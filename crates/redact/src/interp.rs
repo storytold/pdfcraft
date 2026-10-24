@@ -61,6 +61,12 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// When the active font was set by an `/ExtGState` `/Font` entry (`gs`), the resource name of
+    /// that graphics state dictionary (cleared when `Tf` sets a font).
+    font_gs: Option<Vec<u8>>,
+    /// Active pattern names selected by `scn` (non-stroking) and `SCN` (stroking).
+    fill_pattern: Option<Vec<u8>>,
+    stroke_pattern: Option<Vec<u8>>,
 }
 
 /// What processing a scope produced.
@@ -74,10 +80,20 @@ pub(crate) struct Output {
     /// can unlink the original from the resource dictionary (a full save keeps whatever is still
     /// referenced, which would otherwise retain the removed image or form bytes).
     pub replaced: Vec<Vec<u8>>,
+    /// New Pattern resources the rewritten content refers to: (resource name, object).
+    pub patterns: Vec<(Vec<u8>, ObjRef)>,
+    /// Pattern resource names dropped or replaced in this scope.
+    pub replaced_patterns: Vec<Vec<u8>>,
+    /// New ExtGState resources the rewritten content refers to: (resource name, object).
+    pub ext_gstates: Vec<(Vec<u8>, ObjRef)>,
+    /// ExtGState resource names dropped or replaced in this scope.
+    pub replaced_ext_gstates: Vec<Vec<u8>>,
     /// The original objects behind `replaced`, nested scopes included. Other resource
     /// dictionaries may name them too (an inherited or shared /Resources, or the caller's when a
     /// form has none of its own): [`unlink_doomed`] removes those entries.
     pub doomed: Vec<ObjRef>,
+    /// Rewritten form/image objects, including nested replacements, that may retain parent-tree keys.
+    pub replacements: Vec<ObjRef>,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -92,6 +108,52 @@ pub(crate) struct Output {
     pub ambiguous: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
+}
+
+impl Output {
+    pub fn has_resource_changes(&self) -> bool {
+        !self.xobjects.is_empty()
+            || !self.replaced.is_empty()
+            || !self.patterns.is_empty()
+            || !self.replaced_patterns.is_empty()
+            || !self.ext_gstates.is_empty()
+            || !self.replaced_ext_gstates.is_empty()
+    }
+
+    pub fn apply_resources(&self, doc: &Document, res: &mut Dict, content: &[Vec<u8>]) {
+        if !self.xobjects.is_empty() || !self.replaced.is_empty() {
+            let mut xo = res_dict(doc, res, b"XObject");
+            prune(&mut xo, &self.replaced, content);
+            for (n, r) in &self.xobjects {
+                xo.set(n.clone(), Object::Ref(*r));
+            }
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+        }
+        if !self.patterns.is_empty() || !self.replaced_patterns.is_empty() {
+            let mut pat = res_dict(doc, res, b"Pattern");
+            prune_patterns(&mut pat, &self.replaced_patterns, content);
+            for (n, r) in &self.patterns {
+                pat.set(n.clone(), Object::Ref(*r));
+            }
+            if pat.is_empty() {
+                res.remove(b"Pattern");
+            } else {
+                res.set(b"Pattern".to_vec(), Object::Dict(pat));
+            }
+        }
+        if !self.ext_gstates.is_empty() || !self.replaced_ext_gstates.is_empty() {
+            let mut egs = res_dict(doc, res, b"ExtGState");
+            prune_extgstates(&mut egs, &self.replaced_ext_gstates, content);
+            for (n, r) in &self.ext_gstates {
+                egs.set(n.clone(), Object::Ref(*r));
+            }
+            if egs.is_empty() {
+                res.remove(b"ExtGState");
+            } else {
+                res.set(b"ExtGState".to_vec(), Object::Dict(egs));
+            }
+        }
+    }
 }
 
 pub(crate) struct Scope<'a> {
@@ -435,6 +497,59 @@ pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
     }
 }
 
+pub(crate) fn prune_patterns(pat: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
+    if replaced.is_empty() {
+        return;
+    }
+    let joined = Pieces::join(content);
+    let ops = joined.parse().ops;
+    let still_used =
+        |n: &[u8]| ops.iter().any(|op| matches!(op.op.as_slice(), b"scn" | b"SCN") && op.operands.last().and_then(Object::as_name) == Some(n));
+    for n in replaced {
+        if !still_used(n) {
+            pat.remove(n);
+        }
+    }
+}
+
+pub(crate) fn prune_extgstates(egs: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
+    if replaced.is_empty() {
+        return;
+    }
+    let joined = Pieces::join(content);
+    let ops = joined.parse().ops;
+    let still_used = |n: &[u8]| ops.iter().any(|op| op.is("gs") && op.name(0) == Some(n));
+    for n in replaced {
+        if !still_used(n) {
+            egs.remove(n);
+        }
+    }
+}
+
+fn extgstate_mentions_doomed(doc: &Document, val: &Object, doomed: &HashSet<ObjRef>) -> bool {
+    if val.as_ref().is_some_and(|r| doomed.contains(&r)) {
+        return true;
+    }
+    let Some(d) = doc.resolve(val).as_dict().cloned() else { return false };
+    if let Some(smask) = d.get(b"SMask") {
+        if smask.as_ref().is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+        if doc.resolve(smask).as_dict().and_then(|sd| sd.get(b"G")).and_then(Object::as_ref).is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+    }
+    if let Some(font) = d.get(b"Font") {
+        if font.as_ref().is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+        if doc.resolve(font).as_array().and_then(|a| a.first()).and_then(Object::as_ref).is_some_and(|r| doomed.contains(&r)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or
 /// through a form that has no /Resources of its own (such a form draws through its caller's).
 /// `None` when that cannot be told (a form that will not decode, or nesting past the limit).
@@ -514,9 +629,13 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         };
         let mut xo = res_dict(doc, &res, b"XObject");
         let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        let mut pat = res_dict(doc, &res, b"Pattern");
+        let pat_names: Vec<Vec<u8>> = pat.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        let mut egs = res_dict(doc, &res, b"ExtGState");
+        let egs_names: Vec<Vec<u8>> = egs.iter().filter(|(_, v)| extgstate_mentions_doomed(doc, v, &doomed)).map(|(n, _)| n.to_vec()).collect();
         let properties = res_dict(doc, &res, b"Properties");
         let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() && property_names.is_empty() {
+        if names.is_empty() && pat_names.is_empty() && egs_names.is_empty() && property_names.is_empty() {
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
@@ -545,6 +664,51 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         }
         if pruned {
             res.set(b"XObject".to_vec(), Object::Dict(xo));
+        }
+        if !pat_names.is_empty() || !egs_names.is_empty() {
+            let mut used_pat = HashSet::new();
+            let mut used_egs = HashSet::new();
+            for content in &contents {
+                for op in resource_ops(doc, &res, content)? {
+                    if matches!(op.op.as_slice(), b"scn" | b"SCN")
+                        && let Some(n) = op.operands.last().and_then(Object::as_name)
+                    {
+                        used_pat.insert(n.to_vec());
+                    } else if op.is("gs")
+                        && let Some(n) = op.name(0)
+                    {
+                        used_egs.insert(n.to_vec());
+                    }
+                }
+            }
+            let mut pat_pruned = false;
+            for n in pat_names {
+                if !used_pat.contains(&n) {
+                    pat_pruned |= pat.remove(&n).is_some();
+                }
+            }
+            if pat_pruned {
+                pruned = true;
+                if pat.is_empty() {
+                    res.remove(b"Pattern");
+                } else {
+                    res.set(b"Pattern".to_vec(), Object::Dict(pat));
+                }
+            }
+            let mut egs_pruned = false;
+            for n in egs_names {
+                if !used_egs.contains(&n) {
+                    egs_pruned |= egs.remove(&n).is_some();
+                }
+            }
+            if egs_pruned {
+                pruned = true;
+                if egs.is_empty() {
+                    res.remove(b"ExtGState");
+                } else {
+                    res.set(b"ExtGState".to_vec(), Object::Dict(egs));
+                }
+            }
         }
         pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
         if pruned {
@@ -684,15 +848,29 @@ fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<O
     }
     let mut ops = parsed.ops;
     let xobjects = res_dict(doc, res, b"XObject");
+    let patterns = res_dict(doc, res, b"Pattern");
+    let ext_gstates = res_dict(doc, res, b"ExtGState");
     let mut seen = HashSet::new();
     let mut cursor = 0;
     while cursor < ops.len() {
         let op = &ops[cursor];
-        if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        let nested = if op.is("Do") {
+            op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        } else if matches!(op.op.as_slice(), b"scn" | b"SCN") {
+            op.operands.last().and_then(Object::as_name).and_then(|n| patterns.get(n)).and_then(Object::as_ref)
+        } else if op.is("gs") {
+            op.name(0)
+                .and_then(|n| ext_gstates.get(n))
+                .and_then(|g| doc.resolve(g).as_dict().cloned())
+                .and_then(|d| d.get(b"SMask").map(|s| doc.resolve(s)))
+                .and_then(|s| s.as_dict().and_then(|sd| sd.get(b"G")).and_then(Object::as_ref))
+        } else {
+            None
+        };
+        if let Some(r) = nested
             && seen.insert(r)
             && let Object::Stream(s) = &*doc.get(r)
-            && s.dict.name(b"Subtype") == Some(b"Form")
+            && (s.dict.name(b"Subtype") == Some(b"Form") || s.dict.int(b"PatternType") == Some(1) || s.dict.contains(b"PaintType"))
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
             let parsed = pdfcraft_content::parse(&s.decoded()?);
@@ -739,6 +917,34 @@ fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> 
         }
     }
     res.set(b"XObject".to_vec(), Object::Dict(xo));
+    if res.contains(b"Pattern") {
+        let mut pat = res_dict(doc, res, b"Pattern");
+        let pnames: Vec<Vec<u8>> = pat.iter().map(|(n, _)| n.to_vec()).collect();
+        for name in pnames {
+            if !ops.iter().any(|op| matches!(op.op.as_slice(), b"scn" | b"SCN") && op.operands.last().and_then(Object::as_name) == Some(&name)) {
+                pat.remove(&name);
+            }
+        }
+        if pat.is_empty() {
+            res.remove(b"Pattern");
+        } else {
+            res.set(b"Pattern".to_vec(), Object::Dict(pat));
+        }
+    }
+    if res.contains(b"ExtGState") {
+        let mut egs = res_dict(doc, res, b"ExtGState");
+        let gnames: Vec<Vec<u8>> = egs.iter().map(|(n, _)| n.to_vec()).collect();
+        for name in gnames {
+            if !ops.iter().any(|op| op.is("gs") && op.name(0) == Some(&name)) {
+                egs.remove(&name);
+            }
+        }
+        if egs.is_empty() {
+            res.remove(b"ExtGState");
+        } else {
+            res.set(b"ExtGState".to_vec(), Object::Dict(egs));
+        }
+    }
     Ok(())
 }
 
@@ -791,6 +997,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        font_gs: None,
+        fill_pattern: None,
+        stroke_pattern: None,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -800,12 +1009,18 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
 /// with the caller's font, size and spacing, as the renderer places it.
 fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, mut gs: Gs) -> Output {
     let mut out = Output::default();
+    let initial_ctm = gs.ctm;
     let fallback = Rc::new(Metrics::fallback());
     let mut stack: Vec<Gs> = Vec::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let fonts_res = res_dict(doc, resources, b"Font");
-    let ext_gstates = res_dict(doc, resources, b"ExtGState");
     let mut xobjects = res_dict(doc, resources, b"XObject");
+    let mut patterns = res_dict(doc, resources, b"Pattern");
+    let mut ext_gstates = res_dict(doc, resources, b"ExtGState");
+    let mut painted_patterns: HashSet<Vec<u8>> = HashSet::new();
+    let mut redacted_font_gs: HashSet<Vec<u8>> = HashSet::new();
+    let mut surviving_font_gs: HashSet<Vec<u8>> = HashSet::new();
+    let mut any_paint_removed = false;
     // The current path: its operators, its bounding box in user space, and whether it clips.
     let mut path: Vec<Op> = Vec::new();
     let mut path_box: Option<[f64; 4]> = None;
@@ -831,6 +1046,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         if removed > 0 {
             scope.layer_blocks += removed;
             forced_change = true;
+            any_paint_removed = true;
         }
     }
     let mut pieces: Vec<Vec<Op>> = streams.iter().map(|_| Vec::new()).collect();
@@ -877,7 +1093,20 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 let bbox = path_box.take();
                 let clips = std::mem::replace(&mut clip, false);
                 let hit = scope.mode == Mode::Apply && o != b"n" && bbox.is_some_and(|b| scope.hits(b));
+                let record_pattern_paint = |gs: &Gs, o: &[u8], painted: &mut HashSet<Vec<u8>>| {
+                    if matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*")
+                        && let Some(p) = &gs.fill_pattern
+                    {
+                        painted.insert(p.clone());
+                    }
+                    if matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*")
+                        && let Some(p) = &gs.stroke_pattern
+                    {
+                        painted.insert(p.clone());
+                    }
+                };
                 if !hit {
+                    record_pattern_paint(&gs, o, &mut painted_patterns);
                     ops.extend(body);
                     ops.push(op);
                     continue;
@@ -886,6 +1115,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 changed = true;
                 if scope.covered(b) {
                     scope.report.paths_removed += 1;
+                    any_paint_removed = true;
                     if clips {
                         // Keep the clipping, drop the painting.
                         ops.extend(body);
@@ -894,6 +1124,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 } else if clips {
                     // A clip-and-paint path can't be wrapped in q/Q without losing its clip:
                     // paint it clipped, then set its clip with a no-op path.
+                    record_pattern_paint(&gs, o, &mut painted_patterns);
                     scope.report.paths_clipped += 1;
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
                         let plain: Vec<Op> = body.iter().filter(|p| !p.is("W") && !p.is("W*")).cloned().collect();
@@ -906,6 +1137,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     ops.extend(body);
                     ops.push(Op::new("n", vec![]));
                 } else {
+                    record_pattern_paint(&gs, o, &mut painted_patterns);
                     scope.report.paths_clipped += 1;
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
                         ops.push(Op::new("q", vec![]));
@@ -940,6 +1172,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     tlm = Matrix::IDENTITY;
                 }
                 b"Tf" => {
+                    gs.font_gs = None;
                     gs.size = op.num(1).unwrap_or(gs.size);
                     if let Some(name) = op.name(0) {
                         let font_dict = fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
@@ -955,8 +1188,51 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     }
                 }
                 b"gs" => {
-                    if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &ext_gstates, n, &fallback)) {
-                        (gs.font, gs.vertical, gs.size) = (font, vertical, size);
+                    if let Some(new) = extgstate_op(doc, scope, &op, (&mut gs, &fallback), resources, &mut ext_gstates, &mut out) {
+                        changed = true;
+                        if let Some(n) = new {
+                            ops.push(n);
+                        }
+                        continue;
+                    }
+                }
+                b"g" | b"rg" | b"k" | b"sc" => gs.fill_pattern = None,
+                b"G" | b"RG" | b"K" | b"SC" => gs.stroke_pattern = None,
+                b"cs" if op.name(0) != Some(b"Pattern") => {
+                    gs.fill_pattern = None;
+                }
+                b"CS" if op.name(0) != Some(b"Pattern") => {
+                    gs.stroke_pattern = None;
+                }
+                b"scn" | b"SCN" => {
+                    let is_fill = o == b"scn";
+                    if let Some(pat_name) = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec) {
+                        if is_fill {
+                            gs.fill_pattern = Some(pat_name);
+                        } else {
+                            gs.stroke_pattern = Some(pat_name);
+                        }
+                        if let Some(new) = pattern_op(doc, scope, &op, (&gs, &initial_ctm), resources, &mut patterns, &mut out) {
+                            changed = true;
+                            if let Some(n) = new {
+                                let updated = n.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                                if is_fill {
+                                    gs.fill_pattern = updated;
+                                } else {
+                                    gs.stroke_pattern = updated;
+                                }
+                                ops.push(n);
+                            } else if is_fill {
+                                gs.fill_pattern = None;
+                            } else {
+                                gs.stroke_pattern = None;
+                            }
+                            continue;
+                        }
+                    } else if is_fill {
+                        gs.fill_pattern = None;
+                    } else {
+                        gs.stroke_pattern = None;
                     }
                 }
                 b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
@@ -1013,10 +1289,26 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                         out.vertical = true;
                     }
                     let (new_items, removed) = show(scope, &gs, &mut tm, &items);
+                    let has_surviving = new_items.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty()));
+                    if removed == 0 || has_surviving {
+                        if let Some(fg) = &gs.font_gs {
+                            surviving_font_gs.insert(fg.clone());
+                        }
+                        if let Some(p) = &gs.fill_pattern {
+                            painted_patterns.insert(p.clone());
+                        }
+                        if let Some(p) = &gs.stroke_pattern {
+                            painted_patterns.insert(p.clone());
+                        }
+                    }
                     if removed == 0 {
                         ops.push(op);
                         continue;
                     }
+                    if let Some(fg) = &gs.font_gs {
+                        redacted_font_gs.insert(fg.clone());
+                    }
+                    any_paint_removed = true;
                     if scope.mode == Mode::Verify {
                         out.residue += removed;
                         ops.push(op);
@@ -1047,6 +1339,8 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                             continue;
                         }
                     }
+                    // A retained inline image may be a stencil painted with the fill pattern.
+                    painted_patterns.extend(gs.fill_pattern.iter().cloned());
                 }
                 b"sh" if scope.mode == Mode::Apply => {
                     // A shading fills the current clip: clip the regions out.
@@ -1060,7 +1354,13 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     }
                 }
                 b"Do" => {
-                    if let Some(new) = xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out) {
+                    let replacement = xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out);
+                    // Retained forms inherit colour state, and image masks use the fill colour.
+                    if !matches!(replacement, Some(None)) {
+                        painted_patterns.extend(gs.fill_pattern.iter().cloned());
+                        painted_patterns.extend(gs.stroke_pattern.iter().cloned());
+                    }
+                    if let Some(new) = replacement {
                         changed = true;
                         if let Some(n) = new {
                             ops.push(n);
@@ -1078,6 +1378,75 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         processed.push((ops, changed));
     }
     if scope.mode == Mode::Apply {
+        for gs_name in redacted_font_gs {
+            if surviving_font_gs.contains(&gs_name) {
+                continue;
+            }
+            let Some(gs_val) = ext_gstates.get(&gs_name).cloned() else { continue };
+            let gs_ref = gs_val.as_ref();
+            let Some(mut d) = doc.resolve(&gs_val).as_dict().cloned() else { continue };
+            if let Some(font_obj) = d.remove(b"Font") {
+                if let Some(fr) = font_obj.as_ref() {
+                    out.doomed.push(fr);
+                }
+                if let Some(fr) = doc.resolve(&font_obj).as_array().and_then(|a| a.first()).and_then(Object::as_ref)
+                    && !fonts_res.iter().any(|(_, v)| v.as_ref() == Some(fr))
+                {
+                    out.doomed.push(fr);
+                }
+            }
+            if let Some(gr) = gs_ref {
+                out.doomed.push(gr);
+            }
+            out.replaced_ext_gstates.push(gs_name.clone());
+            let only_type = d.iter().all(|(k, _)| k.as_slice() == b"Type");
+            if only_type {
+                for (ops, changed) in &mut processed {
+                    let before = ops.len();
+                    ops.retain(|op| !(op.is("gs") && op.name(0) == Some(gs_name.as_slice())));
+                    if ops.len() != before {
+                        *changed = true;
+                    }
+                }
+            } else {
+                let nr = doc.add(Object::Dict(d));
+                let n = fresh_name(scope, &ext_gstates);
+                ext_gstates.set(n.clone(), Object::Ref(nr));
+                out.ext_gstates.push((n.clone(), nr));
+                for (ops, changed) in &mut processed {
+                    for op in ops {
+                        if op.is("gs") && op.name(0) == Some(gs_name.as_slice()) {
+                            *op = Op::new("gs", vec![Object::Name(n.clone())]);
+                            *changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if any_paint_removed {
+            for (ops, changed) in &mut processed {
+                let mut i = 0;
+                while i < ops.len() {
+                    let drop_pat = if matches!(ops[i].op.as_slice(), b"scn" | b"SCN") {
+                        ops[i].operands.last().and_then(Object::as_name).filter(|n| !painted_patterns.contains(*n)).map(<[u8]>::to_vec)
+                    } else {
+                        None
+                    };
+                    if let Some(pname) = drop_pat {
+                        if let Some(pr) = patterns.get(&pname).and_then(Object::as_ref) {
+                            out.doomed.push(pr);
+                        }
+                        if !out.replaced_patterns.contains(&pname) {
+                            out.replaced_patterns.push(pname);
+                        }
+                        ops.remove(i);
+                        *changed = true;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        }
         clean_replacements(doc, resources, &original, &mut processed, scope.report);
     }
     for ((ops, changed), (comment_in, comment_out)) in processed.into_iter().zip(comment_edges) {
@@ -1211,6 +1580,340 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
     (out, removed)
 }
 
+enum StreamOutcome {
+    Unchanged,
+    Removed,
+    Rewritten(ObjRef),
+}
+
+fn sanitize_stream_form(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    (r, s): (ObjRef, &Stream),
+    gs: Gs,
+    override_rects: Option<&[[f64; 4]]>,
+    resources: &Dict,
+    out: &mut Output,
+) -> StreamOutcome {
+    if s.dict.get(b"OC").is_some_and(|oc| scope.xobject_layer_hidden(doc, r, oc)) {
+        scope.layer_blocks += 1;
+        if scope.mode == Mode::Verify {
+            return StreamOutcome::Unchanged;
+        }
+        out.doomed.push(r);
+        return StreamOutcome::Removed;
+    }
+    let bbox = s.dict.get(b"BBox").and_then(|b| {
+        let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
+        (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    });
+    let active_rects = override_rects.unwrap_or(scope.rects);
+    if let Some(bb) = bbox
+        && !scope.everywhere()
+        && !active_rects.iter().any(|rect| overlaps(*rect, gs.ctm.bbox(bb), 0.0))
+    {
+        return StreamOutcome::Unchanged;
+    }
+    if scope.depth >= MAX_DEPTH {
+        if scope.mode == Mode::Verify {
+            if scope.everywhere() {
+                scope.layer_blocks += 1;
+            }
+            return StreamOutcome::Unchanged;
+        }
+        scope.report.forms_removed += 1;
+        out.doomed.push(r);
+        return StreamOutcome::Removed;
+    }
+    // Strict, like page content: a Form read only in part counts as undecodable.
+    let data = if scope.budget.enter_form() {
+        scope.budget.decode_strict(s)
+    } else {
+        Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
+    };
+    let data = match data {
+        Ok(d) => d,
+        // Past the page's budget nothing more is read: apply refuses the page, and
+        // verification counts the form as content that may remain.
+        Err(e) if scope.budget.exhausted() => {
+            if scope.mode == Mode::Apply {
+                out.error = Some(e);
+            } else if scope.everywhere() {
+                scope.layer_blocks += 1;
+            } else {
+                out.residue += 1;
+            }
+            return StreamOutcome::Unchanged;
+        }
+        Err(_) if scope.mode == Mode::Apply => {
+            scope.report.forms_removed += 1;
+            out.doomed.push(r);
+            return StreamOutcome::Removed;
+        }
+        Err(_) => {
+            if scope.everywhere() {
+                scope.layer_blocks += 1;
+            }
+            return StreamOutcome::Unchanged;
+        }
+    };
+    let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
+    let res = own.clone().unwrap_or_else(|| resources.clone());
+    let inner = {
+        let mut sub_scope = Scope {
+            rects: active_rects,
+            mode: scope.mode,
+            report: scope.report,
+            hidden_text: scope.hidden_text,
+            hidden_layers: std::mem::take(&mut scope.hidden_layers),
+            layers_enabled: scope.layers_enabled,
+            retained_off_layers: std::mem::take(&mut scope.retained_off_layers),
+            ocmd_cache: std::mem::take(&mut scope.ocmd_cache),
+            xobject_oc_cache: std::mem::take(&mut scope.xobject_oc_cache),
+            layer_blocks: scope.layer_blocks,
+            fonts: HashMap::new(),
+            used_names: std::mem::take(&mut scope.used_names),
+            depth: scope.depth + 1,
+            budget: std::mem::replace(&mut scope.budget, DecodeBudget::page()),
+        };
+        let res_inner = process_from(doc, &mut sub_scope, std::slice::from_ref(&data), &res, gs);
+        scope.hidden_layers = sub_scope.hidden_layers;
+        scope.retained_off_layers = sub_scope.retained_off_layers;
+        scope.ocmd_cache = sub_scope.ocmd_cache;
+        scope.xobject_oc_cache = sub_scope.xobject_oc_cache;
+        scope.layer_blocks = sub_scope.layer_blocks;
+        scope.used_names = sub_scope.used_names;
+        scope.budget = sub_scope.budget;
+        res_inner
+    };
+    out.residue += inner.residue;
+    out.vertical |= inner.vertical;
+    out.ambiguous |= inner.ambiguous;
+    out.doomed.extend_from_slice(&inner.doomed);
+    out.retired_properties.extend(inner.retired_properties.clone());
+    out.tag_changes.extend(inner.tag_changes.clone());
+    out.replacements.extend_from_slice(&inner.replacements);
+    out.error = inner.error.clone().or(out.error.take());
+    if scope.mode == Mode::Verify {
+        return StreamOutcome::Unchanged;
+    }
+    let new_data = inner.streams.first().cloned().flatten();
+    if new_data.is_none() && !inner.has_resource_changes() {
+        return StreamOutcome::Unchanged;
+    }
+    let mut dict = s.dict.clone();
+    dict.remove(b"Length");
+    let mut cleaned_res = res.clone();
+    let effective_data = new_data.as_deref().unwrap_or(&data);
+    let content = [effective_data.to_vec()];
+    inner.apply_resources(doc, &mut cleaned_res, &content);
+    if new_data.is_some() {
+        match prune_properties(doc, &mut cleaned_res, &content) {
+            Ok(retired) => out.retired_properties.extend(retired),
+            Err(error) => {
+                out.error = Some(error);
+                return StreamOutcome::Unchanged;
+            }
+        }
+        if let Err(error) = prune_form_resources(doc, &mut cleaned_res, &content) {
+            out.error = Some(error);
+            return StreamOutcome::Unchanged;
+        }
+    }
+    if cleaned_res != res {
+        dict.set(b"Resources".to_vec(), Object::Dict(cleaned_res));
+    }
+    let (changed, empty) = tags::touched(doc, &res, &data, effective_data);
+    let stream = match new_data {
+        Some(d) => Stream::flate(dict, &d),
+        None => Stream { dict, raw: s.raw.clone() },
+    };
+    let nr = doc.add(Object::Stream(stream));
+    out.tag_changes.push((r, nr, changed, empty));
+    out.replacements.push(nr);
+    out.doomed.push(r);
+    scope.report.forms_rewritten += 1;
+    StreamOutcome::Rewritten(nr)
+}
+
+fn extgstate_op(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    op: &Op,
+    (gs, fallback): (&mut Gs, &Rc<Metrics>),
+    resources: &Dict,
+    ext_gstates: &mut Dict,
+    out: &mut Output,
+) -> Option<Option<Op>> {
+    let name = op.name(0)?.to_vec();
+    let gs_val = ext_gstates.get(&name)?.clone();
+    let gs_ref = gs_val.as_ref();
+    let d = doc.resolve(&gs_val).as_dict()?.clone();
+    if let Some((font, vertical, size)) = extgstate_font(doc, scope, ext_gstates, &name, fallback) {
+        (gs.font, gs.vertical, gs.size) = (font, vertical, size);
+        gs.font_gs = Some(name.clone());
+    }
+    let smask_obj = d.get(b"SMask")?;
+    let smask_ref = smask_obj.as_ref();
+    let smask_dict = doc.resolve(smask_obj).as_dict()?.clone();
+    let g_ref = smask_dict.get(b"G").and_then(Object::as_ref)?;
+    let g_obj = doc.get(g_ref);
+    let Object::Stream(s) = &*g_obj else { return None };
+    let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+    let fctm = m.then(&gs.ctm);
+    match sanitize_stream_form(doc, scope, (g_ref, s), Gs { ctm: fctm, ..gs.clone() }, None, resources, out) {
+        StreamOutcome::Unchanged => None,
+        StreamOutcome::Removed => {
+            if let Some(sr) = smask_ref {
+                out.doomed.push(sr);
+            }
+            if let Some(gr) = gs_ref {
+                out.doomed.push(gr);
+            }
+            out.replaced_ext_gstates.push(name.clone());
+            let mut new_d = d;
+            new_d.remove(b"SMask");
+            let only_type = new_d.iter().all(|(k, _)| k.as_slice() == b"Type");
+            if only_type {
+                if gs.font_gs.as_deref() == Some(name.as_slice()) {
+                    gs.font_gs = None;
+                }
+                Some(None)
+            } else {
+                let nr = doc.add(Object::Dict(new_d));
+                let n = fresh_name(scope, ext_gstates);
+                ext_gstates.set(n.clone(), Object::Ref(nr));
+                out.ext_gstates.push((n.clone(), nr));
+                if gs.font_gs.as_deref() == Some(name.as_slice()) {
+                    gs.font_gs = Some(n.clone());
+                }
+                Some(Some(Op::new("gs", vec![Object::Name(n)])))
+            }
+        }
+        StreamOutcome::Rewritten(nr) => {
+            if let Some(sr) = smask_ref {
+                out.doomed.push(sr);
+            }
+            if let Some(gr) = gs_ref {
+                out.doomed.push(gr);
+            }
+            out.replaced_ext_gstates.push(name.clone());
+            let mut new_smask = smask_dict;
+            new_smask.set(b"G".to_vec(), Object::Ref(nr));
+            let mut new_d = d;
+            new_d.set(b"SMask".to_vec(), Object::Dict(new_smask));
+            let new_gs_ref = doc.add(Object::Dict(new_d));
+            let n = fresh_name(scope, ext_gstates);
+            ext_gstates.set(n.clone(), Object::Ref(new_gs_ref));
+            out.ext_gstates.push((n.clone(), new_gs_ref));
+            if gs.font_gs.as_deref() == Some(name.as_slice()) {
+                gs.font_gs = Some(n.clone());
+            }
+            Some(Some(Op::new("gs", vec![Object::Name(n)])))
+        }
+    }
+}
+
+fn pattern_rects(doc: &Document, dict: &Dict, pctm: &Matrix, gs_ctm: &Matrix, m: &Matrix, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
+    let mut out = rects.to_vec();
+    if gs_ctm.0 != pctm.0
+        && let Some(inv_gs) = m.then(gs_ctm).invert()
+    {
+        for r in rects {
+            let mapped = pctm.bbox(inv_gs.bbox(*r));
+            if !out.contains(&mapped) {
+                out.push(mapped);
+            }
+        }
+    }
+    let bbox = dict.get(b"BBox").and_then(|b| {
+        let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
+        (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    });
+    let xstep = dict.get(b"XStep").and_then(|x| doc.resolve(x).as_f64()).unwrap_or(0.0).abs();
+    let ystep = dict.get(b"YStep").and_then(|y| doc.resolve(y).as_f64()).unwrap_or(0.0).abs();
+    if let Some(bb) = bbox
+        && xstep > 1e-3
+        && ystep > 1e-3
+        && let Some(inv) = pctm.invert()
+    {
+        for r in rects {
+            let pr = inv.bbox(*r);
+            let kx0 = ((pr[0] - bb[2]) / xstep).floor() as i64;
+            let kx1 = ((pr[2] - bb[0]) / xstep).ceil() as i64;
+            let ky0 = ((pr[1] - bb[3]) / ystep).floor() as i64;
+            let ky1 = ((pr[3] - bb[1]) / ystep).ceil() as i64;
+            if kx1.saturating_sub(kx0) > 16 || ky1.saturating_sub(ky0) > 16 {
+                // Bounded enumeration must fail closed, not miss distant copies of the tile.
+                let whole = pctm.bbox(bb);
+                if !out.contains(&whole) {
+                    out.push(whole);
+                }
+                continue;
+            }
+            for kx in kx0..=kx1 {
+                for ky in ky0..=ky1 {
+                    if kx == 0 && ky == 0 {
+                        continue;
+                    }
+                    let shifted =
+                        [pr[0] - (kx as f64) * xstep, pr[1] - (ky as f64) * ystep, pr[2] - (kx as f64) * xstep, pr[3] - (ky as f64) * ystep];
+                    if overlaps(shifted, bb, 0.0) {
+                        out.push(pctm.bbox(shifted));
+                    }
+                }
+            }
+        }
+    } else if let Some(bb) = bbox
+        && !(xstep > 1e-3 && ystep > 1e-3)
+        && !rects.is_empty()
+    {
+        // Tiny or invalid steps cannot be enumerated safely.
+        let whole = pctm.bbox(bb);
+        if !out.contains(&whole) {
+            out.push(whole);
+        }
+    }
+    out
+}
+
+fn pattern_op(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    op: &Op,
+    (gs, initial_ctm): (&Gs, &Matrix),
+    resources: &Dict,
+    patterns: &mut Dict,
+    out: &mut Output,
+) -> Option<Option<Op>> {
+    let name = op.operands.last()?.as_name()?.to_vec();
+    let r = patterns.get(&name)?.as_ref()?;
+    let obj = doc.get(r);
+    let Object::Stream(s) = &*obj else { return None };
+    let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
+    let pctm = m.then(initial_ctm);
+    let rects = pattern_rects(doc, &s.dict, &pctm, &gs.ctm, &m, scope.rects);
+    match sanitize_stream_form(doc, scope, (r, s), Gs { ctm: pctm, ..gs.clone() }, Some(&rects), resources, out) {
+        StreamOutcome::Unchanged => None,
+        StreamOutcome::Removed => {
+            out.replaced_patterns.push(name);
+            Some(None)
+        }
+        StreamOutcome::Rewritten(nr) => {
+            let n = fresh_name(scope, patterns);
+            patterns.set(n.clone(), Object::Ref(nr));
+            out.patterns.push((n.clone(), nr));
+            out.replaced_patterns.push(name);
+            let mut operands = op.operands.clone();
+            if let Some(last) = operands.last_mut() {
+                *last = Object::Name(n);
+            }
+            let op_name = if op.op == b"SCN" { "SCN" } else { "scn" };
+            Some(Some(Op::new(op_name, operands)))
+        }
+    }
+}
+
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
 fn xobject(
     doc: &mut Document,
@@ -1255,6 +1958,7 @@ fn xobject(
                     let n = fresh_name(scope, xobjects);
                     xobjects.set(n.clone(), Object::Ref(nr));
                     out.xobjects.push((n.clone(), nr));
+                    out.replacements.push(nr);
                     out.replaced.push(name);
                     out.doomed.push(r);
                     scope.report.images_cleared += 1;
@@ -1271,135 +1975,20 @@ fn xobject(
         Some(b"Form") => {
             let m = s.dict.get(b"Matrix").and_then(|m| Matrix::from_operands(doc.resolve(m).as_array()?)).unwrap_or_default();
             let fctm = m.then(&gs.ctm);
-            let bbox = s.dict.get(b"BBox").and_then(|b| {
-                let v: Vec<f64> = doc.resolve(b).as_array()?.iter().filter_map(Object::as_f64).collect();
-                (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
-            });
-            if let Some(bb) = bbox
-                && !scope.everywhere()
-                && !scope.hits(fctm.bbox(bb))
-            {
-                return None;
-            }
-            // Too deep: this form cannot be read, so it goes (Apply) or the page is left alone
-            // (Verify), as a form that will not decode does. The page's decode budget below is what
-            // keeps a fan-out or a cycle from costing 2^50 walks.
-            if scope.depth >= MAX_DEPTH {
-                if scope.mode == Mode::Verify {
-                    // Sanitization removes a Form it cannot enter, so the verification scan
-                    // must count that conservative removal or it may decide to skip the pass.
-                    if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    }
-                    return None;
-                }
-                scope.report.forms_removed += 1;
-                out.replaced.push(name);
-                out.doomed.push(r);
-                return Some(None);
-            }
-            // Strict, like page content: a Form read only in part counts as undecodable.
-            let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(s)
-            } else {
-                Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
-            };
-            let data = match data {
-                Ok(d) => d,
-                // Past the page's budget nothing more is read: apply refuses the page, and
-                // verification counts the form as content that may remain.
-                Err(e) if scope.budget.exhausted() => {
-                    if scope.mode == Mode::Apply {
-                        out.error = Some(e);
-                    } else if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    } else {
-                        out.residue += 1;
-                    }
-                    return None;
-                }
-                Err(_) if scope.mode == Mode::Apply => {
-                    scope.report.forms_removed += 1;
+            match sanitize_stream_form(doc, scope, (r, s), Gs { ctm: fctm, ..gs.clone() }, None, resources, out) {
+                StreamOutcome::Unchanged => None,
+                StreamOutcome::Removed => {
                     out.replaced.push(name);
-                    out.doomed.push(r);
-                    return Some(None);
+                    Some(None)
                 }
-                Err(_) => {
-                    // Apply drops an undecodable Form while sanitizing. Count it during Verify
-                    // so a zero-count preflight cannot leave its potentially hidden bytes behind.
-                    if scope.everywhere() {
-                        scope.layer_blocks += 1;
-                    }
-                    return None;
-                }
-            };
-            let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
-            let res = own.clone().unwrap_or_else(|| resources.clone());
-            let saved_fonts = std::mem::take(&mut scope.fonts);
-            scope.depth += 1;
-            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
-            scope.depth -= 1;
-            scope.fonts = saved_fonts;
-            out.residue += inner.residue;
-            out.vertical |= inner.vertical;
-            out.ambiguous |= inner.ambiguous;
-            out.doomed.extend_from_slice(&inner.doomed);
-            out.retired_properties.extend(inner.retired_properties);
-            out.tag_changes.extend(inner.tag_changes);
-            out.error = inner.error.or(out.error.take());
-            if scope.mode == Mode::Verify {
-                return None;
-            }
-            let new_data = inner.streams.into_iter().next().flatten();
-            if new_data.is_none() && inner.xobjects.is_empty() && inner.replaced.is_empty() {
-                return None;
-            }
-            let mut dict = s.dict.clone();
-            dict.remove(b"Length");
-            let mut cleaned_res = res.clone();
-            // Install rewritten nested forms before finding live property names: a new form may
-            // still inherit its caller's resources, and its new Do name must resolve here.
-            if !inner.xobjects.is_empty() || !inner.replaced.is_empty() {
-                let mut xo = res_dict(doc, &cleaned_res, b"XObject");
-                if let Some(data) = &new_data {
-                    prune(&mut xo, &inner.replaced, std::slice::from_ref(data));
-                }
-                for (name, reference) in &inner.xobjects {
-                    xo.set(name.clone(), Object::Ref(*reference));
-                }
-                cleaned_res.set(b"XObject".to_vec(), Object::Dict(xo));
-            }
-            if let Some(data) = &new_data {
-                let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut cleaned_res, content) {
-                    Ok(retired) => out.retired_properties.extend(retired),
-                    Err(error) => {
-                        out.error = Some(error);
-                        return None;
-                    }
-                }
-                if let Err(error) = prune_form_resources(doc, &mut cleaned_res, content) {
-                    out.error = Some(error);
-                    return None;
+                StreamOutcome::Rewritten(nr) => {
+                    let n = fresh_name(scope, xobjects);
+                    xobjects.set(n.clone(), Object::Ref(nr));
+                    out.xobjects.push((n.clone(), nr));
+                    out.replaced.push(name);
+                    Some(Some(Op::new("Do", vec![Object::Name(n)])))
                 }
             }
-            if cleaned_res != res {
-                dict.set(b"Resources".to_vec(), Object::Dict(cleaned_res));
-            }
-            let (changed, empty) = tags::touched(doc, &res, &data, new_data.as_deref().unwrap_or(&data));
-            let stream = match new_data {
-                Some(d) => Stream::flate(dict, &d),
-                None => Stream { dict, raw: s.raw.clone() },
-            };
-            let nr = doc.add(Object::Stream(stream));
-            out.tag_changes.push((r, nr, changed, empty));
-            let n = fresh_name(scope, xobjects);
-            xobjects.set(n.clone(), Object::Ref(nr));
-            out.xobjects.push((n.clone(), nr));
-            out.replaced.push(name);
-            out.doomed.push(r);
-            scope.report.forms_rewritten += 1;
-            Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
         _ => None,
     }

@@ -3,6 +3,12 @@
 Interactive forms (AcroForm, ISO 32000-2 §12.7). Layer L3; depends on `pdfcraft-cos` and
 `pdfcraft-fonts`.
 
+Field deletion prunes structure elements made empty by removing their tagged widgets,
+including newly empty ancestors and their ID-tree mappings and name-tree bounds.
+Live siblings and pre-existing empty elements remain. Structure cleanup shares a bounded
+work budget and rejects excessive nesting or work instead of traversing indefinitely.
+An error is not a successful sanitization; callers must not save it as a completed deletion.
+
 ## API
 
 ```rust

@@ -3372,6 +3372,149 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     assert_eq!(page_refs(&doc), [page]);
 }
 
+#[test]
+fn deleting_a_field_removes_every_reference_from_co_ancestors_and_structure_trees() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R /StructTreeRoot 10 0 R >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),        // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R] >>".into(),                    // 3
+        "<< /Fields [5 0 R 8 0 R] /CO [6 0 R 8 0 R] >>".into(),                            // 4
+        "<< /FT /Tx /T (secret_group) /V (SECRET_PARENT_VALUE) /DV (SECRET_PARENT_DEFAULT) /Kids [6 0 R] >>".into(),                                    // 5
+        "<< /FT /Tx /T (ssn) /Parent 5 0 R /V (SECRET_SSN_VALUE) /Kids [7 0 R] /AA << /C << /S /JavaScript /JS (SECRET_CALC_JS) >> >> >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [50 700 250 720] /P 3 0 R /StructParent 1 >>".into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (public_total) /V (KEEP_TOTAL) /Rect [50 650 250 670] /P 3 0 R /StructParent 2 >>".into(), // 8
+        "<< /Type /OBJR /Obj 7 0 R /Pg 3 0 R >>".into(),                                   // 9
+        "<< /Type /StructTreeRoot /K 11 0 R /ParentTree 14 0 R /IDTree << /Names [(SECRET_TAG_ID) 12 0 R (public) 13 0 R] >> >>".into(),                 // 10
+        "<< /Type /StructElem /S /Document /P 10 0 R /K [12 0 R 13 0 R] >>".into(),        // 11
+        "<< /Type /StructElem /S /Form /P 11 0 R /Pg 3 0 R /ID (SECRET_TAG_ID) /A << /O /UserProperties /Value (SECRET_TAG_ATTRIBUTE) >> /T (SECRET_TAG_TITLE) /Alt (SECRET_TAG_ALT) /K [9 0 R << /Type /OBJR /Obj 6 0 R /Pg 3 0 R >>] >>".into(), // 12
+        "<< /Type /StructElem /S /Form /P 11 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 8 0 R /Pg 3 0 R >>] >>".into(), // 13
+        "<< /Nums [1 12 0 R 2 13 0 R 3 7 0 R 4 9 0 R] >>".into(),                          // 14
+    ]);
+    delete_field(&mut doc, "secret_group.ssn").unwrap();
+    assert_eq!(fields(&doc).iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["public_total"]);
+    let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let saved = Document::open(Arc::new(bytes.clone())).unwrap();
+    for secret in [
+        &b"SECRET_SSN_VALUE"[..],
+        b"SECRET_CALC_JS",
+        b"SECRET_PARENT_VALUE",
+        b"SECRET_PARENT_DEFAULT",
+        b"SECRET_TAG_ID",
+        b"SECRET_TAG_ATTRIBUTE",
+        b"SECRET_TAG_TITLE",
+        b"SECRET_TAG_ALT",
+        b"secret_group",
+        b"(ssn)",
+    ] {
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "{} survived full save", String::from_utf8_lossy(secret));
+    }
+    assert_eq!(calculation_order(&saved, &fields(&saved)).extra, ["public_total"]);
+    let pt = saved
+        .get(saved.root().unwrap())
+        .as_dict()
+        .and_then(|c| c.get(b"StructTreeRoot"))
+        .map(|s| saved.resolve(s))
+        .and_then(|s| s.as_dict().and_then(|d| d.get(b"ParentTree")).map(|p| saved.resolve(p)))
+        .and_then(|p| p.as_dict().and_then(|d| d.get(b"Nums")).map(|n| saved.resolve(n)))
+        .and_then(|n| n.as_array().cloned())
+        .unwrap_or_default();
+    let keys: Vec<i64> = pt.chunks(2).filter_map(|pair| pair.first().and_then(Object::as_int)).collect();
+    assert_eq!(keys, [2], "only the surviving field's parent-tree entry remains: {pt:?}");
+}
+
+#[test]
+fn deleting_a_field_does_not_prune_an_unrelated_terminal_named_as_parent() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /Parent 6 0 R /V (REMOVE) /Rect [0 0 10 10] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (public) /V (KEEP) /Rect [20 0 30 10] >>".into(),
+    ]);
+    delete_field(&mut doc, "secret").unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(fields(&saved).iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["public"]);
+}
+
+#[test]
+fn deleted_field_tags_prune_ancestors_id_tree_bounds_and_shared_arrays() {
+    for kind in ["nested", "direct", "shared", "cycle", "indirect_id_kids", "indirect_limits"] {
+        let parent_k = match kind {
+            "direct" => "<< /Type /StructElem /S /Form /ID (SECRET_DIRECT) /A << /Value (SECRET_DIRECT_ATTR) >> /K << /Type /OBJR /Obj 5 0 R >> >>",
+            "shared" => "14 0 R",
+            "cycle" => "[9 0 R 15 0 R]",
+            _ => "[9 0 R]",
+        };
+        let parent_id = if kind == "cycle" { "KEEP_CYCLE" } else { "SECRET_PARENT_TAG" };
+        let other = match kind {
+            "shared" => "<< /Type /StructElem /S /Div /ID (SECRET_OTHER_PARENT) /K 14 0 R >>",
+            "cycle" => "<< /Type /StructElem /S /Div /ID (KEEP_OTHER) /K [8 0 R 10 0 R] >>",
+            _ => "<< /Type /StructElem /S /Div /ID (KEEP_OTHER) >>",
+        };
+        let mut doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R /StructTreeRoot 7 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),
+            "<< /Fields [5 0 R 6 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /V (SECRET_VALUE) /Rect [0 0 10 10] /StructParent 1 >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (public) /V (KEEP_PUBLIC) /Rect [20 0 30 10] /StructParent 2 >>".into(),
+            "<< /Type /StructTreeRoot /K [8 0 R 10 0 R 11 0 R 15 0 R] /IDTree 12 0 R /ParentTree << /Nums [1 9 0 R 2 10 0 R] >> >>".into(),
+            format!("<< /Type /StructElem /S /Div /P 7 0 R /ID ({parent_id}) /K {parent_k} >>"),
+            "<< /Type /StructElem /S /Form /P 8 0 R /ID (SECRET_LEAF) /A << /Value (SECRET_ATTR) >> /K << /Type /OBJR /Obj 5 0 R >> >>".into(),
+            "<< /Type /StructElem /S /Form /P 7 0 R /ID (KEEP_TAG) /K << /Type /OBJR /Obj 6 0 R >> >>".into(),
+            "<< /Type /StructElem /S /Div /ID (KEEP_EMPTY) /K [] >>".into(),
+            if kind == "indirect_limits" {
+                "<< /Kids [13 0 R] /Limits 17 0 R >>".into()
+            } else if kind == "indirect_id_kids" {
+                "<< /Kids 16 0 R /Limits [(SECRET_ID_KEY) (public)] >>".into()
+            } else {
+                "<< /Kids [13 0 R] /Limits [(SECRET_ID_KEY) (public)] >>".into()
+            },
+            "<< /Names [(SECRET_ID_KEY) 9 0 R (public) 10 0 R] /Limits [(SECRET_ID_KEY) (public)] >>".into(),
+            "[9 0 R]".into(),
+            other.into(),
+            "[<< /Names [(SECRET_ID_KEY) 9 0 R (public) 10 0 R] /Limits [(SECRET_ID_KEY) (public)] >>]".into(),
+            "[(SECRET_ID_KEY) (public)]".into(),
+        ]);
+        delete_field(&mut doc, "secret").unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        let saved = Document::open(Arc::new(bytes.clone())).unwrap();
+        assert_eq!(fields(&saved).iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["public"]);
+        let cat = saved.get(saved.root().unwrap());
+        let root = saved.resolve(cat.as_dict().unwrap().get(b"StructTreeRoot").unwrap());
+        let pt = saved.resolve(root.as_dict().unwrap().get(b"ParentTree").unwrap());
+        let nums = saved.resolve(pt.as_dict().unwrap().get(b"Nums").unwrap());
+        let nums = nums.as_array().unwrap();
+        assert_eq!(nums.len(), 2, "{kind}: only live tag mapping must remain");
+        assert_eq!(nums[0].as_int(), Some(2));
+        assert_eq!(saved.resolve(&nums[1]).as_dict().unwrap().get(b"ID").unwrap().as_string().unwrap().bytes, b"KEEP_TAG");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("SECRET_"), "{kind}: sensitive deleted tag metadata survived");
+        for keep in ["KEEP_PUBLIC", "KEEP_TAG", "KEEP_EMPTY"] {
+            assert!(text.contains(keep), "{kind}: lost {keep}");
+        }
+        if kind != "shared" {
+            assert!(text.contains("KEEP_OTHER"), "{kind}: lost unrelated tag");
+        }
+    }
+}
+
+#[test]
+fn deleting_field_rejects_cyclic_direct_name_tree_children_with_a_bound() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R /StructTreeRoot 6 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /V (SECRET_VALUE) /Rect [0 0 10 10] >>".into(),
+        "<< /Type /StructTreeRoot /IDTree << /Kids 7 0 R >> >>".into(),
+        "[<< /Kids 7 0 R >>]".into(),
+    ]);
+    assert!(matches!(delete_field(&mut doc, "secret"), Err(FormError::Invalid(_))));
+}
+
 /// A Calculate script naming thousands of fields is merged with the field's other reads in one
 /// pass, not by searching the names so far for each one.
 #[test]

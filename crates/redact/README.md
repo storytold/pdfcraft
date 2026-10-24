@@ -49,8 +49,14 @@ line once. Invalid or excessive appearances return `RedactError::OverlayLimit` w
 the document. Reduce the marked area, disable repeated text, or apply fewer pages at a time.
 This limits appearance generation; it is not a limit on the input PDF or the whole process's memory.
 
+Tiling-pattern copies are enumerated within a bounded range. If the range is too large or
+a step is too small to enumerate safely, the whole tile is conservatively treated as covered;
+this can remove unmarked copies of that tile too. Surviving forms and stencil images retain
+their selected fill/stroke patterns.
+
 Structure cleanup resolves named MCIDs and indirect content references. Form content
-references are updated to the cleaned copy; unchanged sibling descriptions remain. The structure
+references are updated to the cleaned copy, retaining parent-tree keys used by surviving form
+content; unchanged sibling descriptions remain. The structure
 tree's object references (`/OBJR`) to the annotations and form fields `apply` removes are dropped,
 as Sanitize drops them, so a full rewrite of a tagged PDF can't keep a removed comment or field value.
 A tree where that can't be done (an element written in place, or one too large to walk) makes

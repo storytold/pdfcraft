@@ -376,7 +376,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         }
         scope.hidden_layers = off.iter().copied().collect();
         scope.layers_enabled = layers;
-        let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
+        let mut out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
             return Err(error.into());
         }
@@ -390,10 +390,10 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             continue;
         }
         doomed.extend_from_slice(&out.doomed);
-        retired_properties.extend(out.retired_properties);
+        retired_properties.extend(std::mem::take(&mut out.retired_properties));
         let mut new_list = list.clone();
         let mut changed = false;
-        for (i, new) in out.streams.into_iter().enumerate() {
+        for (i, new) in std::mem::take(&mut out.streams).into_iter().enumerate() {
             let Some(bytes) = new else { continue };
             let mut dict = match &*doc.resolve(&list[i]) {
                 Object::Stream(s) => s.dict.clone(),
@@ -405,7 +405,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, &bytes))));
             changed = true;
         }
-        if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
+        if changed || out.has_resource_changes() {
             // Pin inherited resources before replacing them. When no page still inherits the
             // original holder, retiring it also retires descriptions no longer used anywhere.
             crate::localize_resources(doc, &[pi])?;
@@ -413,15 +413,10 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             cleaned_page.set(b"Contents".to_vec(), Object::Array(new_list.clone()));
             let (_, page_content) = page_streams(doc, &cleaned_page, pi)?;
             let mut res = resources.clone();
-            if !out.xobjects.is_empty() || !out.replaced.is_empty() {
-                let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+            if out.has_resource_changes() {
                 // A full save keeps whatever is still referenced: unlink the originals this page no
                 // longer draws so the removed form or image bytes cannot survive in the saved file.
-                crate::interp::prune(&mut xo, &out.replaced, &page_content);
-                for (n, r) in &out.xobjects {
-                    xo.set(n.clone(), Object::Ref(*r));
-                }
-                res.set(b"XObject".to_vec(), Object::Dict(xo));
+                out.apply_resources(doc, &mut res, &page_content);
             }
             retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
             doc.update_dict(page.obj, |d| {

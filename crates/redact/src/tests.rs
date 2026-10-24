@@ -2188,6 +2188,14 @@ fn form_tags_are_cleaned_and_surviving_references_point_at_the_copy() {
     let Object::Stream(s) = &*doc.get(reference) else { panic!() };
     assert!(String::from_utf8(s.decoded().unwrap()).unwrap().contains("Public"));
     assert!(doc.get(ObjRef::new(11, 0)).as_dict().unwrap().contains(b"ActualText"));
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let root = saved.get(saved.root().unwrap()).as_dict().unwrap().get(b"StructTreeRoot").cloned().unwrap();
+    let tree = saved.resolve(&root);
+    let parent = saved.resolve(tree.as_dict().unwrap().get(b"ParentTree").unwrap());
+    let entries = parent.as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap();
+    assert_eq!(entries.first().and_then(Object::as_int), Some(0), "the replacement form keeps its parent-tree key");
+    let parents = entries.get(1).and_then(Object::as_array).unwrap();
+    assert!(parents.get(1).and_then(Object::as_ref).is_some(), "the surviving MCID retains its mapping");
 }
 
 #[test]
@@ -2577,6 +2585,240 @@ fn a_tj_surplus_arrays_undrawn_glyphs_are_not_seen_under_a_mark() {
     let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td [(FIRSTARR)] [(LASTARR)] TJ ET", "", vec![]);
     assert_eq!(under(&mut doc, 0, &[[45.0, 95.0, 50.0, 110.0]]), 0, "nothing is drawn past LASTARR's 35pt width");
     assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 45.0, 110.0]]), 7, "LASTARR's 7 glyphs, the one the page draws");
+}
+
+#[test]
+fn soft_mask_groups_tiling_patterns_and_extgstate_fonts_are_sanitized() {
+    let mut doc = one_page(
+        b"q /GSFont gs BT 10 220 Td (AB_GS_SECRET_CD) Tj ET Q \
+          q /GSMask gs 0 0 300 300 re f Q \
+          q /Pattern cs /Pat1 scn 0 0 300 300 re f Q",
+        "/ExtGState << /GSFont 7 0 R /GSMask 8 0 R >> /Pattern << /Pat1 11 0 R >>",
+        vec![
+            // 7: ExtGState setting font 12 0 R at 10 pt
+            b"<< /Type /ExtGState /Font [12 0 R 10] >>".to_vec(),
+            // 8: ExtGState with soft-mask dictionary 9 0 R
+            b"<< /Type /ExtGState /SMask 9 0 R >>".to_vec(),
+            // 9: Soft-mask dictionary referencing transparency group form 10 0 R
+            b"<< /Type /Mask /S /Luminosity /G 10 0 R >>".to_vec(),
+            // 10: Soft-mask group Form XObject
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 10 Tf 10 150 Td (SMASK_SECRET) Tj 0 -100 Td (SMASK_PUBLIC) Tj ET",
+            ),
+            // 11: Tiling pattern stream (PatternType 1)
+            stream(
+                "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 10 Tf 10 100 Td (PATTERN_SECRET) Tj 0 -80 Td (PATTERN_PUBLIC) Tj ET",
+            ),
+            // 12: Font used only by /GSFont
+            FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        ],
+    );
+    // "AB_" is 3 glyphs = 15 pt (x = 10..25); "GS_SECRET" is 9 glyphs = 45 pt (x = 25..70).
+    let gs_rect = [25.0, 215.0, 70.0, 232.0];
+    let smask_rect = [5.0, 145.0, 100.0, 165.0];
+    let pat_rect = [5.0, 95.0, 110.0, 115.0];
+    assert_eq!(under(&mut doc, 0, &[gs_rect]), 9, "verifier measures ExtGState /Font glyphs");
+    assert_eq!(under(&mut doc, 0, &[smask_rect]), 12, "verifier enters soft-mask group");
+    assert_eq!(under(&mut doc, 0, &[pat_rect]), 14, "verifier enters tiling pattern");
+
+    mark(&mut doc, 0, &[gs_rect, smask_rect, pat_rect], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(report.glyphs, 9 + 12 + 14);
+    assert!(report.forms_rewritten >= 2, "{report:?}");
+
+    assert_no_secret(&doc, b"GS_SECRET");
+    assert_no_secret(&doc, b"SMASK_SECRET");
+    assert_no_secret(&doc, b"PATTERN_SECRET");
+
+    let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap())).unwrap();
+    assert_eq!(under(&mut saved, 0, &[gs_rect, smask_rect, pat_rect]), 0);
+    assert_eq!(under(&mut saved, 0, &[[10.0, 215.0, 25.0, 232.0]]), 3, "AB_ stays before GS_SECRET");
+    assert_eq!(under(&mut saved, 0, &[[70.0, 215.0, 85.0, 232.0]]), 3, "_CD stays at its original x after GS_SECRET");
+    assert_eq!(under(&mut saved, 0, &[[5.0, 45.0, 100.0, 65.0]]), 12, "SMASK_PUBLIC stays");
+    assert_eq!(under(&mut saved, 0, &[[5.0, 15.0, 110.0, 35.0]]), 14, "PATTERN_PUBLIC stays");
+}
+
+#[test]
+fn redacted_and_deleted_objects_leave_no_references_anywhere_in_saved_file() {
+    let objs: Vec<Vec<u8>> = vec![
+        // 1: Catalog with AcroForm, StructTreeRoot, and PieceInfo
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R /StructTreeRoot 15 0 R /PieceInfo << /App << /Private (SECRET_CATALOG_PIECEINFO) >> >> >>".to_vec(),
+        // 2: Pages
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        // 3: Page with Annots, Thumb, PieceInfo, and Resources
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 \
+             /Annots [9 0 R 11 0 R 12 0 R] /Thumb 13 0 R \
+             /PieceInfo << /App << /LastModified (D:20260101) /Private 14 0 R >> >> \
+             /Resources << /Font << /F1 5 0 R >> /XObject << /ImSecret 20 0 R >> \
+                           /ExtGState << /GSFont 21 0 R /GSMask 23 0 R >> \
+                           /Pattern << /PatSecret 26 0 R >> >> >>"
+            .to_vec(),
+        // 4: Page content stream
+        stream(
+            "",
+            b"BT /F1 10 Tf 10 260 Td (PUBLIC_HEADER) Tj ET \
+              q 20 0 0 20 10 180 cm /ImSecret Do Q \
+              q /GSFont gs BT 10 150 Td (SECRET_GS_FONT_TEXT) Tj ET Q \
+              q /GSMask gs 10 120 80 20 re f Q \
+              q /Pattern cs /PatSecret scn 10 90 80 20 re f Q",
+        ),
+        // 5: Standard font /F1
+        FONT.replace("95 0 R", "27 0 R").into_bytes(),
+        // 6: AcroForm with parent field 7, kept field 10, and /CO referencing deleted field 8 and widget 9
+        b"<< /Fields [7 0 R 10 0 R] /CO [8 0 R 9 0 R 10 0 R] >>".to_vec(),
+        // 7: Non-terminal parent field container
+        b"<< /T (secret_container) /Kids [8 0 R] >>".to_vec(),
+        // 8: Secret terminal field (separate from its widget 9)
+        b"<< /FT /Tx /T (secret_field) /Parent 7 0 R /V (SECRET_FIELD_VAL) /Kids [9 0 R] >>".to_vec(),
+        // 9: Secret field's widget on page 1
+        b"<< /Type /Annot /Subtype /Widget /Parent 8 0 R /P 3 0 R /Rect [10 50 150 70] /StructParent 1 >>".to_vec(),
+        // 10: Public kept field + widget (not on page 1's redacted area)
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (public_field) /V (PUBLIC_FIELD_VAL) /Rect [200 260 280 280] /P 3 0 R /StructParent 4 >>".to_vec(),
+        // 11: Secret comment annotation under the mark
+        b"<< /Type /Annot /Subtype /Text /P 3 0 R /Rect [10 20 40 40] /StructParent 2 /Contents (SECRET_COMMENT_TEXT) /Popup 12 0 R >>".to_vec(),
+        // 12: Popup annotation for 11
+        b"<< /Type /Annot /Subtype /Popup /P 3 0 R /Rect [50 20 100 40] /Parent 11 0 R >>".to_vec(),
+        // 13: Page /Thumb stream
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"SECRET_THUMB_BYTES"),
+        // 14: Page /PieceInfo private stream
+        stream("", b"SECRET_PAGE_PIECEINFO"),
+        // 15: StructTreeRoot with direct /ParentTree
+        b"<< /Type /StructTreeRoot /K 16 0 R /ParentTree << /Nums [1 17 0 R 2 18 0 R 3 19 0 R 4 28 0 R 5 9 0 R 6 8 0 R 7 20 0 R] >> >>".to_vec(),
+        // 16: Document structure element
+        b"<< /Type /StructElem /S /Document /P 15 0 R /K [17 0 R 18 0 R 28 0 R] >>".to_vec(),
+        // 17: Form structure element tagging secret field 8 and widget 9
+        b"<< /Type /StructElem /S /Form /P 16 0 R /Pg 3 0 R /T (SECRET_STRUCT_TITLE) /Alt (SECRET_STRUCT_ALT) /K [19 0 R << /Type /OBJR /Obj 8 0 R /Pg 3 0 R >>] >>".to_vec(),
+        // 18: Annot structure element tagging comment 11 and image 20
+        b"<< /Type /StructElem /S /Annot /P 16 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 11 0 R /Pg 3 0 R >> << /Type /OBJR /Obj 20 0 R /Pg 3 0 R >>] >>".to_vec(),
+        // 19: Indirect OBJR to widget 9
+        b"<< /Type /OBJR /Obj 9 0 R /Pg 3 0 R >>".to_vec(),
+        // 20: Secret Image XObject
+        stream("/Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /StructParent 3", b"SECRET_IMAGE_BYTES"),
+        // 21: ExtGState with /Font [22 0 R 10]
+        b"<< /Type /ExtGState /Font [22 0 R 10] >>".to_vec(),
+        // 22: Font referenced only by ExtGState 21
+        FONT.replace("/Arial", "/SECRET_EXTGSTATE_FONT").replace("95 0 R", "27 0 R").into_bytes(),
+        // 23: ExtGState with /SMask 24 0 R
+        b"<< /Type /ExtGState /SMask 24 0 R >>".to_vec(),
+        // 24: SMask dictionary referencing group form 25 0 R
+        b"<< /Type /Mask /S /Luminosity /G 25 0 R >>".to_vec(),
+        // 25: Soft-mask group Form XObject
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>",
+            b"BT /F1 10 Tf 10 125 Td (SECRET_SMASK_GROUP) Tj ET",
+        ),
+        // 26: Tiling pattern stream
+        stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+            b"BT /F1 10 Tf 10 95 Td (SECRET_PATTERN_STREAM) Tj ET",
+        ),
+        // 27: Widths array
+        widths(),
+        // 28: Kept structure element for public_field (10 0 R)
+        b"<< /Type /StructElem /S /Form /P 16 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 10 0 R /Pg 3 0 R >>] >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    // Keep 10 0 R on page 1Annots too so it stays listed
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        d.set(
+            b"Annots".to_vec(),
+            Object::Array(vec![
+                Object::Ref(ObjRef::new(9, 0)),
+                Object::Ref(ObjRef::new(10, 0)),
+                Object::Ref(ObjRef::new(11, 0)),
+                Object::Ref(ObjRef::new(12, 0)),
+            ]),
+        );
+    })
+    .unwrap();
+
+    // Redact the region [0, 0, 180, 220], covering everything except PUBLIC_HEADER and public_field.
+    mark(&mut doc, 0, &[[0.0, 0.0, 180.0, 220.0]], "");
+    apply(&mut doc, None).unwrap();
+
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    for secret in [
+        &b"SECRET_CATALOG_PIECEINFO"[..],
+        b"SECRET_THUMB_BYTES",
+        b"SECRET_PAGE_PIECEINFO",
+        b"secret_container",
+        b"secret_field",
+        b"SECRET_FIELD_VAL",
+        b"SECRET_COMMENT_TEXT",
+        b"SECRET_STRUCT_TITLE",
+        b"SECRET_STRUCT_ALT",
+        b"SECRET_IMAGE_BYTES",
+        b"SECRET_GS_FONT_TEXT",
+        b"SECRET_EXTGSTATE_FONT",
+        b"SECRET_SMASK_GROUP",
+        b"SECRET_PATTERN_STREAM",
+    ] {
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "{} survived full save", String::from_utf8_lossy(secret));
+    }
+
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert!(content(&saved, 0).contains("PUBLIC_HEADER"));
+    let saved_fields = pdfcraft_forms::fields(&saved);
+    assert_eq!(saved_fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["public_field"]);
+    assert_eq!(pdfcraft_forms::calculation_order(&saved, &saved_fields).extra, ["public_field"]);
+    let page = pdfcraft_model::pages(&saved).swap_remove(0);
+    assert!(!page.dict.contains(b"Thumb") && !page.dict.contains(b"PieceInfo"));
+    let cat = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(!cat.contains(b"PieceInfo"));
+    let pt = cat
+        .get(b"StructTreeRoot")
+        .map(|s| saved.resolve(s))
+        .and_then(|s| s.as_dict().and_then(|d| d.get(b"ParentTree")).map(|p| saved.resolve(p)))
+        .and_then(|p| p.as_dict().and_then(|d| d.get(b"Nums")).map(|n| saved.resolve(n)))
+        .and_then(|n| n.as_array().cloned())
+        .unwrap_or_default();
+    let keys: Vec<i64> = pt.chunks(2).filter_map(|pair| pair.first().and_then(Object::as_int)).collect();
+    assert_eq!(keys, [4], "only the surviving field's parent-tree entry remains: {pt:?}");
+}
+
+#[test]
+fn distant_pattern_copies_fail_closed_when_enumeration_is_bounded() {
+    for (xstep, ystep) in [(10.0, 10.0), (0.0001, 10.0), (10.0, 0.0001)] {
+        let pattern = stream(
+            &format!(
+                "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep {xstep} /YStep {ystep} /Resources << /Font << /F1 5 0 R >> >>"
+            ),
+            b"BT /F1 2 Tf 1 5 Td (SECRET) Tj ET",
+        );
+        let mut doc = one_page(b"/Pattern cs /Pat scn 0 0 300 300 re f", "/Pattern << /Pat 7 0 R >>", vec![pattern]);
+        let rect = [100.0, 100.0, 400.0, 110.0];
+        assert!(under(&mut doc, 0, &[rect]) > 0, "distant copies must be inspected for steps {xstep}, {ystep}");
+        mark(&mut doc, 0, &[rect], "");
+        apply(&mut doc, None).unwrap();
+        assert_no_secret(&doc, b"SECRET");
+        let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(under(&mut saved, 0, &[rect]), 0);
+    }
+}
+
+#[test]
+fn retained_forms_and_stencils_keep_their_selected_patterns() {
+    for paint in ["/Fm Do", "q 10 0 0 10 100 100 cm /Im Do Q", "q 10 0 0 10 100 100 cm BI /W 1 /H 1 /IM true /BPC 1 ID \0 EI Q"] {
+        let data = format!("BT /F1 10 Tf 10 200 Td (SECRET) Tj ET /Pattern cs /Pat scn {paint}");
+        let pattern = stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 1000 /YStep 1000 /Resources << >>",
+            b"0 0 10 10 re f",
+        );
+        let form = stream("/Type /XObject /Subtype /Form /BBox [100 100 110 110]", b"100 100 10 10 re f");
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ImageMask true /BitsPerComponent 1", [0]);
+        let mut doc = one_page(data.as_bytes(), "/Pattern << /Pat 7 0 R >> /XObject << /Fm 8 0 R /Im 9 0 R >>", vec![pattern, form, image]);
+        mark(&mut doc, 0, &[[5.0, 195.0, 60.0, 212.0]], "");
+        apply(&mut doc, None).unwrap();
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let data = content(&saved, 0);
+        assert!(data.contains("/Pat scn"), "retained paint lost its fill pattern: {paint}: {data}");
+        let page = pdfcraft_model::pages(&saved).remove(0);
+        let resources = saved.resolve(page.dict.get(b"Resources").unwrap());
+        let patterns = saved.resolve(resources.as_dict().unwrap().get(b"Pattern").unwrap());
+        assert!(patterns.as_dict().unwrap().contains(b"Pat"));
+    }
 }
 
 #[test]
