@@ -6,9 +6,10 @@
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
-//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
+//! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
+//! ([`crate::text_style`]); lines break at that face's standard-14 widths (no font program is
+//! bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
@@ -371,6 +372,12 @@ fn caret_layout(d: &Dict, rect: [f64; 4]) -> ([f64; 4], Option<(f64, f64, f64)>)
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(d: &Dict) -> Option<Stream> {
+    build_in(d, None)
+}
+
+/// [`build`], with the face a text box's `/DA` font names in the form's `/DR`
+/// ([`crate::text_style::dr_face`]).
+pub(crate) fn build_in(d: &Dict, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
@@ -459,9 +466,23 @@ pub fn build(d: &Dict) -> Option<Stream> {
             }
         }
         b"Redact" => {
-            // While marked: the outline of each area (the fill comes when applied).
-            let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
-            let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
+            // While marked: the outline of each area (the fill comes when applied). Without
+            // `/QuadPoints`, `/Rect` is the area (Table 195), outlined just inside its edges.
+            let q = match d.get(b"QuadPoints") {
+                Some(_) => nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?,
+                None => {
+                    let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
+                    vec![x0, y1, x1, y1, x0, y0, x1, y0]
+                }
+            };
+            // An array `/OC` of three numbers is the outline colour some writers give a mark;
+            // `/OC` as ISO 32000-2 defines it (Table 166) is an optional-content dictionary, which
+            // this leaves alone.
+            let outline = nums(d, b"OC").and_then(|c| match c.as_slice() {
+                [r, g, b] if c.iter().all(|x| x.is_finite()) => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
+                _ => None,
+            });
+            let col = outline.or(stroke).unwrap_or([0.89, 0.13, 0.13]);
             c.push_str(&format!("{}1 w\n", rg_stroke(col)));
             for quad in q.as_chunks::<8>().0.iter() {
                 c.push_str(&format!(
@@ -759,9 +780,10 @@ pub fn build(d: &Dict) -> Option<Stream> {
             }
         }
         b"FreeText" => {
-            let (text_color, size) = parse_da(d);
+            let crate::text_style::TextStyle { face, size, color: text_color } = crate::text_style::text_style(d, dr_face);
             let bg = stroke;
-            let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
+            // Without `/BS` or `/Border`, the `/Border` default [0 0 1]: a 1-pt border (Table 166).
+            let bw = border_width(d);
             // A callout: the leader line (arrowhead at its first point), and the text box inside
             // `/Rect` by `/RD`.
             // Text added to a turned page is drawn upright in its displayed box, which the form
@@ -828,21 +850,22 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
             let q = d.int(b"Q").unwrap_or(0);
             c.push_str(&format!(
-                "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
+                "{} {} {} {} re W n\nBT\n/{} {} Tf\n{}",
                 n(rect[0]),
                 n(rect[1]),
                 n(rect[2] - rect[0]),
                 n(rect[3] - rect[1]),
+                crate::text_style::resource_name(face),
                 n(size),
                 rg(text_color)
             ));
             let mut out = c.into_bytes();
             let mut y = rect[3] - pad - size * 0.9;
-            for line in wrap(&text, size, width) {
+            for line in pdfcraft_fonts::wrap_with(&text, size, width, |s, size| face.text_width(s, size)) {
                 if y < rect[1] - size {
                     break;
                 }
-                let lw = text_width(&line, size);
+                let lw = face.text_width(&line, size);
                 let x = match q {
                     1 => rect[0] + pad + (width - lw) / 2.0,
                     2 => rect[2] - pad - lw,
@@ -854,7 +877,14 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 y -= size * 1.2;
             }
             out.extend_from_slice(b"ET\n");
-            res.set(b"Font".to_vec(), helvetica_resource());
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name(face.base_font()));
+            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            let mut fonts = Dict::new();
+            fonts.set(crate::text_style::resource_name(face).as_bytes().to_vec(), Object::Dict(font));
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
             let mut stream = form(full, &out, res);
             if let Some(m) = matrix {
                 stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
