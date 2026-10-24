@@ -294,6 +294,24 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
     }
     let (scheme, scheme_digest) = signature_algorithm(&next)?;
     let signature = it.next().ok_or_else(|| bad("signature"))?.octets("signature")?.into_owned();
+    let (timestamp, timestamp_token) = parse_timestamp_token(it)?;
+    Ok(SignerInfo {
+        sid,
+        digest,
+        signed_attrs,
+        message_digest,
+        content_type,
+        signing_time,
+        signing_certificate,
+        scheme,
+        scheme_digest,
+        signature,
+        timestamp,
+        timestamp_token,
+    })
+}
+
+fn parse_timestamp_token<'a>(it: impl Iterator<Item = Tlv<'a>>) -> Result<(bool, Option<Vec<u8>>), SignError> {
     let mut timestamp = false;
     let mut timestamp_token = None;
     for t in it {
@@ -309,20 +327,7 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
             }
         }
     }
-    Ok(SignerInfo {
-        sid,
-        digest,
-        signed_attrs,
-        message_digest,
-        content_type,
-        signing_time,
-        signing_certificate,
-        scheme,
-        scheme_digest,
-        signature,
-        timestamp,
-        timestamp_token,
-    })
+    Ok((timestamp, timestamp_token))
 }
 
 /// Attach an RFC 3161 `signatureTimeStampToken` unsigned attribute to a detached CMS object.

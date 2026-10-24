@@ -255,6 +255,13 @@ fn kept_bytes(o: &Outcome) -> usize {
 }
 
 #[test]
+fn exec_menu_item_requests_are_capped_like_other_requests() {
+    let o = go("for (var i = 0; i < 12000; i++) app.execMenuItem('Print');", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.error, None);
+    assert_eq!(o.requests.len(), crate::xfa::MAX_EFFECTS);
+}
+
+#[test]
 fn console_alerts_and_requests_are_capped_in_count_and_bytes() {
     let o = go(
         "var s = 'x'; while (s.length < 8192) s += s; \
@@ -297,6 +304,61 @@ fn document_level_functions_are_available() {
     assert_eq!(o.value, "8");
 }
 
+/// #3940: a document script that throws after defining a helper (here calling an Acrobat method
+/// PdfCraft lacks) still leaves the helper, and the later scripts, to the field script.
+#[test]
+fn a_failing_document_script_does_not_stop_the_field_script() {
+    let docs = [
+        "function double(x) { return x * 2; }\nthis.getField('qty').buttonSetIcon(null);\nvar after = 1;".to_string(),
+        "function plus(x) { return x + 1; }".to_string(),
+        "this is not javascript".to_string(),
+    ];
+    let o = run(
+        "event.value = plus(double(getField('qty').value));",
+        &Event::field("Calculate", "total", ""),
+        &doc(),
+        &fields(),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((o.error.as_deref(), o.value.as_str()), (None, "9"));
+    assert_eq!(o.doc_errors.len(), 2, "{:?}", o.doc_errors);
+    assert!(o.doc_errors[0].starts_with("document script 1: TypeError"), "{:?}", o.doc_errors);
+    assert!(o.doc_errors[1].starts_with("document script 3: SyntaxError"), "{:?}", o.doc_errors);
+    // The failing script stopped where it failed.
+    let o = run("event.value = typeof after;", &Event::field("Calculate", "total", ""), &doc(), &fields(), &docs, Limits::default());
+    assert_eq!(o.value, "undefined");
+    // Working document scripts report nothing.
+    assert!(go("event.value = 1;", &Event::field("Calculate", "total", "")).doc_errors.is_empty());
+}
+
+/// A document script refused before running (too long, or nested too deeply to run safely) is
+/// skipped like one that throws: never run, reported in its place, the rest still run.
+#[test]
+fn a_document_script_too_big_to_run_is_skipped_and_reported() {
+    let docs = [
+        "this.getField('qty').buttonSetIcon(null);".to_string(),
+        format!("var big = 1{};", "+1".repeat(MAX_SCRIPT_BYTES / 2)),
+        "function double(x) { return x * 2; }".to_string(),
+        format!("var deep = {}1{};", "(".repeat(10_000), ")".repeat(10_000)),
+    ];
+    let o = run(
+        "event.value = double(getField('qty').value) + typeof big;",
+        &Event::field("Calculate", "total", ""),
+        &doc(),
+        &fields(),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((o.error.as_deref(), o.value.as_str()), (None, "8undefined"));
+    let places: Vec<&str> = o.doc_errors.iter().map(|e| e.split(':').next().unwrap_or_default()).collect();
+    assert_eq!(places, ["document script 1", "document script 2", "document script 4"], "{:?}", o.doc_errors);
+    assert!(o.doc_errors[1].contains("too long") && o.doc_errors[2].contains("nested too deeply"), "{:?}", o.doc_errors);
+    // The field script's own limits still refuse it outright.
+    let o = run(&format!("1{}", "+1".repeat(MAX_SCRIPT_BYTES)), &Event::field("Calculate", "total", ""), &doc(), &fields(), &docs, Limits::default());
+    assert!(o.error.is_some_and(|e| e.contains("too long")) && o.doc_errors.is_empty());
+}
+
 #[test]
 fn errors_and_runaway_scripts_are_contained() {
     let o = go("event.value = nosuch.thing;", &Event::field("Calculate", "total", "keep"));
@@ -336,9 +398,11 @@ fn deeply_nested_scripts_fail_instead_of_crashing() {
         let o = go(s, &Event::doc("Open"));
         assert!(o.error.is_some(), "{}…", &s[..20]);
     }
-    // A hostile document-level script is refused too, before the field script runs.
+    // A hostile document-level script is refused too: it never runs, and is reported, while
+    // the field script still does (#3940).
     let o = run("event.value = 'ran';", &Event::field("Calculate", "a", ""), &doc(), &fields(), &[hostile[0].clone()], Limits::default());
-    assert!(o.error.is_some());
+    assert_eq!((o.error, o.value.as_str()), (None, "ran"));
+    assert!(o.doc_errors.len() == 1 && o.doc_errors[0].contains("nested too deeply"), "{:?}", o.doc_errors);
 }
 
 #[test]
@@ -803,6 +867,14 @@ mod formcalc {
         let o = go(script, "form1[0].page1[0].total[0]", "calculate");
         assert_eq!(o.error, None, "{script}");
         o.result.unwrap_or_default()
+    }
+
+    /// A negative value that rounds to zero under the picture prints without a minus sign.
+    #[test]
+    fn format_does_not_print_negative_zero() {
+        assert_eq!(calc(r#"Format("9.9", -0.04)"#), "0.0");
+        assert_eq!(calc(r#"Format("99", -0.2)"#), "00");
+        assert_eq!(calc(r#"Format("9.9", -1.5)"#), "-1.5");
     }
 
     /// Assigning one long value to many fields at once stops at the run's byte budget and is
@@ -1328,6 +1400,8 @@ mod session {
     use crate::xfa::*;
     use crate::xfa_session::{Script, XfaSession};
 
+    /// A JavaScript or FormCalc script for `activity` on `target`, against the test form with
+    /// default limits and a 3 s timeout.
     fn script(source: &str, formcalc: bool, target: &str, activity: &str) -> Script {
         Script {
             source: source.into(),
@@ -1339,6 +1413,9 @@ mod session {
         }
     }
 
+    /// JavaScript and FormCalc scripts run in turn in one session, each on the form the caller
+    /// sends: nothing an earlier script changed or defined leaks into the next, a failing script
+    /// doesn't end the session, and hundreds of scripts run on its one thread.
     #[test]
     fn scripts_of_one_event_run_on_one_thread_each_on_the_form_the_caller_sends() {
         let mut s = XfaSession::new(XfaDoc { page_count: 3, ..Default::default() });
@@ -1378,6 +1455,8 @@ mod session {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
+    /// A JavaScript or FormCalc script whose engine takes longer to be ready than the script's
+    /// time limit still runs and returns its result, and the session stays alive.
     #[test]
     fn a_scripts_time_starts_when_its_context_is_ready() {
         // The engine made slow to be ready (300 ms) under a 50 ms script limit: the script is
@@ -1398,6 +1477,9 @@ mod session {
         assert_eq!(s.dead(), None);
     }
 
+    /// An endless JavaScript loop past its 200 ms limit is abandoned within 2 s and leaves the
+    /// session dead, so nothing more runs in it; an endless FormCalc loop is abandoned or
+    /// reported as running too long.
     #[test]
     fn a_script_past_its_time_is_abandoned_and_the_session_is_dead_after_it() {
         let mut s = XfaSession::new(XfaDoc::default());
@@ -1453,6 +1535,249 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert_eq!(read.error, None);
     assert_eq!(read.value, "undefined:4:false");
     assert!(read.changed.is_empty());
+}
+
+mod scand {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEvent, run_xfa};
+
+    /// Runs `util.scand(format, text)` for each case and checks the date it gives, written as
+    /// `yyyy-mm-dd HH:MM:ss`, or `null`.
+    fn assert_scand(cases: &[(&str, &str, &str)]) {
+        let list: Vec<String> = cases.iter().map(|(f, t, _)| format!("['{f}', '{t}']")).collect();
+        let script = format!(
+            "event.value = [{}].map(function (c) {{ var d = util.scand(c[0], c[1]); \
+             return d === null ? 'null' : util.printd('yyyy-mm-dd HH:MM:ss', d); }}).join('|');",
+            list.join(", ")
+        );
+        let o = go(&script, &Event::field("Calculate", "total", ""));
+        assert_eq!(o.error, None);
+        let got: Vec<&str> = o.value.split('|').collect();
+        assert_eq!(got.len(), cases.len());
+        for ((f, t, want), got) in cases.iter().zip(got) {
+            assert_eq!(got, *want, "util.scand('{f}', '{t}')");
+        }
+    }
+
+    // The cases below are another viewer's answers, observed black-box with a synthetic file.
+
+    /// Any separator may come between fields, whether the format has that one, another or none,
+    /// but a text with a space or a letter before or after the date reads nothing.
+    #[test]
+    fn scand_allows_separators_between_fields_but_nothing_before_or_after_them() {
+        assert_scand(&[
+            ("yyyymmdd", "20261018", "2026-10-18 00:00:00"),
+            ("yyyymmdd", "2026-10-18", "2026-10-18 00:00:00"),
+            ("yyyymmdd", "2026 10 18", "2026-10-18 00:00:00"),
+            ("mm/dd/yyyy", "10/18/2026", "2026-10-18 00:00:00"),
+            ("mm/dd/yyyy", "10-18-2026", "2026-10-18 00:00:00"),
+            ("yyyymmdd", " 20261018 ", "null"),
+            ("yyyymmdd", "20261018x", "null"),
+            ("yyyymmdd", "x20261018", "null"),
+        ]);
+    }
+
+    /// Digits typed together fill the joined fields with exactly as many digits as each field has
+    /// letters, so a run of any other length reads nothing.
+    #[test]
+    fn scand_splits_digits_typed_together_by_the_formats_letter_counts() {
+        assert_scand(&[
+            ("yyyymmdd", "261018", "null"),
+            ("yyyymmdd", "2026118", "null"),
+            ("yyyymmdd", "202610181", "null"),
+            ("yymmdd", "20261018", "null"),
+            ("yyyymdd", "2026118", "2026-01-18 00:00:00"),
+            ("yyyymmd", "2026118", "2026-11-08 00:00:00"),
+            ("yyyymd", "2026118", "null"),
+            ("yyyymd", "202618", "2026-01-08 00:00:00"),
+            ("yyyymd", "20261018", "null"),
+            ("yymd", "2618", "2026-01-08 00:00:00"),
+            ("yymd", "261018", "null"),
+        ]);
+    }
+
+    /// A month past 12, a day past the month's end and February 29 outside a leap year are
+    /// refused, while a month or day of 0 is read as 1.
+    #[test]
+    fn scand_refuses_impossible_dates_and_reads_a_zero_month_or_day_as_1() {
+        assert_scand(&[
+            ("yyyymmdd", "20261318", "null"),
+            ("yyyymmdd", "20260230", "null"),
+            ("yyyymmdd", "20260229", "null"),
+            ("yyyymmdd", "20240229", "2024-02-29 00:00:00"),
+            ("mm/dd/yyyy", "13/45/2026", "null"),
+            ("yyyymmdd", "20260018", "2026-01-18 00:00:00"),
+            ("yyyymmdd", "20261000", "2026-10-01 00:00:00"),
+        ]);
+    }
+
+    /// A field typed by itself may have one or two digits, but a `yyyy` year needs four; `yy` reads
+    /// as 1950–2049; month names may be full or three letters in any case; weekday names are read.
+    #[test]
+    fn scand_reads_lone_fields_two_digit_years_and_month_and_weekday_names() {
+        assert_scand(&[
+            ("mm/dd/yyyy", "1/5/2026", "2026-01-05 00:00:00"),
+            ("m/d/yyyy", "1/5/2026", "2026-01-05 00:00:00"),
+            ("m/d/yyyy", "01/05/2026", "2026-01-05 00:00:00"),
+            ("m/d/yy", "1/5/26", "2026-01-05 00:00:00"),
+            ("mm/dd/yyyy", "10/18/26", "null"),
+            ("yyyy/mm/dd", "26/10/18", "null"),
+            ("yymmdd", "261018", "2026-10-18 00:00:00"),
+            ("yymmdd", "491018", "2049-10-18 00:00:00"),
+            ("yymmdd", "501018", "1950-10-18 00:00:00"),
+            ("mmm d, yyyy", "Oct 18, 2026", "2026-10-18 00:00:00"),
+            ("mmm d, yyyy", "October 18, 2026", "2026-10-18 00:00:00"),
+            ("mmm d, yyyy", "oct 18, 2026", "2026-10-18 00:00:00"),
+            ("mmmm d, yyyy", "Oct 18, 2026", "2026-10-18 00:00:00"),
+            ("mmmm d, yyyy", "October 18, 2026", "2026-10-18 00:00:00"),
+            ("dd-mmm-yyyy", "18-Oct-2026", "2026-10-18 00:00:00"),
+            ("dddd, mmmm d, yyyy", "Sunday, October 18, 2026", "2026-10-18 00:00:00"),
+        ]);
+    }
+
+    /// A time is read along with a date, but a format with only time fields reads nothing.
+    #[test]
+    fn scand_reads_a_time_only_with_a_date() {
+        assert_scand(&[
+            ("mm/dd/yyyy HH:MM:ss", "10/18/2026 21:07:05", "2026-10-18 21:07:05"),
+            ("HH:MM", "09:07", "null"),
+            ("HH:MM", "9:07", "null"),
+            ("h:MM tt", "9:07 pm", "null"),
+            ("h:MM tt", "9:07 am", "null"),
+            ("h:MM tt", "12:07 am", "null"),
+            ("h:MM tt", "9:07pm", "null"),
+        ]);
+    }
+
+    /// An empty text reads as today at noon, and a text that is not a string (a number, or none
+    /// at all) reads nothing.
+    #[test]
+    fn scand_reads_only_text_and_an_empty_text_is_today_at_noon() {
+        let o = go(
+            "var d = util.scand('yyyymmdd', ''), n = new Date(); \
+             event.value = [d.toDateString() == n.toDateString(), d.getHours(), d.getMinutes(), d.getSeconds(), \
+             util.scand('yyyymmdd', 20261018), util.scand(), util.scand('yyyymmdd')].join('|');",
+            &Event::field("Calculate", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "true|12|0|0|||");
+    }
+
+    // Not observed: the choices made where the other viewer wasn't asked.
+
+    /// A year left out is this year, `h:MM tt` reads a 12-hour time and refuses hours it cannot
+    /// have, and a letter the format writes must be typed there.
+    #[test]
+    fn scand_takes_this_year_when_none_is_given_and_reads_12_hour_times_and_written_letters() {
+        assert_scand(&[
+            ("mm/dd/yyyy h:MM tt", "10/18/2026 9:07 pm", "2026-10-18 21:07:00"),
+            ("mm/dd/yyyy h:MM tt", "10/18/2026 12:07 AM", "2026-10-18 00:07:00"),
+            ("mm/dd/yyyy h:MM tt", "10/18/2026 13:07 pm", "null"),
+            ("mm/dd/yyyy HH:MM", "10/18/2026 24:00", "null"),
+            ("yyyy-mm-ddTHH:MM", "2026-10-18T21:07", "2026-10-18 21:07:00"),
+            ("yyyy-mm-ddTHH:MM", "2026-10-18X21:07", "null"),
+        ]);
+        let o = go(
+            "var d = util.scand('mm/dd', '10/18'); event.value = [d.getFullYear() == new Date().getFullYear(), d.getMonth(), d.getDate()].join('|');",
+            &Event::field("Calculate", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "true|9|18");
+    }
+
+    /// A format of 50,000 literal letters and one of 100,000 fields, with texts to match, are read
+    /// in linear time. The limit is generous so a loaded runner passes (it also covers starting
+    /// the engine and building the strings); a quadratic scan of inputs this size takes minutes.
+    #[test]
+    fn scand_reads_long_formats_and_texts_in_linear_time() {
+        // Scripts can pass anything; native code isn't bounded by the loop limit.
+        let started = std::time::Instant::now();
+        let o = go(
+            "var x = new Array(50001).join('x'), md = new Array(50001).join('md'), ones = new Array(100000).join('1 ') + '1'; \
+             event.value = [util.scand(x + 'yyyy', x + '2026') !== null, util.scand('yyyy' + md, '2026 ' + ones) !== null].join('|');",
+            &Event::field("Calculate", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "true|true");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    /// The check an XFA form runs on leaving a date field tries six formats with `util.scand` and
+    /// writes the first that reads the text back as `yyyymmdd`, or reports an invalid date.
+    #[test]
+    fn xfa_scripts_check_typed_dates_with_util_scand() {
+        // The check a form runs when a date field is left: the first of six formats that reads
+        // the typed text, written back as yyyymmdd; or an invalid date. Results as another viewer gives them.
+        let check = |typed: &str| {
+            let script = format!(
+                "var six = ['yyyymmdd', 'yymmdd', 'yyyymdd', 'yyyymmd', 'yyyymd', 'yymd'], out = 'invalid'; \
+                 for (var i = 0; i < six.length; i++) {{ var d = util.scand(six[i], '{typed}'); \
+                 if (d !== null) {{ out = util.printd('yyyymmdd', d); break; }} }} out"
+            );
+            let event = XfaEvent { activity: "exit".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
+            run_xfa(&script, &event, &XfaDoc::default(), &super::xfa_model::form(), Limits::default())
+        };
+        for (typed, want) in [
+            ("20261018", "20261018"),
+            ("261018", "20261018"),
+            ("2026118", "20260118"),
+            ("202618", "20260108"),
+            ("2618", "20260108"),
+            ("2026-10-18", "20261018"),
+            ("20261318", "invalid"),
+            ("20260230", "invalid"),
+        ] {
+            let o = check(typed);
+            assert_eq!(o.error, None, "{typed}: {o:?}");
+            assert_eq!(o.result.as_deref(), Some(want), "{typed}");
+        }
+    }
+}
+
+mod menu_items {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
+
+    /// Every side panel has a fixed id in automation output.
+    #[test]
+    fn each_panel_has_a_fixed_id_for_automation() {
+        let ids = [Panel::Bookmarks, Panel::Pages, Panel::Attachments, Panel::Signatures, Panel::Layers].map(Panel::id);
+        assert_eq!(ids, ["bookmarks", "pages", "attachments", "signatures", "layers"]);
+    }
+
+    /// Each side panel item, Print and SaveAs make their request, in order; an unknown item
+    /// makes none and is not an error.
+    #[test]
+    fn exec_menu_item_shows_side_panels_prints_and_saves() {
+        let o = go(
+            "app.execMenuItem('ShowHideFileAttachment'); app.execMenuItem('ShowHideBookmarks'); app.execMenuItem('ShowHideThumbnails'); \
+             app.execMenuItem('ShowHideSignatures'); app.execMenuItem('ShowHideOptCont'); app.execMenuItem('Print'); \
+             app.execMenuItem('SaveAs'); app.execMenuItem('NoSuchItem');",
+            &Event::field("Mouse Up", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(
+            o.requests,
+            [
+                Request::ShowPanel(Panel::Attachments),
+                Request::ShowPanel(Panel::Bookmarks),
+                Request::ShowPanel(Panel::Pages),
+                Request::ShowPanel(Panel::Signatures),
+                Request::ShowPanel(Panel::Layers),
+                Request::Print,
+                Request::SaveAs,
+            ]
+        );
+    }
+
+    /// `app.execMenuItem` works in XFA scripts too: a click shows the attachments panel.
+    #[test]
+    fn xfa_scripts_show_the_attachments_panel() {
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("app.execMenuItem('ShowHideFileAttachment')", &event, &XfaDoc::default(), &super::xfa_model::form(), Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert!(o.effects.contains(&XfaEffect::ShowPanel(Panel::Attachments)), "{:?}", o.effects);
+    }
 }
 
 /// The check XFA forms run on opening: without both globals, or with a version below 2.8, it

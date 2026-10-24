@@ -1137,10 +1137,15 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn dests_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    bookmarks_harness("dests.pdf", DESTS)
+}
+
+/// `pdf` open with the Bookmarks panel showing, once the window's layout holds still.
+fn bookmarks_harness(name: &'static str, pdf: &'static [u8]) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("dests.pdf", None, DESTS.to_vec()).expect("opens");
+        app.open_bytes(name, None, pdf.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "bookmarks").unwrap();
         app
@@ -1190,13 +1195,15 @@ fn bookmark_destinations_scroll_to_their_position() {
     let d = from_viewport_corner(&h, 1, 0.25, 0.5);
     assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "the destination point is at the window's top-left: {d:?}");
 
-    // Malformed operands fall back to the top of the page at the current zoom.
+    // Unusable operands are read as null, which keeps the reader's place in user space: y 300
+    // was at the window's top on page 2 (its crop box starts at y 100), so on page 3 (crop from
+    // 0) y 300 is there too, a quarter down, at the current zoom.
     h.get_by_label("Broken").click();
     h.run_steps(6);
     let v = &h.state().views[0];
     assert_eq!((v.current, v.zoom), (2, 3.0));
-    let d = from_viewport_corner(&h, 2, 0.0, 0.0);
-    assert!(d.y > 0.0 && d.y < 40.0, "page 3 is scrolled to its top: {d:?}");
+    let d = from_viewport_corner(&h, 2, 0.0, 0.25);
+    assert!(d.y.abs() < 2.0, "y 300 on page 3 is at the top of the window: {d:?}");
 }
 
 #[test]
@@ -1217,6 +1224,42 @@ fn link_destinations_scroll_to_their_position() {
     assert_eq!((v.current, v.fit), (1, Fit::Width), "/FitH goes to page 2 and fits its width");
     let d = from_viewport_corner(&h, 1, 0.0, 0.2);
     assert!(d.y.abs() < 2.0, "y 420 on page 2 is at the top of the window: {d:?}");
+}
+
+/// Two 300×400 pages. A bookmark shows page 1 at 400% with (40, 360) at the window's top-left;
+/// the link there goes to page 2 as CAD exports write their cross-references, `/XYZ null null 0`.
+const KEEP_PLACE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 11 0 R /Count 1 >> endobj
+11 0 obj << /Title (Start) /Parent 10 0 R /Dest [3 0 R /XYZ 40 360 4] >> endobj
+20 0 obj << /Type /Annot /Subtype /Link /Rect [60 320 140 350] /Border [0 0 0] /Dest [4 0 R /XYZ null null 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn a_link_without_a_position_keeps_the_place_on_the_next_page() {
+    let mut h = bookmarks_harness("keep-place.pdf", KEEP_PLACE);
+    h.get_by_label("Start").click();
+    h.run_steps(6);
+    assert_eq!((h.state().views[0].current, h.state().views[0].zoom), (0, 4.0));
+    let (fx, fy) = (40.0 / 300.0, 40.0 / 400.0);
+    let d = from_viewport_corner(&h, 0, fx, fy);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "(40, 360) is at the window's top-left: {d:?}");
+
+    let r = rect(&h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * (100.0 / 300.0), r.min.y + r.height() * (1.0 - 335.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.zoom), (1, 4.0), "the link goes to page 2 at the same zoom");
+    let d = from_viewport_corner(&h, 1, fx, fy);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "page 2 shows the same place, not its top: {d:?}");
 }
 
 /// Two pages with a text field on each and a non-embedded Helvetica.
@@ -1266,13 +1309,7 @@ fn highlight_fields_tints_the_field_area() {
     h.state_mut().set_option("panel", "none").unwrap();
     // Highlighting is on by default; start from plain fields.
     h.state_mut().set_option("fields", "off").unwrap();
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     // The field spans x 50..250, y 300..330 (PDF space, y up) on a 300×400 page; sample inside it.
     let at = egui::pos2(r.min.x + r.width() * (60.0 / 300.0), r.min.y + r.height() * (1.0 - 305.0 / 400.0));
@@ -1409,13 +1446,7 @@ fn required_radio_buttons_get_a_round_red_border() {
         app.set_option("fields", "on").unwrap();
         app
     });
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     let ppp = h.ctx.pixels_per_point();
     let img = h.render().expect("renders");
@@ -1560,13 +1591,7 @@ fn required_fields_get_a_red_border_when_highlighting() {
     h.state_mut().set_option("fields", "on").unwrap();
     let props = pdfcraft_engine::FieldProps { required: Some(true), ..Default::default() };
     h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "fullname".into(), props: Box::new(props) });
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     // Just inside the left edge of the field (x 50, y 300..330 on a 300×400 page).
     let ppp = h.ctx.pixels_per_point();
@@ -1622,13 +1647,7 @@ trailer << /Root 1 0 R >>
 /// Mean and largest difference between page 1 on screen and the page rendered directly at the
 /// view's exact device scale, over the lined area of `page_raster_maps_one_to_one_onto_screen_pixels`.
 fn compare_page_with_raster(h: &mut Harness<'static, PdfCraftApp>, pdf: &[u8], zoom: f32) -> (f64, u8) {
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(h);
     let ppp = h.ctx.pixels_per_point();
     let r = rect(h, 0).expect("page 1");
     let img = h.render().expect("renders");
@@ -1693,16 +1712,6 @@ fn grid_harness(pdf: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
     })
 }
 
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..400 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 /// Detail in the middle of the window: the summed difference between neighbouring pixels.
 fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
     let img = h.render().expect("renders");
@@ -1720,7 +1729,7 @@ fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
 fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
     let _gpu = gpu();
     let mut h = grid_harness(fine_grid_pdf(), "300");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let sharp = centre_detail(&mut h);
     // The first frame at a new zoom has no tiles for it yet (they are requested at its end).
     h.state_mut().set_option("zoom", "310").unwrap();
@@ -1736,13 +1745,13 @@ fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
 fn returning_to_a_visited_zoom_reuses_its_cached_tiles() {
     let _gpu = gpu();
     let mut h = grid_harness(fine_grid_pdf(), "300");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].tiles_debug(0);
     assert!(!before.is_empty(), "the 300 % page should be tiled, but it cached no tiles");
     // Zoom right out, where the 1200 pt page fits in one raster and is not tiled at all, so
     // none of its tiles is demanded...
     h.state_mut().set_option("zoom", "50").unwrap();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // ...then back to the first zoom, which was already rendered sharp.
     h.state_mut().set_option("zoom", "300").unwrap();
     h.step();

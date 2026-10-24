@@ -553,10 +553,7 @@ pub fn add_bookmark_at(
     let at = index.min(kids.len());
     kids.insert(at, item);
     relink(doc, parent, &kids)?;
-    // Show the new bookmark: open its parent (the root is always open).
-    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
-        put(doc, parent, b"Count", Some(Object::Int(1)))?;
-    }
+    show_children(doc, parent, parent_path)?;
     recount(doc)?;
     let mut path = parent_path.to_vec();
     path.push(at);
@@ -699,9 +696,21 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
     let at = index.min(kids.len());
     kids.insert(at, r);
     relink(doc, parent, &kids)?;
+    if parent != old_parent {
+        show_children(doc, parent, &to_parent)?;
+    }
     recount(doc)?;
     to_parent.push(at);
     Ok(to_parent)
+}
+
+/// Open `parent` so a bookmark just added or moved into it shows (the root is always open).
+/// Only the sign of `/Count` matters here: [`recount`] sets its value.
+fn show_children(doc: &mut Document, parent: ObjRef, parent_path: &[usize]) -> Result<()> {
+    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
+        put(doc, parent, b"Count", Some(Object::Int(1)))?;
+    }
+    Ok(())
 }
 
 /// Expand or collapse a bookmark that has children.

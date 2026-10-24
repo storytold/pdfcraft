@@ -1874,3 +1874,62 @@ fn a_comment_locked_by_an_indirect_flag_is_not_replaced_by_an_import() {
     assert!(annots.contains(&Object::Ref(note)), "the locked comment was replaced");
     assert_eq!(doc.get(note), before, "the locked comment was changed");
 }
+
+#[test]
+fn import_skips_annotations_with_non_finite_coordinates() {
+    for rect in ["nan,10,100,100", "0,inf,100,100", "0,10,infinity,100", "0,10,100,-inf"] {
+        let mut doc = blank();
+        let xfdf = format!(
+            r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><square page="0" rect="0,0,50,50" name="good"/><square page="0" rect="{rect}" name="bad"/></annots></xfdf>"#
+        );
+        let r = import(&mut doc, xfdf.as_bytes()).unwrap();
+        assert_eq!(r.comments, 1, "rect {rect}: {r:?}");
+        let names = annots_of(&doc);
+        assert_eq!(names.len(), 1, "rect {rect}: {names:?}");
+        assert_eq!(names[0].get(b"NM"), Some(&PdfString::literal(b"good".to_vec()).into()), "rect {rect}");
+    }
+}
+
+#[test]
+fn import_drops_non_finite_numbers_from_every_coordinate_list() {
+    let xfdf = r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>
+        <line page="0" rect="0,0,50,50" name="line" start="nan,0" end="10,10"/>
+        <polygon page="0" rect="0,0,50,50" name="poly"><vertices>1,2;inf,4;5,6</vertices></polygon>
+        <ink page="0" rect="0,0,50,50" name="ink"><inklist><gesture>1,2;3,-inf</gesture></inklist></ink>
+        <freetext page="0" rect="0,0,50,50" name="callout" callout="1,2,nan,4,5,6"/>
+        <highlight page="0" rect="0,0,50,50" name="hl" coords="0,0,infinity,0,0,10,10,10"/>
+        </annots></xfdf>"#;
+    let mut doc = blank();
+    let r = import(&mut doc, xfdf.as_bytes()).unwrap();
+    assert_eq!(r.comments, 5, "{r:?}");
+    fn finite(doc: &Document, o: &Object) -> bool {
+        match &*doc.resolve(o) {
+            Object::Real(x) => x.is_finite(),
+            Object::Array(a) => a.iter().all(|e| finite(doc, e)),
+            _ => true,
+        }
+    }
+    let annots = annots_of(&doc);
+    assert_eq!(annots.len(), 5);
+    for d in &annots {
+        for (k, v) in d.iter() {
+            if k.as_slice() != b"P" {
+                assert!(finite(&doc, v), "{d:?}");
+            }
+        }
+        assert!(d.get(b"L").is_none() && d.get(b"CL").is_none() && d.get(b"Vertices").is_none(), "{d:?}");
+    }
+}
+
+fn annots_of(doc: &Document) -> Vec<Dict> {
+    let page = &pdfcraft_model::pages(doc)[0];
+    page.dict
+        .get(b"Annots")
+        .map(|a| doc.resolve(a))
+        .and_then(|a| a.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|a| doc.resolve(a).as_dict().cloned().unwrap())
+        .filter(|d| d.get(b"Subtype") != Some(&Object::name("Widget")))
+        .collect()
+}

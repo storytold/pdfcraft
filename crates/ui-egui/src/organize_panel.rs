@@ -168,13 +168,17 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     } else if back {
         view.organize = false;
         app.left = LeftPanel::AllTools;
-        app.mode = crate::Mode::AllTools;
     }
     match act {
         Some(Act::Edit(edit)) => view.pending_edit = Some(*edit),
         Some(Act::View(action)) => view.pending_action = Some(action),
         Some(Act::Command(command)) => app.run_command(command),
         None => {}
+    }
+    // Leaving the workspace needs the whole app, so it waits until the view is done with: leaving
+    // Edit puts Edit text down and applies a paragraph still open on the page.
+    if back && !close {
+        app.enter_mode(crate::Mode::AllTools);
     }
 }
 

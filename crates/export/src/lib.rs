@@ -246,7 +246,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         used.sort_unstable();
         used.dedup();
         let mut edges: Vec<f64> = used.iter().filter_map(|&i| col_of.get(i).copied().flatten()).filter_map(|ci| cols.get(ci)).map(|c| c.0).collect();
-        edges.sort_by(|a, b| a.total_cmp(b));
+        edges.sort_by(f64::total_cmp);
         edges.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         let ncols = edges.len();
         let ok = (ncols >= 3 || (ncols == 2 && run.len() >= 3)) && ncols <= MAX_COLS;
@@ -256,7 +256,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         }
         let right = used.iter().map(|&i| blocks[i].rect[2]).fold(f64::MIN, f64::max) + COL_TOL;
         let mut rows_out = Vec::new();
-        let mut slots: Vec<Option<Cell>> = vec![None; ncols];
+        let mut slots: Vec<Option<(Cell, Vec<usize>)>> = vec![None; ncols];
         for row in run.drain(..) {
             for slot in slots.iter_mut() {
                 *slot = None;
@@ -266,20 +266,28 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                 let Some(slot) = edges.iter().position(|e| (*e - b.rect[0]).abs() <= COL_TOL) else { continue };
                 let span = edges[slot + 1..].iter().filter(|e| **e > b.rect[0] + COL_TOL && **e < b.rect[2] - COL_TOL).count() + 1;
                 let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, color: b.color, span };
-                match &mut slots[slot] {
-                    Some(c) => {
+                match slots.get_mut(slot) {
+                    Some(Some((c, sources))) => {
                         c.text.push(' ');
                         c.text.push_str(&cell.text);
+                        sources.push(bi);
                     }
-                    None => slots[slot] = Some(cell),
+                    Some(empty @ None) => *empty = Some((cell, vec![bi])),
+                    None => continue,
                 }
-                consumed[bi] = true;
             }
             let mut materialized = Vec::with_capacity(ncols);
             let mut column = 0;
             while column < ncols {
-                match slots[column].take() {
-                    Some(mut cell) => {
+                match slots.get_mut(column).and_then(Option::take) {
+                    Some((mut cell, sources)) => {
+                        // A spanning cell can skip later slots. Only consume source blocks
+                        // when their text is emitted, leaving covered text in paragraph flow.
+                        for bi in sources {
+                            if let Some(taken) = consumed.get_mut(bi) {
+                                *taken = true;
+                            }
+                        }
                         cell.span = cell.span.min(ncols - column).max(1);
                         column += cell.span;
                         materialized.push(cell);
@@ -313,7 +321,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     let run_edges = |run: &[Vec<(usize, usize)>]| -> Vec<f64> {
         let mut es: Vec<f64> =
             run.iter().flatten().filter_map(|(_, i)| col_of.get(*i).copied().flatten()).filter_map(|ci| cols.get(ci)).map(|c| c.0).collect();
-        es.sort_by(|a, b| a.total_cmp(b));
+        es.sort_by(f64::total_cmp);
         es.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         es
     };
@@ -517,17 +525,18 @@ fn docx_table(t: &Table) -> String {
     s.push_str("</w:tblGrid>");
     for row in &t.rows {
         s.push_str("<w:tr>");
+        let mut column = 0usize;
         for c in row {
             let span = if c.span > 1 { format!("<w:gridSpan w:val=\"{}\"/>", c.span) } else { String::new() };
-            let w: i64 = widths.iter().take(c.span.min(widths.len())).sum();
+            let w: i64 = widths.iter().skip(column).take(c.span).sum();
             s.push_str(&format!(
                 "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
                 run_xml(&c.text, c.size, c.bold, c.italic, c.color)
             ));
+            column = column.saturating_add(c.span);
         }
         // Pad the grid so every row covers all columns (Word rejects short rows).
-        let used: usize = row.iter().map(|c| c.span).sum();
-        for _ in used..t.cols.len() {
+        for _ in column..t.cols.len() {
             s.push_str("<w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr><w:p/></w:tc>");
         }
         s.push_str("</w:tr>");
@@ -1041,6 +1050,27 @@ mod tests {
     }
 
     #[test]
+    fn word_table_cell_widths_follow_the_columns_they_span() {
+        let cell = |text: &str, span| Cell { text: text.into(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span };
+        let table = Table {
+            rect: [0.0, 0.0, 300.0, 100.0],
+            cols: vec![0.0, 50.0, 150.0],
+            rows: vec![
+                vec![cell("First", 1), cell("Second", 1), cell("Third", 1)],
+                vec![cell("First", 1), cell("Last two", 2)],
+                vec![cell("First two", 2), cell("Third", 1)],
+                vec![cell("All", 3)],
+                vec![cell("First", 1)],
+            ],
+        };
+        let xml = docx_table(&table);
+        assert!(xml.contains("<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/>"), "{xml}");
+        let widths: Vec<Vec<&str>> =
+            xml.split("<w:tr>").skip(1).map(|row| row.split("<w:tcW w:w=\"").skip(1).map(|cell| cell.split('"').next().unwrap()).collect()).collect();
+        assert_eq!(widths, vec![vec!["1000", "2000", "3000"], vec!["1000", "5000"], vec!["3000", "3000"], vec!["6000"], vec!["1000", "0", "0"]]);
+    }
+
+    #[test]
     fn word_keeps_a_page_with_a_clear_image_and_big_title_in_flow() {
         // page() has a picture between paragraphs and a 24 pt title over 11 pt body text, but
         // nothing overlaps: it must stay flowing paragraphs with the image inline.
@@ -1392,6 +1422,40 @@ mod tests {
         assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
     }
 
+    /// A continuation can drift into a grid column covered by the preceding cell's span.
+    /// It must remain available as paragraph text if that slot never becomes an output cell.
+    #[test]
+    fn table_spans_do_not_consume_text_they_do_not_emit() {
+        let mut blocks = vec![
+            Block { size: 12.0, ..block("ABCDEFGHIJK", 72.1, 697.0, 151.3, 710.8) },
+            Block { size: 12.0, color: [0.0, 0.0, 1.0], ..block("LOST", 150.4, 697.0, 179.2, 710.8) },
+            Block { size: 12.0, ..block("R0", 250.0, 697.0, 264.4, 710.8) },
+        ];
+        for row in 1..=4 {
+            let y = 697.0 - f64::from(row) * 50.0;
+            for (text, left, right) in [(format!("L{row}"), 72.1, 86.5), (format!("M{row}"), 146.4, 160.8), (format!("R{row}"), 250.0, 264.4)] {
+                blocks.push(Block { size: 12.0, ..block(&text, left, y, right, y + 13.8) });
+            }
+        }
+        let p = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+        let (tables, consumed) = tables(&p.blocks);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].rows[0][0].span, 2);
+        assert!(!consumed[1], "a covered slot did not emit its text");
+        assert!(consumed.iter().enumerate().all(|(index, used)| index == 1 || *used));
+        let outputs = [
+            html(std::slice::from_ref(&p), "Continuations"),
+            part(&docx(std::slice::from_ref(&p), "Continuations"), "word/document.xml"),
+            rtf(std::slice::from_ref(&p)),
+            part(&pptx(std::slice::from_ref(&p), "Continuations"), "ppt/slides/slide1.xml"),
+        ];
+        for output in outputs {
+            for b in &p.blocks {
+                assert_eq!(output.matches(&b.text).count(), 1, "{} must survive exactly once", b.text);
+            }
+        }
+    }
+
     /// #2806: a superscript right after a number ("1" "st") continues its cell; the prize table
     /// around it stays a table.
     #[test]
@@ -1407,6 +1471,10 @@ mod tests {
         let h = html(std::slice::from_ref(&p), "Prizes");
         assert!(h.contains("<table>"), "the prize table was lost: {h}");
         assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
+        let (tables, consumed) = tables(&p.blocks);
+        assert!(consumed.iter().all(|used| *used), "ordinary table continuations stay in their cells");
+        let cells: Vec<&str> = tables.iter().flat_map(|t| &t.rows).flatten().map(|c| c.text.as_str()).collect();
+        assert!(["st", "nd", "rd", "th"].iter().all(|suffix| cells.contains(suffix)));
     }
 
     #[test]

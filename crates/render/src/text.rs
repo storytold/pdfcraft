@@ -499,11 +499,11 @@ impl TextDevice {
             return;
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
-            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(char::is_control)));
             return;
         };
-        let originals = drawn.iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())).map(|d| (d.2.text.clone(), d.2.rect)).collect();
-        let at = if text.chars().all(|c| c.is_control()) {
+        let originals = drawn.iter().filter(|d| !d.2.text.chars().all(char::is_control)).map(|d| (d.2.text.clone(), d.2.rect)).collect();
+        let at = if text.chars().all(char::is_control) {
             None
         } else {
             self.glyphs.push(glyph);
@@ -594,7 +594,7 @@ impl TextDevice {
             let text = replacement.to_owned();
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
-            if !text.chars().all(|c| c.is_control()) {
+            if !text.chars().all(char::is_control) {
                 match merge(run, text) {
                     Some(glyph) => self.glyphs.push(glyph),
                     None => self.glyphs.extend_from_slice(run),
@@ -640,7 +640,7 @@ impl<'a> Device<'a> for TextDevice {
                 return;
             }
         };
-        if !replaced && text.chars().all(|c| c.is_control()) {
+        if !replaced && text.chars().all(char::is_control) {
             return;
         }
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
@@ -2145,6 +2145,43 @@ mod tests {
             assert_eq!(text.plain_text(), expected);
             assert!(!text.find("heading").is_empty());
         }
+    }
+
+    /// ISO 32000-2 §9.3.6: Type 3 text under `7 Tr` is not rendered (vendored hayro-interpret
+    /// patch 64), but it is still clipping text, not an invisible text layer: the filter that
+    /// drops OCR layers keeps it, as it keeps clipping text in other fonts.
+    #[test]
+    fn clipping_mode_type3_text_is_kept_by_the_ocr_filter() {
+        let font = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] \
+                    /CharProcs << /A 6 0 R >> /Encoding << /Type /Encoding /Differences [65 /A] >> \
+                    /FirstChar 65 /LastChar 65 /Widths [1000] >>";
+        let glyph = "1000 0 100 0 900 800 d1 100 0 800 800 re f";
+        let content = "BT /T3 24 Tf 7 Tr 30 200 Td (AAA) Tj ET BT /T3 12 Tf 3 Tr 30 100 Td (A) Tj ET";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            font.to_string(),
+            format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len()),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let all = extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), TextFilter::default()).unwrap();
+        assert_eq!(all.plain_text().matches('A').count(), 4, "{:?}", all.plain_text());
+        let filtered = extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), TextFilter { images: true, ..Default::default() }).unwrap();
+        assert_eq!(filtered.plain_text().trim(), "AAA", "the 7 Tr text stays, the 3 Tr layer goes");
     }
 
     /// One page per `(encoding, content)`, in Helvetica (`/F1`).

@@ -654,6 +654,10 @@
 	Draw your {what} below.	Spodaj narišite: {what}.
 	Drawing	Risba
 	Drawing scale	Merilo risbe
+	Scale	Merilo
+	Common scales	Pogosta merila
+	Enter a scale such as 1:50.	Vnesite merilo, na primer 1:50.
+	Applying a scale switches units to m / mm.	Z uporabo merila se enote preklopijo na m / mm.
 	Drop PDFs or folders here, or choose them.	Spustite datoteke PDF ali mape sem ali jih izberite.
 	Drop-down list	Spustni seznam
 	Dropdown Properties	Lastnosti spustnega seznama
@@ -1506,6 +1510,7 @@
 	Rename bookmark	Preimenuj zaznamek
 	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Izris: hayro (bootstrap) · Vmesnik: egui · Ikone: Lucide (ISC) · Pisave: Inter, JetBrains Mono, Dancing Script (OFL)
 	Reopen the files that were open when PdfCraft last closed	Ponovno odpri datoteke, ki so bile odprte ob zadnjem zaprtju PdfCrafta
+	Restore the last view (page, zoom and page display) when a document is opened again	Ob ponovnem odprtju dokumenta obnovi zadnji pogled (stran, povečavo in prikaz strani)
 	Repair log	Dnevnik popravil
 	Repairs	Popravila
 	Repeat overlay text	Ponovi besedilo prekrivanja
@@ -1964,6 +1969,7 @@
 	Update watermark…	Posodobi vodni žig…
 	Use 72 DPI (one point per pixel)	Uporabi 72 DPI (ena točka na slikovno piko)
 	Use Flate to encode streams that are not encoded	Za kodiranje nekodiranih tokov uporabi Flate
+	In streams that use LZW encoding, use Flate instead	V tokovih s kodiranjem LZW uporabi Flate
 	Use JavaScript	Uporabi JavaScript
 	Use a Digital ID from a file	Uporabi digitalno identiteto iz datoteke
 	Use a certificate	Uporabi potrdilo
@@ -2325,6 +2331,8 @@ key	Space	Preslednica
 	Printer paper and scaling may differ. Check driver settings.	Papir in merilo tiskalnika se lahko razlikujeta. Preverite nastavitve gonilnika.
 	Drawing scale changes. Use Actual size for full-scale plans.	Merilo risbe se spremeni. Za načrte v polnem merilu uporabite Dejansko velikost.
 	Reload documents when their files change on disk	Znova naloži dokumente, ko se njihove datoteke na disku spremenijo
+	Don't show again	Ne prikaži več
+	Show a notice when a document is secured	Prikaži obvestilo, ko je dokument zaščiten
 	Always use my default zoom and page layout	Vedno uporabi moje privzeto povečanje in postavitev strani
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži
@@ -2486,6 +2494,11 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Attach a file…	Priloži datoteko…
+	Delete attachment	Izbriši prilogo
+	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo
+	Attach {name}	Priloži {name}
+	Delete attachment {key}	Izbriši prilogo {key}
 	Font	Pisava
 	Bulleted list	Označen seznam
 	Numbered list	Oštevilčen seznam
@@ -2520,3 +2533,6 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Danes

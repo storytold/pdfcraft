@@ -9,6 +9,9 @@
 //!   links are followed: for a file that doesn't exist yet, the links of its nearest existing
 //!   folder, the rest of the path being plain names (`..` below a missing folder is refused, and so
 //!   is a link that leads nowhere).
+//! - A path on another network share or in a device namespace (`\\host\share`, `\\.\pipe\x`)
+//!   than the root's is refused by name, before anything is resolved: resolving it would contact
+//!   the host.
 //! - The result must lie inside the root, compared by whole components (`/work2` isn't inside
 //!   `/work`), without regard to case on Windows.
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
@@ -97,7 +100,10 @@ impl AutomationRoots {
                 Access::Write => Err(format!("automation filesystem access is not granted: write authority is absent: {shown}")),
             };
         };
-        if inside(&resolve(shown, target)?, folder) {
+        let absolute = absolute(shown, target)?;
+        // Another network share or a device is refused by name, as `--root` refuses it: even
+        // resolving the path would contact the host (#4003).
+        if !foreign_share(&absolute, folder) && inside(&resolve(shown, &absolute)?, folder) {
             return Ok(());
         }
         let root = root_shown.display();
@@ -123,9 +129,8 @@ fn plain(path: PathBuf) -> PathBuf {
     }
 }
 
-/// `path` made absolute with its links followed; for a path that doesn't exist (yet), its nearest
-/// existing folder's links followed and the rest appended.
-fn resolve(shown: &str, path: &Path) -> Result<PathBuf, String> {
+/// `path` made absolute against the working directory, by name: nothing on disk is read.
+fn absolute(shown: &str, path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("automation path rejected: path is empty".into());
     }
@@ -133,10 +138,15 @@ fn resolve(shown: &str, path: &Path) -> Result<PathBuf, String> {
     if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if is_device_name(&n.to_string_lossy()))) {
         return Err(format!("automation path rejected: reserved device names are not allowed: {shown}"));
     }
-    let absolute = std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))?;
+    std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
+}
+
+/// `absolute` with its links followed; for a path that doesn't exist (yet), its nearest existing
+/// folder's links followed and the rest appended.
+fn resolve(shown: &str, absolute: &Path) -> Result<PathBuf, String> {
     // The names below the nearest existing folder, last first.
     let mut missing: Vec<OsString> = vec![];
-    let mut at = absolute.as_path();
+    let mut at = absolute;
     loop {
         match std::fs::canonicalize(at) {
             Ok(mut found) => {
@@ -189,6 +199,24 @@ fn same_component(a: Component, b: Component) -> bool {
     }
 }
 
+/// Whether `path` names another network share or device namespace than `root` (Windows
+/// `\\host\share`, `\\?\UNC\…`, `\\.\…`, `\\?\…`). Those are refused by name: even checking
+/// that one exists would contact the host. Drive letters are left to the normal check.
+pub(crate) fn foreign_share(path: &Path, root: &Path) -> bool {
+    use std::path::Prefix;
+    fn share(p: &Path) -> Option<String> {
+        let Some(Component::Prefix(prefix)) = p.components().next() else { return None };
+        let (kind, a, b) = match prefix.kind() {
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => return None,
+            Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share) => ("unc", host, share),
+            Prefix::DeviceNS(name) => ("device", name, std::ffi::OsStr::new("")),
+            Prefix::Verbatim(name) => ("verbatim", name, std::ffi::OsStr::new("")),
+        };
+        Some(format!("{kind}\\{}\\{}", a.to_string_lossy(), b.to_string_lossy()).to_lowercase())
+    }
+    share(path).is_some_and(|s| share(root).as_ref() != Some(&s))
+}
+
 /// A Windows device name (`CON`, `NUL`, `COM1`… also with an extension), which names no file.
 fn is_device_name(component: &str) -> bool {
     let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
@@ -230,6 +258,27 @@ mod tests {
         let e = roots.check(&s(base.join("in/a.pdf")), Access::Write).unwrap_err();
         assert!(e.contains("outside the write root"), "{e}");
         assert!(roots.check(&s(base.join("out/x.png")), Access::Read).unwrap_err().contains("outside the read root"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// #4003: another share or a device namespace is refused by name, with the same words as any
+    /// other path outside the root, before anything is resolved (which would contact the host).
+    #[cfg(windows)]
+    #[test]
+    fn other_shares_and_devices_are_refused_before_they_are_resolved() {
+        let (base, roots) = folders("shares");
+        for p in [
+            r"\\.\pipe\pdfcraft-4003.pdf",
+            r"\\?\GLOBALROOT\Device\Null",
+            r"\\pdfcraft-no-such-host.invalid\share\a.pdf",
+            "//pdfcraft-no-such-host.invalid/share/a.pdf",
+            r"\\?\UNC\pdfcraft-no-such-host.invalid\share\a.pdf",
+        ] {
+            let e = roots.check(p, Access::Read).unwrap_err();
+            assert!(e.starts_with("automation path rejected: outside the read root"), "{p}: {e}");
+            let e = roots.check(p, Access::Write).unwrap_err();
+            assert!(e.starts_with("automation path rejected: outside the write root"), "{p}: {e}");
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -345,7 +394,8 @@ mod tests {
         // Helpers that are only called with a resolved path. `doc_batch` (batch.rs) resolves its
         // inputs and out_dir, walks only inside them (skipping links) and resolves every
         // discovered file again before `process` reads it or `publish` writes it.
-        const RESOLVED_BY_CALLER: &[&str] = &["write_atomic", "write_atomic_with", "read_review_sidecar", "process", "linked", "walk", "publish"];
+        const RESOLVED_BY_CALLER: &[&str] =
+            &["write_atomic", "write_atomic_with", "read_input", "read_input_bytes", "read_review_sidecar", "process", "linked", "walk", "publish"];
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = vec![];
         for entry in std::fs::read_dir(&dir).unwrap() {
@@ -365,7 +415,8 @@ mod tests {
                     || !(trimmed.contains("std::fs")
                         || trimmed.contains("File::open")
                         || trimmed.contains("File::create")
-                        || trimmed.contains("OpenOptions"))
+                        || trimmed.contains("OpenOptions")
+                        || trimmed.contains("read_input"))
                 {
                     continue;
                 }

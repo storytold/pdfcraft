@@ -505,6 +505,29 @@ pub fn fields_template(data: &str) -> String {
     )
 }
 
+/// Date fields whose edit pictures list alternatives, as forms let a date be typed several ways
+/// (`date{YYYYMMDD}|date{YYMMDD}|…`); one with a single pattern; a text field; `code`, whose
+/// only alternative is a text clause; `short`, whose first pattern has a two-digit year; and
+/// `pick`, where two later patterns read some dates and only one gives a year the first keeps.
+pub fn date_alternatives_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="leave" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}|date{YYMMDD}|date{YYYYMMD}|date{YY MM DD}</picture></ui><value><date/></value></field>
+ <field name="born" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYY-MM-DD}</picture></ui><value><date/></value></field>
+ <field name="name" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="code" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|text{YYMMDD}</picture></ui><value><date/></value></field>
+ <field name="short" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYMMDD}|date{YYYYMMDD}</picture></ui><value><date/></value></field>
+ <field name="pick" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYMMDD}|date{DDMMYYYY}|date{YYYYMMDD}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A form of `sections` sections of `rows` rows, each row with a calculated total (half in
 /// JavaScript, half in FormCalc) and a section sum over its rows: 2 × sections × rows + sections
 /// calculate scripts, every one reading values the earlier ones settled.
@@ -594,6 +617,27 @@ pub fn shell(xdp: &str) -> Vec<u8> {
         b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
         format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
     ];
+    assemble(objs)
+}
+
+/// [`shell`] with usage rights: the catalog's `/Perms` holds a `/UR3` signature (a stand-in
+/// dictionary, nothing verifies it), beside `others` (`/DocMDP 6 0 R`, say: object 6 is a
+/// signature dictionary too). `indirect` puts `/Perms` in an object of its own.
+pub fn usage_rights_shell(xdp: &str, others: &str, indirect: bool) -> Vec<u8> {
+    let perms = format!("<< /UR3 6 0 R {others} >>");
+    let entry = if indirect { "7 0 R".to_string() } else { perms.clone() };
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Perms {entry} >>");
+    let mut objs: Vec<Vec<u8>> = vec![
+        catalog.into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /Type /Sig /Reference [<< /Type /SigRef /TransformMethod /UR3 >>] >>".to_vec(),
+    ];
+    if indirect {
+        objs.push(perms.into_bytes());
+    }
     assemble(objs)
 }
 

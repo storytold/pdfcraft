@@ -543,7 +543,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     let prep = &view.prepare;
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
-    let zoom = (xf.rect.width() / xf.pw.max(1.0)).clamp(0.5, 3.0);
+    let zoom = xf.zoom().clamp(0.5, 3.0);
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
             let mut r = screen_rect(xf, info, page, w.rect);
@@ -560,7 +560,8 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
                 egui::StrokeKind::Inside,
             );
             // The name tag: white text on black, clipped to the field.
-            let label = f.name.rsplit('.').next().unwrap_or(&f.name);
+            // The full name, as Acrobat shows it: MASTER.first, not first (#2696).
+            let label = f.name.as_str();
             let font = theme::regular((9.0 * zoom).clamp(7.0, 13.0));
             let galley = painter.layout_no_wrap(label.to_string(), font, Color32::WHITE);
             let size = galley.size() + vec2(6.0, 2.0);
@@ -740,6 +741,7 @@ impl crate::PdfCraftApp {
             self.session.get(id).map(|doc| doc.form.iter().filter(|x| x.name != name).map(|x| x.name.clone()).collect()).unwrap_or_default();
         d.others = others.clone();
         d.actions = self.session.get(id).map(|doc| doc.field_actions(name)).unwrap_or_default();
+        d.chained = self.session.get(id).map(|doc| doc.field_action_chains(name)).unwrap_or_default();
         if let Some(o) = d.original.as_mut() {
             o.others = others;
             o.actions = d.actions.clone();
@@ -852,6 +854,11 @@ pub struct FieldDraft {
     /// Actions tab: each trigger's action, and the one being added.
     pub actions: Vec<(pdfcraft_engine::FieldTrigger, pdfcraft_engine::FieldAction)>,
     pub new_action: ActionDraft,
+    /// Actions tab: the trigger whose script `new_action` is editing (Edit), if any.
+    pub editing: Option<pdfcraft_engine::FieldTrigger>,
+    /// Actions tab: how many actions the document chains after each trigger's first one. They are
+    /// kept when that first action is replaced.
+    pub chained: Vec<(pdfcraft_engine::FieldTrigger, usize)>,
     original: Box<Option<FieldDraft>>,
 }
 
@@ -887,7 +894,8 @@ impl FieldDraft {
             kind: f.kind,
             widget,
             tab: FieldTab::General,
-            name: f.name.rsplit('.').next().unwrap_or(&f.name).to_string(),
+            // The full name: a dotted name moves the field under those parent fields (#2696).
+            name: f.name.clone(),
             tooltip: f.tooltip.clone().unwrap_or_default(),
             caption: f.widgets.get(widget).and_then(|w| w.caption.clone()).unwrap_or_default(),
             read_only: f.read_only(),
@@ -913,6 +921,8 @@ impl FieldDraft {
             others: Vec::new(),
             actions: Vec::new(),
             new_action: ActionDraft::default(),
+            editing: None,
+            chained: Vec::new(),
             original: Box::new(None),
         };
         d.original = Box::new(Some(d.clone()));
@@ -1533,21 +1543,27 @@ fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
 
 fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     use pdfcraft_engine::FieldTrigger as T;
-    ui.label(egui::RichText::new(tl!("Add an Action")).font(theme::semibold(13.0)));
+    let editing = d.editing.is_some();
+    ui.label(egui::RichText::new(if editing { tl!("Edit Action") } else { tl!("Add an Action") }).font(theme::semibold(13.0)));
     let a = &mut d.new_action;
     egui::Grid::new("field-actions-add").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Select Trigger:"));
-        egui::ComboBox::from_id_salt("action-trigger").selected_text(tl!(a.trigger.label())).width(220.0).show_ui(ui, |ui| {
-            for tr in T::ALL {
-                ui.selectable_value(&mut a.trigger, tr, tl!(tr.label()));
-            }
+        // Editing changes the script of one trigger's action: its trigger and kind stay.
+        ui.add_enabled_ui(!editing, |ui| {
+            egui::ComboBox::from_id_salt("action-trigger").selected_text(tl!(a.trigger.label())).width(220.0).show_ui(ui, |ui| {
+                for tr in T::ALL {
+                    ui.selectable_value(&mut a.trigger, tr, tl!(tr.label()));
+                }
+            });
         });
         ui.end_row();
         ui.label(tl!("Select Action:"));
-        egui::ComboBox::from_id_salt("action-kind").selected_text(tl!(ACTION_KINDS[a.kind])).width(220.0).show_ui(ui, |ui| {
-            for (i, k) in ACTION_KINDS.iter().enumerate() {
-                ui.selectable_value(&mut a.kind, i, tl!(k));
-            }
+        ui.add_enabled_ui(!editing, |ui| {
+            egui::ComboBox::from_id_salt("action-kind").selected_text(tl!(ACTION_KINDS[a.kind])).width(220.0).show_ui(ui, |ui| {
+                for (i, k) in ACTION_KINDS.iter().enumerate() {
+                    ui.selectable_value(&mut a.kind, i, tl!(k));
+                }
+            });
         });
         ui.end_row();
         let hint = match a.kind {
@@ -1568,7 +1584,12 @@ fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) 
         ui.end_row();
     });
     let mut error = None;
-    if ui.button(tl!("Add")).clicked() {
+    let (mut commit, mut discard) = (false, false);
+    ui.horizontal(|ui| {
+        commit = ui.button(if editing { tl!("Update") } else { tl!("Add") }).clicked();
+        discard = editing && ui.button(tl!("Discard")).clicked();
+    });
+    if commit {
         match d.new_action.action() {
             Ok(act) => {
                 let tr = d.new_action.trigger;
@@ -1576,9 +1597,14 @@ fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) 
                 d.actions.push((tr, act));
                 d.actions.sort_by_key(|(x, _)| T::ALL.iter().position(|y| y == x));
                 d.new_action.text.clear();
+                d.editing = None;
             }
             Err(e) => error = Some(e),
         }
+    }
+    if discard {
+        d.new_action = ActionDraft::default();
+        d.editing = None;
     }
     if let Some(e) = error {
         ui.label(egui::RichText::new(tl!(&e)).small().color(t.text_muted));
@@ -1590,19 +1616,40 @@ fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) 
         if d.actions.is_empty() {
             ui.label(egui::RichText::new(tl!("No actions")).color(t.text_muted));
         }
-        let mut remove = None;
+        let (mut remove, mut edit) = (None, None);
         for (i, (tr, act)) in d.actions.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!(tr.label())).strong());
-                ui.label(act.describe());
+                let more = d.chained.iter().find(|(x, _)| x == tr).map_or(0, |(_, n)| *n);
+                if more == 0 {
+                    ui.label(act.describe());
+                } else {
+                    let then = crate::i18n::trn(crate::i18n::current(), more as u64, "then {n} more action", "then {n} more actions");
+                    ui.label(format!("{}, {then}", act.describe()));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.push_id(i, |ui| ui.button(tl!("Delete"))).inner.clicked() {
-                        remove = Some(i);
-                    }
+                    ui.push_id(i, |ui| {
+                        if ui.button(tl!("Delete")).clicked() {
+                            remove = Some(i);
+                        }
+                        if let pdfcraft_engine::FieldAction::JavaScript(js) = act
+                            && ui.add_enabled(d.editing.is_none(), egui::Button::new(tl!("Edit"))).clicked()
+                        {
+                            edit = Some((*tr, js.clone()));
+                        }
+                    });
                 });
             });
         }
+        if let Some((trigger, text)) = edit {
+            d.new_action = ActionDraft { trigger, kind: 0, text };
+            d.editing = Some(trigger);
+        }
         if let Some(i) = remove {
+            if d.actions.get(i).map(|(x, _)| Some(*x)) == Some(d.editing) {
+                d.new_action = ActionDraft::default();
+                d.editing = None;
+            }
             d.actions.remove(i);
         }
     });

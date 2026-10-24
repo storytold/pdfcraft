@@ -159,6 +159,60 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
     Ok(out)
 }
 
+/// Most chained actions [`field_action_chains`] walks per trigger.
+const MAX_CHAIN: usize = 1000;
+
+/// How many actions follow `action` through `/Next` (a dictionary or an array of them, each with
+/// its own `/Next`), counting each object once.
+fn chained(doc: &Document, action: &Object) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    if let Object::Ref(r) = action {
+        seen.insert(*r);
+    }
+    let mut stack: Vec<Object> = doc.resolve(action).as_dict().and_then(|d| d.get(b"Next").cloned()).into_iter().collect();
+    let mut count = 0;
+    while let Some(o) = stack.pop() {
+        if count >= MAX_CHAIN {
+            break;
+        }
+        if let Object::Ref(r) = &o
+            && !seen.insert(*r)
+        {
+            continue;
+        }
+        match &*doc.resolve(&o) {
+            Object::Array(items) => stack.extend(items.iter().cloned()),
+            Object::Dict(d) => {
+                count += 1;
+                stack.extend(d.get(b"Next").cloned());
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// For each trigger of field `name` (its first widget) whose action has others chained after it,
+/// how many there are.
+pub fn field_action_chains(doc: &Document, name: &str) -> Result<Vec<(Trigger, usize)>, FormError> {
+    let all = fields(doc);
+    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let Some(w) = f.widgets.first() else { return Ok(Vec::new()) };
+    let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
+    let aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+    Ok(Trigger::ALL
+        .into_iter()
+        .filter_map(|t| {
+            let o = match t.key() {
+                None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
+                Some(k) => aa.get(k).cloned(),
+            }?;
+            let n = chained(doc, &o);
+            (n > 0).then_some((t, n))
+        })
+        .collect())
+}
+
 fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) -> Result<Option<Object>, FormError> {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("Action"));
@@ -207,11 +261,13 @@ fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) ->
 }
 
 /// Replace field `name`'s actions (on every widget) with `actions`; triggers not listed lose
-/// theirs. `Other` actions are left as they are.
+/// theirs. `Other` actions, and actions that read the same as before, are left as they are (with
+/// their chain and the keys this module doesn't read); a replaced action keeps its chain.
 pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, FieldAction)]) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let pages = crate::page_refs(doc);
+    let mut scripts = crate::script_budget();
     for w in &f.widgets {
         let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
         let mut aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
@@ -221,10 +277,23 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
             if matches!(new, Some(FieldAction::Other(_))) {
                 continue;
             }
+            let old = match t.key() {
+                None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
+                Some(k) => aa.get(k).cloned(),
+            };
+            let old_action = old.as_ref().and_then(|o| read(doc, o, &pages, &mut scripts));
+            if new.is_some() && new == old_action.as_ref() {
+                continue;
+            }
+            // The list shows a trigger's first action: replacing it keeps the ones chained after it.
+            let next = new.and(old).and_then(|o| doc.resolve(&o).as_dict().and_then(|d| d.get(b"Next").cloned()));
             let obj = match new {
                 Some(a) => write(doc, a, &pages)?,
                 None => None,
             };
+            if let (Some(Object::Ref(r)), Some(next)) = (&obj, next) {
+                doc.update_dict(*r, |d| d.set(b"Next".to_vec(), next))?;
+            }
             match t.key() {
                 None => {
                     a_entry = obj;

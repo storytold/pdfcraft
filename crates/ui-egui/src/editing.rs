@@ -265,6 +265,10 @@ impl PdfCraftApp {
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
+            Some(crate::canvas::ViewAction::SplitBeforeSelected) => {
+                self.split_draft.mode = crate::SplitMode::Selection;
+                self.dialog = Some(crate::Dialog::Split);
+            }
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
@@ -489,7 +493,7 @@ impl PdfCraftApp {
                 && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
                 && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
             {
-                focus.text = field.value.first().cloned().unwrap_or_default();
+                focus.text = crate::forms_ui::draft_text(field);
                 focus.picked = field.value.clone();
             }
             if let Some(page) = signature_page
@@ -537,17 +541,44 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        let typing = self
-            .views
-            .get(i)
-            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
+        let typing = self.views.get(i).is_some_and(|v| {
+            v.pending_edit.is_some()
+                || v.forms.focus.is_some()
+                || v.content.draft.is_some()
+                || v.line_editor.as_ref().is_some_and(|ed| ed.has_changes())
+                || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+        });
         if self.active != Some(i) {
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id)
+        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+    }
+
+    /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
+    /// click-away. Save does that first, so the typed text is in the file instead of being left
+    /// open on the screen (#3496).
+    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(doc) = self.session.get(id) else { return true };
+        let Some(view) = self.views.iter_mut().find(|v| v.id == id) else { return true };
+        // Both are taken out of the view before either edit runs, so keep what is needed to put
+        // back whichever one the document refuses: typed text must not be lost.
+        let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
+        let added = view.content.finish_draft(doc.added());
+        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
+        let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
+        let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
+        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+            if !added_ok {
+                (view.content.draft, view.content.select_added) = (draft, select_added);
+            }
+            if !paragraph_ok {
+                view.line_editor = editor;
+            }
+        }
+        added_ok && paragraph_ok
     }
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
@@ -902,10 +933,15 @@ impl PdfCraftApp {
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
     fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
         self.close_tab(index);
-        // A newer prompt wins: the user may have started another close while a save was pending.
+        // A newer prompt wins: the user may have started another close while a save was pending,
+        // and seen its question, which keeps counting as seen.
         if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
             match self.first_dirty() {
-                Some(_) => self.close_request = Some(req),
+                Some(_) => {
+                    // A question about the next document is a new one.
+                    self.save_prompt_seen = false;
+                    self.close_request = Some(req);
+                }
                 None if req == CloseRequest::Quit => self.quit(ctx),
                 None => {}
             }
@@ -961,6 +997,32 @@ impl PdfCraftApp {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
         }
+    }
+
+    /// Ask for the user's attention when the "save changes?" question opens while PdfCraft is in
+    /// the background (Quit in the Dock menu, logging out, or an agent quitting), and withdraw the
+    /// request once the user comes back or the question is answered.
+    ///
+    /// The question holds up the quit the user asked for, so the request is critical, as AppKit
+    /// makes it for a modal panel that an inactive app presents: the Dock icon bounces until
+    /// PdfCraft is active, Windows flashes the taskbar button until the window is in front, and
+    /// X11 sets the urgency hint, which stays until it is reset. A question that opens in front
+    /// asks nothing, and neither does leaving it open: the user has seen it. Each document asked
+    /// about when quitting is a new question, so one that opens in the background asks even after
+    /// a question the user saw; a request that still stands carries over to it.
+    pub(crate) fn attend_save_prompt(&mut self, ctx: &egui::Context) {
+        let open = self.close_request.is_some();
+        let focused = ctx.input(|i| i.focused);
+        if self.save_prompt_attention {
+            if focused || !open {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Reset));
+                self.save_prompt_attention = false;
+            }
+        } else if open && !self.save_prompt_seen && !focused {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Critical));
+            self.save_prompt_attention = true;
+        }
+        self.save_prompt_seen = open;
     }
 }
 
@@ -1475,6 +1537,32 @@ mod tests {
     }
 
     #[test]
+    fn save_commits_the_open_text_box() {
+        let dir = staging_dir("open-text-box");
+        let dest = dir.join("out.pdf");
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        app.save_override = Some(dest.to_string_lossy().into_owned());
+        let style = crate::content_ui::default_style();
+        app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+            page: 0,
+            index: None,
+            rect: [20.0, 20.0, 120.0, 40.0],
+            text: "Typed text".into(),
+            style,
+            focus: true,
+        });
+
+        assert!(app.save_active(SaveTarget::InPlace));
+        let id = app.views[0].id;
+        let added = app.session.get(id).unwrap().added();
+        assert_eq!(added.len(), 1, "the open text box was committed before the save");
+        assert!(app.views[0].content.draft.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alone() {
         let dir = staging_dir("mail-temp");
         let cache = dir.join("INetCache").join("Content.Outlook").join("AB12CD34");
@@ -1679,5 +1767,47 @@ mod content_page_tests {
         assert_eq!(content_page(&moved), Some(3));
         assert_eq!(content_page(&Edit::RotatePages { pages: vec![0], degrees: 90 }), None);
         assert_eq!(content_page(&Edit::SetInfo { key: "Title".into(), value: "x".into() }), None);
+    }
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::CloseRequest;
+    use crate::PdfCraftApp;
+
+    /// The attention requests one frame of `attend_save_prompt` sends, with the window `focused`
+    /// or not.
+    fn attend(app: &mut PdfCraftApp, ctx: &egui::Context, focused: bool) -> Vec<egui::UserAttentionType> {
+        let mut out = ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| app.attend_save_prompt(ui.ctx()));
+        // The frame's font texture isn't uploaded anywhere in a unit test.
+        out.textures_delta.clear();
+        out.viewport_output
+            .values()
+            .flat_map(|v| v.commands.iter())
+            .filter_map(|c| if let egui::ViewportCommand::RequestUserAttention(a) = c { Some(*a) } else { None })
+            .collect()
+    }
+
+    /// A save that finishes after a newer "save changes?" question opened in front, and after the
+    /// user went to another app, asks for no attention: the user saw that question.
+    #[test]
+    fn a_save_finishing_behind_a_newer_question_the_user_saw_asks_for_nothing() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            app.open_bytes(name, None, bytes.as_ref().clone()).unwrap();
+            app.active = Some(app.views.len() - 1);
+            assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        }
+        // a.pdf was answered with Save while quitting. While that save is pending, the user closes
+        // c.pdf's tab, and its question opens in front.
+        let c = app.views[2].id;
+        app.close_request = Some(CloseRequest::Tab(c));
+        assert!(attend(&mut app, &ctx, true).is_empty());
+        // a.pdf's save finishes once the user has gone to another app.
+        app.close_and_continue(&ctx, 0, CloseRequest::Quit);
+        assert_eq!(app.close_request, Some(CloseRequest::Tab(c)), "the newer question stands");
+        assert!(attend(&mut app, &ctx, false).is_empty(), "the user has seen it");
     }
 }

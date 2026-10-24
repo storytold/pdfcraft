@@ -52,7 +52,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Rulers, grids, snap to grid, guides | yes | no | planned |
 | Cursor coordinates, line weights | yes | no | planned |
 | Measuring snap to paths, endpoints, midpoints, intersections | yes | yes | shipped |
-| Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608) | shipped |
+| Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608); a selected comment: a screen pixel, ⌘/Ctrl or Shift ten | shipped |
 | Single-key tool accelerators (H, V, Z, …) | yes, opt-in | no | planned |
 | Context menus on pages, thumbnails, comments, fields | yes | thumbnails, comments, fields | partial |
 | Comment pop-ups as movable windows, connector lines | yes | inline in the panel | planned |

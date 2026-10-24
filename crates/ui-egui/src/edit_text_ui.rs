@@ -1839,6 +1839,57 @@ mod tests {
     }
 
     #[test]
+    fn save_applies_the_paragraph_open_in_the_editor() {
+        // Save wrote the file without the paragraph still open in the editor (#3496).
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Text preview".into();
+        app.views[0].line_editor = Some(ed);
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-open-paragraph-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
+
+        assert!(app.save_active(crate::SaveTarget::InPlace));
+        assert!(app.views[0].line_editor.is_none());
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refused_text_box_does_not_lose_the_open_paragraph() {
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Text preview".into();
+        app.views[0].line_editor = Some(ed);
+        let draft = crate::content_ui::TextDraft {
+            page: 9,
+            index: None,
+            rect: [20.0, 20.0, 120.0, 40.0],
+            text: "Typed text".into(),
+            style: crate::content_ui::default_style(),
+            focus: true,
+        };
+        app.views[0].content.draft = Some(draft.clone());
+
+        assert!(!app.commit_typing_in(app.views[0].id));
+        assert_eq!(app.views[0].content.draft, Some(draft), "the refused text box stays open");
+        assert!(app.views[0].line_editor.is_none(), "the paragraph was applied");
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
+    }
+
+    #[test]
+    fn a_refused_paragraph_stays_open_with_its_text() {
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Text preview".into();
+        ed.page = 9;
+        app.views[0].line_editor = Some(ed.clone());
+
+        assert!(!app.commit_typing_in(app.views[0].id));
+        assert_eq!(app.views[0].line_editor, Some(ed), "the paragraph keeps its unsaved text");
+    }
+
+    #[test]
     fn text_background_is_cached_without_editing_and_released_on_cancel() {
         let (app, ed) = preview_app();
         let doc = app.session.get(app.views[0].id).unwrap();
