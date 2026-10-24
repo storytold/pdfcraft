@@ -461,11 +461,15 @@ The portable zip runs from any folder, a USB stick included. Its `portable.txt` 
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
 `%APPDATA%`; delete that file to use the normal per-user folders.
 
-The MSI installs for all users and requires administrator privileges. It adds "Edit with PdfCraft"
+The MSI's setup window asks whether to install for you only (the default: into
+`%LOCALAPPDATA%\Programs\PdfCraft`, no administrator privileges needed) or for all users of the
+computer (into Program Files, with administrator privileges). An update stays in the scope it was
+installed in. It adds "Edit with PdfCraft"
 to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
 images (.png .jpg .jpeg .tif .tiff .gif .bmp .jp2 .j2k .jpx) in File Explorer (on Windows 11, under
-"Show more options"), without changing which app opens them by default. For unattended deployment
-without a desktop shortcut, run from an elevated terminal:
+"Show more options"), without changing which app opens them by default. Unattended installs are for
+all users unless you pass the per-user properties below (`ALLUSERS=2 MSIINSTALLPERUSER=1`); for
+deployment without a desktop shortcut, run from an elevated terminal:
 
 ```powershell
 msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCUT=0
@@ -473,7 +477,7 @@ msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCU
 
 | Property | `=0` leaves out |
 |---|---|
-| `INSTALLDESKTOPSHORTCUT` | the all-users desktop shortcut |
+| `INSTALLDESKTOPSHORTCUT` | the desktop shortcut |
 | `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" on PDF files |
 | `INSTALLIMAGECONTEXTMENU` | "Create PDF with PdfCraft…" on images |
 
@@ -482,8 +486,10 @@ or menu entry that is there stays, and one that is missing (left out at install,
 shortcut someone deleted) stays missing, so you don't need to pass them again. A value on the
 command line always wins: `=1` puts one back and `=0` removes it. Upgrading from a release that
 didn't have a menu yet (0.6.0 and earlier for the PDF menu, 0.2.1 and earlier for the image menu)
-adds it, as a first install would. Use the MSI for your architecture. Per-user installation
-overrides are not supported.
+adds it, as a first install would. Use the MSI for your architecture. To install unattended for
+the current user only, without administrator privileges, add `ALLUSERS=2 MSIINSTALLPERUSER=1`;
+updating that installation needs the same properties. Setup refuses to install a second copy
+beside one in the other scope: uninstall it first.
 
 **Pin the checksum, not just the version.** Release candidates of a version share its MSI version
 (MSI versions are numbers only, so 1.2.3-rc.1 and 1.2.3 are both 1.2.3), and the installer lets an

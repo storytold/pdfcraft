@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Original, text-only native MSI dialogs. No third-party UI artwork or custom-action DLLs.
-     Full UI gets welcome (with the desktop-shortcut and PDF context-menu checkboxes)/progress/outcome screens; /qn and /qb stay unattended. -->
+     Full UI gets welcome (with the install-scope choice and the desktop-shortcut and PDF context-menu checkboxes)/progress/outcome screens; /qn and /qb stay unattended. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <UI Id="PdfcraftInstallerUI">
@@ -8,18 +8,43 @@
       <TextStyle Id="InstallerTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
       <Property Id="DefaultUIFont" Value="InstallerNormal" />
 
-      <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40"
-            Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
-        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17"
-            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17"
-            Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
-        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
-          <Publish Event="EndDialog" Value="Return" />
+      <!-- The scope choice (INSTALLSCOPE, pdfcraft.wxs) is only offered for a first install: an
+           update keeps the installed version's scope, so the radio buttons are disabled when one is
+           found. Each Install button sets the installation context the way Windows Installer's
+           single package authoring sample does, and the install folder for it, since the folders
+           were resolved before the choice; only the per-machine one carries the UAC shield. -->
+      <Dialog Id="InstallWelcome" Width="370" Height="230" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
+        <Control Id="Description" Type="Text" X="20" Y="42" Width="330" Height="20"
+            Text="Setup will install [ProductName] and add it to the Start menu. Install it for:" />
+        <Control Id="Scope" Type="RadioButtonGroup" X="20" Y="65" Width="330" Height="40" Property="INSTALLSCOPE"
+            DisableCondition="EXISTINGMACHINEINSTALL OR EXISTINGUSERINSTALL"
+            EnableCondition="NOT EXISTINGMACHINEINSTALL AND NOT EXISTINGUSERINSTALL">
+          <RadioButtonGroup Property="INSTALLSCOPE">
+            <RadioButton Value="perUser" X="0" Y="0" Width="330" Height="17" Text="Only &amp;me (no administrator privileges needed)" />
+            <RadioButton Value="perMachine" X="0" Y="20" Width="330" Height="17" Text="&amp;All users of this computer (requires administrator privileges)" />
+          </RadioButtonGroup>
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="115" Width="330" Height="17"
+            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="133" Width="330" Height="17"
+            Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
+        <Control Id="InstallPerUser" Type="PushButton" X="195" Y="195" Width="75" Height="23" Default="yes" Text="&amp;Install"
+            ShowCondition="INSTALLSCOPE = &quot;perUser&quot;" HideCondition="INSTALLSCOPE &lt;&gt; &quot;perUser&quot;"
+            DefaultCondition="INSTALLSCOPE = &quot;perUser&quot;">
+          <Publish Property="ALLUSERS" Value="2" Order="1" />
+          <Publish Property="MSIINSTALLPERUSER" Value="1" Order="2" />
+          <Publish Property="INSTALLFOLDER" Value="[LocalAppDataFolder]Programs\PdfCraft\" Order="3" />
+          <Publish Event="EndDialog" Value="Return" Order="4" />
+        </Control>
+        <Control Id="InstallPerMachine" Type="PushButton" X="195" Y="195" Width="75" Height="23" ElevationShield="yes" Text="&amp;Install"
+            ShowCondition="INSTALLSCOPE = &quot;perMachine&quot;" HideCondition="INSTALLSCOPE &lt;&gt; &quot;perMachine&quot;"
+            DefaultCondition="INSTALLSCOPE = &quot;perMachine&quot;">
+          <Publish Property="ALLUSERS" Value="1" Order="1" />
+          <Publish Property="INSTALLFOLDER" Value="[PERMACHINEFOLDER]" Order="2" />
+          <Publish Event="EndDialog" Value="Return" Order="3" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="195" Width="70" Height="23" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>

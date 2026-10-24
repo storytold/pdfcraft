@@ -111,26 +111,46 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - Before packaging, it reads both executables' PE headers: the machine type must match `-Arch`, and
   `pdfcraft.exe` must be a GUI-subsystem program (no console window, #57) while `pdfcraft-cli.exe`
   stays a console program.
-- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut, a
+- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files, or per user into
+  `%LOCALAPPDATA%\Programs\PdfCraft` without administrator privileges, with a Start Menu shortcut, a
   desktop shortcut (on by default) and an App Paths entry. Both shortcuts are plain links to
   `pdfcraft.exe`, not advertised MSI shortcuts (#107, #143). The MSI version is the numeric `X.Y.Z`
   (MSI has no pre-release field), and same-version upgrades are allowed so release candidates replace
   each other. Icon ids end in `.ico` or `.exe` (Windows Installer requires it); packaging-lint checks
   this.
+- **Install scope.** The MSI is a dual-purpose package whose authored context stays per machine
+  (`ALLUSERS=1`): msiexec decides whether to ask for elevation from the properties it starts with,
+  and the launcher updates with `msiexec /passive` and none, so a per-user default would turn the
+  update of every existing per-machine installation into a second, per-user copy. Unattended
+  installs are per machine unless `ALLUSERS=2 MSIINSTALLPERUSER=1` is passed. In the full UI the
+  welcome dialog offers "Only me" (the default for a first install, no UAC prompt) or "All users"
+  (UAC shield); each Install button sets the context the way Windows Installer's single package
+  authoring sample does, and also `INSTALLFOLDER`, because the folders were resolved before the
+  choice. Every registration is `HKMU`, so it lands in HKLM per machine and HKCU per user (#305).
+  An update stays in the installed version's scope: the installation is found by its App Paths
+  entry (HKLM for every per-machine release, HKCU per user), the welcome dialog locks the choice to
+  it, and launch conditions refuse a second copy in the other scope (an upgrade only finds products
+  in its own context, so Windows Installer would otherwise install beside it). Moving between scopes
+  means uninstalling first. Since the launcher passes no properties, its update of a per-user
+  installation asks for elevation and then stops at that launch condition; it needs to pass
+  `ALLUSERS=2 MSIINSTALLPERUSER=1` for those.
 - `installer-ui.wxs` supplies native welcome, maintenance, progress, files-in-use and outcome
   dialogs. Full UI confirms success with Finish; failures and cancellations have distinct messages.
-  The welcome dialog has a "Create a desktop shortcut" checkbox and an "Edit with PdfCraft"
+  The welcome dialog has the install-scope choice, a "Create a desktop shortcut" checkbox and an "Edit with PdfCraft"
   right-click menu checkbox, both ticked by default. `/qn` and `/qb` stay unattended and create
   both unless `INSTALLDESKTOPSHORTCUT=0` or `INSTALLPDFCONTEXTMENU=0` is passed;
   `INSTALLIMAGECONTEXTMENU=0` (no checkbox) leaves out the image menu. An update (the launcher runs
   `msiexec /passive` with no properties) keeps the desktop shortcut only if `PdfCraft.lnk` is still
-  on the all-users desktop, so deleting it once keeps it away (#1058), and keeps each menu only if
-  its key path is still in HKLM (#305). Both are AppSearch results read before the old version is
+  on the desktop of its scope, so deleting it once keeps it away (#1058), and keeps each menu only if
+  its key path is still in HKLM (per machine) or HKCU (per user) (#305). In the full UI these defaults are
+  set after the scope choice and an upgrade search in that scope, so the checkboxes start from the
+  installed version's choice; for "Only me" the desktop is looked up by path (under the profile or
+  OneDrive), since the UI starts in the per-machine context. Both are AppSearch results read before the old version is
   removed. An update from a release that didn't have a menu yet (before 0.7.1 for the PDF menu,
   before 0.4.0 for the image menu, found by `OnlyDetect` Upgrade rows) adds it like a first install.
   A value given on the command line wins.
 - The PDF right-click entry (#682) is a classic verb under
-  `HKLM\Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit`, so it shows whichever app
+  `HKMU\Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit`, so it shows whichever app
   is the default for `.pdf` and never changes that default. Several selected PDFs (up to 15, the
   limit for a `Document` verb) start one `pdfcraft.exe "<file>"` each, and the single-instance
   hand-off opens them as tabs. On Windows 11 it is under "Show more options"; a first-level entry
@@ -140,11 +160,15 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   types, in its own component (`PdfcraftImageContextMenu`) since it became optional. Its rows moved
   out of `PdfcraftApp`; that's safe because `MajorUpgrade` removes the old version before installing
   the new one (`afterInstallValidate`), which `test-msi.ps1` checks.
-- `test-msi.ps1 <file.msi>` checks the compiled shortcut, context-menu and dialog tables, and
-  evaluates the first-install and update conditions of the desktop shortcut and both menus. Packaging
-  runs it in a child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
-  smoke test checks that both all-users shortcuts point at the installed `pdfcraft.exe` and are
-  removed on uninstall, and that `INSTALLDESKTOPSHORTCUT=0` skips the desktop one.
+- `test-msi.ps1 <file.msi>` checks the compiled install-scope, registry, shortcut, context-menu and
+  dialog tables, and evaluates, with Windows Installer's own condition evaluator, the welcome
+  dialog's default scope, the launch conditions for first installs, updates and copies in the other
+  scope, and the first-install and update conditions of the desktop shortcut and both menus in both
+  scopes. Packaging runs it in a child process before signing, so the MSI isn't held open when
+  signtool runs. The ARM64 smoke test (`craft-common-actions`' `windows-arm64.yml`) installs the MSI
+  unattended, so per machine, into Program Files, checks that both executables are ARM64, runs
+  `pdfcraft-cli --version` and uninstalls. Nothing installs per user in CI yet: that workflow's
+  `is-per-user` mode is for packages that are only per-user.
 - The portable zip holds both executables, the README, the licences, the OFL licence of each
   embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
   settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of

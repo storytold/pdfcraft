@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    pdfcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
+    pdfcraft-<version>-windows-<arch>.msi            per-user or per-machine installer (WiX v5)
     pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe + models\ + portable.txt
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
