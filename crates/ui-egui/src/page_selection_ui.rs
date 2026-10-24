@@ -1,8 +1,6 @@
 //! The Organize Pages selection, as an editable list of physical page numbers.
 use std::collections::BTreeSet;
 
-use pdfcraft_engine::print::PrintError;
-
 #[derive(Default)]
 pub(crate) struct PageSelectionInput {
     text: String,
@@ -10,35 +8,7 @@ pub(crate) struct PageSelectionInput {
     error: Option<String>,
 }
 
-/// Blank clears the explicit selection. Repeated/reversed ranges become a sorted set.
-/// Bound both the input and expansion work, including repeated overlapping ranges.
-pub(crate) fn parse(text: &str, count: usize) -> Result<Vec<usize>, PrintError> {
-    if text.len() > 16_384 {
-        return Err(PrintError::NotAPage(text.chars().take(80).collect()));
-    }
-    if text.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut pages = BTreeSet::new();
-    let mut budget = 1_000_000usize;
-    let number = |token: &str| {
-        let n = token.trim().parse::<usize>().map_err(|_| PrintError::NotAPage(token.into()))?;
-        if n == 0 || n > count { Err(PrintError::OutOfRange(n, count)) } else { Ok(n - 1) }
-    };
-    for part in text.split([',', ';']).map(str::trim) {
-        let (a, b) = if let Some((a, b)) = part.split_once('-') {
-            (number(a)?, number(b)?)
-        } else {
-            let p = number(part)?;
-            (p, p)
-        };
-        let (a, b) = (a.min(b), a.max(b));
-        let size = b.saturating_sub(a).saturating_add(1);
-        budget = budget.checked_sub(size).ok_or_else(|| PrintError::NotAPage(part.into()))?;
-        pages.extend(a..=b);
-    }
-    Ok(pages.into_iter().collect())
-}
+pub(crate) use pdfcraft_engine::page_selection::parse;
 
 fn formatted(pages: &BTreeSet<usize>) -> String {
     let mut parts = Vec::new();

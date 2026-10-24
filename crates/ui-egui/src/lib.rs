@@ -161,7 +161,7 @@ use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
 pub use editing::{CloseRequest, SaveTarget};
-pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
+pub use files::{ExtractDraft, ExtractPages, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::{ThemeKind, ThemePreference};
 

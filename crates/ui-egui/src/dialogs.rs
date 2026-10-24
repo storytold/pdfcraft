@@ -15,6 +15,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     unlock(app, ctx);
 }
 
+/// Render the active modal and route confirmed actions after widget borrows have ended.
 fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     password(app, ctx);
     save_prompt(app, ctx);
@@ -680,30 +681,60 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::Extract => {
-                let (selected, total) = app.active_ids().map_or((Vec::new(), 0), |(i, _)| (app.views[i].target_pages(), app.views[i].page_count()));
+                use crate::ExtractPages;
+                use pdfcraft_engine::PageParity as P;
+                let (n, selected) = app
+                    .active_ids()
+                    .and_then(|(i, id)| Some((app.session.get(id)?.info.pages.len(), app.views.get(i)?.target_pages())))
+                    .unwrap_or_default();
                 ui.label(egui::RichText::new(tl!("Extract pages")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
-                // Page ranges to take instead of the selection (#3593); the hint is the selection.
-                let hint = match crate::combine_ui::range_of(&selected, total) {
-                    all if all.is_empty() && total > 1 => format!("1-{total}"),
-                    all if all.is_empty() => "1".to_string(),
-                    some => some,
-                };
+                let d = &mut app.extract_draft;
+                if d.selection == ExtractPages::Selection && !d.pages.trim().is_empty() {
+                    d.selection = ExtractPages::Range;
+                }
+                if widgets::radio_value(ui, &mut d.selection, ExtractPages::Selection, tl!("Selection")).changed() {
+                    d.pages.clear();
+                }
+                widgets::radio_value(ui, &mut d.selection, ExtractPages::All, tl!("All pages"));
                 ui.horizontal(|ui| {
-                    let l = ui.label(tl!("Pages"));
-                    ui.add(egui::TextEdit::singleline(&mut app.extract_draft.pages).hint_text(hint).desired_width(240.0)).labelled_by(l.id);
+                    widgets::radio_value(ui, &mut d.selection, ExtractPages::Range, tl!("Pages:"));
+                    let input = ui.add_enabled(
+                        d.selection != ExtractPages::All,
+                        egui::TextEdit::singleline(&mut d.pages).desired_width(240.0).char_limit(16_384).hint_text("1-5, 8, 12-15"),
+                    );
+                    input.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), tl!("Pages")));
+                    if input.changed() {
+                        d.selection = ExtractPages::Range;
+                    }
                 });
-                let chosen = app.extract_draft.pages_to_extract(selected, total);
-                match &chosen {
-                    Ok(pages) if pages.len() == 1 => {
-                        ui.label(tl!("1 page selected."));
-                    }
-                    Ok(pages) => {
-                        ui.label(crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &pages.len().to_string())]));
-                    }
-                    Err(e) => {
-                        ui.colored_label(ui.visuals().error_fg_color, e);
-                    }
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Subset"));
+                    egui::ComboBox::from_id_salt("extract-parity")
+                        .selected_text(match d.parity {
+                            P::Both => tl!("Even and Odd Pages"),
+                            P::Even => tl!("Even Pages Only"),
+                            P::Odd => tl!("Odd Pages Only"),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut d.parity, P::Both, tl!("Even and Odd Pages"));
+                            ui.selectable_value(&mut d.parity, P::Odd, tl!("Odd Pages Only"));
+                            ui.selectable_value(&mut d.parity, P::Even, tl!("Even Pages Only"));
+                        });
+                });
+                let result = d.pages(n, &selected);
+                let count = result.as_ref().map_or(0, Vec::len);
+                let valid = count > 0;
+                let text = if count == 1 {
+                    tl!("1 page selected.").to_string()
+                } else {
+                    crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &count.to_string())])
+                };
+                ui.label(text);
+                if let Err(e) = result {
+                    ui.colored_label(ui.visuals().error_fg_color, e.said(&|s| crate::i18n::t(s).to_string()));
+                } else if !valid {
+                    ui.label(tl!("No pages selected"));
                 }
                 ui.add_space(4.0);
                 // The name the pages are saved under (#737); separate files add " (page N)".
@@ -715,7 +746,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.add(widgets::checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files")));
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add_enabled_ui(chosen.is_ok(), |ui| widgets::pill_button(ui, tl!("Extract"), true)).inner.clicked() {
+                    if ui.add_enabled_ui(valid, |ui| widgets::pill_button(ui, tl!("Extract"), true)).inner.clicked() {
                         extract_now = true;
                         close = true;
                     }

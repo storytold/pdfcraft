@@ -68,6 +68,27 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## Extract page selections
+
+`page_extract` accepts a physical 1-based `range` or the existing explicit `pages` array:
+
+```json
+{"doc": 1, "range": "1-5, 8, 12-15", "out": "chapters.pdf"}
+{"doc": 1, "subset": "odd", "out": "odd-pages.pdf"}
+{"doc": 1, "range": "2-10", "subset": "even", "separate": true, "out_dir": "parts"}
+```
+
+`subset` is `all` (default), `odd` or `even`, applied to **physical page numbers** rather than
+positions in the range. With only `subset`, it selects from the whole document. Typed ranges
+are sorted and deduplicated; explicit arrays preserve their order and duplicates. Do not supply
+both `pages` and `range`. At least one of `pages`, `range` or `subset` is required. Empty,
+malformed, out-of-bounds or over-budget selections fail before output or deletion. Range text is
+limited to 16 KiB and expansion work to 1,000,000 entries, including overlaps. Page labels are
+not interpreted. Existing `open`, `out`, `separate`, `out_dir` and undoable `delete` options apply.
+
+The Extract Pages dialog offers the same range and parity choices, with the existing manual
+selection/current-page workflow as its default. Its choices do not replace thumbnail selection.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:
