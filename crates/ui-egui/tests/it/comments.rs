@@ -1038,6 +1038,30 @@ fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
 /// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
 /// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
 /// Shift they go where the pointer is.
+/// Over the first corner, where a click closes the polygon, the rubber band runs to that corner
+/// with Shift held too: the closing side the click will make, not a level or plumb one.
+#[test]
+fn the_rubber_band_shows_the_closing_side_with_shift_held() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    for p in [(40.0, 40.0), (140.0, 40.0), (140.0, 140.0)] {
+        click_pt(&mut h, p);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(at(&h, 40.0, 40.0) + egui::vec2(2.0, 2.0));
+    h.run_steps(3);
+    let pixels = h.render().unwrap();
+    // Halfway along the diagonal closing side, (90, 90).
+    let m = at(&h, 90.0, 90.0);
+    let drawn = (-2..=2).any(|d: i32| {
+        let v = pixels.get_pixel((m.x as i32 + d) as u32, (m.y as i32 + d) as u32).0;
+        v[0] > 150 && v[1] < 100 && v[2] < 100
+    });
+    assert!(drawn, "the closing side is drawn");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+}
+
 #[test]
 fn shift_holds_new_lines_and_sides_level_or_plumb() {
     let mut h = harness(|app| app.set_option("quick", "line").unwrap());

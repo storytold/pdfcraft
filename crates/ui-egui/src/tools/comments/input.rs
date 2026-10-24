@@ -438,7 +438,7 @@ impl Gestures<'_> {
             match cv.gesture.as_mut() {
                 Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
-                    let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
+                    let closes = closes_at(cx, tool, points, p);
                     let u = held(points.last(), u, shift);
                     let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(cx.to_screen(u)) < 2.0);
                     if closes {
