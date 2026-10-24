@@ -414,6 +414,46 @@ fn custom_page_cannot_silently_match_a_standard_paper() {
     assert_eq!(h.state().print_draft.size, before.size);
 }
 
+/// Windows' printer list doesn't say which drivers take two-sided settings: reading a printer
+/// Windows can't reach takes it about 48 s (#2192). The dialog lists every printer at once and
+/// asks only about the one picked, in the background, so a printer nobody picks is never waited on.
+#[test]
+fn two_sided_support_is_read_only_for_the_printer_picked() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            Printer { name: "Office PCL".into(), default: true, two_sided: None },
+            Printer { name: "Office PS".into(), default: false, two_sided: None },
+            Printer { name: "Away WSD".into(), default: false, two_sided: None },
+        ]
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str| {
+        log.lock().unwrap().push(name.to_string());
+        Some(name != "Office PS")
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let settle = |h: &mut Harness<'static, PdfCraftApp>, done: &dyn Fn(&PdfCraftApp) -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(h.state()) && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(2);
+    };
+    settle(&mut h, &|a| a.print_draft.two_sided.contains_key("Office PCL"));
+    assert_eq!(h.state().print_draft.printers.len(), 3);
+    let note = "doesn't take two-sided settings";
+    assert!(h.query_by_label_contains(note).is_none(), "a driver that prints two-sided as asked");
+    h.state_mut().print_draft.printer = Some("Office PS".into());
+    settle(&mut h, &|a| a.print_draft.two_sided.contains_key("Office PS"));
+    h.get_by_label_contains(note);
+    assert_eq!(*asked.lock().unwrap(), ["Office PCL", "Office PS"], "each picked printer once, never the others");
+}
+
 /// A driver Windows reports without two-sided printing keeps its own setting whatever Two-sided
 /// says (some print both sides with it Off), so the dialog says where to change it.
 #[test]
