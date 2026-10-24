@@ -59,11 +59,14 @@ pub enum Clip {
 /// An image on the system clipboard, or else its text.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_clipboard() -> Option<Clip> {
-    let mut cb = arboard::Clipboard::new().ok()?;
-    if let Ok(img) = cb.get_image() {
-        return Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() });
-    }
-    cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text)
+    crate::os_clipboard::with(|cb| {
+        if let Ok(img) = cb.get_image() {
+            return Ok(Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() }));
+        }
+        Ok(cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text))
+    })
+    .ok()
+    .flatten()
 }
 
 pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {

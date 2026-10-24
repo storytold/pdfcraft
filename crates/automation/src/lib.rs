@@ -3,7 +3,7 @@
 //! - **Layer:** L7. Headless: depends on the engine, never on a UI toolkit.
 //! - [`Automation`] is a tool set over an engine [`Session`]: open, inspect, render, extract and
 //!   find text, edit pages and metadata, undo/redo, save, combine, extract and split. Every tool
-//!   has a JSON Schema ([`tools`]) and takes and returns JSON, so the same table drives the MCP
+//!   has a JSON Schema ([`tools()`]) and takes and returns JSON, so the same table drives the MCP
 //!   server ([`mcp`]), `pdfcraft-cli run` and (later) the UI control channel.
 //! - Pages are **1-based** in every tool, as people number them. Rectangles are in PDF points
 //!   with the origin at the top-left of the displayed page.
@@ -571,6 +571,11 @@ impl Automation {
                         "flip_horizontal" => ImageEdit::Flip { horizontal: true },
                         "flip_vertical" => ImageEdit::Flip { horizontal: false },
                         "delete" => ImageEdit::Delete,
+                        "bring_to_front" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+                        "send_to_back" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
+                        "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
+                        "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
+                        "remove_crop" => ImageEdit::RemoveCrop,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;

@@ -1675,6 +1675,7 @@ fn control_open_replies_pending_while_the_worker_opens_and_focuses_once_it_has()
 
     // The worker completes the open on later frames; the tab shows, and only then does a
     // repeated open focus it instead of reporting another pending open.
+    // Background preparation can take fractions of a second on loaded CI runners (e.g. FreeBSD VM).
     let mut documents = 0;
     let opened = crate::support::step_until(&mut h, |h| {
         let state = ok(h, &c, "ui.state", json!({}));

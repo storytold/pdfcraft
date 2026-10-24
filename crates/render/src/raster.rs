@@ -250,6 +250,7 @@ struct AtomicRenderStats {
 }
 
 impl AtomicRenderStats {
+    #[allow(dead_code)]
     fn record_request(&self, req: RenderRequest) {
         self.render_requests.fetch_add(1, Ordering::Relaxed);
         if req.tile.is_some() {
@@ -551,6 +552,7 @@ struct Shared {
     busy: Mutex<Vec<Option<Busy>>>,
     /// Exact requests the watchdog gave up on: answered with an error at once, so a pathological
     /// request cannot trap every worker in turn while other scales, tiles, or generations remain usable.
+    #[allow(dead_code)]
     stuck: Mutex<std::collections::HashSet<RequestFailureKey>>,
     stats: AtomicRenderStats,
     /// Per worker id: set to stop that worker's render at its next content operator once nobody
@@ -711,7 +713,7 @@ impl PoolParser {
 
 /// Renders pages on worker threads, most urgent request first.
 ///
-/// **Watchdog:** a render running longer than `stuck_after` (default [`STUCK_AFTER`]) is given
+/// **Watchdog:** a render running longer than `stuck_after` (default `STUCK_AFTER`) is given
 /// up on. A timed-out *shared* render retires that parser and retries still-desired work
 /// privately: the page may only have been waiting behind another page's decode. A private
 /// timeout is reported as an error for that page and the page is not attempted again. Threads
@@ -725,8 +727,11 @@ pub struct RenderPool {
     shared: Arc<Shared>,
     wake: Mutex<Vec<SyncSender<()>>>,
     results: ResultReceiver,
+    #[allow(dead_code)]
     results_tx: Arc<WorkQueue>,
+    #[allow(dead_code)]
     bytes: Arc<Vec<u8>>,
+    #[allow(dead_code)]
     config: RenderConfig,
     _workers: Mutex<Vec<JoinHandle<()>>>,
     stuck_after: std::time::Duration,

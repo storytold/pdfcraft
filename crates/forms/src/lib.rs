@@ -540,7 +540,7 @@ struct Inherited {
 }
 
 /// Every terminal field: the `/Fields` tree in order, then the fields reachable only through the
-/// page annotations (see [`adopt_page_fields`]).
+/// page annotations (see `adopt_page_fields`).
 pub fn fields(doc: &Document) -> Vec<Field> {
     fields_with_adopted(doc).items
 }

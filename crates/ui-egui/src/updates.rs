@@ -52,6 +52,7 @@ pub(crate) enum Check {
     Idle,
     #[cfg(not(target_arch = "wasm32"))]
     Running(std::sync::mpsc::Receiver<Result<Release, String>>),
+    #[allow(dead_code)]
     Done(Result<Release, String>),
 }
 

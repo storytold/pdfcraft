@@ -37,7 +37,9 @@ mod calc_order_ui;
 pub mod canvas;
 mod chrome;
 mod combine_grid;
+pub mod image_engine;
 mod image_pick;
+pub use image_engine::{HandleId, MIN_RECT_SIZE, apply_crop, apply_resize, apply_resize_proportional, reset_crop};
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
@@ -72,7 +74,7 @@ mod zoom_snap;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
-mod content_ui;
+pub mod content_ui;
 mod link_ui;
 mod object_ui;
 pub use create_ui::Clip;
@@ -83,9 +85,9 @@ mod autoscroll;
 mod bidi;
 pub mod bulk_fields;
 mod dialogs;
-mod edit_text_ui;
+pub mod edit_text_ui;
 pub mod field_table_ui;
-pub use edit_text_ui::CropMode;
+pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_watch;
@@ -100,6 +102,8 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 pub mod motion;
+#[cfg(not(target_arch = "wasm32"))]
+mod os_clipboard;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -365,6 +369,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Pin tools to Home: selection modal.
+    PinTool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,6 +614,10 @@ pub struct PdfCraftApp {
     open_prepare_gate: Option<std::sync::Arc<open_worker::PrepareGate>>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
+    /// Tools pinned to Home, in user-defined order.
+    pub pinned_tools: Vec<String>,
+    /// Search query for the Pin a tool selection dialog.
+    pub pin_tool_search: String,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
@@ -732,7 +742,7 @@ pub struct PdfCraftApp {
     pub optimize_draft: OptimizeDraft,
     /// The running optimization (Optimize PDF ▸ Advanced optimization).
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
-    /// A background job's progress card (see [`widgets::progress_notice`]).
+    /// A background job's progress card (see `widgets::progress_notice`).
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
@@ -747,11 +757,13 @@ pub struct PdfCraftApp {
     /// The last image copied in its original format (file name, bytes), also put on the
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
+    pub last_copied_image_rect: Option<[f64; 4]>,
     pub system_clipboard: bool,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
     /// V is down as a plain key press (see [`Self::paste_key_released`]).
     v_pressed: bool,
+    last_command_time: Option<f64>,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.
@@ -1000,6 +1012,8 @@ impl PdfCraftApp {
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
+            pinned_tools: Vec::new(),
+            pin_tool_search: String::new(),
             toast: None,
             integrated_titlebar: false,
             window_controls: None,
@@ -1076,9 +1090,11 @@ impl PdfCraftApp {
             last_snapshot: None,
             last_copied_image: None,
             last_copied_file: None,
+            last_copied_image_rect: None,
             system_clipboard: true,
             clipboard_override: None,
             v_pressed: false,
+            last_command_time: None,
             attach_override: None,
             duplicate_draft: None,
             field_table_draft: None,
@@ -2247,6 +2263,48 @@ impl PdfCraftApp {
         self.pending_panel_reveals.push(docking::Panel::Tools);
     }
 
+    /// Check whether a tool group is pinned to Home.
+    pub fn is_tool_pinned(&self, id: &str) -> bool {
+        self.pinned_tools.iter().any(|t| t == id)
+    }
+
+    /// Pin a tool group to Home. Returns true if newly pinned.
+    pub fn pin_tool(&mut self, id: &str) -> bool {
+        if pdfcraft_engine::catalog::group(id).is_none() {
+            return false;
+        }
+        if !self.is_tool_pinned(id) {
+            self.pinned_tools.push(id.to_string());
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Pinned {tool} to Home", &[("tool", tl!(g.label))]);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a tool group from Home.
+    pub fn unpin_tool(&mut self, id: &str) {
+        if let Some(pos) = self.pinned_tools.iter().position(|t| t == id) {
+            self.pinned_tools.remove(pos);
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Unpinned {tool} from Home", &[("tool", tl!(g.label))]);
+            }
+        }
+    }
+
+    /// Toggle a tool group's pinned state on Home.
+    pub fn toggle_pin_tool(&mut self, id: &str) -> bool {
+        if self.is_tool_pinned(id) {
+            self.unpin_tool(id);
+            false
+        } else {
+            self.pin_tool(id);
+            true
+        }
+    }
+
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
     /// workspace, so opening its panel also opens the page grid (without toggling it off).
     pub(crate) fn select_tool(&mut self, id: &'static str) {
@@ -2375,6 +2433,7 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
+            "pinned_tools": self.pinned_tools,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "animation_effects": self.animation_effects,
@@ -2476,6 +2535,15 @@ impl PdfCraftApp {
             self.reload_changed_files = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
+        if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
+            let mut tools = Vec::new();
+            for item in items.iter().filter_map(serde_json::Value::as_str) {
+                if pdfcraft_engine::catalog::group(item).is_some() && !tools.contains(&item.to_string()) {
+                    tools.push(item.to_string());
+                }
+            }
+            self.pinned_tools = tools;
+        }
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }
@@ -2553,6 +2621,8 @@ impl PdfCraftApp {
         }
         if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
             self.comment_prefs.hide_empty_highlight_hover = hide;
+        } else if let Some(display) = v["display_author_hover_no_comment"].as_bool() {
+            self.comment_prefs.hide_empty_highlight_hover = !display;
         }
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
@@ -2902,6 +2972,13 @@ impl PdfCraftApp {
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
                 };
             }
+            ("display-author-hover-no-comment", _) => {
+                self.comment_prefs.hide_empty_highlight_hover = match value {
+                    "true" => false,
+                    "false" => true,
+                    _ => return Err("display-author-hover-no-comment must be true or false".into()),
+                };
+            }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
@@ -3036,8 +3113,7 @@ impl PdfCraftApp {
                 prepare::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
-            self.copy_key(i, ctx);
-            self.paste_image_key(i, ctx, pasted);
+            self.clipboard_keys(i, ctx, pasted);
             self.image_pick_keys(i, ctx);
         }
     }
@@ -3065,14 +3141,66 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
-    fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
-        // ⌘C arrives as a Copy event on most platforms.
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        if !copy || ctx.egui_wants_keyboard_input() {
+    /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
+    fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
+        if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
             return;
         }
-        self.copy_selected_text(i, ctx);
+        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)));
+        let cut = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
+        let paste_event_text = ctx.input(|input| {
+            input.events.iter().find_map(|e| match e {
+                egui::Event::Paste(text) if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+        });
+        let paste = pasted
+            || ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
+
+        if copy
+            && !self.copy_selected_text(i, ctx)
+            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            self.copy_page_image(sel.page, sel.index);
+        }
+        if cut
+            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            if let Some(v) = self.views.get_mut(i) {
+                v.image_selection = None;
+            }
+            self.cut_page_image(sel.page, sel.index);
+        }
+        if paste {
+            let has_override_image = matches!(self.clipboard_override, Some(crate::create_ui::Clip::Image { .. }));
+            #[cfg(not(target_arch = "wasm32"))]
+            let system_has_text = if !has_override_image && self.system_clipboard {
+                crate::os_clipboard::with(|cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
+            } else {
+                false
+            };
+            #[cfg(target_arch = "wasm32")]
+            let system_has_text = false;
+
+            if !has_override_image && (paste_event_text.is_some() || system_has_text) {
+                self.last_copied_image = None;
+                self.last_copied_file = None;
+                self.last_copied_image_rect = None;
+                return;
+            }
+
+            let page = self.views.get(i).map_or(0, |v| v.current);
+            self.paste_image(page, None);
+        }
     }
 
     /// Shared permission gate for copying selected page text from menus and keyboard events.

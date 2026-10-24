@@ -1131,7 +1131,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 }
 
 /// The message bar for signed documents: (icon, colour, template, argument).
-/// The template renders through [`crate::i18n::tr_fmt`] at the call site, so the bar follows
+/// The template renders through `crate::i18n::tr_fmt` at the call site, so the bar follows
 /// the UI language; names inside `argument` stay as they are.
 pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, &'static str, String)> {
     let signed: Vec<&SignatureInfo> = sigs.iter().filter(|s| s.signed).collect();

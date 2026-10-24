@@ -364,7 +364,7 @@ pub struct TextBlock {
 impl TextBlock {
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
-    /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
+    /// keep their own runs (#2198); past `MAX_CHANGED_WORDS` the draft counts as one change.
     /// Byte ranges are always UTF-8 boundaries. Linear time, including large edits.
     pub fn edited_spans(&self, draft: &str) -> Vec<(std::ops::Range<usize>, usize)> {
         if self.editor_text.len() > 4_000_000 || draft.len() > 4_000_000 {

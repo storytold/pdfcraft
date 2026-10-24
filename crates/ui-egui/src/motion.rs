@@ -8,13 +8,13 @@
 //!
 //! - A wheel notch scrolls its whole distance in the frame it arrives. egui spreads a notch
 //!   over about a quarter of a second and has no switch for that, so each frame's wheel input
-//!   is read again here, the way egui reads it but for the easing ([`WheelReader`]), and handed
+//!   is read again here, the way egui reads it but for the easing (`WheelReader`), and handed
 //!   to egui's scroll areas in place of its own.
 //! - ⌘/Ctrl-wheel zooms by a notch's whole step at once: egui makes its zoom factor from the
-//!   same eased wheel motion. Views read [`zoom_delta`] instead of egui's.
+//!   same eased wheel motion. Views read `zoom_delta` instead of egui's.
 //! - Scrolling to a place (a row revealed by the keys, the Hand tool's drag) takes no time.
 //! - egui's other animations (menus fading in, sections opening) take no time: its style's
-//!   animation time is zero, which the app's own fades and sweeps ask about too ([`animated`]).
+//!   animation time is zero, which the app's own fades and sweeps ask about too (`animated`).
 //!
 //! How far anything scrolls or zooms doesn't change, only how long it takes.
 
@@ -68,7 +68,7 @@ impl AnimationEffects {
 }
 
 /// Asks the system whether it wants no animations; `None` when it can't say, which leaves the
-/// last answer standing. Asked from the UI thread every [`ASK_EVERY`] seconds while the window
+/// last answer standing. Asked from the UI thread every `ASK_EVERY` seconds while the window
 /// is in use, so it must answer at once.
 pub type MotionSource = Box<dyn Fn() -> Option<bool>>;
 

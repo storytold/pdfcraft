@@ -43,6 +43,21 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        let target_arrange_image = match &edit {
+            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
+                let doc = self.session.get(id);
+                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
+                let ambiguous = doc.is_some_and(|d| {
+                    if let Some(t) = &target {
+                        d.page_images(*page).iter().filter(|img| img.name == t.name && img.object == t.object && img.rect == t.rect).count() > 1
+                    } else {
+                        false
+                    }
+                });
+                target.map(|t| (t, ambiguous))
+            }
+            _ => None,
+        };
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
@@ -132,18 +147,18 @@ impl PdfCraftApp {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                match edit {
+                match &edit {
                     Edit::MovePages { pages, to } => {
                         let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-                        let to = to.min(info.pages.len() - n);
+                        let to = *to.min(&(info.pages.len() - n));
                         view.select_pages(&(to..to + n).collect::<Vec<_>>());
                     }
                     Edit::DuplicatePages { pages, at: Some(at) } => {
                         let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-                        let at = at.min(info.pages.len().saturating_sub(n));
+                        let at = *at.min(&(info.pages.len().saturating_sub(n)));
                         view.select_pages(&(at..at + n).collect::<Vec<_>>());
                     }
-                    Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
+                    Edit::InsertBlankPage { at, .. } => view.select_pages(&[*at.min(&(info.pages.len() - 1))]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
                     // A stroke drawn with the pen stays unselected, so the selection box and
                     // author popup don't sit over the next stroke (#429).
@@ -170,6 +185,43 @@ impl PdfCraftApp {
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
                     _ => {}
                 }
+                if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
+                    let page_images = doc.page_images(*page);
+                    let exact_matches: Vec<usize> = page_images
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, img)| img.name == target.name && img.object == target.object && img.rect == target.rect)
+                        .map(|(idx, _)| idx)
+                        .collect();
+                    let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
+                        Some(exact_matches[0])
+                    } else if !ambiguous_before && exact_matches.is_empty() {
+                        let name_obj_matches: Vec<usize> = page_images
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, img)| img.name == target.name && img.object == target.object)
+                            .map(|(idx, _)| idx)
+                            .collect();
+                        if name_obj_matches.len() == 1 {
+                            Some(name_obj_matches[0])
+                        } else if name_obj_matches.is_empty() {
+                            let name_matches: Vec<usize> =
+                                page_images.iter().enumerate().filter(|(_, img)| img.name == target.name).map(|(idx, _)| idx).collect();
+                            if name_matches.len() == 1 { Some(name_matches[0]) } else { None }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == *page) {
+                        if let Some(idx) = new_idx {
+                            s.index = idx;
+                        } else {
+                            view.image_selection = None;
+                        }
+                    }
+                }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
@@ -186,6 +238,9 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
+                    if matches!(edit, Edit::EditPageImage { .. }) {
+                        view.image_selection = None;
+                    }
                     // A paragraph that couldn't be applied opens again with its typing, instead of
                     // the box the click moved to.
                     if let Edit::EditTextBlock { page, block, .. } = &edit
@@ -1024,6 +1079,9 @@ fn is_form_edit(edit: &Edit) -> bool {
 /// `Packages\Microsoft.OutlookForWindows_<id>` package folder for the new Outlook. The patterns
 /// follow those layouts, so an ordinary folder that merely shares a name doesn't match. Saving there either fails,
 /// because Outlook can still hold the file, or appears to work while the edits stay out of the
+/// email and are deleted with the cache. Matched on either separator and in any case, so it can
+/// be tested on every platform.
+#[allow(dead_code)]
 /// email and are deleted with the cache. Apple Mail opens one from `Mail Downloads/<UUID>/` in
 /// its sandbox container, where other apps can't write, so saving there fails (#2751). Matched on
 /// either separator and in any case, so it can be tested on every platform.

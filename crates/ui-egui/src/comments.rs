@@ -1954,7 +1954,7 @@ pub fn recent_custom_colours(ctx: &egui::Context) -> Vec<Rgb> {
     ctx.data(|d| d.get_temp::<Vec<Rgb>>(recent_custom_id())).unwrap_or_default()
 }
 
-/// Put `c` first in the recent custom colours (once, at most [`RECENT_CUSTOM`]). Colours that are
+/// Put `c` first in the recent custom colours (once, at most `RECENT_CUSTOM`). Colours that are
 /// already swatches are not repeated there.
 pub fn remember_custom_colour(ctx: &egui::Context, c: Rgb) {
     if !c.iter().all(|v| v.is_finite()) || SWATCHES.iter().any(|(_, s)| same_colour(s, &c)) {

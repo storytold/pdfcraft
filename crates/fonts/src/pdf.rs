@@ -58,7 +58,7 @@ pub struct Metrics {
     pub bold: bool,
     pub italic: bool,
     /// Whether this font draws Indic text in visual order (pre-base vowel signs before their
-    /// consonant): a known legacy Indic font whose Unicode mapping is Indic. See [`legacy_indic_font`].
+    /// consonant): a known legacy Indic font whose Unicode mapping is Indic. See `legacy_indic_font`.
     pub visual_order: bool,
     /// Bytes per code for writing new text (1 for simple fonts, else the codespace length).
     code_len: usize,

@@ -73,7 +73,7 @@ impl SortKey {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Columns {
     pub order: [SortKey; 5],
-    /// By [`SortKey::index`]; `None` until a column is resized: fitted to the window until then.
+    /// By `SortKey::index`; `None` until a column is resized: fitted to the window until then.
     pub widths: Option<[f32; 5]>,
 }
 

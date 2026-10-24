@@ -911,7 +911,7 @@ fn refuse(slot: &mut Option<Slot>, lingering: &std::sync::Arc<std::sync::atomic:
 ///
 /// Protocol: newline-delimited JSON-RPC 2.0. The first request on a connection must be
 /// `{"method": "auth", "params": {"token": …}}`; anything else closes the connection, and so does
-/// a line longer than [`MAX_AUTH_LINE`] before that, or [`LIMITS`] passing without it.
+/// a line longer than `MAX_AUTH_LINE` before that, or `LIMITS` passing without it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
     serve_with(client, LIMITS)

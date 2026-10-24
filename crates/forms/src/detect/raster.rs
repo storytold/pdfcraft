@@ -4,14 +4,14 @@
 //! Steps:
 //! - Ink is a pixel clearly darker than the paper around it (a local mean, so the uneven paper
 //!   of a scan or photo still reads as paper).
-//! - Straight lines are runs of ink at least [`MIN_LINE`] long, horizontal or vertical, with
+//! - Straight lines are runs of ink at least `MIN_LINE` long, horizontal or vertical, with
 //!   short gaps (noise, a faint print) bridged.
 //! - A box is a patch of paper that the lines enclose and that is close to a rectangle. Its
 //!   writing area is the whole box when it is empty, or else the largest band of empty rows or
 //!   columns in it (many official forms print a small label in the corner of each box).
 //! - The remaining horizontal lines, the ones that are not the edge of a box, are rules.
 //!
-//! Everything is bounded: pictures larger than [`MAX_PIXELS`] are refused (the caller renders
+//! Everything is bounded: pictures larger than `MAX_PIXELS` are refused (the caller renders
 //! at a resolution that fits), and the results are capped.
 
 use super::Shapes;

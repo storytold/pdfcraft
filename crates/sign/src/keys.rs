@@ -441,7 +441,7 @@ impl PublicKey {
     }
 
     /// Check `sig` over a message whose digest (with `alg`) is `digest`. Encodings are read
-    /// leniently (see [`crate::rsa_pad`], [`ecdsa_rs`]); the cryptographic check never is.
+    /// leniently (see `crate::rsa_pad`, `ecdsa_rs`); the cryptographic check never is.
     /// `Err(Unsupported)` means "can't tell", as opposed to `Ok(false)`: "doesn't match".
     pub fn verify(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8]) -> Result<bool, SignError> {
         self.verify_noting(scheme, alg, digest, sig, &mut Vec::new())

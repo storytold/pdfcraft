@@ -809,7 +809,7 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> R
     Ok(out)
 }
 /// XML 1.0 fifth-edition NameStartChar, excluding `:` for an unprefixed NCName.
-/// https://www.w3.org/TR/2008/REC-xml-20081126/#NT-NameStartChar
+/// <https://www.w3.org/TR/2008/REC-xml-20081126/#NT-NameStartChar>
 fn xml_name_start(c: char) -> bool {
     matches!(
         c,

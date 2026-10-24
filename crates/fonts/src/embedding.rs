@@ -66,6 +66,7 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
     {
         return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
     }
+    validate(bytes)?;
     Ok(())
 }
 

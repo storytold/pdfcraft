@@ -129,7 +129,7 @@ mod native {
         }
 
         /// Run one script, waiting at most its `timeout` from when the engine is ready for it
-        /// (the engine itself gets [`ENGINE_START_LIMIT`] to be ready); past that it is
+        /// (the engine itself gets `ENGINE_START_LIMIT` to be ready); past that it is
         /// abandoned on its thread and the session is dead.
         pub fn run(&mut self, script: Script) -> XfaOutcome {
             let abandoned = |why: String| XfaOutcome { error: Some(why), abandoned: true, ..Default::default() };

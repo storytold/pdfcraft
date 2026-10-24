@@ -160,6 +160,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     if view.objects.input_blocked {
         return true;
     }
+    if resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx()) {
+        return false;
+    }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
         let blocked = view.objects.blocked_page == Some(page);
         let modifier_press = ui.input(|i| i.pointer.primary_pressed())

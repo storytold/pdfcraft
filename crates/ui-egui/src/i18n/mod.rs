@@ -16,7 +16,7 @@
 //! placeholders, plural forms) pick it up from the registry.
 //!
 //! # Looking strings up
-//! - [`tl!`](crate::tl) / [`t`]: a plain string in the current language. [`tr`]: in a given one.
+//! - `tl!` / [`t`]: a plain string in the current language. [`tr`]: in a given one.
 //! - [`tr_ctx`] (`tl_ctx!` in UI code): when one English word needs different translations.
 //! - [`tr_id`]: a command-id keyed string with the English label as fallback (menu items), so a
 //!   translation survives rewording of the English text and can differ per command.
@@ -45,7 +45,7 @@ pub struct LangInfo {
     /// `@plural` entries list one form per index.
     pub plural: fn(u64) -> usize,
     /// The language is written right to left. egui lays text out left to right, so the catalog's
-    /// translations are put into display order when it loads ([`crate::bidi::display_rtl`]).
+    /// translations are put into display order when it loads (`crate::bidi::display_rtl`).
     pub rtl: bool,
     catalog: OnceLock<Catalog>,
 }
