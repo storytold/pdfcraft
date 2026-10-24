@@ -3705,6 +3705,29 @@ fn long_names_repeated_by_an_index_are_capped() {
     assert!(data.len() < 2_000_000, "{} bytes of data built", data.len());
 }
 
+/// Forms with an `enter` or `exit` script, in the body, a radio group or a page master, have
+/// something to run when the focus moves; forms with other scripts only, or blank ones, don't.
+#[test]
+fn focus_scripts_are_found_wherever_the_template_has_them() {
+    let has = |xml: &str| has_focus_scripts(&parse(xml).unwrap().0);
+    assert!(has(&crate::fixtures::focus_template()));
+    let clicks =
+        crate::fixtures::focus_template().replace(r#"activity="enter""#, r#"activity="click""#).replace(r#"activity="exit""#, r#"activity="click""#);
+    assert!(!has(&clicks), "click scripts only");
+    let large = r#"<items><text>L</text></items><event activity="#;
+    assert!(has(&clicks.replace(&format!(r#"{large}"click""#), &format!(r#"{large}"enter""#))), "a radio button's enter script");
+    assert!(!has(&template(2)), "click and ready scripts only");
+    let print = crate::fixtures::repeated_print_button_template();
+    assert!(!has(&print));
+    assert!(has(&print.replace(r#"activity="click""#, r#"activity="exit""#)), "a page master's exit script");
+    assert!(
+        !has(&print
+            .replace(r#"activity="click""#, r#"activity="exit""#)
+            .replace("xfa.host.print(1, \"0\", (xfa.host.numPages -1).toString(), 0, 0, 0, 0, 0);", "  ")),
+        "a blank script"
+    );
+}
+
 /// #3441: a font the form already holds as an object stays that object when the XFA layout
 /// writes its fields' fonts into `/DR`.
 #[test]

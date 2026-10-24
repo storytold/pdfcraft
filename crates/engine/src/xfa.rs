@@ -828,15 +828,30 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
 /// the calculations once (or only those, after a reset). A validate script that answers false,
 /// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
-/// than reverting it.
-pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names: &[String], run: &mut XfaRun) -> Result<(), String> {
+/// than reverting it. The SOM paths whose exit scripts ran go into `exited`.
+pub(crate) fn on_changes(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    names: &[String],
+    run: &mut XfaRun,
+    exited: &mut Vec<String>,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
-        for ev in r.events_of(&som, "change").into_iter().chain(r.events_of(&som, "exit")) {
+        for ev in r.events_of(&som, "change") {
             r.run(&ev, &value)?;
+        }
+        // Noted only when an exit script ran: one the event's budget skipped, or one an error
+        // before it stopped, is still to run when the field loses focus.
+        let mut ran_exit = false;
+        for ev in r.events_of(&som, "exit") {
+            ran_exit |= r.run(&ev, &value)?.is_some();
+        }
+        if ran_exit {
+            exited.push(som.clone());
         }
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };
@@ -896,6 +911,44 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     r.clock = Clock::start(OPEN_BUDGET_MS);
     r.calculates()?;
     r.finish().map(|_| ())
+}
+
+/// A field gaining (`enter`) or losing (`exit`) focus: its scripts for that activity, then, when
+/// they changed something, the calculations. Returns what changed; nothing (and no error) when
+/// the field has no such script, so a focus change with nothing to run leaves the form alone.
+pub(crate) fn on_focus(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<Changes, String> {
+    let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
+    let events = r.events_of(som, activity);
+    if events.is_empty() {
+        return Ok(Changes::default());
+    }
+    // The field's value, as the script's event sees it (`xfa.event.prevText`, `newText`).
+    let value = r.by_som().get(som).cloned().and_then(|name| r.fields().get(&name).map(|f| f.value.join("\n"))).unwrap_or_default();
+    for ev in events {
+        r.run(&ev, &value)?;
+    }
+    if !r.changes.is_empty() {
+        // The calculations that follow get a budget of their own.
+        r.clock = Clock::start(OPEN_BUDGET_MS);
+        r.calculates()?;
+    }
+    r.finish()
+}
+
+/// The SOM path of widget `widget` of field `field`: each radio button of a group has its own,
+/// and a field's copies on several pages share one.
+pub(crate) fn widget_som(doc: &pdfcraft_cos::Document, field: &pdfcraft_forms::Field, widget: usize) -> Option<String> {
+    let som_of = |obj: pdfcraft_cos::ObjRef| {
+        let object = doc.get(obj);
+        object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string().map(|s| s.to_text())
+    };
+    field.widgets.get(widget).and_then(|w| som_of(w.obj)).or_else(|| som_of(field.obj))
+}
+
+/// Does the live form give SOM path `som` an `activity` script?
+pub(crate) fn has_event(doc: &pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str) -> bool {
+    let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
+    live.events.iter().any(|e| e.som == som && e.activity == activity)
 }
 
 /// The SOM path of a generated field whose template has a click script.

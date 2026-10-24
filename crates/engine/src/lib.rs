@@ -435,6 +435,10 @@ pub struct Document {
     xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     xfa_scripts_off: bool,
+    /// SOM paths of the XFA fields whose exit scripts ran with a value change ([`xfa::on_changes`])
+    /// since they last gained focus: their exit on losing focus has run already
+    /// ([`Session::field_focus`]).
+    xfa_exited: std::collections::HashSet<String>,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or
     /// embedded fonts, so the font list is read again on demand ([`Session::refresh_fonts`]).
     fonts_stale: bool,
@@ -2461,6 +2465,8 @@ struct EditCtx {
     xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     xfa_ran_away: bool,
+    /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
+    xfa_unchanged: bool,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
@@ -2479,6 +2485,8 @@ struct EditCtx {
 }
 
 impl EditCtx {
+    /// The context for one edit made at `now` (Unix seconds, when known), its random values
+    /// seeded from the time and `salt`.
     fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -2495,6 +2503,7 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_unchanged: false,
             xfa_removed: Vec::new(),
             pages: 0,
             date: now.map(pdfcraft_cos::pdf_date),
@@ -2678,10 +2687,14 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
             let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
-            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            let ran = if matches!(activity.as_str(), "enter" | "exit") {
+                xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
+            } else {
+                xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
+            };
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
-            ran.map_err(EditError::Invalid)?;
+            cx.xfa_unchanged = ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
             let (img, _) = embed_image(doc, name, image)?;
@@ -2995,6 +3008,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => {
+            // A form-script event runs on its own: in a batch, its scripts and those the batch's
+            // value edits run afterwards (change, exit) would interleave, an exit running twice.
+            if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
+                return Err(EditError::Invalid("a form script event can't be part of a batch of edits".into()));
+            }
             for e in edits {
                 run_edit(doc, e, cx)?;
             }
@@ -3927,6 +3945,7 @@ impl Session {
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,
+            xfa_exited: Default::default(),
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
@@ -3989,6 +4008,18 @@ impl Session {
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
+        // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
+        // a batch keeps the other edits it holds.
+        if cx.xfa_unchanged && matches!(edit, Edit::XfaEvent { .. }) {
+            doc.js_output.append(cx.xfa_out);
+            if cx.xfa_ran_away {
+                doc.xfa_template = None;
+                doc.xfa_scripts_off = true;
+                doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
+            }
+            return Ok(());
+        }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
         if let Edit::ApplyRedactions { pages } = &edit {
@@ -4027,7 +4058,8 @@ impl Session {
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
-        // to date first.
+        // to date first. The fields whose exit scripts ran are noted once the edit is kept.
+        let mut exited: Vec<String> = Vec::new();
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -4036,6 +4068,8 @@ impl Session {
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
             }
+            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+            /// resets the form.
             fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
                 match e {
                     Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
@@ -4051,7 +4085,7 @@ impl Session {
                 let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
@@ -4122,6 +4156,10 @@ impl Session {
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
+        // Only this edit's exits are skipped on the next focus loss: one an earlier change ran is
+        // no reason to skip a later one.
+        doc.xfa_exited.clear();
+        doc.xfa_exited.extend(exited);
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -4143,6 +4181,7 @@ impl Session {
         Ok(())
     }
 
+    /// Undo the last edit of document `id`, keeping it for [`Session::redo`]. Returns its label.
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
@@ -4168,10 +4207,13 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        // The change whose exit ran is undone (or redone without its scripts): skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Ok(label)
     }
 
+    /// Redo the last edit of document `id` that [`Session::undo`] took back. Returns its label.
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
@@ -4197,6 +4239,8 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        // The change whose exit ran is undone (or redone without its scripts): skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
         Ok(label)
     }
