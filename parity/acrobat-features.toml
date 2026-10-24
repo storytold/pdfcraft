@@ -8036,8 +8036,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::page_selection", "crates/automation/tests/it/automation.rs::printing_through_tools"]
-notes = "all, current, ranges with labels and open ends"
+evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::a_number_in_parentheses_names_the_page_at_that_position", "crates/automation/tests/it/automation.rs::printing_through_tools"]
+notes = "all, current, ranges with labels and open ends; (n) names the nth page whatever its label (ISO 32000-2 §12.4.2: labels and page indices need not coincide), alone or as a range end. The same parser serves Combine files ranges. Organize Pages range selection still takes positions only, without labels or (n)."
 
 [[feature]]
 id = "print.odd-even-reverse"
@@ -8048,8 +8048,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::odd_and_even_pages_are_page_numbers_not_places_in_the_range", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools"]
-notes = "Odd and even are page numbers, as Acrobat counts them (Adobe Acrobat DC Help, 11/28/2019, Options in the Print dialog box, p. 515: a range of 2, 7–10 with Even Pages Only prints pages 2, 8 and 10), for a typed range, picked thumbnails and the current page; Reverse turns the chosen pages round (#3984). Not yet: with page labels, odd and even still count page numbers (a document whose front matter is numbered i, ii, iii… keeps label 2 among the odd pages when it is page 5); the Acrobat help consulted doesn't say how Acrobat counts there, and the other Print-dialog behaviours #3984 mentions are open."
+evidence = ["crates/print/src/tests.rs::page_selection", "crates/print/src/tests.rs::odd_and_even_pages_are_page_numbers_not_places_in_the_range", "crates/print/src/tests.rs::odd_and_even_count_positions_on_a_labelled_document", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools"]
+notes = "Odd and even are page numbers, as Acrobat counts them (Adobe Acrobat DC Help, 11/28/2019, Options in the Print dialog box, p. 515: a range of 2, 7–10 with Even Pages Only prints pages 2, 8 and 10), for a typed range, picked thumbnails and the current page; Reverse turns the chosen pages round (#3984). With page labels, odd and even count page positions, not the numbers in the labels: page indices are fixed and consecutive while labels can restart, repeat, use letters or carry no number at all (ISO 32000-2 §12.4.2), so with front matter labelled i–iii the page labelled 1 (the fourth) is even. The other Print-dialog behaviours #3984 mentions are open."
 
 [[feature]]
 id = "print.scaling"

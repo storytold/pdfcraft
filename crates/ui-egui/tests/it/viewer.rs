@@ -450,6 +450,24 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
     assert_eq!(h.state().views[0].current, 0, "the current fallback number must not jump to another page labelled 1");
 }
 
+/// A page's label and its position need not coincide (ISO 32000-2 §12.4.2). Typed in the page
+/// box, "(n)" goes to the nth page whatever its label, as print ranges take it, while a bare
+/// number is still a label first. On these pages (i, ii, 1, 2, 3) "1" is the third page and
+/// "(1)" the first; a position past the end, or anything else in parentheses, leaves the page.
+#[test]
+fn page_label_input_takes_a_position_in_parentheses() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.run_steps(3);
+    for (typed, page, displayed) in [("(1)", 0, "i"), ("1", 2, "1"), ("(4)", 3, "2"), ("( 2 )", 1, "ii"), ("(9)", 1, "ii"), ("(x)", 1, "ii")] {
+        type_page_input(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{typed}");
+        assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
+    }
+}
+
 #[test]
 fn page_label_input_preserves_literal_whitespace_before_trimmed_lookup() {
     use pdfcraft_render::{DocInfo, PageInfo};

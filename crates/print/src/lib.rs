@@ -25,7 +25,7 @@ pub mod spool;
 #[cfg(test)]
 mod tests;
 
-pub use range::{Subset, select_listed, select_pages};
+pub use range::{Subset, position, select_listed, select_pages};
 
 /// What can go wrong when printing.
 ///
