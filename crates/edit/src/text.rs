@@ -80,6 +80,10 @@ pub struct TextLine {
     /// Why the line can't be edited: its font's writing mode (its CMap's `WMode`) couldn't be read,
     /// so which way its glyphs advance is unknown. The line is listed as horizontal text.
     unreadable_mode: Option<String>,
+    /// The runs the line joins, in content order: each one's text, the end of its words in
+    /// `ink`, and whether joining put a space before it. Empty when the line's text was put
+    /// into another order (see [`TextLine::runs`]).
+    runs: Vec<(String, usize, bool)>,
 }
 
 impl TextLine {
@@ -204,7 +208,17 @@ fn layout_draft(
             *count -= 1;
             continue;
         }
-        rect = Some(rect.map_or(line.rect, |r| [r[0].min(line.rect[0]), r[1].min(line.rect[1]), r[2].max(line.rect[2]), r[3].max(line.rect[3])]));
+        // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
+        // measured to the end of its last word: they don't make a draft overflow (#4199).
+        let mut r = line.rect;
+        if line.upright() && !line.ink.is_empty() {
+            if crate::bidi::rtl_base(&line.text) {
+                r[0] = r[0].max(line.ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min));
+            } else {
+                r[2] = r[2].min(line.ink.iter().map(|i| i[2]).fold(f64::NEG_INFINITY, f64::max));
+            }
+        }
+        rect = Some(rect.map_or(r, |a| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]));
     }
     let overflow = rect
         .is_some_and(|r| r[0] < source.rect[0] - 0.5 || r[1] < source.rect[1] - 0.5 || r[2] > source.rect[2] + 0.5 || r[3] > source.rect[3] + 0.5);
@@ -223,6 +237,14 @@ struct TextState {
     fill: Vec<Op>,
     /// The text rendering mode (`Tr`); 3 is invisible text, as in an OCR layer over a scan.
     render_mode: i64,
+    /// The stroke colour operators, the line width and the ExtGStates selected (see [`Ts`]):
+    /// graphics state the text was painted with that [`TextState::ops`] doesn't restate.
+    stroke: Vec<Op>,
+    line_width: Option<f64>,
+    ext_gstate: Vec<Vec<u8>>,
+    /// The dash pattern and line cap in force (see [`Ts`]): compared, not restated.
+    dash: Dash,
+    line_cap: i64,
 }
 
 impl TextState {
@@ -236,7 +258,51 @@ impl TextState {
             rise: ts.rise,
             fill: ts.fill.clone(),
             render_mode: ts.render_mode,
+            stroke: ts.stroke.clone(),
+            line_width: ts.line_width,
+            ext_gstate: ts.ext_gstate.clone(),
+            dash: ts.dash.clone(),
+            line_cap: ts.line_cap,
         }
+    }
+
+    /// Operators that change how text is painted from `current` (the state where they run) to
+    /// this one: the ExtGStates, stroke colour, line width and a visible rendering mode. A
+    /// rewritten paragraph is drawn before its text object, so whatever that object set before
+    /// its first show (`/GS1 gs`, `1 Tr 1 0 0 RG 2 w` inside `BT`, #3508/#3509) must be stated
+    /// again. Empty when nothing differs.
+    ///
+    /// Only fill, stroke and fill-then-stroke (`Tr` 0–2) are restated: invisible text is revealed
+    /// by [`reveal_ops`] and clipping text is refused, so neither is ever drawn this way.
+    ///
+    /// A `gs` has no inverse, so a selection `current` has and this state doesn't stays in force:
+    /// run these inside a `q`/`Q` that starts from `current`, one per state drawn.
+    fn paint_ops(&self, current: &TextState) -> Vec<Op> {
+        let n = pdfcraft_content::num;
+        let mut v = Vec::new();
+        // The selections both share stay in force; the ones after them are selected again in order.
+        let shared = self.ext_gstate.iter().zip(&current.ext_gstate).take_while(|(a, b)| a == b).count();
+        for name in self.ext_gstate.iter().skip(shared) {
+            v.push(Op::new("gs", vec![Object::Name(name.clone())]));
+        }
+        // A reselected ExtGState may set `/LW`, so the width (already the effective one) follows it.
+        let reselected = !v.is_empty();
+        if self.stroke != current.stroke {
+            if self.stroke.is_empty() {
+                // The initial stroke colour: black in DeviceGray.
+                v.push(Op::new("G", vec![n(0.0)]));
+            } else {
+                v.extend(self.stroke.iter().cloned());
+            }
+        }
+        let width = self.line_width.unwrap_or(1.0);
+        if reselected || width != current.line_width.unwrap_or(1.0) {
+            v.push(Op::new("w", vec![n(width)]));
+        }
+        if (0..=2).contains(&self.render_mode) && self.render_mode != current.render_mode {
+            v.push(Op::new("Tr", vec![Object::Int(self.render_mode)]));
+        }
+        v
     }
 
     /// Operators that set this state (inside a text object).
@@ -539,6 +605,20 @@ impl TextLine {
         (self.stream, self.ops.iter().min().copied().unwrap_or(0))
     }
 
+    /// The runs of text the line joins, in content order: each run's text as its glyphs show it,
+    /// the boxes of its words (a part of `ink`), and whether joining put a space between it and
+    /// the run before (`text` has one there; runs closer together join with none, so one word
+    /// can span runs). None when the line's text was reordered for reading (right-to-left or
+    /// visual-order Indic text): then only the line's text as a whole says what it reads.
+    pub fn runs(&self) -> impl Iterator<Item = (&str, &[[f64; 4]], bool)> {
+        let mut start = 0;
+        self.runs.iter().map(move |(text, end, spaced)| {
+            let ink = self.ink.get(start..*end).unwrap_or_default();
+            start = *end;
+            (text.as_str(), ink, *spaced)
+        })
+    }
+
     fn rotation(&self) -> f64 {
         let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
         m[1].atan2(m[0]).to_degrees()
@@ -616,6 +696,50 @@ struct Ts {
     /// Why the font's writing mode couldn't be read (a broken or cyclic CMap). Its text is then
     /// listed as horizontal, but the lines in it are refused for editing.
     unreadable: Option<Rc<str>>,
+    /// The operators that set the current stroke colour (`G`, `RG`, `K`, or `CS` + `SC`/`SCN`).
+    stroke: Vec<Op>,
+    /// The line width a `w` or an ExtGState's `/LW` set (`None`: the initial 1.0).
+    line_width: Option<f64>,
+    /// The ExtGState resources selected with `gs`, oldest first (see [`select_gs`]).
+    ext_gstate: Vec<Vec<u8>>,
+    /// The dash pattern a `d` or an ExtGState's `/D` set (initially solid: `[] 0`).
+    dash: Dash,
+    /// The line cap a `J` or an ExtGState's `/LC` set (initially 0, butt).
+    line_cap: i64,
+}
+
+/// A dash pattern (ISO 32000-2 §8.4.3.6): the dash array and the phase.
+type Dash = (Vec<f64>, f64);
+
+/// The most dash array entries a pattern keeps; a longer one is ignored, as is a malformed one.
+const MAX_DASH: usize = 32;
+
+/// The dash pattern `array phase`, as `d` takes it and an ExtGState's `/D` holds it.
+fn dash_pattern(doc: &Document, array: Option<&Object>, phase: Option<&Object>) -> Option<Dash> {
+    let array = doc.resolve(array?);
+    let items = array.as_array().filter(|a| a.len() <= MAX_DASH)?;
+    let finite = |o: &Object| doc.resolve(o).as_f64().filter(|v| v.is_finite());
+    Some((items.iter().map(finite).collect::<Option<Vec<_>>>()?, finite(phase?)?))
+}
+
+/// A line cap style, as `J` takes it and an ExtGState's `/LC` holds it: 0, 1 or 2.
+fn line_cap(doc: &Document, cap: Option<&Object>) -> Option<i64> {
+    doc.resolve(cap?).as_int().filter(|c| (0..=2).contains(c))
+}
+
+/// The most `gs` selections a state remembers. Repeating a selection moves it to the end, so
+/// this bounds the distinct ExtGStates in force, not the operators a hostile stream repeats.
+const MAX_GS: usize = 32;
+
+/// Record `gs /name` in `list`. A `gs` sets every parameter its dictionary names to an absolute
+/// value, so a later selection of the same dictionary overrides the earlier one completely: the
+/// earlier entry goes, which keeps replaying the list equivalent to replaying the stream.
+fn select_gs(list: &mut Vec<Vec<u8>>, name: &[u8]) {
+    list.retain(|n| n != name);
+    if list.len() >= MAX_GS {
+        list.remove(0);
+    }
+    list.push(name.to_vec());
 }
 
 /// The page's content streams as listed, each with its decoded data (empty when it doesn't
@@ -929,6 +1053,11 @@ impl Carry {
             gs: Gs::default(),
             vertical: None,
             unreadable: None,
+            stroke: Vec::new(),
+            line_width: None,
+            ext_gstate: Vec::new(),
+            dash: (Vec::new(), 0.0),
+            line_cap: 0,
         };
         Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
     }
@@ -1042,6 +1171,14 @@ fn interpret(
                 ts.fill.retain(|o| o.is("cs"));
                 ts.fill.push(op.clone());
             }
+            b"G" | b"RG" | b"K" | b"CS" => ts.stroke = vec![op.clone()],
+            b"SC" | b"SCN" => {
+                ts.stroke.retain(|o| o.is("CS"));
+                ts.stroke.push(op.clone());
+            }
+            b"w" => ts.line_width = op.num(0).filter(|w| w.is_finite()).or(ts.line_width),
+            b"d" => ts.dash = dash_pattern(doc, op.operands.first(), op.operands.get(1)).unwrap_or_else(|| ts.dash.clone()),
+            b"J" => ts.line_cap = line_cap(doc, op.operands.first()).unwrap_or(ts.line_cap),
             b"Tf" => {
                 ts.size = op.num(1).unwrap_or(ts.size);
                 if let Some(name) = op.name(0) {
@@ -1069,9 +1206,21 @@ fn interpret(
             b"Ts" => ts.rise = op.num(0).unwrap_or(0.0),
             b"Tr" => ts.render_mode = op.operands.first().and_then(Object::as_int).unwrap_or(-1),
             b"gs" => {
+                if let Some(name) = op.name(0) {
+                    select_gs(&mut ts.ext_gstate, name);
+                }
                 let params = op.name(0).and_then(|name| states.get(name)).map(|p| doc.resolve(p));
                 if let Some(params) = params.as_deref().and_then(Object::as_dict) {
                     ts.gs.apply(doc, params);
+                    // `/LW` sets the line width as `w` does (ISO 32000-2 §8.4.5).
+                    let lw = params.get(b"LW").and_then(|w| doc.resolve(w).as_f64()).filter(|w| w.is_finite());
+                    ts.line_width = lw.or(ts.line_width);
+                    let dash = params.get(b"D").map(|d| doc.resolve(d));
+                    let dash = dash.as_deref().and_then(Object::as_array);
+                    if let Some(d) = dash.and_then(|d| dash_pattern(doc, d.first(), d.get(1))) {
+                        ts.dash = d;
+                    }
+                    ts.line_cap = line_cap(doc, params.get(b"LC")).unwrap_or(ts.line_cap);
                 }
             }
             b"Do" => {
@@ -1351,7 +1500,11 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
                 && (s.text.trim().is_empty()
                     || lines.last().is_some_and(|l| {
-                        (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
+                        (s.size - l.size).abs() < 0.01
+                            && s.bold == l.bold
+                            && s.italic == l.italic
+                            && fill_color(&s.state.fill) == l.color
+                            && same_paint(l, &s.state)
                     }))
                 && near
                 // An OCR layer is one text object over the whole scan: its words continue a line
@@ -1360,13 +1513,15 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
         });
         if joins && let Some(l) = lines.last_mut() {
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
-            if gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ') {
+            let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
+            if spaced {
                 l.text.push(' ');
             }
             l.text.push_str(&s.text);
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
+            l.runs.push((s.text.clone(), l.ink.len(), spaced));
             l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
             l.decodable &= s.decodable;
@@ -1399,6 +1554,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
+                runs: vec![(s.text.clone(), s.ink.len(), false)],
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 origin: Origin {
                     tm: s.tm.0,
@@ -1418,10 +1574,15 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
     // Content streams draw right-to-left lines in visual order; the editor works in typing order.
     for l in lines.iter_mut().filter(|l| !l.logical_order) {
         // A visual-order Indic font draws pre-base vowel signs before their consonant.
+        let shown = l.text.clone();
         if l.visual_order && !l.actual_text {
             l.text = crate::indic::to_logical(&l.text);
         }
         l.text = crate::bidi::to_logical(&l.text);
+        // The runs hold the text in drawing order, which no longer reads as the line does.
+        if l.text != shown {
+            l.runs.clear();
+        }
     }
     // Lines of only spaces aren't editable text.
     lines.retain(|l| !l.text.trim().is_empty());
@@ -1457,19 +1618,25 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
-                    (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
+                    (s.size - l.size).abs() < 0.01
+                        && s.bold == l.bold
+                        && s.italic == l.italic
+                        && fill_color(&s.state.fill) == l.color
+                        && same_paint(l, &s.state)
                 }))
             && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
     });
     if joins && let Some(l) = lines.last_mut() {
         let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
-        if gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ') {
+        let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
+        if spaced {
             l.text.push(' ');
         }
         l.text.push_str(&s.text);
         l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
         l.frame = union(l.frame, s.frame);
         l.ink.extend(s.ink.iter().copied());
+        l.runs.push((s.text.clone(), l.ink.len(), spaced));
         l.ops.push(s.op);
         l.ops.extend(s.extra_ops.iter().copied());
         l.decodable &= s.decodable;
@@ -1501,6 +1668,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
+            runs: vec![(s.text.clone(), s.ink.len(), false)],
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             origin: Origin {
                 tm: s.tm.0,
@@ -1681,7 +1849,11 @@ fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), E
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.
     for l in lines.iter_mut().filter(|l| l.visual_order && !l.actual_text) {
+        let shown = l.text.clone();
         l.text = crate::indic::to_logical(&l.text);
+        if l.text != shown {
+            l.runs.clear();
+        }
     }
     lines.retain(|l| !l.text.trim().is_empty());
     Ok((lines, w.budget.truncated))
@@ -1817,6 +1989,24 @@ fn same_font(line: &TextLine, font: &[u8], base_font: &str, face: Option<&str>) 
     line.font.as_bytes() == font || same_base_font(&line.base_font, base_font) || (line.face.is_some() && line.face.as_deref() == face)
 }
 
+/// Whether a run painted with `ts` continues `line` as it is painted: a line is rewritten in the
+/// state of its first run, so a `Tr`, stroke colour or line width that changes partway starts
+/// another run (see [`TextState::paint_ops`]; the `gs` parameters are compared as [`Paint`]).
+/// The stroke colour, width, dash and cap only count for text that is stroked, so a rule drawn
+/// between two words doesn't split their line. They are compared as values, wherever they were
+/// set: two ExtGStates with the same settings under other names still continue a line.
+///
+/// Only the visible modes (`Tr` 0–2) that `paint_ops` restates are compared: a line that goes on
+/// as invisible or clipping text stays one line, which the clipping refusal reads whole (#3447).
+fn same_paint(line: &TextLine, ts: &Ts) -> bool {
+    let a = &line.origin.state;
+    let visible = |m: i64| (0..=2).contains(&m);
+    let same_mode = a.render_mode == ts.render_mode || !visible(a.render_mode) || !visible(ts.render_mode);
+    let stroked = matches!((a.render_mode, ts.render_mode), (1 | 2, 1 | 2));
+    let outline = a.stroke == ts.stroke && a.line_width == ts.line_width && a.dash == ts.dash && a.line_cap == ts.line_cap;
+    same_mode && (!stroked || outline)
+}
+
 /// Whether two `/BaseFont` names name the same font: a subset's six-letter tag and `+` prefix do
 /// not change the font (ISO 32000-2 §9.6.4), so `ABCDEF+Arial` and `GHIJKL+Arial` are one font.
 /// A name that is missing, or only a tag (`ABCDEF+`), names no font and matches nothing.
@@ -1845,8 +2035,6 @@ fn source_family(base_font: &str) -> crate::added::Family {
     }
 }
 
-const SUBSTITUTE_NAME: &str = "PCEdHelv";
-const SUBSTITUTE: &[u8] = SUBSTITUTE_NAME.as_bytes();
 const MAX_TYPE3_GLYPHS: usize = 240;
 
 /// The generated fonts for one replacement: one per run of at most `max_glyphs` unique characters,
@@ -2064,6 +2252,19 @@ fn type3_font(
             .map_err(|_| EditError::Invalid("replacement text has too many unique characters".into()))?;
         glyphs.push(Type3Glyph { code, ch, path, width });
     }
+    Ok(write_type3_glyphs(doc, fonts_res, face, hebrew, glyphs, per_font))
+}
+
+/// Write already validated outlines; callers can prepare every face before adding any objects.
+fn write_type3_glyphs(
+    doc: &mut Document,
+    fonts_res: &mut Dict,
+    face: &CraftFont,
+    hebrew: bool,
+    glyphs: Vec<Type3Glyph>,
+    per_font: usize,
+) -> Type3Fallback {
+    let per_font = per_font.clamp(1, MAX_TYPE3_GLYPHS);
     let mut codes = HashMap::with_capacity(glyphs.len());
     let mut widths = Vec::with_capacity(glyphs.len());
     let mut names = Vec::new();
@@ -2079,7 +2280,7 @@ fn type3_font(
         }
         names.push(add_type3_font(doc, fonts_res, face, hebrew, group));
     }
-    Ok(Type3Fallback { family: face.family, names, widths, codes })
+    Type3Fallback { family: face.family, names, widths, codes }
 }
 
 /// Adds one generated font whose codes 1 to `glyphs.len()` show `glyphs`, and returns its resource
@@ -2565,20 +2766,28 @@ fn paragraph_separator(c: char) -> bool {
 
 /// Greedy word wrapping to `width` with `advance` giving a string's width. Each `\n` starts a
 /// new line. A row may also end inside a word of Chinese or Japanese text ([`crate::linebreak`]);
-/// those pieces join without a space.
+/// those pieces join without a space. Every white-space character is written as one space, so
+/// a run of spaces typed between, before or after words stays (#4199); only the spaces where a
+/// row wraps are dropped.
 fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
     let mut out = Vec::new();
     for row in text.split('\n') {
         let mut line = String::new();
         let start = out.len();
-        for word in row.split(paragraph_separator).filter(|word| !word.is_empty()) {
+        // The separators read since the last word: each one boundary between `split` pieces.
+        let mut gap = 0usize;
+        for (k, word) in row.split(paragraph_separator).enumerate() {
+            if k > 0 {
+                gap = gap.saturating_add(1);
+            }
+            if word.is_empty() {
+                continue;
+            }
+            let spaces = " ".repeat(std::mem::take(&mut gap));
             for (i, piece) in crate::linebreak::pieces(word).into_iter().enumerate() {
-                let candidate = match (line.is_empty(), i) {
-                    (true, _) => piece.to_string(),
-                    (false, 0) => format!("{line} {piece}"),
-                    (false, _) => format!("{line}{piece}"),
-                };
-                if !line.is_empty() && advance(&candidate) > width {
+                let candidate = if i == 0 { format!("{line}{spaces}{piece}") } else { format!("{line}{piece}") };
+                // A row holding only the spaces that indent it doesn't wrap before its first word.
+                if line.chars().any(|c| c != ' ') && advance(&candidate) > width {
                     out.push(std::mem::take(&mut line));
                     line = piece.to_string();
                 } else {
@@ -2586,6 +2795,7 @@ fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
                 }
             }
         }
+        line.push_str(&" ".repeat(gap));
         if !line.is_empty() || out.len() == start {
             out.push(line);
         }
@@ -2707,7 +2917,8 @@ fn rewrite_block_from(
         && (!style.ranges.is_empty()
             || style.resource.is_some()
             || (text.is_some_and(|draft| {
-                draft.contains('\n')
+                // A row break, `\n` or a carriage return, takes the path that keeps untouched rows.
+                draft.contains(['\n', '\r'])
                     || pdfcraft_fonts::source_shaping::required(draft)
                     || !pdfcraft_fonts::embedding::matching_faces(&b.base_font).is_empty()
             }) || registered_face
@@ -2717,18 +2928,24 @@ fn rewrite_block_from(
                 && style.family.is_none()
                 && style.bold.is_none())
     {
-        return rewrite_styled_block(doc, page, &b, &lines, text, style);
+        return rewrite_styled_block(doc, page, &b, &lines, text, style, max_glyphs);
     }
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
-    // Explicit line breaks stay (#1443); within a line, runs of white space become one space.
-    let text = text
+    // Explicit line breaks stay (#1443), and so does each typed U+0020 space: a run of them is
+    // not folded into one (#4199, #3797). `\r\n` and a lone `\r` are breaks too; other white
+    // space is written as one space.
+    let text: String = text
         .unwrap_or(&b.text)
-        .split('\n')
-        .map(|row| row.split(paragraph_separator).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" "))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .replace("\r\n", "\n")
+        .chars()
+        .map(|c| match c {
+            '\r' => '\n',
+            c if c != '\n' && paragraph_separator(c) => ' ',
+            c => c,
+        })
+        .collect();
     // The characters to show, for choosing fonts: the breaks are moves, not glyphs.
     let flat = text.replace('\n', " ");
     let o = &first.origin;
@@ -2883,7 +3100,9 @@ fn rewrite_block_from(
         f.set(b"Subtype".to_vec(), Object::name("Type1"));
         f.set(b"BaseFont".to_vec(), Object::name(base));
         f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        let name = if style.family.is_none() { String::from_utf8_lossy(SUBSTITUTE).into_owned() } else { format!("PCEd{}", base.replace('-', "")) };
+        // Named after its face, as the line and region rewrites name theirs: one name for every
+        // stand-in would repoint the paragraphs set in an earlier one at this face (#4280).
+        let name = format!("PCEd{}", base.replace('-', ""));
         fonts_res.set(name.clone().into_bytes(), Object::Dict(f));
         if style.family.is_none() {
             substituted = Some(base.to_string());
@@ -2908,6 +3127,21 @@ fn rewrite_block_from(
         None => size * 1.2,
     };
     let n = pdfcraft_content::num;
+    // The paragraph's operators go, and so does another drawing on the same baseline (a fake-bold
+    // second copy, an invisible text layer): the new text is all that may show.
+    let drop = dropped;
+    // Text shown earlier in the same text object stays first: the paragraph then goes where its
+    // last row was, after any backgrounds between the rows, or between two halves of the text object.
+    let start = last.ops.first().copied().unwrap_or(emit.bt_op);
+    let split = ops
+        .get(emit.bt_op..start)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(emit.bt_op + i)));
+    // What the text after the paragraph expects, and what is in force where the paragraph is
+    // drawn: the state at its BT (or where it was split).
+    let after = if split { &emit.state } else { &emit.bt_state };
     // In its own graphics state, so a new colour (or anything else) stops at the paragraph.
     let mut block_ops = vec![Op::new("q", vec![])];
     block_ops.extend(reveal_ops(&b, &lines, style, emit.ctm)?);
@@ -2915,6 +3149,8 @@ fn rewrite_block_from(
     if let Some((ax, ay)) = movement {
         block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
     }
+    // Painted as the paragraph was, including what its text object set before the first show.
+    block_ops.extend(o_state.paint_ops(after));
     block_ops.push(Op::new("BT", vec![]));
     let mut state = o_state.clone();
     state.word_spacing = 0.0;
@@ -2927,12 +3163,13 @@ fn rewrite_block_from(
     block_ops.extend(state.ops());
     block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
     // Alignment: each line's offset from the left edge, in text space.
-    let offset = |line: &str| -> f64 {
-        let free = (width - advance(line)).max(0.0) / k;
+    // `visible` is the width the line is aligned on (see the loop below).
+    let offset = |visible: f64| -> f64 {
+        let free = (width - visible).max(0.0) / k;
         match align {
             Some(crate::added::Align::Center) => free / 2.0,
             // A right-to-left line anchored at its right edge may start left of the old box.
-            Some(crate::added::Align::Right) if anchored_right => (right_edge - advance(line)) / k,
+            Some(crate::added::Align::Right) if anchored_right => (right_edge - visible) / k,
             Some(crate::added::Align::Right) => free,
             // A justified right-to-left paragraph ends its last line at the right edge.
             Some(crate::added::Align::Justify) if rtl => free,
@@ -2952,11 +3189,29 @@ fn rewrite_block_from(
     let mut tw_set = 0.0;
     let mut underlines: Vec<(f64, f64, f64)> = Vec::new(); // (x0, x1, y) in text space
     for (i, line) in wrapped.iter().enumerate() {
-        let spaces = line.matches(' ').count();
-        let tw =
-            if justify && i + 1 < wrapped.len() && spaces > 0 { (width - advance(line)).max(0.0) / k / o_state.scale / spaces as f64 } else { 0.0 };
-        // A stretched line fills the width from the left edge.
-        let dx = if tw > 0.0 { 0.0 } else { offset(line) };
+        // A stretched (justified) line shows only its words, as before #4199: word spacing would
+        // reach the spaces before its first word and after its last, so they are left out, and
+        // the line fills the width from the left edge. Nothing to stretch over, or a paragraph
+        // drawn at `0 Tz`, isn't justified.
+        let body = line.trim_matches(' ');
+        let interior = body.matches(' ').count();
+        let tw = if justify && i + 1 < wrapped.len() && interior > 0 && o_state.scale.abs() > 1e-6 {
+            Some((width - advance(body)).max(0.0) / k / o_state.scale / interior as f64).filter(|tw| tw.is_finite())
+        } else {
+            None
+        }
+        .unwrap_or(0.0);
+        // Other lines show every space typed. A left-to-right one is aligned on its width up to
+        // its last word; a right-to-left one on its whole width, since the spaces typed after its
+        // last word are drawn on its left and the ones before its first on its right.
+        let (shown, visible) = if tw > 0.0 {
+            (body, advance(body))
+        } else if crate::bidi::rtl_base(line) {
+            (line.as_str(), advance(line))
+        } else {
+            (line.as_str(), advance(line.trim_end_matches(' ')))
+        };
+        let dx = if tw > 0.0 { 0.0 } else { offset(visible) };
         if i > 0 || dx != 0.0 {
             block_ops.push(Op::new("Td", vec![n(dx - x), n(if i > 0 { -lead } else { 0.0 })]));
         }
@@ -2968,7 +3223,7 @@ fn rewrite_block_from(
             tw_set = tw;
         }
         // Each wrapped line in typing order; drawn left to right (right-to-left runs reversed).
-        let visual = crate::bidi::to_visual(line);
+        let visual = crate::bidi::to_visual(shown);
         // Stretched without word spacing: shown up to and including each space, then moved on.
         let pieces = if stretch > 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
         for piece in pieces {
@@ -2989,7 +3244,8 @@ fn rewrite_block_from(
             }
         }
         let tw = tw + stretch;
-        let w = (advance(line) + tw * spaces as f64 * o_state.scale * k) / k;
+        // Underlined to the line's last word, over its stretched gaps.
+        let w = (visible + tw * interior as f64 * o_state.scale * k) / k;
         underlines.push((dx, dx + w, -(i as f64) * lead - size * 0.12));
     }
     block_ops.push(Op::new("ET", vec![]));
@@ -3019,21 +3275,6 @@ fn rewrite_block_from(
         block_ops.push(Op::new("Q", vec![]));
     }
     block_ops.push(Op::new("Q", vec![]));
-    // The paragraph's operators go, and so does another drawing on the same baseline (a fake-bold
-    // second copy, an invisible text layer): the new text is all that may show.
-    let mut drop = coincident_ops(&lines, &members);
-    drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    // Text shown earlier in the same text object stays first: the paragraph then goes where its
-    // last row was, after any backgrounds between the rows, or between two halves of the text object.
-    let start = last.ops.first().copied().unwrap_or(emit.bt_op);
-    let split = ops
-        .get(emit.bt_op..start)
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(emit.bt_op + i)));
-    // What the text after the paragraph expects: the state at its BT (or where it was split).
-    let after = if split { &emit.state } else { &emit.bt_state };
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
@@ -3355,7 +3596,23 @@ mod tests {
         assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
         assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
         assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
+    }
+
+    /// #4199: a run of spaces stays a run, before, between and after words; the spaces where a
+    /// row wraps go, and each other white-space character is one space.
+    #[test]
+    fn paragraph_wrapping_keeps_every_space_typed() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("a  b   c", 20.0, width), ["a  b   c"]);
+        assert_eq!(wrap("  a b  ", 20.0, width), ["  a b  "]);
+        assert_eq!(wrap("a\t\tb", 20.0, width), ["a  b"]);
+        assert_eq!(wrap("aa  bb  cc", 6.0, width), ["aa  bb", "cc"]);
+        // An indent alone on a row doesn't wrap before its first word.
+        assert_eq!(wrap("    abc", 3.0, width), ["    abc"]);
+        // The rewrite turns `\r\n` and `\r` into `\n` before wrapping.
+        assert_eq!(wrap(" \tA  B\nC ", 3.0, width), ["  A", "B", "C "]);
+        assert_eq!(wrap("   ", 3.0, width), ["   "]);
+        assert_eq!(wrap("", 3.0, width), [""]);
     }
 
     #[test]

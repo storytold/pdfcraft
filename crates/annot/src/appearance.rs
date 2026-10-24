@@ -180,23 +180,42 @@ fn interior_color(d: &Dict, fallback: Option<Rgb>) -> Option<Rgb> {
     color(d, b"IC").flatten().or(fallback)
 }
 
+/// The border width (ISO 32000-2 §12.5.4): `/BS /W` when there is a border style dictionary, which
+/// makes `/Border` ignored (Table 166), else the third element of `/Border [hr vr w [dash]]`, read
+/// whether or not the optional fourth element, a dash array, follows. 1 when neither says, and
+/// when the number given is negative or not finite.
 pub(crate) fn border_width(d: &Dict) -> f64 {
-    if let Some(w) = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()) {
-        return w.max(0.0);
-    }
-    match nums(d, b"Border") {
-        Some(b) if b.len() >= 3 => b[2].max(0.0),
-        _ => 1.0,
-    }
+    let width = match d.get(b"BS").and_then(Object::as_dict) {
+        Some(bs) => bs.get(b"W").and_then(Object::as_f64),
+        None => d.get(b"Border").and_then(Object::as_array).and_then(|b| b.get(2)).and_then(Object::as_f64),
+    };
+    width.filter(|w| w.is_finite() && *w >= 0.0).unwrap_or(1.0)
 }
 
-/// Dash pattern operator for a dashed border, if any.
+/// Elements a dash array may have before it is drawn solid instead: the lengths are written into
+/// the appearance as they are, so a file can't make it arbitrarily large.
+const MAX_DASH: usize = 64;
+
+/// A dash array (§8.4.3.6) as drawn: every element finite and non-negative, not all zero (that
+/// pattern is invalid) and at most [`MAX_DASH`] long. `None` for anything else, which is drawn solid.
+fn dash_array(o: &Object) -> Option<Vec<f64>> {
+    let a = o.as_array().filter(|a| !a.is_empty() && a.len() <= MAX_DASH)?;
+    let v: Vec<f64> = a.iter().map(Object::as_f64).collect::<Option<_>>()?;
+    (v.iter().all(|x| x.is_finite() && *x >= 0.0) && v.iter().any(|x| *x > 0.0)).then_some(v)
+}
+
+/// Dash pattern operator for a dashed border, if any: `/BS /S /D` with its `/D` (default `[3]`,
+/// Table 168), or, without `/BS`, the dash array that may follow the width in `/Border` (Table 166).
 fn dash(d: &Dict) -> String {
-    let Some(bs) = d.get(b"BS").and_then(|b| b.as_dict()) else { return String::new() };
-    if bs.name(b"S") != Some(b"D") {
-        return String::new();
-    }
-    let arr = nums(bs, b"D").filter(|a| !a.is_empty() && a.iter().all(|x| *x >= 0.0)).unwrap_or_else(|| vec![3.0]);
+    let arr = match d.get(b"BS").and_then(Object::as_dict) {
+        Some(bs) if bs.name(b"S") != Some(b"D") => return String::new(),
+        Some(bs) => match bs.get(b"D") {
+            None => Some(vec![3.0]),
+            Some(o) => dash_array(o),
+        },
+        None => d.get(b"Border").and_then(Object::as_array).and_then(|b| b.get(3)).and_then(dash_array),
+    };
+    let Some(arr) = arr else { return String::new() };
     format!("[{}] 0 d\n", arr.iter().map(|x| n(*x)).collect::<Vec<_>>().join(" "))
 }
 
@@ -297,6 +316,55 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         _ => return None,
     };
     Some((what, first_undrawable(&text)?))
+}
+
+/// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
+fn helvetica_resource() -> Object {
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    let mut fonts = Dict::new();
+    fonts.set(b"Helv".to_vec(), Object::Dict(font));
+    Object::Dict(fonts)
+}
+
+/// Where a caret and its paragraph symbol go within `rect`: the box the caret is drawn in, and for
+/// `/Sy /P` the symbol's baseline origin and font size (ISO 32000-2 Table 183).
+///
+/// The caret lies within `/Rect` less `/RD` (left, top, right, bottom), when `/RD` is four finite,
+/// non-negative numbers that leave a box; otherwise within `/Rect`. The ¶ sits to the right of the
+/// caret, its height a little over half the caret's, in the room `/RD` leaves on the right; when
+/// that is too narrow, the caret gives up to half its width and the symbol shrinks to what is left,
+/// so both stay inside `/Rect` (the form's `/BBox`).
+fn caret_layout(d: &Dict, rect: [f64; 4]) -> ([f64; 4], Option<(f64, f64, f64)>) {
+    let rd = nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite() && *x >= 0.0));
+    let mut caret = match rd {
+        Some(rd) => [rect[0] + rd[0], rect[1] + rd[3], rect[2] - rd[2], rect[3] - rd[1]],
+        None => rect,
+    };
+    if !(caret[2] > caret[0] && caret[3] > caret[1]) {
+        caret = rect;
+    }
+    if d.name(b"Sy") != Some(b"P") {
+        return (caret, None);
+    }
+    let size = (caret[3] - caret[1]) * 0.6;
+    let (gap, glyph) = (size * 0.1, text_width("\u{b6}", size));
+    let need = gap + glyph;
+    let room = rect[2] - caret[2];
+    if room < need {
+        caret[2] -= (need - room).min((caret[2] - caret[0]) * 0.5);
+    }
+    let room = rect[2] - caret[2];
+    let scale = if need > room { room / need } else { 1.0 };
+    let size = size * scale;
+    if !(size.is_finite() && size > 0.0) {
+        return (caret, None);
+    }
+    // The pilcrow descends about a sixth of the size below its baseline.
+    (caret, Some((caret[2] + gap * scale, caret[1] + size * 0.18, size)))
 }
 
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
@@ -512,7 +580,8 @@ pub fn build(d: &Dict) -> Option<Stream> {
         b"Caret" => {
             // A filled caret: two curved flanks meeting at the top centre.
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
-            let [x0, y0, x1, y1] = rect;
+            let (caret, pilcrow) = caret_layout(d, rect);
+            let [x0, y0, x1, y1] = caret;
             let (cx, h) = ((x0 + x1) / 2.0, y1 - y0);
             c.push_str(&format!(
                 "{}{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c h f\n",
@@ -532,11 +601,22 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 n(x1),
                 n(y0)
             ));
+            if let Some((x, y, size)) = pilcrow {
+                // `/Sy /P`: a new paragraph symbol beside the caret (Table 183), in its colour.
+                // 0xB6 is the pilcrow in WinAnsiEncoding.
+                let mut out = c.into_bytes();
+                out.extend(format!("BT /Helv {} Tf {} {} Td (", n(size), n(x), n(y)).bytes());
+                out.push(0xB6);
+                out.extend_from_slice(b") Tj ET\n");
+                res.set(b"Font".to_vec(), helvetica_resource());
+                return Some(form(rect, &out, res));
+            }
         }
         b"Ink" => {
             let col = stroke?;
             let list = d.get(b"InkList")?.as_array()?;
-            c.push_str(&format!("{}{} w 1 J 1 j\n", rg_stroke(col), n(w)));
+            // `/BS` gives an ink stroke its width and dash pattern (Table 182).
+            c.push_str(&format!("{}{} w 1 J 1 j\n{}", rg_stroke(col), n(w), dash(d)));
             for s in list {
                 let pts: Vec<f64> = s.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<_>>()?;
                 let pts: Vec<(f64, f64)> = pts.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
@@ -670,7 +750,8 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     }
                     let kind = crate::StampKind::from_name(other)?;
                     let by = d.get(b"PCByLine").and_then(|o| o.as_string()).map(PdfString::to_text);
-                    return Some(turned(stamp(kind, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res)));
+                    let sign_here = kind.group() == crate::StampGroup::SignHere;
+                    return Some(turned(stamp(kind.label(), sign_here, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res)));
                 }
             }
             if turn != 0 {
@@ -773,14 +854,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 y -= size * 1.2;
             }
             out.extend_from_slice(b"ET\n");
-            let mut font = Dict::new();
-            font.set(b"Type".to_vec(), Object::name("Font"));
-            font.set(b"Subtype".to_vec(), Object::name("Type1"));
-            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-            let mut fonts = Dict::new();
-            fonts.set(b"Helv".to_vec(), Object::Dict(font));
-            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            res.set(b"Font".to_vec(), helvetica_resource());
             let mut stream = form(full, &out, res);
             if let Some(m) = matrix {
                 stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
@@ -803,22 +877,101 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
             out.extend(literal(&win_ansi(&value)));
             out.extend_from_slice(b" Tj ET\n");
-            let mut font = Dict::new();
-            font.set(b"Type".to_vec(), Object::name("Font"));
-            font.set(b"Subtype".to_vec(), Object::name("Type1"));
-            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-            let mut fonts = Dict::new();
-            fonts.set(b"Helv".to_vec(), Object::Dict(font));
-            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            res.set(b"Font".to_vec(), helvetica_resource());
         }
     }
     Some(form(rect, &out, res))
 }
 
+/// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
+/// another program wrote without an appearance. Names are matched byte for byte, as PDF names
+/// are compared (§7.3.5). Eight are stamps of PdfCraft's palette; the other six take a label of
+/// their own and the palette's colour for their meaning.
+fn standard_stamp(name: &[u8]) -> Option<(&'static str, Rgb)> {
+    use crate::StampKind::*;
+    let palette = [Approved, NotApproved, NotForPublicRelease, Confidential, Final, ForComment, Draft, ForPublicRelease];
+    if let Some(kind) = palette.into_iter().find(|k| k.name().as_bytes() == name) {
+        return Some((kind.label(), kind.color()));
+    }
+    let (label, like) = match name {
+        b"Experimental" => ("EXPERIMENTAL", Draft),
+        b"AsIs" => ("AS IS", Draft),
+        b"Expired" => ("EXPIRED", NotApproved),
+        b"Sold" => ("SOLD", Approved),
+        b"Departmental" => ("DEPARTMENTAL", Draft),
+        b"TopSecret" => ("TOP SECRET", Confidential),
+        _ => return None,
+    };
+    Some((label, like.color()))
+}
+
+/// The neutral grey of a stamp whose name has no drawing.
+const PLACEHOLDER_GREY: Rgb = [0.45, 0.45, 0.45];
+
+/// The display appearance of a rubber stamp another program wrote without one: the stamp its
+/// `/Name` names (Draft when there is none, Table 184's default) in its `/C` colour or the
+/// stamp's own, or for any other name a thin grey frame with both diagonals, so the stamp stays
+/// visible and can be selected. The frame is grey whatever the `/C`: it stands in for a stamp
+/// that cannot be drawn, so it takes none of that stamp's colour. The name is never drawn as text.
+///
+/// For display only ([`crate::with_missing_appearances`]): [`build`] declines these stamps, so
+/// edits (restyling, flattening) never write this drawing into the file. `None` for any other
+/// annotation, one of PdfCraft's own stamps, a dictionary with an `/AP` (a stamp's own artwork is
+/// never replaced; the display copy passes the dictionary without an `/AP` that has no normal
+/// appearance), or a `/Rect` that isn't finite or is under a point wide or high.
+pub(crate) fn display_stamp(d: &Dict) -> Option<Stream> {
+    let own = matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) || d.contains(b"PCPicture") || d.contains(b"PCOutline");
+    if d.name(b"Subtype") != Some(b"Stamp") || own || d.contains(b"AP") {
+        return None;
+    }
+    let rect = nums(d, b"Rect")?;
+    let [a, b, c, e] = rect.as_slice() else { return None };
+    let rect = [a.min(*c), b.min(*e), a.max(*c), b.max(*e)];
+    if !rect.iter().all(|v| v.is_finite()) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+        return None;
+    }
+    let opacity = d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0);
+    // A malformed `/C` falls back to the stamp's own colour rather than hiding the stamp.
+    let stroke = color(d, b"C").flatten();
+    let mut res = Dict::new();
+    if let Some(gs) = ext_gstate(opacity, false) {
+        res.set(b"ExtGState".to_vec(), Object::Dict(gs));
+    }
+    // A stamp whose intent (`/IT`, PDF 2.0) is an image or a snapshot has no `/Name` to default.
+    let stamp_intent = d.name(b"IT").is_none_or(|it| it == b"Stamp");
+    let name = d.name(b"Name").or(stamp_intent.then_some(b"Draft".as_slice()));
+    if let Some((label, col)) = name.and_then(standard_stamp) {
+        return Some(stamp(label, false, rect, stroke.unwrap_or(col), None, opacity, res));
+    }
+    let [x0, y0, x1, y1] = rect;
+    let (a0, b0, a1, b1) = (x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5);
+    let mut c = String::new();
+    if opacity < 1.0 {
+        c.push_str("/GS0 gs\n");
+    }
+    c.push_str(&format!(
+        "{}1 w\n{} {} {} {} re\n{} {} m {} {} l\n{} {} m {} {} l\nS\n",
+        // Grey whatever the `/C`: the placeholder is not the stamp, so it takes none of its colour.
+        rg_stroke(PLACEHOLDER_GREY),
+        n(a0),
+        n(b0),
+        n(a1 - a0),
+        n(b1 - b0),
+        n(a0),
+        n(b0),
+        n(a1),
+        n(b1),
+        n(a0),
+        n(b1),
+        n(a1),
+        n(b0)
+    ));
+    Some(form(rect, c.as_bytes(), res))
+}
+
 /// A rubber stamp: a rounded frame (a pointed tag for sign-here stamps) with the label in bold
 /// capitals, and the dynamic stamps' "By … at …" line.
-fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opacity: f64, mut res: Dict) -> Stream {
+fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: Option<&str>, opacity: f64, mut res: Dict) -> Stream {
     let [x0, y0, x1, y1] = rect;
     let h = y1 - y0;
     let mut c = String::new();
@@ -827,7 +980,7 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     }
     let lw = (h * 0.07).clamp(1.0, 3.0);
     let inset = lw / 2.0 + 0.5;
-    if kind.group() == crate::StampGroup::SignHere {
+    if sign_here {
         // A tag pointing left, filled, with white text.
         let tip = h * 0.45;
         c.push_str(&format!(
@@ -893,16 +1046,15 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
             n(b0)
         ));
     }
-    let label = kind.label();
     let (title_h, by_h) = if by.is_some() { (h * 0.5, h * 0.22) } else { (h * 0.52, 0.0) };
-    let text_area = if kind.group() == crate::StampGroup::SignHere { (x0 + h * 0.45, x1 - lw * 2.0) } else { (x0 + lw * 2.0, x1 - lw * 2.0) };
+    let text_area = if sign_here { (x0 + h * 0.45, x1 - lw * 2.0) } else { (x0 + lw * 2.0, x1 - lw * 2.0) };
     let mut size = title_h;
     let tw = text_width(label, size) * 1.12;
     if tw > text_area.1 - text_area.0 - 4.0 {
         size *= (text_area.1 - text_area.0 - 4.0) / tw;
     }
     let tw = text_width(label, size) * 1.12;
-    let text_col = if kind.group() == crate::StampGroup::SignHere { [1.0, 1.0, 1.0] } else { col };
+    let text_col = if sign_here { [1.0, 1.0, 1.0] } else { col };
     let ty = if by.is_some() { y0 + h * 0.48 } else { y0 + (h - size * 0.72) / 2.0 };
     let mut out = c.into_bytes();
     out.extend(

@@ -594,15 +594,31 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::Extract => {
-                let count = app.active_ids().map_or(0, |(i, _)| app.views[i].target_pages().len());
+                let (selected, total) = app.active_ids().map_or((Vec::new(), 0), |(i, _)| (app.views[i].target_pages(), app.views[i].page_count()));
                 ui.label(egui::RichText::new(tl!("Extract pages")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
-                let text = if count == 1 {
-                    tl!("1 page selected.").to_string()
-                } else {
-                    crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &count.to_string())])
+                // Page ranges to take instead of the selection (#3593); the hint is the selection.
+                let hint = match crate::combine_ui::range_of(&selected, total) {
+                    all if all.is_empty() && total > 1 => format!("1-{total}"),
+                    all if all.is_empty() => "1".to_string(),
+                    some => some,
                 };
-                ui.label(text);
+                ui.horizontal(|ui| {
+                    let l = ui.label(tl!("Pages"));
+                    ui.add(egui::TextEdit::singleline(&mut app.extract_draft.pages).hint_text(hint).desired_width(240.0)).labelled_by(l.id);
+                });
+                let chosen = app.extract_draft.pages_to_extract(selected, total);
+                match &chosen {
+                    Ok(pages) if pages.len() == 1 => {
+                        ui.label(tl!("1 page selected."));
+                    }
+                    Ok(pages) => {
+                        ui.label(crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &pages.len().to_string())]));
+                    }
+                    Err(e) => {
+                        ui.colored_label(ui.visuals().error_fg_color, e);
+                    }
+                }
                 ui.add_space(4.0);
                 // The name the pages are saved under (#737); separate files add " (page N)".
                 ui.horizontal(|ui| {
@@ -613,7 +629,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.add(widgets::checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files")));
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::pill_button(ui, tl!("Extract"), true).clicked() {
+                    if ui.add_enabled_ui(chosen.is_ok(), |ui| widgets::pill_button(ui, tl!("Extract"), true)).inner.clicked() {
                         extract_now = true;
                         close = true;
                     }
@@ -1360,8 +1376,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             && let Some(i) = app.active
         {
             // Keep the (possibly renamed) field selected.
-            let prefix = d.field.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
-            let name = format!("{prefix}{}", d.name.trim());
+            // A dotted name is the full name; a plain one renames the field within its parent.
+            let typed = d.name.trim();
+            let prefix = d.field.rsplit_once('.').filter(|_| !typed.contains('.')).map(|(p, _)| format!("{p}.")).unwrap_or_default();
+            let name = format!("{prefix}{typed}");
             if let (Some(before), Some(after)) = (before, form(app)) {
                 let n = pdfcraft_engine::form_calculations_changed(&before, &after).iter().filter(|f| **f != name).count();
                 if n > 0 {

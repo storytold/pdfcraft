@@ -89,6 +89,10 @@ read in full is refused, not cleaned in part. Both make the next save a full rew
 
 `patterns` finds phone numbers, e-mail addresses, credit card numbers (Luhn-checked), US Social
 Security numbers and dates for Search & Redact.
+A phone label such as `Tel.` or `Fax:` also enables Italian international geographic numbers with a slash, such as `Tel. +39 0426/123456` or `Fax: +390426/123456` (#3205 follow-up).
+The country code and national number are matched together, with the significant initial `0` and 6 to 11 national digits described in the [AGCOM numbering plan published by ITU](https://www.itu.int/dms_pub/itu-t/oth/02/02/t020200006b0001pdfe.pdf).
+This narrow case accepts at most one space after `+39` and one slash immediately after the area code; international slash numbers without a phone label, or with country codes other than +39, remain unsupported.
+Patterns are heuristic: dates, protocol identifiers and longer number runs are retained, and users still need to review the marks before applying them.
 
 `codes` holds the redaction code sets (U.S. FOIA and U.S. Privacy Act exemptions):
 `CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.

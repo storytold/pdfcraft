@@ -1357,6 +1357,11 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
     // attacker-written version carries (relabelling a signed page /Type /Sig, or dropping its
     // /Type and adding /ModDate, must not reclassify it away from page content).
     let signed_pages: HashSet<ObjRef> = pdfcraft_annot::page_refs(&old).unwrap_or_default().into_iter().collect();
+    // The signed pages' /Annots arrays that are objects of their own. Adding an annotation updates
+    // such an array in place (the page dictionary does not change), so it is judged like a
+    // page's inline /Annots: by the annotations it gained.
+    let signed_annots: HashSet<ObjRef> =
+        signed_pages.iter().filter_map(|pg| old.get(*pg).as_dict().and_then(|d| d.get(b"Annots").and_then(Object::as_ref))).collect();
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_pages);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref);
@@ -1425,6 +1430,24 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
             (Some(k), _) => k,
             // The Document Security Store's own arrays and dictionaries, when they only grew.
             (_, _) if dss.contains(&num) => kind::SECURITY_STORE,
+            // A signed page's indirect /Annots array, still an array: what it lost, then what it
+            // gained. Dropping a signed annotation is never hidden behind an added signature.
+            (_, Object::Array(now)) if signed_annots.contains(&r) && before.as_deref().is_some_and(|b| b.as_array().is_some()) => {
+                let was: HashSet<ObjRef> =
+                    before.as_deref().and_then(Object::as_array).map(|a| a.iter().filter_map(Object::as_ref).collect()).unwrap_or_default();
+                let kept: HashSet<ObjRef> = now.iter().filter_map(Object::as_ref).collect();
+                let removed: Vec<ObjRef> = was.iter().filter(|r| !kept.contains(r)).copied().collect();
+                if removed.is_empty() {
+                    let added: Vec<ObjRef> = now.iter().filter_map(Object::as_ref).filter(|r| !was.contains(r)).collect();
+                    added_annots(doc, &added)
+                } else if removed.iter().any(|r| old.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"))) {
+                    // A form field or signature widget taken off the page: no permission covers it.
+                    kind::OTHER
+                } else {
+                    // Deleting comments is a comment change (permitted at P 3 only).
+                    kind::COMMENTS
+                }
+            }
             (_, Object::Dict(d)) => {
                 let was = before.as_deref().and_then(Object::as_dict);
                 if signed_pages.contains(&r) {
@@ -1794,6 +1817,18 @@ fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Di
     }
 }
 
+/// Whether the catalog `d` keeps every developer extension the signed catalog `b` declared, each
+/// with the same value: it may only declare more.
+fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
+    let now = d.get(b"Extensions").map(|e| doc.resolve(e)).and_then(|e| e.as_dict().cloned());
+    let was = b.get(b"Extensions").map(|e| old.resolve(e)).and_then(|e| e.as_dict().cloned());
+    match (was, now) {
+        (None, _) => true,
+        (Some(was), Some(now)) => was.iter().all(|(k, v)| now.get(k) == Some(v)),
+        (Some(_), None) => false,
+    }
+}
+
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature
@@ -1812,9 +1847,13 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
         Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
         Some(b"Catalog") => {
-            let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering"];
+            let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
             return match before {
                 Some(b) if without(d, keys) != without(b, keys) => kind::STRUCTURE,
+                // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A
+                // writer adding a /DSS also declares the ESIC extension it belongs to, so a
+                // declaration may be added, but none that was signed may change or go.
+                Some(b) if !extensions_kept(doc, old, d, b) => kind::STRUCTURE,
                 Some(b) => {
                     if d.get(b"AcroForm") != b.get(b"AcroForm") {
                         // Compare the forms themselves, inline or not.

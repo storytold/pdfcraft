@@ -436,6 +436,10 @@ pub struct Annotation {
     /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
     /// signature or initials (the rules of `pdfcraft_annot::is_fill_sign`).
     pub fill_sign: bool,
+    /// The NoRotate flag (`/F` bit 5), set on sticky notes and attachments: on a turned page the
+    /// appearance stays upright, turned about the upper-left corner of `rect`
+    /// ([`Self::shown_rect`]).
+    pub no_rotate: bool,
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
@@ -446,6 +450,58 @@ impl Annotation {
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
     }
+
+    /// Where the comment is drawn on a page turned by `rotation` (`PageInfo::rotation`), in user
+    /// space: `rect`, or for a NoRotate comment `rect` turned upright about its upper-left corner
+    /// (see [`Self::no_rotate`]). Hit-testing, selection and anything placed beside the comment
+    /// use this, so they match the drawing.
+    pub fn shown_rect(&self, rotation: u16) -> [f32; 4] {
+        self.shown(self.rect.map(f64::from), rotation).map(|v| v as f32)
+    }
+
+    /// [`Self::shown_rect`] for this comment with its `/Rect` at `rect` (one being moved or
+    /// resized).
+    pub fn shown(&self, rect: [f64; 4], rotation: u16) -> [f64; 4] {
+        if self.no_rotate { upright_rect(rect, rotation) } else { rect }
+    }
+
+    /// The `/Rect` that shows this comment in the user-space box `shown`: the inverse of
+    /// [`Self::shown`], for a box resized as drawn.
+    pub fn rect_for_shown(&self, shown: [f64; 4], rotation: u16) -> [f64; 4] {
+        if self.no_rotate { rect_from_upright(shown, rotation) } else { shown }
+    }
+}
+
+/// The user-space box a NoRotate annotation with `/Rect` `rect` is drawn in on a page turned
+/// clockwise by `rotation` (ISO 32000-2 §12.5.3): `rect` turned as far counterclockwise about its
+/// upper-left corner `(x0, y1)`, which stays where it is on the page. As displayed, the box's
+/// top-left is that corner, the rectangle's width runs across and its height down, as on an
+/// unturned page. `rect` itself for 0 or anything that isn't a quarter turn. The vendored
+/// renderer draws the appearance there (hayro-interpret patch 37).
+fn upright_rect(rect: [f64; 4], rotation: u16) -> [f64; 4] {
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let (w, h) = (x1 - x0, y1 - y0);
+    match rotation {
+        90 => [x0, y1, x0 + h, y1 + w],
+        180 => [x0 - w, y1, x0, y1 + h],
+        270 => [x0 - h, y1 - w, x0, y1],
+        _ => [x0, y0, x1, y1],
+    }
+}
+
+/// The `/Rect` whose [`upright_rect`] is `shown`: `shown` turned back about the corner that
+/// stays put.
+fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
+    let [s0, s1, s2, s3] = [shown[0].min(shown[2]), shown[1].min(shown[3]), shown[0].max(shown[2]), shown[1].max(shown[3])];
+    let (sw, sh) = (s2 - s0, s3 - s1);
+    // The upper-left corner of `/Rect` and the rectangle's width and height.
+    let ((x0, y1), w, h) = match rotation {
+        90 => ((s0, s1), sh, sw),
+        180 => ((s2, s1), sw, sh),
+        270 => ((s2, s3), sh, sw),
+        _ => return [s0, s1, s2, s3],
+    };
+    [x0, y1 - h, x0 + w, y1]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1356,6 +1412,7 @@ impl<'a> Inspector<'a> {
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
                     fill_sign,
+                    no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                     points,
                 };
                 kept = kept.saturating_add(retained(&annotation));
@@ -1864,6 +1921,17 @@ fn close_outline(open: &mut Vec<(usize, OutlineItem)>, roots: &mut Vec<OutlineIt
     }
 }
 
+/// An annotation's `/F` as the renderer reads it: a real is truncated, and a value that isn't a
+/// `u32` counts as no flags.
+fn draw_flags(o: &Object) -> u32 {
+    let f = match o {
+        Object::Integer(i) => *i,
+        Object::Real(r) => *r as i64,
+        _ => 0,
+    };
+    u32::try_from(f).unwrap_or(0)
+}
+
 fn rect4(o: &Object) -> [f32; 4] {
     match o {
         Object::Array(a) if a.len() == 4 => {
@@ -2317,6 +2385,54 @@ mod tests {
         let p = super::PageInfo { width: 200.0, height: 300.0, label: String::new(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 0 };
         assert_eq!(p.view_to_user(0.0, 0.0), [10.0, 320.0]);
         assert_eq!(p.view_rect_to_quad([0.0, 0.0, 10.0, 5.0]), [10.0, 320.0, 20.0, 320.0, 10.0, 315.0, 20.0, 315.0]);
+    }
+
+    /// #2583: a NoRotate comment is drawn upright with its top-left as displayed at the upper-left
+    /// corner of `/Rect`, its width across and its height down; a box resized as drawn maps back to
+    /// the `/Rect` that shows it. Other comments, and pages that aren't quarter-turned, keep `/Rect`.
+    #[test]
+    fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
+        let mut note = super::Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            rect: [40.0, 50.0, 70.0, 70.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: true,
+            points: Vec::new(),
+        };
+        let rect = note.rect.map(f64::from);
+        for rotation in [0u16, 90, 180, 270, 45] {
+            let (w, h) = if rotation % 180 == 90 { (140.0, 200.0) } else { (200.0, 140.0) };
+            let p = super::PageInfo { width: w, height: h, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation };
+            let shown = note.shown_rect(rotation);
+            let (a, b) = (p.user_to_view(shown[0], shown[1]), p.user_to_view(shown[2], shown[3]));
+            let [cx, cy] = p.user_to_view(40.0, 70.0);
+            let want = [cx, cy, cx + 30.0, cy + 20.0];
+            let got = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "{rotation}: shown {got:?}, want {want:?}");
+            assert_eq!(note.rect_for_shown(note.shown(rect, rotation), rotation), rect, "{rotation}");
+            // Moved by (5, -7) and resized to 50 × 10 as drawn, back to a /Rect.
+            let resized = [shown[0] as f64 + 5.0, shown[1] as f64 - 7.0, 0.0, 0.0];
+            let across = if rotation % 180 == 90 { [10.0, 50.0] } else { [50.0, 10.0] };
+            let resized = [resized[0], resized[1], resized[0] + across[0], resized[1] + across[1]];
+            let back = note.rect_for_shown(resized, rotation);
+            assert_eq!((back[2] - back[0], back[3] - back[1]), (50.0, 10.0), "{rotation}: {back:?}");
+            assert_eq!(note.shown(back, rotation), resized, "{rotation}");
+        }
+        note.no_rotate = false;
+        assert_eq!(note.shown_rect(90), note.rect);
+        assert_eq!(note.rect_for_shown([1.0, 2.0, 3.0, 4.0], 90), [1.0, 2.0, 3.0, 4.0]);
     }
 
     use super::*;

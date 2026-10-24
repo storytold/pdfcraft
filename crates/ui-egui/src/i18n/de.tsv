@@ -584,6 +584,7 @@
 	Discard private data of other applications	Private Daten anderer Anwendungen verwerfen
 	Discard hidden text	Ausgeblendeten Text verwerfen
 	Use Flate to encode streams that are not encoded	Nicht codierte Streams mit Flate codieren
+	In streams that use LZW encoding, use Flate instead	In LZW-codierten Streams stattdessen Flate verwenden
 	Remove invalid links and bookmarks	Ungültige Links und Lesezeichen entfernen
 	Remove unreferenced named destinations	Nicht referenzierte benannte Ziele entfernen
 	Compress document structure (object streams)	Dokumentstruktur komprimieren (Objekt-Streams)
@@ -1976,6 +1977,10 @@
 	Perimeter	Umfang
 	Area	Fläche
 	Drawing scale	Zeichnungsmaßstab
+	Scale	Maßstab
+	Common scales	Gängige Maßstäbe
+	Enter a scale such as 1:50.	Geben Sie einen Maßstab wie 1:50 ein.
+	Applying a scale switches units to m / mm.	Beim Anwenden eines Maßstabs werden die Einheiten auf m / mm umgestellt.
 	Snapping	Einrasten
 	Export measurements	Messungen exportieren
 	Open a PDF to measure it.	Öffne ein PDF, um es zu messen.
@@ -2186,6 +2191,7 @@ signature pad	Type	Tippen
 certificate	Subject	Zertifikatsinhaber
 action wizard	Start	Starten
 	Reopen the files that were open when PdfCraft last closed	Beim Start die Dateien wieder öffnen, die beim letzten Beenden von PdfCraft geöffnet waren
+	Restore the last view (page, zoom and page display) when a document is opened again	Beim erneuten Öffnen eines Dokuments die letzte Ansicht (Seite, Zoom und Seitenanzeige) wiederherstellen
 
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hinzufügen
@@ -2324,6 +2330,8 @@ key	Space	Leertaste
 	Printer paper and scaling may differ. Check driver settings.	Druckerpapier und Skalierung können abweichen. Treibereinstellungen prüfen.
 	Drawing scale changes. Use Actual size for full-scale plans.	Der Zeichnungsmaßstab ändert sich. Für maßstabsgetreue Pläne Tatsächliche Größe verwenden.
 	Reload documents when their files change on disk	Dokumente neu laden, wenn sich ihre Dateien auf dem Datenträger ändern
+	Don't show again	Nicht mehr anzeigen
+	Show a notice when a document is secured	Hinweis anzeigen, wenn ein Dokument geschützt ist
 	Always use my default zoom and page layout	Immer meinen Standardzoom und mein Standard-Seitenlayout verwenden
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Diese Datei wurde auf dem Datenträger geändert. „Neu laden“ zeigt die neue Version und verwirft Ihre ungespeicherten Änderungen; „Speichern“ ersetzt sie durch diese Version.
 	Reload	Neu laden
@@ -2482,6 +2490,11 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Attach a file…	Datei anhängen…
+	Delete attachment	Anhang löschen
+	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar
+	Attach {name}	{name} anhängen
+	Delete attachment {key}	Anhang {key} löschen
 	Font	Schrift
 	Bulleted list	Aufzählung
 	Numbered list	Nummerierte Liste
@@ -2516,3 +2529,6 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Heute
