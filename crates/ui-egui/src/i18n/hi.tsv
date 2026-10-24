@@ -2757,6 +2757,15 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	EPUB book (.epub)	EPUB पुस्तक (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	हर पृष्ठ जैसा दिखता है वैसा ही, उसका पाठ खोजने योग्य रहता है। उन दस्तावेज़ों के लिए जिनमें लेआउट मायने रखता है।
+	Export to EPUB	EPUB में निर्यात करें
+	Export to EPUB…	EPUB में निर्यात करें…
+	Exported {name}	{name} निर्यात किया गया
+	Fixed layout	स्थिर लेआउट
+	Layout	लेआउट
+	Reflowable	पुनर्प्रवाही
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	पाठ पाठक की स्क्रीन और फ़ॉन्ट आकार के अनुसार अध्यायों में पुनः प्रवाहित होता है, बुकमार्क विषय-सूची बन जाते हैं।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

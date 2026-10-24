@@ -2790,6 +2790,15 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	EPUB book (.epub)	EPUB-kirja (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Jokainen sivu sellaisenaan, teksti haettavana. Asiakirjoille, joissa asettelulla on väliä.
+	Export to EPUB	Vie EPUB-muotoon
+	Export to EPUB…	Vie EPUB-muotoon…
+	Exported {name}	Viety: {name}
+	Fixed layout	Kiinteä asettelu
+	Layout	Asettelu
+	Reflowable	Uudelleen rivittyvä
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Teksti rivittyy uudelleen lukijan näytön ja fonttikoon mukaan, lukuina, ja kirjanmerkit toimivat sisällysluettelona.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

@@ -2494,6 +2494,16 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+# Export to EPUB (#493).
+	Export to EPUB…	Izvozi v EPUB…
+	EPUB book (.epub)	Knjiga EPUB (.epub)
+	Export to EPUB	Izvozi v EPUB
+	Layout	Postavitev
+	Reflowable	Prilagodljiva
+	Fixed layout	Fiksna postavitev
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Besedilo se prilagodi bralčevemu zaslonu in velikosti pisave, razdeljeno v poglavja, z zaznamki kot kazalom.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Vsaka stran takšna, kot je videti, njeno besedilo pa ostane iskalno. Za dokumente, pri katerih je postavitev pomembna.
+	Exported {name}	Izvoženo: {name}
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo

@@ -23,6 +23,7 @@ pub mod commands;
 pub mod compare;
 mod copy_image;
 pub mod dates;
+pub mod epub;
 pub mod export;
 pub mod field_table;
 pub mod js;

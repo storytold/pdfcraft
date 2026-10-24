@@ -2495,6 +2495,16 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+# Export to EPUB (#493).
+	Export to EPUB…	Εξαγωγή σε EPUB…
+	EPUB book (.epub)	Βιβλίο EPUB (.epub)
+	Export to EPUB	Εξαγωγή σε EPUB
+	Layout	Διάταξη
+	Reflowable	Αναδιπλούμενη
+	Fixed layout	Σταθερή διάταξη
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Το κείμενο προσαρμόζεται στην οθόνη και στο μέγεθος γραμματοσειράς του αναγνώστη, σε κεφάλαια, με τους σελιδοδείκτες ως περιεχόμενα.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Κάθε σελίδα όπως φαίνεται, με το κείμενό της να παραμένει αναζητήσιμο. Για έγγραφα όπου η διάταξη έχει σημασία.
+	Exported {name}	Έγινε εξαγωγή του {name}
 	Attach a file…	Επισύναψη αρχείου…
 	Delete attachment	Διαγραφή συνημμένου
 	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό

@@ -2488,6 +2488,16 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+# Export to EPUB (#493).
+	Export to EPUB…	Exportálás EPUB formátumba…
+	EPUB book (.epub)	EPUB-könyv (.epub)
+	Export to EPUB	Exportálás EPUB formátumba
+	Layout	Elrendezés
+	Reflowable	Újratördelhető
+	Fixed layout	Rögzített elrendezés
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	A szöveg az olvasó képernyőjéhez és betűméretéhez igazodik, fejezetekre bontva, a könyvjelzőkkel mint tartalomjegyzékkel.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Minden oldal úgy, ahogy kinéz, a szövege továbbra is kereshető. Olyan dokumentumokhoz, amelyeknél számít az elrendezés.
+	Exported {name}	Exportálva: {name}
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el

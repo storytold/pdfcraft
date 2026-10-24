@@ -2701,6 +2701,16 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+# Export to EPUB (#493).
+	Export to EPUB…	Esporta in EPUB…
+	EPUB book (.epub)	Libro EPUB (.epub)
+	Export to EPUB	Esporta in EPUB
+	Layout	Layout
+	Reflowable	Adattabile
+	Fixed layout	Layout fisso
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Il testo si adatta allo schermo e alla dimensione del carattere del lettore, in capitoli, con i segnalibri come sommario.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Ogni pagina così com’è, con il testo ancora ricercabile. Per i documenti in cui il layout conta.
+	Exported {name}	{name} esportato
 	Attach a file…	Allega un file…
 	Delete attachment	Elimina allegato
 	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web

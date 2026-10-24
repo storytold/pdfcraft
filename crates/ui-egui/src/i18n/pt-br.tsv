@@ -2503,6 +2503,16 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+# Export to EPUB (#493).
+	Export to EPUB…	Exportar para EPUB…
+	EPUB book (.epub)	Livro EPUB (.epub)
+	Export to EPUB	Exportar para EPUB
+	Layout	Layout
+	Reflowable	Ajustável
+	Fixed layout	Layout fixo
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	O texto se ajusta à tela e ao tamanho da fonte do leitor, em capítulos, com os marcadores como sumário.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Cada página como ela aparece, com o texto ainda pesquisável. Para documentos em que o layout importa.
+	Exported {name}	{name} exportado
 	Attach a file…	Anexar um arquivo…
 	Delete attachment	Excluir anexo
 	Attaching files is not available on the web yet	Anexar arquivos ainda não está disponível na web

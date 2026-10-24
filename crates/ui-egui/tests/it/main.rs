@@ -38,6 +38,8 @@ mod date_format;
 mod dialog_chrome;
 mod document_links;
 mod editing;
+mod epub_export_range;
+mod epub_export_save_name;
 mod export;
 mod fill_sign;
 mod folders;

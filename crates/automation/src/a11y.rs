@@ -785,6 +785,22 @@ impl Automation {
         Ok(out)
     }
 
+    /// Export ▸ EPUB: the whole document as a reflowable book (default) or one page per PDF page.
+    pub(crate) fn doc_export_epub(&self, a: &Args) -> Result<Value> {
+        let path = self.resolve(a.str("path")?, true)?;
+        let layout = match a.opt_str("layout")?.unwrap_or("reflowable") {
+            "reflowable" => pdfcraft_engine::epub::EpubLayout::Reflowable,
+            "fixed" => pdfcraft_engine::epub::EpubLayout::Fixed,
+            other => return Err(ToolError::InvalidArgs(format!("unknown layout {other:?} (reflowable or fixed)"))),
+        };
+        let doc = self.doc_to_copy(a)?;
+        let bytes = doc.export_epub(layout, self.session.now_secs()).map_err(failed)?;
+        write_atomic(&path, &bytes)?;
+        Ok(
+            json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "layout": if layout == pdfcraft_engine::epub::EpubLayout::Fixed { "fixed" } else { "reflowable" } }),
+        )
+    }
+
     fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
         pdfcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))

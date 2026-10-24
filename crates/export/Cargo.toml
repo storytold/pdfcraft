@@ -11,4 +11,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+chrono.workspace = true
 flate2.workspace = true
+
+[dev-dependencies]
+roxmltree = "0.20"

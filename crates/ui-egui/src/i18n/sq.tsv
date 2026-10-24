@@ -2507,6 +2507,15 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	EPUB book (.epub)	Libër EPUB (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Çdo faqe siç duket, me tekstin e saj të kërkueshëm. Për dokumente ku paraqitja ka rëndësi.
+	Export to EPUB	Eksporto në EPUB
+	Export to EPUB…	Eksporto në EPUB…
+	Exported {name}	U eksportua {name}
+	Fixed layout	Paraqitje e fiksuar
+	Layout	Paraqitja
+	Reflowable	I rrjedhshëm
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Teksti përshtatet me ekranin dhe madhësinë e shkronjave të lexuesit, në kapituj, me libërshënuesit si përmbajtje.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

@@ -2113,6 +2113,7 @@ fn protecting_through_tools() {
         ("doc_export_images", json!({ "doc": re, "folder": "pages" })),
         ("doc_export_all_images", json!({ "doc": re, "folder": "images" })),
         ("doc_export_office", json!({ "doc": re, "path": "out.docx" })),
+        ("doc_export_epub", json!({ "doc": re, "path": "out.epub" })),
     ] {
         match b.call(tool, &args) {
             Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{tool}: {m}"),
@@ -6615,6 +6616,24 @@ fn exporting_to_word_html_and_rtf() {
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
+}
+
+#[test]
+fn exporting_to_epub_in_both_layouts() {
+    let dir = workdir("epub");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_epub", json!({ "doc": doc, "path": "a.epub" }));
+    assert_eq!(r["layout"], "reflowable");
+    let r = ok(&mut a, "doc_export_epub", json!({ "doc": doc, "path": "fixed.epub", "layout": "fixed" }));
+    assert_eq!(r["layout"], "fixed");
+    for name in ["a.epub", "fixed.epub"] {
+        let file = std::fs::read(dir.join(name)).unwrap();
+        // EPUB's signature: the mimetype entry first, stored.
+        assert!(file.starts_with(b"PK\x03\x04") && file[30..].starts_with(b"mimetypeapplication/epub+zip"), "{name}");
+    }
+    assert!(a.call("doc_export_epub", &json!({ "doc": doc, "path": "b.epub", "layout": "scroll" })).is_err());
+    assert!(!dir.join("b.epub").exists());
 }
 
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose

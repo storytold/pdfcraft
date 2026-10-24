@@ -2452,6 +2452,16 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+# Export to EPUB (#493).
+	Export to EPUB…	Експортирай в EPUB…
+	EPUB book (.epub)	Книга EPUB (.epub)
+	Export to EPUB	Експортиране в EPUB
+	Layout	Оформление
+	Reflowable	Пренареждащо се
+	Fixed layout	Фиксирано оформление
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Текстът се пренарежда според екрана и размера на шрифта на читателя, на глави, с отметките като съдържание.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Всяка страница както изглежда, а текстът ѝ остава достъпен за търсене. За документи, чието оформление е важно.
+	Exported {name}	Експортиран е {name}
 	Attach a file…	Прикачване на файл…
 	Delete attachment	Изтриване на прикачения файл
 	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията
