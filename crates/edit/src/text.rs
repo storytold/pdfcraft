@@ -6,8 +6,9 @@
 //! dropped, and every positioning operator stays, so the lines after it keep their places
 //! (`Td`, `T*` and friends move from the line matrix, which showing text doesn't change).
 //!
-//! The new text uses the line's own font when every character has a code and a glyph in it;
-//! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
+//! The new text uses the line's own font when every character has a code and a glyph in it.
+//! Otherwise the words the font can show keep it and only the others are set in Helvetica
+//! (WinAnsi), run by run, and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
 use std::collections::HashMap;
@@ -80,6 +81,9 @@ pub struct TextLine {
     /// Why the line can't be edited: its font's writing mode (its CMap's `WMode`) couldn't be read,
     /// so which way its glyphs advance is unknown. The line is listed as horizontal text.
     unreadable_mode: Option<String>,
+    /// The `/PCEdLine` marked-content sequence a replacement mixing fonts wrote the line in
+    /// (see [`continues_font`]).
+    edited: Option<usize>,
 }
 
 impl TextLine {
@@ -775,6 +779,7 @@ struct Shown {
     paint: Paint,
     logical_order: bool,
     actual_text: bool,
+    edited: Option<usize>,
 }
 
 impl Shown {
@@ -961,6 +966,8 @@ fn interpret(
     let mut bt = 0usize;
     let mut marked = std::mem::take(&mut carry.marked);
     let mut layers = std::mem::take(&mut carry.layers);
+    // The `/PCEdLine` sequences around the text (a replacement mixing fonts), innermost last.
+    let mut edited: Vec<Option<usize>> = Vec::new();
     let mut actual: Vec<Option<(usize, usize, String)>> = Vec::new();
     for (i, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
@@ -974,6 +981,7 @@ fn interpret(
                 // A layer named in the resources is told apart by its name, an inline one by where it opens.
                 let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
                 layers.push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{i}").into_bytes(), <[u8]>::to_vec)));
+                edited.push(if op.name(0) == Some(b"PCEdLine") { Some(i) } else { edited.last().copied().flatten() });
                 // The property list is inline or named in the resources' /Properties (§14.6.2).
                 let list = logical_text.and_then(|properties| match op.operands.get(1) {
                     Some(Object::Name(n)) => properties.get(n).and_then(|o| doc.dict(o)),
@@ -988,6 +996,7 @@ fn interpret(
             b"EMC" => {
                 marked.pop();
                 layers.pop();
+                edited.pop();
                 if let Some(Some((start, open, logical))) = actual.pop() {
                     let tail = out.split_off(start.min(out.len()));
                     let mut items = tail.into_iter();
@@ -1291,6 +1300,7 @@ fn interpret(
                     paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
                     logical_order: false,
                     actual_text: false,
+                    edited: edited.last().copied().flatten(),
                 });
             }
             _ => {}
@@ -1348,7 +1358,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             piece == si
                 && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
-                && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
+                && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
                 && (s.text.trim().is_empty()
                     || lines.last().is_some_and(|l| {
                         (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
@@ -1376,6 +1386,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             if l.unreadable_mode.is_none() {
                 l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
             }
+            adopt_source_font(l, &s);
             // Spaces may use a separate subset font; they do not change the visible style.
         } else {
             lines.push(TextLine {
@@ -1399,6 +1410,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
+                edited: s.edited,
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 origin: Origin {
                     tm: s.tm.0,
@@ -1454,7 +1466,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         let bt = pen.bt;
         lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
             && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
-            && (s.text.trim().is_empty() || lines.last().is_some_and(|l| same_font(l, &s.font, &s.base_font, s.face.as_deref())))
+            && (s.text.trim().is_empty() || lines.last().is_some_and(|l| continues_font(l, &s)))
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
                     (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
@@ -1479,6 +1491,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         if l.unreadable_mode.is_none() {
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
+        adopt_source_font(l, &s);
     } else {
         lines.push(TextLine {
             text: s.text.clone(),
@@ -1501,6 +1514,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
+            edited: s.edited,
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             origin: Origin {
                 tm: s.tm.0,
@@ -1807,6 +1821,23 @@ fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::col
         }
     }
     Some(shown)
+}
+
+/// Whether run `s` may continue `line` font-wise: the same font, or both inside the `/PCEdLine`
+/// sequence of a replacement that set the words its font can't show in a substitute (#2378),
+/// which reads back as the one line it replaced, so the next edit replaces all of it.
+fn continues_font(line: &TextLine, s: &Shown) -> bool {
+    same_font(line, &s.font, &s.base_font, s.face.as_deref()) || (s.edited.is_some() && line.edited == s.edited)
+}
+
+/// A line that began with a substitute run takes the source font of a later run, so the next
+/// replacement starts from the line's own font again.
+fn adopt_source_font(line: &mut TextLine, s: &Shown) {
+    if line.edited.is_some() && line.font.starts_with("PCEd") && !s.font.starts_with(b"PCEd") {
+        line.font = String::from_utf8_lossy(&s.font).into_owned();
+        line.base_font = s.base_font.clone();
+        line.face = s.face.clone();
+    }
 }
 
 /// Whether a run shown in `font` (a resource name), with `/BaseFont` `base_font` and the Japanese
@@ -2252,6 +2283,30 @@ fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacin
     Ok(out)
 }
 
+/// `text` split into runs of words `metrics` can show (`true`) and words it can't (`false`), in
+/// order. A word is shown in one font, so a word with any character the font lacks goes to the
+/// substitute whole rather than switching fonts letter by letter. Spaces join the run they are
+/// in, since [`source_show`] draws spaces the font lacks with a displacement.
+fn source_runs(metrics: &Metrics, text: &str) -> Vec<(bool, String)> {
+    let mut runs: Vec<(bool, String)> = Vec::new();
+    // Spaces before the first word go with it: on their own they would make a run of the line's
+    // font with nothing to show (review on #2955).
+    let mut lead = String::new();
+    for (i, word) in text.split(' ').enumerate() {
+        let piece = if i == 0 { word.to_string() } else { format!(" {word}") };
+        if runs.is_empty() && word.is_empty() {
+            lead.push_str(&piece);
+            continue;
+        }
+        let own = word.is_empty() || metrics.encode(word).is_some();
+        match runs.last_mut() {
+            Some((last, run)) if *last == own || word.is_empty() => run.push_str(&piece),
+            _ => runs.push((own, std::mem::take(&mut lead) + &piece)),
+        }
+    }
+    runs
+}
+
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
 pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) -> Result<LineEdit, EditError> {
     let edit = replace_line_with_limit(doc, page, line, text, MAX_TYPE3_GLYPHS)?;
@@ -2336,10 +2391,24 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(format!("{} Type3", fallback.family));
             } else {
+                // The words the line's font can show keep it; only the others are set in the
+                // substitute (#2378): a subset without `V` or `ü` no longer turns the whole line
+                // into Helvetica. Reordered text (right to left, Indic) keeps one run as before.
+                let mixed = font
+                    .as_ref()
+                    .filter(|_| !visual_indic && fallback_shown == text)
+                    .map(|m| source_runs(m, &text))
+                    .filter(|runs| runs.iter().any(|(own, _)| *own));
+                // What the substitute has to show: only the runs the line's font can't.
+                let for_substitute: String = match &mixed {
+                    Some(runs) => runs.iter().filter(|(own, _)| !*own).map(|(_, run)| run.as_str()).collect(),
+                    None => fallback_shown.clone(),
+                };
                 let win = pdfcraft_fonts::win_ansi(&fallback_shown);
                 // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
-                let back: String = win.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
-                if fallback_shown.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
+                let checked = pdfcraft_fonts::win_ansi(&for_substitute);
+                let back: String = checked.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
+                if for_substitute.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
                     return Err(EditError::Invalid(format!("\"{text}\" has characters neither {} nor Helvetica can show", target.base_font)));
                 }
                 // The size in text space: the current Tf's size.
@@ -2347,8 +2416,36 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 let family = source_family(&target.base_font);
                 let base = family.base_font(target.bold, target.italic);
                 let substitute_name = format!("PCEd{}", base.replace('-', ""));
-                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
-                replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
+                match mixed {
+                    Some(runs) => {
+                        let space = font.as_ref().map_or(0.33, |m| source_space(doc, &fonts_res, m));
+                        // Marked as one line, so it reads back as one (see `continues_font`).
+                        replacement.push(Op::new("BMC", vec![Object::name("PCEdLine")]));
+                        for (own, run) in runs {
+                            if own {
+                                replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
+                                if let Some(m) = font.as_ref() {
+                                    replacement.extend(source_show(
+                                        m,
+                                        &run,
+                                        target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
+                                        space,
+                                        target.origin.state.char_spacing,
+                                        target.origin.state.word_spacing,
+                                    )?);
+                                }
+                            } else {
+                                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
+                                replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(pdfcraft_fonts::win_ansi(&run)))]));
+                            }
+                        }
+                        replacement.push(Op::new("EMC", Vec::new()));
+                    }
+                    None => {
+                        replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
+                        replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
+                    }
+                }
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(base.to_string());
                 let mut f = Dict::new();
@@ -2361,6 +2458,31 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
+    // A line an earlier replacement wrote in two fonts is in a `/PCEdLine` sequence of its own,
+    // with its fonts and the moves standing in for spaces the source font lacks: all of it goes
+    // with the line, or each edit would nest one more (review on #2955). The line then starts in
+    // its own font, set again where the sequence was.
+    if let Some((open, close)) = target.edited.and_then(|open| Some((open, matching_emc(&ops, open)?))) {
+        // Only when the sequence holds nothing but this line: a paragraph rewrite keeps the
+        // delimiters, so other rows can be inside it (review on #2955). Then the sequence stays
+        // as it is, since it is also what reads its own two-font line back as one, and only
+        // this line's operators go.
+        let others_inside = lines.iter().any(|l| l.ops.iter().any(|o| (open..=close).contains(o) && !drops.contains(o)));
+        if !others_inside {
+            drops.extend(open..=close);
+            let size = font_size_before(&ops, first).unwrap_or(target.size);
+            let own_font = |i: usize| ops.get(i).is_some_and(|o| o.is("Tf") && o.name(0) == Some(target.font.as_bytes()) && o.num(1) == Some(size));
+            replacement.insert(0, Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
+            // The same font set just before the sequence (by the last edit) is set again here.
+            if let Some(i) = open.checked_sub(1).filter(|&i| own_font(i)) {
+                drops.insert(i);
+            }
+            // And set back after it: the replacement ends in that font too.
+            if let Some(i) = close.checked_add(1).filter(|&i| own_font(i)) {
+                drops.insert(i);
+            }
+        }
+    }
     let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
     let contents = rewritten_contents(doc, &streams, new_data);
     let page_ref = p.obj;
@@ -2374,6 +2496,24 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
     })?;
     Ok(LineEdit { substituted })
+}
+
+/// The `EMC` that closes the marked-content sequence `BMC`/`BDC` operator `open` begins.
+fn matching_emc(ops: &[Op], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, op) in ops.iter().enumerate().skip(open) {
+        match op.op.as_slice() {
+            b"BMC" | b"BDC" => depth = depth.saturating_add(1),
+            b"EMC" => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The size of the last `Tf` before operator `at`.
