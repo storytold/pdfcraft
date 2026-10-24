@@ -7,7 +7,7 @@
 //! off, scripts don't run and AF calls keep working natively.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
-pub use pdfcraft_js::{Limits, Outcome, Request};
+pub use pdfcraft_js::{Limits, Outcome, Panel, Request};
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -19,25 +19,63 @@ pub struct JsOutput {
     pub requests: Vec<Request>,
     /// Script errors (as Acrobat's console shows them).
     pub errors: Vec<String>,
+    /// Which of `errors` are document scripts' (#3940), told apart by where they came from and
+    /// not by their text, which a field script's error can share: each is reported once, however
+    /// often the document scripts run again.
+    pub doc_errors: Vec<String>,
 }
 
 impl JsOutput {
+    /// Whether scripts produced nothing: no alerts, console lines, requests or errors.
     pub fn is_empty(&self) -> bool {
         self.alerts.is_empty() && self.console.is_empty() && self.requests.is_empty() && self.errors.is_empty()
     }
 
+    /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
+    /// except a request to show a side panel or open Save As, which is noted on the console
+    /// and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
-        self.requests.extend(o.requests.iter().cloned());
+        // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
+        // button's may show or hide a side panel, or open Save As.
+        for r in &o.requests {
+            match r {
+                Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
+                Request::SaveAs => {
+                    self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())
+                }
+                r => self.requests.push(r.clone()),
+            }
+        }
         self.errors.extend(o.error.iter().cloned());
+        // The document scripts run before every field script, so a failing one would repeat
+        // once per calculation; it is reported once.
+        for e in &o.doc_errors {
+            if !self.doc_errors.contains(e) {
+                self.doc_errors.push(e.clone());
+                self.errors.push(e.clone());
+            }
+        }
     }
 
     pub(crate) fn append(&mut self, other: JsOutput) {
         self.alerts.extend(other.alerts);
         self.console.extend(other.console);
         self.requests.extend(other.requests);
-        self.errors.extend(other.errors);
+        // As in `absorb`: a document script's error, already reported, is not repeated; a field
+        // script's errors are each their own, even one worded like a document script's.
+        let mut docs = other.doc_errors;
+        for e in other.errors {
+            if let Some(k) = docs.iter().position(|d| *d == e) {
+                docs.swap_remove(k);
+                if self.doc_errors.contains(&e) {
+                    continue;
+                }
+                self.doc_errors.push(e.clone());
+            }
+            self.errors.push(e);
+        }
     }
 }
 
@@ -132,20 +170,16 @@ impl JsRunner {
     /// A runner for `cos`: what scripts read about the document (pages, info, whether it is
     /// an XFA form) and its document-level scripts, read once.
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
-        let doc = pdfcraft_js::DocInfo {
-            file_name: file_name.to_string(),
-            num_pages: pdfcraft_model::pages(cos).len(),
-            page: 0,
-            info: info(cos),
-            xfa: pdfcraft_xfa::xfa_shape(cos).is_some(),
-        };
-        JsRunner {
-            doc,
-            doc_scripts: pdfcraft_forms::document_scripts(cos),
-            output: JsOutput::default(),
-            cos: cos.clone(),
-            displays: std::collections::HashMap::new(),
-        }
+        let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
+        let doc =
+            pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos), xfa };
+        // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
+        // Keep them in the file and in Document JavaScripts, but do not initialize an
+        // AcroForm context with them: a viewer-compatibility alert would be misleading.
+        // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
+        let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
+        let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
     }
 }
 
@@ -198,6 +232,11 @@ impl crate::Document {
     /// Field Properties ▸ Actions: field `name`'s action per trigger.
     pub fn field_actions(&self, name: &str) -> Vec<(pdfcraft_forms::Trigger, pdfcraft_forms::FieldAction)> {
         self.editor.as_ref().and_then(|e| pdfcraft_forms::field_actions(&e.cos, name).ok()).unwrap_or_default()
+    }
+
+    /// Field Properties ▸ Actions: how many actions are chained after each trigger's first one.
+    pub fn field_action_chains(&self, name: &str) -> Vec<(pdfcraft_forms::Trigger, usize)> {
+        self.editor.as_ref().and_then(|e| pdfcraft_forms::field_action_chains(&e.cos, name).ok()).unwrap_or_default()
     }
 
     /// Document JavaScripts (name, source), in name order.
@@ -446,6 +485,32 @@ mod review_tests {
         assert_eq!(words.iter().map(|(w, _)| w.len()).collect::<Vec<_>>(), [n, 1]);
         let read = UNDERSCORE_CHARS_READ.with(std::cell::Cell::get);
         assert!(read <= 4 * n, "{read} characters read for {n} glyphs");
+    }
+
+    /// Review on #3985: merging two outputs reports a failing document script once, as one run
+    /// does, while each field script error stays: told apart by where an error came from, so a
+    /// field script that throws a document script's very words is still reported.
+    #[test]
+    fn merged_output_reports_a_document_script_error_once() {
+        let doc = "document script 2: TypeError: not a callable function";
+        let field = "ReferenceError: x is not defined";
+        let run = |error: &str| {
+            let mut out = JsOutput::default();
+            out.absorb(&Outcome { error: Some(error.into()), doc_errors: vec![doc.into()], ..Outcome::default() });
+            out
+        };
+        let mut out = run(field);
+        out.append(run(field));
+        assert_eq!(out.errors, [field, doc, field]);
+        // CodeRabbit on #3985: a field script that throws the document script's text.
+        out.append(run(doc));
+        assert_eq!(out.errors, [field, doc, field, doc]);
+        let alone = run(doc);
+        assert_eq!(alone.errors, [doc, doc], "the field's error and the document script's");
+        let count = |o: &JsOutput| o.errors.iter().filter(|e| *e == doc).count();
+        let mut merged = run(field);
+        merged.append(alone);
+        assert_eq!(count(&merged), 2, "the field's copy stays; the document script's is listed once");
     }
 
     #[test]

@@ -465,7 +465,7 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8
     Some(gray_plane(doc, m, w, h)?.into_iter().map(|v| 255 - v).collect())
 }
 
-/// A one-component mask image as 8-bit values (its `/Decode` inversion applied), scaled to
+/// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
@@ -491,14 +491,11 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
             unpack(&m.decoded().ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
-    let invert = m
-        .dict
-        .get(b"Decode")
-        .map(|d| doc.resolve(d))
-        .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
-        .unwrap_or(false);
-    if invert {
-        px.iter_mut().for_each(|v| *v = 255 - *v);
+    if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {
+        for value in &mut px {
+            let t = f64::from(*value) / 255.0;
+            *value = (((1.0 - t) * lo + t * hi).clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
     }
     if (mw, mh) == (w, h) {
         return Some(px);

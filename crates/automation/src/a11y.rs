@@ -575,6 +575,8 @@ impl Automation {
 }
 
 impl Automation {
+    /// Recognition settings from the arguments: `dpi` (clamped to 72–600), `language` (refused
+    /// unless the models read it) and `skip_text_pages`, each left at its default when absent.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
@@ -592,6 +594,9 @@ impl Automation {
         Ok(settings)
     }
 
+    /// Recognizes text in each of `paths` and writes the result under the same file name in
+    /// `folder`, reporting per file its output, word count and skipped pages, or its error. A
+    /// path outside the root refuses the whole call before any work starts.
     pub(crate) fn ocr_recognize_files(&mut self, a: &Args) -> Result<Value> {
         let settings = self.ocr_settings(a)?;
         let folder = self.resolve(a.str("folder")?, true)?;
@@ -601,15 +606,26 @@ impl Automation {
         for p in &paths {
             self.resolve_for(p, crate::file_access::Access::Read, true)?;
         }
+        // Two inputs that would write the same output file overwrite each other while both report
+        // success, so the whole batch is refused here: before the folder is created, anything is
+        // read, or the OCR engines load.
+        let targets: Vec<std::path::PathBuf> = paths.iter().map(|p| child(&folder, &input_file_name(p))).collect();
+        let shared = shared_file_names(&targets);
+        if !shared.is_empty() {
+            return Err(ToolError::InvalidArgs(format!(
+                "more than one input would write to the same output file, so each would replace the one before it. Colliding file names: {}. Give each input a different file name, or run them in separate batches with different folders.",
+                shared.join(", ")
+            )));
+        }
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
         let ocr = pdfcraft_engine::ocr::engine().map_err(failed)?;
         let mut out = Vec::new();
         for p in paths {
-            let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
+            let name = input_file_name(p);
             let result =
-                self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| std::fs::read(&src).map_err(|e| e.to_string())).and_then(|bytes| {
-                    pdfcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true)
-                });
+                self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string())).and_then(
+                    |bytes| pdfcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true),
+                );
             out.push(match result {
                 Ok(r) => {
                     let target = child(&folder, &name);
@@ -623,6 +639,8 @@ impl Automation {
         Ok(json!({ "files": out }))
     }
 
+    /// Recognizes text on the open document's `pages` (every page when absent) and adds it,
+    /// reporting the total word count and, per page, why it was skipped or what it found.
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
         let settings = self.ocr_settings(a)?;
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
@@ -642,6 +660,8 @@ impl Automation {
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
     }
 
+    /// Whether text recognition's models are installed, the directories searched for them (in
+    /// order), and the languages it reads, each as a code and a name.
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
@@ -650,6 +670,39 @@ impl Automation {
     }
 }
 
+/// The file name an input is written under: its own file name, or `document.pdf` when it has none.
+fn input_file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into())
+}
+
+/// The output file names that two or more of `targets` share, each spelling listed once, in input
+/// order. Names are compared without regard to case on Windows and macOS and exactly elsewhere; on
+/// Windows a trailing dot or space is not part of the name (`scan.pdf.` is `scan.pdf`). Unicode
+/// normalization forms (NFC and NFD spellings of one name) are not compared, so such inputs are
+/// not caught. The folder is the same for every target, so only the names are compared.
+fn shared_file_names(targets: &[std::path::PathBuf]) -> Vec<String> {
+    let mut groups: std::collections::BTreeMap<String, (usize, Vec<String>)> = std::collections::BTreeMap::new();
+    for target in targets {
+        let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let key = if cfg!(windows) {
+            name.trim_end_matches(['.', ' ']).to_lowercase()
+        } else if cfg!(target_os = "macos") {
+            // Case only; NFC and NFD spellings of one name stay distinct here (a known limit).
+            name.to_lowercase()
+        } else {
+            name.clone()
+        };
+        let (count, spellings) = groups.entry(key).or_insert_with(|| (0, Vec::new()));
+        *count += 1;
+        if !spellings.contains(&name) {
+            spellings.push(name);
+        }
+    }
+    groups.into_values().filter(|(count, _)| *count > 1).flat_map(|(_, spellings)| spellings).collect()
+}
+
+/// A script's request to the viewer as the JSON that running a script reports; a side panel
+/// goes by its fixed id.
 fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     use pdfcraft_engine::js::Request as R;
     match r {
@@ -661,6 +714,7 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Focus(f) => json!({ "focus": f }),
         R::Beep => json!({ "beep": true }),
         R::SaveAs => json!({ "save_as": true }),
+        R::ShowPanel(p) => json!({ "panel": p.id() }),
     }
 }
 
@@ -669,7 +723,9 @@ impl Automation {
         let id = self.doc(a)?.id;
         let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
-        Ok(json!({ "alerts": o.alerts, "console": o.console, "requests": reqs, "error": o.error, "result": o.result }))
+        Ok(
+            json!({ "alerts": o.alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }),
+        )
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {
@@ -700,7 +756,7 @@ impl Automation {
         let mut files = Vec::new();
         for p in a.strs("paths")? {
             let path = self.resolve(p, false)?;
-            files.push((p.to_string(), std::fs::read(&path).map_err(|e| failed(format!("{p}: {e}")))?));
+            files.push((p.to_string(), crate::read_input_bytes(&path).map_err(|e| failed(format!("{p}: {e}")))?));
         }
         let csv = pdfcraft_engine::merge_data_files(&files).map_err(failed)?;
         let target = self.resolve(a.str("path")?, true)?;
@@ -845,7 +901,7 @@ impl Automation {
             let result = self
                 .resolve(p, false)
                 .map_err(|e| e.to_string())
-                .and_then(|src| std::fs::read(&src).map_err(|e| e.to_string()))
+                .and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string()))
                 .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
             out.push(match result {
                 Ok(r) => {
@@ -1040,5 +1096,23 @@ mod review_html_tests {
         let html = review_html(&record).unwrap();
         assert!(html.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;.pdf"));
         assert!(!html.contains("<script>"));
+    }
+}
+
+#[cfg(test)]
+mod shared_output_name_tests {
+    use super::*;
+
+    #[test]
+    fn shared_output_names_follow_the_default_filesystem() {
+        let targets = |names: &[&str]| -> Vec<std::path::PathBuf> { names.iter().map(|n| std::path::Path::new("out").join(n)).collect() };
+        // A spelling that repeats is one shared name, listed once.
+        assert_eq!(shared_file_names(&targets(&["a.pdf", "b.pdf", "a.pdf"])), vec!["a.pdf".to_string()]);
+        assert!(shared_file_names(&targets(&["a.pdf", "b.pdf"])).is_empty());
+        // Case is ignored on Windows and macOS only; a trailing dot is ignored on Windows only.
+        let case = shared_file_names(&targets(&["scan.pdf", "Scan.PDF"]));
+        let dot = shared_file_names(&targets(&["scan.pdf", "scan.pdf."]));
+        assert_eq!(case.len(), if cfg!(any(windows, target_os = "macos")) { 2 } else { 0 }, "{case:?}");
+        assert_eq!(dot.len(), if cfg!(windows) { 2 } else { 0 }, "{dot:?}");
     }
 }

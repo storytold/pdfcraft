@@ -975,6 +975,8 @@
 	Redaction code:	Šalinimo kodas:
 	Reload	Įkelti iš naujo
 	Reload documents when their files change on disk	Iš naujo įkelti dokumentus, kai pasikeičia jų failai diske
+	Don't show again	Daugiau nerodyti
+	Show a notice when a document is secured	Rodyti pranešimą, kai dokumentas apsaugotas
 	Always use my default zoom and page layout	Visada naudoti mano numatytąjį mastelį ir puslapio išdėstymą
 	Remove checkmark	Pašalinti varnelę
 	Remove invalid links and bookmarks	Pašalinti netinkamus saitus ir žymeles
@@ -987,6 +989,7 @@
 	Remove {n} pages	Pašalinti puslapių: {n}
 	Reopen Closed Tab	Vėl atverti užvertą kortelę
 	Reopen the files that were open when PdfCraft last closed	Vėl atverti failus, kurie buvo atverti paskutinį kartą užveriant „PdfCraft“
+	Restore the last view (page, zoom and page display) when a document is opened again	Iš naujo atidarant dokumentą atkurti paskutinį rodinį (puslapį, mastelį ir puslapių rodymą)
 	Repair log	Taisymo žurnalas
 	Repeat overlay text	Kartoti perdangos tekstą
 	Replace Image…	Pakeisti paveikslėlį…
@@ -1278,6 +1281,7 @@
 	Update	Atnaujinti
 	Use 72 DPI (one point per pixel)	Naudoti 72 DPI (vienas taškas vienam pikseliui)
 	Use Flate to encode streams that are not encoded	Nekoduotiems srautams koduoti naudoti „Flate“
+	In streams that use LZW encoding, use Flate instead	LZW koduotiems srautams naudoti „Flate“
 	Use a Digital ID from a file	Naudoti faile esantį skaitmeninį ID
 	Use custom DPI	Naudoti pasirinktinį DPI
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Naudoti paveikslėlyje įrašytą DPI; jei jo nėra, naudoti 72 DPI.
@@ -1449,6 +1453,10 @@
 	Draw freehand	Brėžti laisva ranka
 	Drawing	Brėžinys
 	Drawing scale	Brėžinio mastelis
+	Scale	Mastelis
+	Common scales	Dažni masteliai
+	Enter a scale such as 1:50.	Įveskite mastelį, pavyzdžiui, 1:50.
+	Applying a scale switches units to m / mm.	Pritaikius mastelį, vienetai pakeičiami į m / mm.
 	Drop-down list	Išskleidžiamasis sąrašas
 	Duplicate pages	Dubliuoti puslapius
 	Edit a PDF	Redaguoti PDF
@@ -2739,6 +2747,11 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Attach a file…	Pridėti failą…
+	Delete attachment	Ištrinti priedą
+	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas
+	Attach {name}	Pridėti {name}
+	Delete attachment {key}	Ištrinti priedą {key}
 	Bulleted list	Sąrašas su ženkleliais
 	Numbered list	Numeruotas sąrašas
 	Alignment	Lygiuotė
@@ -2776,3 +2789,6 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Šiandien

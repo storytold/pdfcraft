@@ -1417,6 +1417,10 @@
 	Perimeter	Περίμετρος
 	Area	Εμβαδόν
 	Drawing scale	Κλίμακα σχεδίου
+	Scale	Κλίμακα
+	Common scales	Συνηθισμένες κλίμακες
+	Enter a scale such as 1:50.	Εισαγάγετε μια κλίμακα, όπως 1:50.
+	Applying a scale switches units to m / mm.	Η εφαρμογή κλίμακας αλλάζει τις μονάδες σε m / mm.
 	Snapping	Προσκόλληση
 	Export measurements	Εξαγωγή μετρήσεων
 	Open a PDF to measure it.	Ανοίξτε ένα PDF για να πραγματοποιήσετε μετρήσεις.
@@ -1467,6 +1471,7 @@
 	Couldn't import the signature image: {e}	Δεν ήταν δυνατή η εισαγωγή της εικόνας υπογραφής: {e}
 	Go to page…	Μετάβαση στη σελίδα…
 	Reopen the files that were open when PdfCraft last closed	Εκ νέου άνοιγμα των αρχείων που ήταν ανοιχτά κατά τον τελευταίο τερματισμό του PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Επαναφορά της τελευταίας προβολής (σελίδα, ζουμ και εμφάνιση σελίδων) όταν ένα έγγραφο ανοίγει ξανά
 	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Οι γραμματοσειρές κειμένου PDF δεν μπορούν να εμφανίσουν τον χαρακτήρα «{c}» ({code}). Επιλέξτε κείμενο που υποστηρίζεται.
 	Open arrow	Ανοιχτή αιχμή βέλους
 	Closed arrow	Κλειστή αιχμή βέλους
@@ -1923,6 +1928,7 @@
 	Discard private data of other applications	Αφαίρεση ιδιωτικών δεδομένων άλλων εφαρμογών
 	Discard hidden text	Αφαίρεση κρυφού κειμένου
 	Use Flate to encode streams that are not encoded	Χρήση συμπίεσης Flate για ροές που δεν είναι συμπιεσμένες
+	In streams that use LZW encoding, use Flate instead	Χρήση Flate αντί για LZW στις ροές με κωδικοποίηση LZW
 	Remove invalid links and bookmarks	Αφαίρεση μη έγκυρων συνδέσμων και σελιδοδεικτών
 	Remove unreferenced named destinations	Αφαίρεση ονομασμένων προορισμών χωρίς αναφορές
 	Compress document structure (object streams)	Συμπίεση δομής εγγράφου (ροές αντικειμένων)
@@ -2328,6 +2334,8 @@ comment menu	Edit	Επεξεργασία
 	Printer paper and scaling may differ. Check driver settings.	Το χαρτί και η κλίμακα του εκτυπωτή μπορεί να διαφέρουν. Ελέγξτε τις ρυθμίσεις του προγράμματος οδήγησης.
 	Drawing scale changes. Use Actual size for full-scale plans.	Η κλίμακα του σχεδίου αλλάζει. Για σχέδια σε πλήρη κλίμακα χρησιμοποιήστε το Πραγματικό μέγεθος.
 	Reload documents when their files change on disk	Επαναφόρτωση εγγράφων όταν αλλάζουν τα αρχεία τους στον δίσκο
+	Don't show again	Να μην εμφανιστεί ξανά
+	Show a notice when a document is secured	Εμφάνιση ειδοποίησης όταν ένα έγγραφο προστατεύεται
 	Always use my default zoom and page layout	Να χρησιμοποιείται πάντα η προεπιλεγμένη μεγέθυνση και διάταξη σελίδας μου
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Αυτό το αρχείο άλλαξε στον δίσκο. Η επαναφόρτωση δείχνει τη νέα έκδοση και απορρίπτει τις μη αποθηκευμένες αλλαγές σας· η αποθήκευση την αντικαθιστά με αυτή την έκδοση.
 	Reload	Επαναφόρτωση
@@ -2487,6 +2495,11 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Attach a file…	Επισύναψη αρχείου…
+	Delete attachment	Διαγραφή συνημμένου
+	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό
+	Attach {name}	Επισύναψη {name}
+	Delete attachment {key}	Διαγραφή συνημμένου {key}
 	Font	Γραμματοσειρά
 	Bulleted list	Λίστα με κουκκίδες
 	Numbered list	Αριθμημένη λίστα
@@ -2521,3 +2534,6 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Σήμερα

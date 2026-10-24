@@ -86,7 +86,9 @@ impl Type0Font {
                     if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
                         (FontQuery::Standard(standard), true)
                     } else {
-                        let mut query = FallbackFontQuery::new(dict);
+                        // PdfCraft patch: the style comes from the descendant's descriptor.
+                        let mut query =
+                            FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
                         query.character_collection = character_collection.clone();
 
                         warn!(

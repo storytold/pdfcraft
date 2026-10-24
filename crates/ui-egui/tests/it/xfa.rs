@@ -63,6 +63,14 @@ fn a_dynamic_xfa_form_is_laid_out_and_filled() {
 }
 
 #[test]
+fn a_dynamic_xfa_form_says_when_laying_it_out_took_its_usage_rights_off() {
+    let xdp = pdfcraft_xfa::fixtures::template(2);
+    let h = open(pdfcraft_xfa::fixtures::usage_rights_shell(&xdp, "", false));
+    // The note starts its own sentence after the layout's.
+    h.get_by_label_contains("laid out from its template: 2 pages, 11 fields. The form's usage rights were removed");
+}
+
+#[test]
 fn a_dynamic_xfa_form_says_its_page_is_a_placeholder() {
     // No fields, the form lives in the XFA packets (an array of name/stream pairs here), but
     // the packets hold no template: the placeholder page stays, with a notice.

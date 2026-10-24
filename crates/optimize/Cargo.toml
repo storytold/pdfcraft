@@ -12,12 +12,15 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-annot = { workspace = true }
 thiserror.workspace = true
 # JPEG decoding (zune-jpeg) and encoding, and bicubic resampling; already in the tree.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# The same JPEG decoder, used directly to read samples untransformed (/ColorTransform 0).
+zune-jpeg = "0.5"
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }

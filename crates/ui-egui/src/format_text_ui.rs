@@ -2,8 +2,9 @@
 //! alignment; bold, italic, underline, superscript and subscript; line and paragraph spacing;
 //! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
 //! fonts already on its page and the spacing controls) and added text (the standard families,
-//! size, colour, style and alignment). What PdfCraft can't apply yet (lists, superscript and
-//! subscript, paragraph spacing, or spacing for added text) is shown disabled and says so.
+//! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
+//! superscript and subscript, paragraph spacing, or line spacing and scale for added text) is shown
+//! disabled and says so.
 //!
 //! The icons are Lucide's (AGENTS.md §1); only the arrangement follows Acrobat.
 
@@ -197,9 +198,10 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
     // Line and paragraph spacing; horizontal scale and character spacing: two columns, each an
     // icon and its control, `half` wide.
     let half = ((ui.available_width() - 2.0 * LABEL_ICON - 8.0 - 3.0 * GAP) / 2.0).max(40.0);
-    ui.add_enabled_ui(extras.is_some(), |ui| {
-        let mut fallback = Extras::default();
-        let e = extras.as_deref_mut().unwrap_or(&mut fallback);
+    let editing = extras.is_some();
+    let mut fallback = Extras::default();
+    let e = extras.as_deref_mut().unwrap_or(&mut fallback);
+    ui.add_enabled_ui(editing, |ui| {
         row(ui, |ui| {
             labelled_icon(ui, t, "arrow-up-down", tl!("Line spacing"));
             let own = tl!("Auto").to_string();
@@ -222,16 +224,20 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                     .on_disabled_hover_text(tip);
             });
         });
-        // Any value the engine takes can be typed; the lists hold the common ones.
-        row(ui, |ui| {
+    });
+    // Any value the engine takes can be typed; the lists hold the common ones. Added text has
+    // character spacing of its own (#4245), but no scale yet.
+    row(ui, |ui| {
+        ui.add_enabled_ui(editing, |ui| {
             let label = labelled_icon(ui, t, "move-horizontal", tl!("Horizontal scale"));
             let scale = Number { value: &mut e.scale, range: SCALE_RANGE, speed: 1.0, suffix: " %" };
             number_with_presets(ui, scale, &SCALES, half, (label.id, tl!("Horizontal scale")));
-            ui.add_space(8.0);
-            let label = labelled_icon(ui, t, "arrow-left-right", tl!("Character spacing"));
-            let spacing = Number { value: &mut e.char_spacing, range: CHAR_SPACING_RANGE, speed: 0.1, suffix: " pt" };
-            number_with_presets(ui, spacing, &CHAR_SPACINGS, half, (label.id, tl!("Character spacing")));
         });
+        ui.add_space(8.0);
+        let label = labelled_icon(ui, t, "arrow-left-right", tl!("Character spacing"));
+        let value = if editing { &mut e.char_spacing } else { &mut look.char_spacing };
+        let spacing = Number { value, range: CHAR_SPACING_RANGE, speed: 0.1, suffix: " pt" };
+        number_with_presets(ui, spacing, &CHAR_SPACINGS, half, (label.id, tl!("Character spacing")));
     });
 
     out.changed = (look.clone(), extras.as_deref().copied()) != before;

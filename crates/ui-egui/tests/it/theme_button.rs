@@ -1,5 +1,5 @@
-//! The title bar's theme button: a click cycles System, Light and Dark; a right-click opens the
-//! menu with the appearance settings.
+//! The title bar's theme button: a click cycles System, Light and Dark (a fresh install starts
+//! on System, #1248); a right-click opens the menu with the appearance settings.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -22,9 +22,9 @@ fn preference(h: &Harness<'static, PdfCraftApp>) -> String {
 #[test]
 fn a_click_cycles_the_theme_and_a_right_click_opens_the_menu() {
     let mut h = harness();
-    assert_eq!(preference(&h), "Light", "new installs start Light");
+    assert_eq!(preference(&h), "System", "a fresh install follows the desktop (#1248)");
     for (label, next) in
-        [("Display theme: Light gray", "Dark"), ("Display theme: Dark gray", "System"), ("Display theme: Use system setting", "Light")]
+        [("Display theme: Use system setting", "Light"), ("Display theme: Light gray", "Dark"), ("Display theme: Dark gray", "System")]
     {
         h.get_by_label(label).click();
         h.run_steps(4);
@@ -32,7 +32,7 @@ fn a_click_cycles_the_theme_and_a_right_click_opens_the_menu() {
     }
     assert!(h.query_by_label("Appearance settings…").is_none(), "a plain click opens no menu");
 
-    h.get_by_label("Display theme: Light gray").click_secondary();
+    h.get_by_label("Display theme: Use system setting").click_secondary();
     h.run_steps(4);
     h.get_by_label("Appearance settings…").click();
     h.run_steps(4);

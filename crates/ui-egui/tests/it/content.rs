@@ -702,6 +702,76 @@ fn format_text_panel_sets_alignment_and_lists_planned_controls_disabled() {
     assert!(h.state().text_style.bold);
 }
 
+/// Opening right-aligned added text to edit it shows it right-aligned, as the page does, not at
+/// the box's left edge, where it never was.
+#[test]
+fn the_text_editor_keeps_the_boxs_alignment() {
+    let _gpu = gpu();
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Hi".into(), align: pdfcraft_engine::TextAlign::Right, ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 200.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.run_steps(3);
+    let r = item_on_screen(&h, rect);
+    let pixels = h.render().unwrap();
+    let left = ink(&pixels, egui::Rect::from_min_max(r.min, pos2(r.center().x, r.max.y)));
+    let right = ink(&pixels, egui::Rect::from_min_max(pos2(r.center().x, r.min.y), r.max));
+    assert!(left == 0 && right > 20, "the text is drawn at the right ({left} dark pixels left, {right} right)");
+}
+
+/// A box narrower than the editor's least width (60 points on screen): right-aligned text stays
+/// at the box's right edge, not the wider editor's, which lies past it.
+#[test]
+fn the_text_editor_aligns_a_narrow_box_to_its_own_edge() {
+    let _gpu = gpu();
+    let mut h = harness();
+    let rect = [40.0, 195.0, 60.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Hi".into(), align: pdfcraft_engine::TextAlign::Right, ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 50.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.run_steps(3);
+    let r = item_on_screen(&h, rect);
+    assert!(r.width() < 60.0, "the box is narrower than the editor: {}", r.width());
+    let pixels = h.render().unwrap();
+    let inside = ink(&pixels, r);
+    let edge = ink(&pixels, egui::Rect::from_min_max(pos2(r.right() - r.width() * 0.25, r.min.y), r.max));
+    let past = ink(&pixels, egui::Rect::from_min_max(pos2(r.right() + 2.0, r.min.y), pos2(r.right() + 40.0, r.max.y)));
+    assert!(
+        inside > 20 && edge > 0 && past == 0,
+        "the text is drawn in its box, up to its right edge ({inside} dark pixels in it, {edge} in its last quarter, {past} past it)"
+    );
+}
+
+/// Added text takes character spacing from Format text (#4245), typed like a paragraph's; its
+/// line spacing and horizontal scale stay disabled until added text has them.
+#[test]
+fn format_text_sets_character_spacing_for_added_text() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let disabled = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_role_and_label(Role::SpinButton, label).accesskit_node().is_disabled();
+    assert!(disabled(&h, "Horizontal scale"), "added text has no scale yet");
+    assert!(!disabled(&h, "Character spacing"), "added text takes character spacing");
+    h.get_by_role_and_label(Role::SpinButton, "Character spacing").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("2.5".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(h.state().text_style.char_spacing, 2.5);
+}
+
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
