@@ -1,5 +1,6 @@
 //! Turn laid-out pages into PDF objects inside an open document: page dictionaries with content
-//! streams (standard-14 fonts, WinAnsi), image XObjects and AcroForm widgets. Widget appearance
+//! streams (standard-14 fonts, with an embedded Unicode fallback for page text), image XObjects
+//! and AcroForm widgets. Widget appearance
 //! streams are left empty here; the forms layer regenerates them from the field dictionaries.
 
 use std::collections::{BTreeMap, HashMap};
@@ -251,6 +252,12 @@ const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 const MAX_PAGES_SEARCHED: usize = 10_000;
 /// Most pictures remembered.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
+const FALLBACK_FONT: &str = "PCFullXfaFallback";
+
+struct FallbackFont {
+    object: Object,
+    metrics: pdfcraft_fonts::pdf::Metrics,
+}
 
 struct Emitter<'a> {
     doc: &'a mut Document,
@@ -264,6 +271,8 @@ struct Emitter<'a> {
     warnings: Vec<String>,
     /// The signatures the file holds, by the SOM path of the field signed.
     signed: HashMap<String, Signed>,
+    fallback_fonts: Dict,
+    fallback: Option<FallbackFont>,
 }
 
 /// A signature field of the file that has been signed.
@@ -322,6 +331,34 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
 }
 
 impl Emitter<'_> {
+    /// Inter covers this whole span or the original, reported fallback stands. Fit the
+    /// replacement to the advance layout measured, keeping wrapping, alignment and link bounds.
+    fn fallback_text(&mut self, span: &Span) -> Result<Option<(Vec<u8>, f64)>, XfaError> {
+        use pdfcraft_fonts::{INTER_REGULAR, embedding, pdf::Metrics};
+        if pdfcraft_fonts::first_undrawable(&span.text).is_none() || !embedding::covers(INTER_REGULAR, &span.text) {
+            return Ok(None);
+        }
+        if self.fallback.is_none() {
+            let name = embedding::embed(self.doc, &mut self.fallback_fonts, INTER_REGULAR, "Inter")
+                .map_err(|e| XfaError::Malformed(format!("could not embed the bundled XFA fallback font: {e}")))?;
+            let object = self.fallback_fonts.get(name.as_bytes()).cloned().ok_or_else(|| XfaError::Malformed("missing XFA fallback font".into()))?;
+            let font = self.doc.dict(&object).ok_or_else(|| XfaError::Malformed("invalid XFA fallback font".into()))?;
+            self.fallback = Some(FallbackFont { metrics: Metrics::from_dict(self.doc, &font), object });
+        }
+        let Some(fallback) = &self.fallback else { return Ok(None) };
+        let Some(encoded) = fallback.metrics.encode(&span.text) else { return Ok(None) };
+        let natural: f64 = fallback.metrics.codes(&encoded).iter().map(|(code, _)| fallback.metrics.width(*code) * span.face.size).sum();
+        let advance = span.face.width(&span.text);
+        if !natural.is_finite() || natural <= 0.0 || !advance.is_finite() || advance <= 0.0 {
+            return Ok(None);
+        }
+        let scale = advance / natural;
+        if !(0.001..=1000.0).contains(&scale) {
+            return Ok(None);
+        }
+        Ok(Some((encoded, scale)))
+    }
+
     fn da(face: &Face) -> Vec<u8> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
@@ -671,6 +708,7 @@ impl Emitter<'_> {
         let page_ref = self.doc.add(Object::Dict(Dict::new()));
         let mut content: Vec<u8> = Vec::new();
         let mut fonts: BTreeMap<&'static str, &'static str> = BTreeMap::new();
+        let mut uses_fallback = false;
         let mut xobjects = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
@@ -711,9 +749,12 @@ impl Emitter<'_> {
                     );
                 }
                 Item::Text(s) => {
-                    // The form's own text, set in the standard fonts: what they can't draw is
-                    // shown as `?` and reported once (the layout goes on), never silently.
-                    if let Some(c) = pdfcraft_fonts::first_undrawable(&s.text) {
+                    let fallback = self.fallback_text(s)?;
+                    // Spans neither encoding can show retain the existing question-mark fallback
+                    // and one warning; supported Unicode spans do not report text loss.
+                    if fallback.is_none()
+                        && let Some(c) = pdfcraft_fonts::first_undrawable(&s.text)
+                    {
                         const PREFIX: &str = "some of the form's text has characters the standard fonts can't draw";
                         if !self.warnings.iter().any(|w| w.starts_with(PREFIX)) {
                             self.warnings.push(format!(
@@ -723,18 +764,24 @@ impl Emitter<'_> {
                             ));
                         }
                     }
-                    let name = s.face.resource_name();
-                    fonts.insert(name, s.face.family.base_font(s.face.bold, s.face.italic));
+                    let (name, encoded, h_scale) = if let Some((encoded, scale)) = fallback {
+                        uses_fallback = true;
+                        (FALLBACK_FONT, encoded, scale)
+                    } else {
+                        let name = s.face.resource_name();
+                        fonts.insert(name, s.face.family.base_font(s.face.bold, s.face.italic));
+                        (name, win_ansi(&s.text), s.face.h_scale)
+                    };
                     // Horizontal scaling is text state, which outlives the text object: a
                     // condensed span gets a graphics state of its own, so the next isn't.
-                    let scaled = (s.face.h_scale - 1.0).abs() > 1e-6;
+                    let scaled = (h_scale - 1.0).abs() > 1e-6;
                     let (open, tz, close) =
-                        if scaled { ("q BT", format!(" {} Tz", n(s.face.h_scale * 100.0)), " ET Q") } else { ("BT", String::new(), " ET") };
+                        if scaled { ("q BT", format!(" {} Tz", n(h_scale * 100.0)), " ET Q") } else { ("BT", String::new(), " ET") };
                     content.extend(
                         format!("{open} /{name} {} Tf {} rg{tz} 1 0 0 1 {} {} Tm ", n(s.face.size), rgb(s.face.color), n(s.x), n(h - s.baseline))
                             .bytes(),
                     );
-                    content.extend(literal(&win_ansi(&s.text)));
+                    content.extend(literal(&encoded));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
                     if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
                         annots.push(Object::Ref(r));
@@ -756,6 +803,9 @@ impl Emitter<'_> {
         let mut font_dict = Dict::new();
         for (name, base) in fonts {
             font_dict.set(name.as_bytes().to_vec(), standard_font(base));
+        }
+        if uses_fallback && let Some(fallback) = &self.fallback {
+            font_dict.set(FALLBACK_FONT.as_bytes().to_vec(), fallback.object.clone());
         }
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(font_dict));
@@ -908,6 +958,23 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
     out
 }
 
+/// Candidates from earlier layouts are validated by the embedding helper against our own
+/// program, Unicode map and glyph mapping before reuse; a resource name alone is never trusted.
+fn earlier_fallback_fonts(doc: &Document, pages: ObjRef) -> Dict {
+    let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    for page in kids.iter().take(MAX_PAGES_SEARCHED) {
+        let Some(page) = doc.dict(page) else { continue };
+        let Some(resources) = page.get(b"Resources").and_then(|r| doc.dict(r)) else { continue };
+        let Some(fonts) = resources.get(b"Font").and_then(|f| doc.dict(f)) else { continue };
+        if let Some(font) = fonts.get(FALLBACK_FONT.as_bytes()) {
+            let mut out = Dict::new();
+            out.set(FALLBACK_FONT.as_bytes().to_vec(), font.clone());
+            return out;
+        }
+    }
+    Dict::new()
+}
+
 pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> {
     let catalog_ref = doc.root().ok_or_else(|| XfaError::Malformed("the document has no catalog".into()))?;
     let mut catalog = doc.get(catalog_ref).as_dict().cloned().ok_or_else(|| XfaError::Malformed("the catalog is not a dictionary".into()))?;
@@ -926,6 +993,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     // Pictures embedded by earlier passes, from the pages this pass replaces.
     let images = earlier_images(doc, pages_ref);
     let signed = signed_fields(doc, &catalog);
+    let fallback_fonts = earlier_fallback_fonts(doc, pages_ref);
     let mut em = Emitter {
         doc,
         images,
@@ -935,6 +1003,8 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         field_count: 0,
         warnings: Vec::new(),
         signed,
+        fallback_fonts,
+        fallback: None,
     };
     let mut kids = Vec::new();
     for page in &form.pages {
