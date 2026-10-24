@@ -2286,6 +2286,143 @@ fn redacting_every_inheriting_page_retires_the_parent_resources() {
     }
 }
 
+/// Issue #2246: applying a redaction to a scanned page (one JPEG image) removed the whole image
+/// and blanked the page. A DCT image must be decoded so only the covered pixels are cleared.
+#[test]
+fn a_jpeg_scan_is_cleared_not_removed() {
+    // A 16×16 grey JPEG: flat 200 with a dark one-pixel border.
+    let mut gray = vec![200u8; 16 * 16];
+    for k in 0..16 {
+        gray[k] = 20;
+        gray[15 * 16 + k] = 20;
+        gray[k * 16] = 20;
+        gray[k * 16 + 15] = 20;
+    }
+    let mut jpeg = Vec::new();
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&gray, 16, 16, ::image::ExtendedColorType::L8).unwrap();
+    let img = stream("/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode", &jpeg);
+    let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+    // The mark covers image pixels 7 and 8 on both axes; the border stays.
+    mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.images_cleared), (0, 1), "{r:?}");
+
+    let c = content(&doc, 0);
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let (name, new) = xo.iter().find(|(k, _)| k.starts_with(b"PCRedacted")).map(|(k, v)| (k.clone(), v.clone())).expect("a cleared copy");
+    assert!(c.contains(&format!("{} Do", String::from_utf8_lossy(&name))), "{c}");
+    let Object::Stream(s) = &*doc.resolve(&new) else { panic!() };
+    assert_eq!(s.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
+    let samples = s.decoded().unwrap();
+    assert_eq!(samples.len(), 16 * 16);
+    let at = |x: usize, y: usize| samples[y * 16 + x];
+    assert_eq!((at(7, 7), at(8, 8), at(7, 8), at(8, 7)), (0, 0, 0, 0), "marked pixels are cleared");
+    assert!(at(4, 4) > 100 && at(11, 11) > 100, "unmarked pixels keep the scan: {} {}", at(4, 4), at(11, 11));
+    assert!(at(0, 0) < 100 && at(15, 15) < 100, "the dark border stays: {} {}", at(0, 0), at(15, 15));
+}
+
+#[test]
+fn an_rgb_jpeg_scan_is_cleared_not_removed() {
+    let rgb = vec![200u8; 16 * 16 * 3];
+    let mut jpeg = Vec::new();
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&rgb, 16, 16, ::image::ExtendedColorType::Rgb8).unwrap();
+    let img = stream("/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", &jpeg);
+    let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+    mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared), (0, 1), "{report:?}");
+
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let new = xo.iter().find(|(k, _)| k.starts_with(b"PCRedacted")).map(|(_, v)| v.clone()).expect("a cleared copy");
+    let Object::Stream(s) = &*doc.resolve(&new) else { panic!() };
+    let samples = s.decoded().unwrap();
+    assert_eq!(samples.len(), 16 * 16 * 3);
+    let pixel = |x: usize, y: usize| &samples[(y * 16 + x) * 3..(y * 16 + x + 1) * 3];
+    assert_eq!(pixel(7, 7), [0, 0, 0]);
+    assert!(pixel(4, 4).iter().all(|&sample| sample > 100), "unmarked RGB pixels keep the scan: {:?}", pixel(4, 4));
+}
+
+#[test]
+fn mismatched_jpeg_dimensions_and_dct_filter_chains_fail_closed() {
+    let gray = vec![200u8; 16 * 16];
+    let mut jpeg = Vec::new();
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&gray, 16, 16, ::image::ExtendedColorType::L8).unwrap();
+
+    // Inflate only the JPEG SOF dimensions. The PDF still declares a 16×16 raster, so the strict
+    // decoder limits must reject this header before allocating a sample buffer.
+    let mut mismatched = jpeg.clone();
+    let sof = mismatched.windows(2).position(|marker| marker == [0xff, 0xc0]).unwrap();
+    mismatched.get_mut(sof + 5..sof + 9).unwrap().copy_from_slice(&[0x10, 0x00, 0x10, 0x00]);
+
+    for (filter, data) in [("/Filter /DCTDecode", mismatched.as_slice()), ("/Filter [/ASCII85Decode /DCTDecode]", jpeg.as_slice())] {
+        let img = stream(&format!("/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceGray /BitsPerComponent 8 {filter}"), data);
+        let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+        mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{filter}: {report:?}");
+        assert!(!content(&doc, 0).contains("/Im0 Do"), "{filter}");
+    }
+}
+
+#[test]
+fn a_cmyk_jpeg_that_decodes_as_rgb_is_removed_when_declared_rgb() {
+    let jpeg = include_bytes!("../tests/data/cmyk.jpg");
+    let decoded = ::image::ImageReader::with_format(std::io::Cursor::new(jpeg.as_slice()), ::image::ImageFormat::Jpeg).decode().unwrap();
+    assert_eq!(decoded.color(), ::image::ColorType::Rgb8, "the decoder converts this CMYK source to RGB");
+
+    let img = stream("/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", jpeg);
+    let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+    mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{report:?}");
+    assert!(!content(&doc, 0).contains("/Im0 Do"));
+}
+
+#[test]
+fn non_device_jpeg_colorspaces_are_removed_whole() {
+    let gray = vec![200u8; 16 * 16];
+    let mut gray_jpeg = Vec::new();
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut gray_jpeg, 95).encode(&gray, 16, 16, ::image::ExtendedColorType::L8).unwrap();
+    let rgb = vec![200u8; 16 * 16 * 3];
+    let mut rgb_jpeg = Vec::new();
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut rgb_jpeg, 95).encode(&rgb, 16, 16, ::image::ExtendedColorType::Rgb8).unwrap();
+
+    struct Case<'a> {
+        color_space: &'a str,
+        jpeg: &'a [u8],
+        extra: Option<Vec<u8>>,
+    }
+    let cases = [
+        Case { color_space: "[/Indexed /DeviceRGB 0 <ff0000>]", jpeg: &gray_jpeg, extra: None },
+        Case { color_space: "[/Lab << /WhitePoint [0.9505 1 1.089] >>]", jpeg: &rgb_jpeg, extra: None },
+        Case { color_space: "[/ICCBased 8 0 R]", jpeg: &rgb_jpeg, extra: Some(stream("/N 3", b"")) },
+        Case {
+            color_space: "[/Separation /Spot /DeviceRGB 8 0 R]",
+            jpeg: &gray_jpeg,
+            extra: Some(b"<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 0 0] /N 1 >>".to_vec()),
+        },
+    ];
+    for Case { color_space, jpeg, extra } in cases {
+        let img = stream(
+            &format!("/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace {color_space} /BitsPerComponent 8 /Filter /DCTDecode"),
+            jpeg,
+        );
+        let mut resources = vec![img];
+        if let Some(extra) = extra {
+            resources.push(extra);
+        }
+        let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", resources);
+        mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{color_space}: {report:?}");
+        assert!(!content(&doc, 0).contains("/Im0 Do"), "{color_space}");
+    }
+}
+
 #[test]
 fn replacement_text_and_property_resources_do_not_survive_redaction() {
     let mut doc = one_page(
