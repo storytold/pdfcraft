@@ -10,7 +10,7 @@ use crate::{PdfCraftApp, icons, panels::human_size, widgets};
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
 /// A soft shadow that rises on hover and settles when the card is pressed.
-fn card_lift(ui: &egui::Ui, t: &Tokens, rect: Rect, press: theme::Press) {
+pub(crate) fn card_lift(ui: &egui::Ui, t: &Tokens, rect: Rect, press: theme::Press) {
     let lift = press.hover * (1.0 - press.down);
     if lift > 0.04 {
         let shadow = egui::Shadow { offset: [0, 3], blur: (14.0 * lift) as u8, spread: 0, color: t.page_shadow.gamma_multiply(0.85 * lift) };

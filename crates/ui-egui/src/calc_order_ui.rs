@@ -494,7 +494,7 @@ fn explained(issues: &[CalculationIssue]) -> String {
 
 /// The Calculation order page; Back returns to Prepare a form.
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let (back, close) = crate::panels::panel_header(ui, t, "Calculation order", Some(tl!("Back to Prepare a form")));
+    let (back, close) = crate::panels::panel_header(ui, t, "Calculation order", Some(("chevron-left", tl!("Back to Prepare a form"))));
     if back {
         app.left = LeftPanel::Tool("form");
     }

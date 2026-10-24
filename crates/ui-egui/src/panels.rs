@@ -36,14 +36,14 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     );
 }
 
-/// A panel's title row: Back (with `back` as its tooltip) when given, the title and Close.
-/// Returns whether Back and Close were clicked.
-pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Option<&str>) -> (bool, bool) {
+/// A panel's title row: a leading button (`lead`: its icon and tooltip) when given, the title
+/// and Close. Returns whether the leading button and Close were clicked.
+pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, lead: Option<(&str, &str)>) -> (bool, bool) {
     let mut go_back = false;
     let mut close = false;
     ui.horizontal(|ui| {
-        if let Some(tip) = back
-            && icons::button(ui, "chevron-left", 26.0, false, tip).clicked()
+        if let Some((icon, tip)) = lead
+            && icons::button(ui, icon, 26.0, false, tip).clicked()
         {
             go_back = true;
         }
@@ -62,8 +62,14 @@ pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Opt
     (go_back, close)
 }
 
+/// The All tools sidebar: Expand (the full view) and Close, then the tool list, the first few
+/// tools until View more shows them all.
 fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let (_, close) = panel_header(ui, t, "All tools", None);
+    // Labels distinct from the Combine grid's Expand and Collapse, which can show beside them.
+    let (expand, close) = panel_header(ui, t, "All tools", Some(("maximize-2", tl!("Expand all tools"))));
+    if expand {
+        app.expand_all_tools();
+    }
     if close {
         app.left_open = false;
     }
@@ -154,7 +160,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         edit_panel(app, ui, t, g);
         return;
     }
-    let (back, close) = panel_header(ui, t, g.label, Some(tl!("Back to all tools")));
+    let (back, close) = panel_header(ui, t, g.label, Some(("chevron-left", tl!("Back to all tools"))));
     if back {
         app.left = LeftPanel::AllTools;
         app.enter_mode(crate::Mode::AllTools);
