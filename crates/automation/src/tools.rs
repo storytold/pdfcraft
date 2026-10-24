@@ -951,6 +951,19 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t(
+            "page_remove_white_margins",
+            "Remove white margins",
+            "Automatically crop pages to their visible non-white content bounding box, removing excess margins. Undoable.",
+        )
+        .cmd("page.remove_white_margins")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to crop (default: all)"),
+            }),
+            &["doc"],
+        )),
+        t(
             "doc_header_footer",
             "Add header and footer",
             "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier. replace: true swaps out existing ones (Update). Undoable.",

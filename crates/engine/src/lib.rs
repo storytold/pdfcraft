@@ -38,6 +38,7 @@ pub mod signature_scan;
 mod stamp_preview;
 pub mod text_fonts;
 mod text_preview;
+pub mod white_margins;
 pub mod word_count;
 pub mod xfa;
 
@@ -2120,8 +2121,16 @@ pub const EDIT_LABELS: &[&str] = &[
 /// The names of the batches built below L7, which an interface shows in the same places as
 /// [`EDIT_LABELS`] and so translates the same way. A batch built in the interface itself arrives
 /// already worded in the interface's language.
-pub const BATCH_LABELS: &[&str] =
-    &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text", field_table::LABEL, "Style"];
+pub const BATCH_LABELS: &[&str] = &[
+    "Set document title",
+    "Mark differences",
+    "Detect form fields",
+    "Run JavaScript",
+    "Recognize text",
+    field_table::LABEL,
+    "Style",
+    "Remove white margins",
+];
 
 impl Edit {
     /// Label for the Edit menu and history ("Undo Rotate pages").
@@ -4718,6 +4727,44 @@ impl Session {
         })
         .map_err(EditError::Write)?
         .map_err(EditError::Write)
+    }
+
+    /// Detect the bounding box of non-white content on page `page` of document `id` in PDF user space.
+    pub fn detect_content_box(&self, id: DocId, page: usize) -> Result<Option<[f64; 4]>, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        white_margins::detect_page_content_box(doc, page)
+    }
+
+    /// Calculate the margins from the MediaBox `[left, bottom, right, top]` to the non-white content of `page`.
+    pub fn content_margins(&self, id: DocId, page: usize) -> Result<Option<[f64; 4]>, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        white_margins::page_content_margins(doc, page)
+    }
+
+    /// Automatically crop `pages` of document `id` to their visible non-white content bounding boxes, removing excess margins.
+    pub fn remove_white_margins(&mut self, id: DocId, pages: &[usize]) -> Result<(), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if let Some(why) = &doc.read_only_reason {
+            return Err(EditError::ReadOnly(why.clone()));
+        }
+        let boxes = white_margins::detect_pages_content_boxes(doc, pages)?;
+        let mut edits = Vec::new();
+        for (p, rect_opt) in boxes {
+            if let Some(rect) = rect_opt {
+                edits.push(Edit::SetPageBox { pages: vec![p], which: PageBox::Crop, spec: BoxSpec::Rect(rect) });
+            }
+        }
+        if edits.is_empty() {
+            return Ok(());
+        }
+        if edits.len() == 1 {
+            if let Some(first) = edits.pop() {
+                self.apply(id, first)?;
+            }
+        } else {
+            self.apply(id, Edit::Batch { label: "Remove white margins".into(), edits })?;
+        }
+        Ok(())
     }
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).

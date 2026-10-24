@@ -113,6 +113,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Execute a registered command by id without panic guarding.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -361,6 +362,22 @@ impl PdfCraftApp {
             }
             "page.rotate_ccw" => {
                 self.apply_edit(Edit::RotatePages { pages: targets, degrees: -90 });
+            }
+            "page.remove_white_margins" => {
+                if let Some(i) = active {
+                    let id = self.views[i].id;
+                    match self.session.remove_white_margins(id, &targets) {
+                        Ok(()) => {
+                            if let Some(doc) = self.session.get(id) {
+                                self.views[i].document_changed(&doc.info);
+                            }
+                            if let Some(ctx) = &self.ctx {
+                                ctx.request_repaint();
+                            }
+                        }
+                        Err(e) => self.notify(e.to_string()),
+                    }
+                }
             }
             "page.delete" => {
                 self.apply_edit(Edit::DeletePages { pages: targets });

@@ -12,6 +12,7 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Harness setup with a 2-page fixture document.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
@@ -25,12 +26,14 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Retrieve the (width, height) of page `page` of the active document.
 fn size(h: &Harness<'static, PdfCraftApp>, page: usize) -> (f32, f32) {
     let s = h.state();
     let p = &s.session.get(s.views[0].id).unwrap().info.pages[page];
     (p.width, p.height)
 }
 
+/// Test that dragging the crop tool crops the page rectangle and returns to the select tool.
 #[test]
 fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     let mut h = harness();
@@ -57,6 +60,7 @@ fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Crop page"));
 }
 
+/// Test that the Set Page Boxes dialog applies margins to chosen pages and resets with Set to zero.
 #[test]
 fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     let mut h = harness();
@@ -82,6 +86,7 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     assert_eq!(size(&h, 0), (300.0, 400.0));
 }
 
+/// Test that duplicating pages copies the current page and increases page count.
 #[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();
@@ -91,6 +96,57 @@ fn duplicate_pages_copies_the_current_page() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 3);
 }
 
+/// Harness setup with a document containing visible text content.
+fn harness_with_text() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_from_text("Title", "Page content for white margins test").unwrap();
+        app.open_bytes("text_doc.pdf", None, bytes.to_vec()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// Test executing `page.remove_white_margins` command crops the page to its content.
+#[test]
+fn remove_white_margins_command_crops_to_content() {
+    let mut h = harness_with_text();
+    let (w0, h0) = size(&h, 0);
+    assert_eq!((w0, h0), (612.0, 792.0));
+    assert!(h.state_mut().execute("page.remove_white_margins"));
+    h.run_steps(4);
+    let (w1, h1) = size(&h, 0);
+    assert!(w1 < 612.0 && w1 > 10.0, "width after white margins removed: {w1}");
+    assert!(h1 < 792.0 && h1 > 10.0, "height after white margins removed: {h1}");
+    // Undo.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(4);
+    assert_eq!(size(&h, 0), (612.0, 792.0));
+}
+
+/// Test the "Remove white margins" button in the Set Page Boxes dialog populates margins.
+#[test]
+fn set_page_boxes_remove_white_margins_button_populates_margins() {
+    let mut h = harness_with_text();
+    assert!(h.state_mut().execute("page.boxes"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::PageBoxes));
+    h.get_by_label("Set Page Boxes");
+    h.get_by_label("Remove white margins").click();
+    h.run_steps(2);
+    // Margins should be populated from the content.
+    assert!(h.state().boxes_draft.margins[0] > 10.0, "left margin: {}", h.state().boxes_draft.margins[0]);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    let (w, hh) = size(&h, 0);
+    assert!(w < 612.0 && hh < 792.0, "cropped: {w}x{hh}");
+}
+
+/// Test that invoking the crop tool leaves thumbnail grid mode so the page can be cropped.
 #[test]
 fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     let mut h = harness();

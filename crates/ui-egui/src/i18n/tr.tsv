@@ -783,6 +783,7 @@
 	Box	Kutu
 	Units	Birimler
 	Set to zero	Sıfırla
+	Remove white margins	Beyaz kenar boşluklarını kaldır
 	Current page ({n})	Geçerli sayfa ({n})
 	Subset	Alt küme
 	Update	Güncelle

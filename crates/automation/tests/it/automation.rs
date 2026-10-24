@@ -2443,6 +2443,7 @@ fn page_duplicate_at_inserts_the_copies_there() {
     assert!(matches!(a.call("page_duplicate", &json!({ "doc": doc, "pages": [1], "at": 6 })), Err(ToolError::InvalidArgs(_))), "past the end");
 }
 
+/// Test duplicating and cropping pages via the `page_duplicate` and `page_set_box` automation tools.
 #[test]
 fn duplicating_and_cropping_through_tools() {
     let dir = workdir("boxes");
@@ -2464,6 +2465,32 @@ fn duplicating_and_cropping_through_tools() {
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Test removing white margins headlessly through the automation tool `page_remove_white_margins`.
+#[test]
+fn remove_white_margins_through_tools() {
+    let dir = workdir("white_margins");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let initial_sizes = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len();
+    assert_eq!(initial_sizes, 3);
+
+    // Call page_remove_white_margins on page 1.
+    let r = ok(&mut a, "page_remove_white_margins", json!({ "doc": doc, "pages": [1] }));
+    let page1_size = r["page_sizes"][0].as_array().unwrap();
+    let w = page1_size[0].as_f64().unwrap();
+    let h = page1_size[1].as_f64().unwrap();
+    // In a.pdf, page 1 (200x300) has text "Page 1". White margins are removed, so dimensions shrink.
+    assert!(w < 200.0 && w > 10.0, "width after white margin removal: {w}");
+    assert!(h < 300.0 && h > 10.0, "height after white margin removal: {h}");
+
+    // Undo restores the original size.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undone = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(undone["pages"][0]["width"].as_f64().unwrap(), 200.0);
+    assert_eq!(undone["pages"][0]["height"].as_f64().unwrap(), 300.0);
+}
+
+/// Test setting and removing headers, footers, watermarks and backgrounds headlessly through automation tools.
 #[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");
