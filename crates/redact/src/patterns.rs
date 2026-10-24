@@ -11,9 +11,10 @@ pub enum Pattern {
     CreditCard,
     Ssn,
     Date,
+    Iban,
 }
 
-pub const PATTERNS: [Pattern; 5] = [Pattern::Phone, Pattern::Email, Pattern::CreditCard, Pattern::Ssn, Pattern::Date];
+pub const PATTERNS: [Pattern; 6] = [Pattern::Phone, Pattern::Email, Pattern::CreditCard, Pattern::Ssn, Pattern::Date, Pattern::Iban];
 
 impl Pattern {
     pub fn label(self) -> &'static str {
@@ -23,6 +24,7 @@ impl Pattern {
             Pattern::CreditCard => "Credit Cards",
             Pattern::Ssn => "Social Security Numbers",
             Pattern::Date => "Dates",
+            Pattern::Iban => "IBAN Numbers",
         }
     }
 
@@ -33,6 +35,7 @@ impl Pattern {
             Pattern::CreditCard => "credit-card",
             Pattern::Ssn => "ssn",
             Pattern::Date => "date",
+            Pattern::Iban => "iban",
         }
     }
 
@@ -397,6 +400,77 @@ fn date(s: &[char], i: usize) -> Option<usize> {
     Some(k2 + y - i)
 }
 
+/// An IBAN (ISO 13616): a two-letter country code, two check digits and up to thirty
+/// more alphanumeric characters, optionally separated by spaces. Valid iff the number
+/// is one modulo 97 after moving the first four characters to the end. Spaces inside
+/// the run are ignored, and a run that continues past a valid IBAN (extra digits that
+/// belong to something else) still yields just the IBAN.
+fn iban(s: &[char], i: usize) -> Option<usize> {
+    if !(s.get(i).copied().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.get(i + 1).copied().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.get(i + 2).copied().is_some_and(|c| c.is_ascii_digit())
+        && s.get(i + 3).copied().is_some_and(|c| c.is_ascii_digit()))
+    {
+        return None;
+    }
+    // Not the tail of a longer alphanumeric run.
+    if s.get(i.wrapping_sub(1)).is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    // The run of letters, digits and spaces: the kept characters uppercased with
+    // the spaces removed, and where each kept character sits in `s`.
+    let (mut digits, mut pos) = (Vec::new(), Vec::new());
+    let mut j = i;
+    while j < s.len() {
+        let c = s[j];
+        if c.is_ascii_alphanumeric() {
+            digits.push(c.to_ascii_uppercase());
+            pos.push(j);
+            // An IBAN holds at most 34 alphanumeric characters, so a longer
+            // run can never be one: stop collecting to bound allocation.
+            if digits.len() > 34 {
+                break;
+            }
+        } else if c != ' ' {
+            break;
+        }
+        j += 1;
+    }
+    let len = digits.len();
+    if !(5..=34).contains(&len) {
+        return None;
+    }
+    // A run can continue past a valid IBAN with digits that belong to something
+    // else ("...00 123"), so try the longest valid prefix first.
+    for l in (5..=len).rev() {
+        if iban_check(&digits[..l]) {
+            return Some(pos[l - 1] + 1 - i);
+        }
+    }
+    None
+}
+
+/// Whether `digits` is a valid IBAN: move the first four characters to the end,
+/// replace letters by two digits (A = 10, ..., Z = 35), and the number must be
+/// one modulo 97.
+fn iban_check(digits: &[char]) -> bool {
+    let mut rem = 0u32;
+    for c in digits.iter().skip(4).chain(digits.iter().take(4)).copied() {
+        let value = iban_value(c);
+        // A letter stands for two decimal digits (A = 10, ..., Z = 35),
+        // a digit for one.
+        rem = if c.is_ascii_digit() { (rem * 10 + value) % 97 } else { (rem * 100 + value) % 97 };
+    }
+    rem == 1
+}
+
+fn iban_value(c: char) -> u32 {
+    match c {
+        '0'..='9' => c as u32 - '0' as u32,
+        _ => c as u32 - 'A' as u32 + 10,
+    }
+}
+
 /// Character ranges of `text` matching `pattern`.
 pub fn find(pattern: Pattern, text: &[char]) -> Vec<Range<usize>> {
     let f: fn(&[char], usize) -> Option<usize> = match pattern {
@@ -405,6 +479,7 @@ pub fn find(pattern: Pattern, text: &[char]) -> Vec<Range<usize>> {
         Pattern::CreditCard => credit_card,
         Pattern::Ssn => ssn,
         Pattern::Date => date,
+        Pattern::Iban => iban,
     };
     let mut out = Vec::new();
     let mut i = 0;
@@ -664,5 +739,24 @@ mod tests {
     fn case_folding_keeps_one_character_per_character() {
         let s: Vec<char> = "\u{130}\u{131}I\u{15E}".chars().collect();
         assert_eq!(s.iter().copied().map(fold).collect::<String>(), "iii\u{15F}");
+    }
+
+    #[test]
+    fn iban_matches_compact_spaced_and_rejects_near_matches() {
+        assert_eq!(Pattern::from_id("iban").map(Pattern::id), Some("iban"));
+
+        // Spaced and compact IBANs match, a wrong check digit is rejected ("DE89
+        // 3704 0044 0532 0130 00" and "DE89370400440532013000" match, "...01"
+        // does not).
+        if let Some(iban_pattern) = Pattern::from_id("iban") {
+            // Spaced IBAN (valid German IBAN: DE89 3704 0044 0532 0130 00)
+            assert_eq!(found(iban_pattern, "DE89 3704 0044 0532 0130 00"), vec!["DE89 3704 0044 0532 0130 00"]);
+            // Compact IBAN (same number, no spaces)
+            assert_eq!(found(iban_pattern, "DE89370400440532013000"), vec!["DE89370400440532013000"]);
+            // Wrong check digit should not match (DE89...01 instead of DE89...00)
+            assert_eq!(found(iban_pattern, "DE89 3704 0044 0532 0130 01"), Vec::<String>::new());
+            // Near match: IBAN followed by extra digits should match only the IBAN
+            assert_eq!(found(iban_pattern, "DE89 3704 0044 0532 0130 00 123"), vec!["DE89 3704 0044 0532 0130 00"]);
+        }
     }
 }
