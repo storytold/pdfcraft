@@ -391,9 +391,13 @@ pub enum Gesture {
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ComposerKind {
     Note,
+    /// A comment anchored to selected text; replacing the composer drops its quads.
+    TextNote {
+        quads: Vec<[f64; 8]>,
+    },
     /// A text box; `size` is the box dragged out (displayed width and height, in user space
     /// units), `None` after a click: then the box fits its text.
     TextBox {
@@ -649,6 +653,14 @@ impl PageCx<'_> {
             .chain(fallback)
     }
 
+    pub(crate) fn comment_marker_rect(&self, a: &Annotation) -> Option<Rect> {
+        if !is_markup(&a.subtype) || a.contents.as_deref().is_none_or(|s| s.trim().is_empty()) {
+            return None;
+        }
+        let r = self.screen_rects(a).last()?;
+        Some(Rect::from_min_size(pos2(r.right() + 3.0, r.top() - 14.0), vec2(12.0, 12.0)))
+    }
+
     /// A redaction mark's areas: one per marked quad, or its rectangle.
     fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
         if a.quads.is_empty() {
@@ -668,7 +680,11 @@ impl PageCx<'_> {
 
     /// The topmost comment under `p`.
     fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).last()
+        self.comments()
+            .filter(|a| {
+                self.screen_rects(a).any(|r| r.expand(3.0).contains(p)) || self.comment_marker_rect(a).is_some_and(|r| r.expand(3.0).contains(p))
+            })
+            .last()
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
@@ -1321,6 +1337,19 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
     let pointer = ui.input(|i| i.pointer.hover_pos());
+    // A highlighted comment keeps the text anchor in its quads. Add a small
+    // viewer-only marker so it is distinguishable from a plain highlight.
+    for a in cx.comments().filter(|a| is_markup(&a.subtype) && a.contents.as_deref().is_some_and(|s| !s.trim().is_empty())) {
+        if let Some(marker) = cx.comment_marker_rect(a)
+            && let Some(target) = cx.screen_rects(a).last()
+        {
+            painter.line_segment(
+                [marker.left_bottom(), pos2(target.right(), target.top())],
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xD4, 0x8A, 0x00, 150)),
+            );
+            icons::paint(ui, marker, "message-square", 12.0, Color32::from_rgb(0xD4, 0x8A, 0x00));
+        }
+    }
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
     if cv.gesture.is_none()
@@ -1590,7 +1619,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let mut cancel = false;
     let c = view.comments.composer.as_mut()?;
     let title = match c.kind {
-        ComposerKind::Note => "Sticky note",
+        ComposerKind::Note | ComposerKind::TextNote { .. } => "Sticky note",
         ComposerKind::TextBox { .. } => "Text box",
         ComposerKind::Callout { .. } => "Callout",
         ComposerKind::Caret { .. } => "Inserted text",
@@ -1670,6 +1699,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         ComposerKind::Note => {
             view.comments.tool_done = true;
             Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
+        }
+        ComposerKind::TextNote { quads } => {
+            view.comments.tool_done = true;
+            Some(new_comment(&cx, CommentTool::Highlight, Shape::TextMarkup { kind: Markup::Highlight, quads }, text))
         }
         ComposerKind::TextBox { size } => {
             view.comments.tool_done = true;

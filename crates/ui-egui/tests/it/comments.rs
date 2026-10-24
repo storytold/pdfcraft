@@ -553,8 +553,66 @@ fn selected_text_comment_action_opens_note_composer() {
     h.run_steps(3);
     h.get_by_label("Add comment").click();
     h.run_steps(2);
-    assert!(matches!(h.state().views[0].comments.composer.as_ref().map(|c| &c.kind), Some(pdfcraft_ui_egui::comments::ComposerKind::Note)));
+    assert!(matches!(
+        h.state().views[0].comments.composer.as_ref().map(|c| &c.kind),
+        Some(pdfcraft_ui_egui::comments::ComposerKind::TextNote { .. })
+    ));
     assert!(h.state().views[0].selected_text().is_none());
+}
+
+#[test]
+fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "note").unwrap();
+    click_pt(&mut h, (250.0, 180.0));
+    let anchor = h.state().views[0].comments.composer.as_ref().unwrap().at;
+    field(&h, "Add a comment").type_text("New sticky note");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Text");
+    assert_eq!(c[0].contents.as_deref(), Some("New sticky note"));
+    assert!(c[0].quads.is_empty());
+    assert!((anchor[0] - 250.0).abs() < 1.0 && (anchor[1] - 180.0).abs() < 1.0);
+    assert!((f64::from(c[0].rect[0]) - anchor[0]).abs() < 1.0 && (f64::from(c[0].rect[3]) - anchor[1]).abs() < 1.0, "{:?}", c[0].rect);
+}
+
+#[test]
+fn selection_note_posts_highlight_and_hovers_only_comment_text() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    let selected = h.state().views[0].selected_text().unwrap();
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    field(&h, "Add a comment").type_text("Check these words");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    settle(&mut h);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Highlight");
+    assert_eq!(c[0].contents.as_deref(), Some("Check these words"));
+    assert!(!c[0].quads.is_empty());
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.hover_at(pos2(0.0, 0.0));
+    h.run_steps(3);
+    assert!(h.query_by_label("Check these words").is_none());
+    let r = c[0].rect;
+    let p = at(&h, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    h.hover_at(p);
+    h.run_steps(3);
+    h.get_by_label("Check these words");
+    assert!(h.query_by_label_contains("Tester").is_none(), "hover omits the author");
+    assert!(h.query_by_label_contains(&selected).is_none(), "hover omits the selected text");
 }
 
 #[test]
