@@ -906,6 +906,18 @@ evidence = ["crates/ui-egui/tests/it/viewer.rs::layouts_fit_height_labels_and_sy
 notes = "View ▸ Page display, the rail's Page display button or the palette; disabled outside two-page view; next / previous page step one spread at a time even when several spreads fit on screen"
 
 [[feature]]
+id = "view.right-to-left-spreads"
+title = "Right-to-left page order in two-page view (right binding)"
+area = "B"
+tier = "P2"
+milestone = "M3"
+status = "shipped"
+commands = ["view.layout.right_to_left"]
+tools = []
+evidence = ["crates/ui-egui/src/canvas.rs::right_to_left_spreads_put_the_earlier_page_on_the_right", "crates/ui-egui/tests/it/view.rs::a_right_bound_document_opens_with_right_to_left_spreads", "crates/ui-egui/tests/it/view.rs::right_to_left_spreads_toggle_through_the_command_and_control_channel"]
+notes = "A document whose /ViewerPreferences /Direction is /R2L (Document Properties ▸ Initial View ▸ right-edge binding) opens with each two-page spread laid out right to left: the earlier page on the right, a lone cover page left of centre, and ← turning to the next spread (→ back). The binding applies even with Always use my default zoom and page layout. View ▸ Page display (and the palette) toggles it per document view; ui.set right-to-left on/off and ui.state active.right_to_left reach it from the control channel. Single-page view is unaffected. The organize grid and the Pages panel still run left to right, and the choice is not remembered across sessions or written back to the file (Initial View does that)."
+
+[[feature]]
 id = "view.page-gaps"
 title = "Show or hide gaps between pages"
 area = "B"
