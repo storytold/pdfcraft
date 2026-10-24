@@ -2353,6 +2353,8 @@ calendar date	December	dezembro
 scroll speed	Slow	Lenta
 scroll speed	Normal	Normal
 scroll speed	Fast	Rápida
+	Scroll speed (touchpad)	Velocidade de rolagem (touchpad)
+	On X11, the touchpad follows the mouse wheel speed.	No X11, o touchpad segue a velocidade da roda do mouse.
 	Animation effects	Efeitos de animação
 animation effects	On	Ativados
 animation effects	Off	Desativados

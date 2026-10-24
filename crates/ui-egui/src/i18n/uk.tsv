@@ -2361,6 +2361,8 @@ key	Space	Пробіл
 scroll speed	Slow	Повільна
 scroll speed	Normal	Звичайна
 scroll speed	Fast	Швидка
+	Scroll speed (touchpad)	Швидкість прокручування (сенсорна панель)
+	On X11, the touchpad follows the mouse wheel speed.	У X11 сенсорна панель використовує швидкість коліщатка миші.
 	Animation effects	Ефекти анімації
 animation effects	On	Увімкнено
 animation effects	Off	Вимкнено

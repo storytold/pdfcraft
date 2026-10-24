@@ -2341,6 +2341,8 @@ key	Space	Preslednica
 scroll speed	Slow	Počasi
 scroll speed	Normal	Običajno
 scroll speed	Fast	Hitro
+	Scroll speed (touchpad)	Hitrost drsenja (sledilna ploščica)
+	On X11, the touchpad follows the mouse wheel speed.	V X11 sledilna ploščica uporablja hitrost kolesca miške.
 	Animation effects	Učinki animacije
 animation effects	On	Vklopljeni
 animation effects	Off	Izklopljeni

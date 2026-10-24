@@ -2513,6 +2513,8 @@ signature pad	Type	Nhập chữ
 scroll speed	Slow	Chậm
 scroll speed	Normal	Bình thường
 scroll speed	Fast	Nhanh
+	Scroll speed (touchpad)	Tốc độ cuộn (bàn di chuột)
+	On X11, the touchpad follows the mouse wheel speed.	Trên X11, bàn di chuột dùng tốc độ của con lăn chuột.
 certificate	Subject	Chủ thể chứng chỉ
 certificate	Issued to	Cấp cho
 certificate	Issued by	Cấp bởi

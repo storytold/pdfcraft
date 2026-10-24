@@ -2339,6 +2339,8 @@ key	Space	Espace
 scroll speed	Slow	Lente
 scroll speed	Normal	Normale
 scroll speed	Fast	Rapide
+	Scroll speed (touchpad)	Vitesse de défilement (pavé tactile)
+	On X11, the touchpad follows the mouse wheel speed.	Sous X11, le pavé tactile suit la vitesse de la molette.
 	Animation effects	Effets d'animation
 animation effects	On	Activés
 animation effects	Off	Désactivés

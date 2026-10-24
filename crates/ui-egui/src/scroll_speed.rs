@@ -3,9 +3,17 @@
 //! egui scrolls `line_scroll_speed` points per wheel line: 40 on the desktop, 8 on the web.
 //! macOS already accelerates line deltas, and browsers there scroll about that far per line,
 //! but on Windows and Linux winit reports one line per notch, where browsers scroll about
-//! 100 pixels, so 40 felt slow. Wheel input reported in points (most trackpads) keeps its own
-//! speed, ⌘/Ctrl-wheel zoom keeps egui's rate, and wheel paging in Single page view still turns
-//! one page per notch.
+//! 100 pixels, so 40 felt slow. ⌘/Ctrl-wheel zoom keeps egui's rate, and wheel paging in Single
+//! page view still turns one page per notch.
+//!
+//! Touchpads have a speed of their own. Wayland reports a two-finger swipe in points, and egui
+//! moved the view only as far as the fingers went: slow next to the same swipe on X11 (or
+//! XWayland), where winit reports it as fractional lines, about one per ten points, which egui
+//! multiplies by the line speed. So on Wayland touchpad points are scaled by
+//! [`ScrollSpeed::touchpad_factor`] before egui reads them, which also carries into the page
+//! view's 1:1 path (#759) and its momentum (#531). macOS accelerates its own deltas, and browsers
+//! report mouse wheels in points too, so both keep them as they come at Normal. X11 and Windows
+//! report touchpads as lines, which follow the wheel setting.
 
 /// The user's choice, relative to the platform's normal speed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -29,6 +37,10 @@ const NORMAL_LINE_POINTS: f32 = if cfg!(target_arch = "wasm32") {
 } else {
     100.0
 };
+
+/// Points the view moves per point of touchpad travel at Normal speed. 4 is how far egui's
+/// scroll areas move for the same swipe under XWayland (ten points a line, 40 points a line).
+const NORMAL_TOUCHPAD_FACTOR: f32 = if cfg!(any(target_os = "macos", target_arch = "wasm32")) { 1.0 } else { 4.0 };
 
 impl ScrollSpeed {
     pub const ALL: [Self; 3] = [Self::Slow, Self::Normal, Self::Fast];
@@ -67,6 +79,24 @@ impl ScrollSpeed {
                 && modifiers.command
             {
                 *delta *= zoom_scale;
+            }
+        }
+    }
+
+    /// Points the view moves per point a touchpad reports.
+    pub fn touchpad_factor(self) -> f32 {
+        NORMAL_TOUCHPAD_FACTOR * self.factor()
+    }
+
+    /// Scales this frame's touchpad (point) scrolling by [`Self::touchpad_factor`] (call it
+    /// before egui reads `raw`). ⌘/Ctrl-wheel zooms at egui's own rate, so it is left alone.
+    pub(crate) fn apply_touchpad(self, raw: &mut egui::RawInput) {
+        let factor = self.touchpad_factor();
+        for event in &mut raw.events {
+            if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers, .. } = event
+                && !modifiers.command
+            {
+                *delta *= factor;
             }
         }
     }
@@ -116,5 +146,32 @@ mod tests {
         }
         assert_eq!(ScrollSpeed::parse("FAST"), Some(ScrollSpeed::Fast));
         assert_eq!(ScrollSpeed::parse("warp"), None);
+    }
+
+    #[test]
+    fn touchpad_points_follow_the_touchpad_choice_and_nothing_else_does() {
+        assert_eq!(ScrollSpeed::Normal.touchpad_factor(), NORMAL_TOUCHPAD_FACTOR);
+        assert_eq!(ScrollSpeed::Slow.touchpad_factor() * 4.0, ScrollSpeed::Fast.touchpad_factor());
+        for speed in ScrollSpeed::ALL {
+            let mut raw = egui::RawInput {
+                events: vec![
+                    wheel(egui::MouseWheelUnit::Point, -10.0, false),
+                    wheel(egui::MouseWheelUnit::Point, 30.0, true),
+                    wheel(egui::MouseWheelUnit::Line, 1.0, false),
+                    wheel(egui::MouseWheelUnit::Point, f32::NAN, false),
+                    egui::Event::PointerMoved(egui::pos2(5.0, 5.0)),
+                ],
+                ..Default::default()
+            };
+            speed.apply_touchpad(&mut raw);
+            let dy: Vec<f32> =
+                raw.events.iter().filter_map(|e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+            // Plain touchpad points scaled; ⌘/Ctrl zoom and wheel lines untouched; a junk delta
+            // goes on as it came, no worse than before.
+            assert_eq!(dy[0], -10.0 * speed.touchpad_factor(), "{speed:?}");
+            assert_eq!((dy[1], dy[2]), (30.0, 1.0), "{speed:?}");
+            assert!(dy[3].is_nan());
+            assert_eq!(raw.events.len(), 5);
+        }
     }
 }

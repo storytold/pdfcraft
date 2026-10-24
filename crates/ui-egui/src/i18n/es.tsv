@@ -2483,6 +2483,8 @@ key	Space	Espacio
 scroll speed	Slow	Lenta
 scroll speed	Normal	Normal
 scroll speed	Fast	Rápida
+	Scroll speed (touchpad)	Velocidad de desplazamiento (panel táctil)
+	On X11, the touchpad follows the mouse wheel speed.	En X11, el panel táctil sigue la velocidad de la rueda del ratón.
 	Animation effects	Efectos de animación
 animation effects	On	Activados
 animation effects	Off	Desactivados

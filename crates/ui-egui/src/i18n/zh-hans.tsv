@@ -2303,6 +2303,8 @@ key	Space	空格
 scroll speed	Slow	慢
 scroll speed	Normal	正常
 scroll speed	Fast	快
+	Scroll speed (touchpad)	滚动速度（触控板）
+	On X11, the touchpad follows the mouse wheel speed.	在 X11 上，触控板使用鼠标滚轮的速度。
 	Animation effects	动画效果
 animation effects	On	开
 animation effects	Off	关

@@ -2525,6 +2525,8 @@ signature pad	Type	Tekstu
 scroll speed	Slow	Lėtas
 scroll speed	Normal	Įprastas
 scroll speed	Fast	Greitas
+	Scroll speed (touchpad)	Slinkimo greitis (jutiklinis kilimėlis)
+	On X11, the touchpad follows the mouse wheel speed.	X11 aplinkoje jutiklinis kilimėlis naudoja pelės ratuko greitį.
 certificate	Subject	Sertifikato subjektas
 certificate	Issued to	Išduota kam
 certificate	Issued by	Išdavė

@@ -2360,6 +2360,8 @@ key	Space	مسافة
 scroll speed	Slow	بطيئة
 scroll speed	Normal	عادية
 scroll speed	Fast	سريعة
+	Scroll speed (touchpad)	سرعة التمرير (لوحة اللمس)
+	On X11, the touchpad follows the mouse wheel speed.	في X11، تتبع لوحة اللمس سرعة عجلة الفأرة.
 	Animation effects	تأثيرات الحركة
 animation effects	On	مفعّلة
 animation effects	Off	معطّلة

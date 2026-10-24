@@ -2332,6 +2332,8 @@ key	Space	Boşluk
 scroll speed	Slow	Yavaş
 scroll speed	Normal	Orta
 scroll speed	Fast	Hızlı
+	Scroll speed (touchpad)	Kaydırma hızı (dokunmatik yüzey)
+	On X11, the touchpad follows the mouse wheel speed.	X11'de dokunmatik yüzey fare tekerleğinin hızını kullanır.
 	Animation effects	Animasyon efektleri
 animation effects	On	Açık
 animation effects	Off	Kapalı

@@ -2253,6 +2253,8 @@ key	Space	స్పేస్
 scroll speed	Slow	నెమ్మదిగా
 scroll speed	Normal	సాధారణం
 scroll speed	Fast	వేగంగా
+	Scroll speed (touchpad)	స్క్రోల్ వేగం (టచ్‌ప్యాడ్)
+	On X11, the touchpad follows the mouse wheel speed.	X11లో, టచ్‌ప్యాడ్ మౌస్ వీల్ వేగాన్ని అనుసరిస్తుంది.
 	Animation effects	యానిమేషన్ ప్రభావాలు
 animation effects	On	ఆన్
 animation effects	Off	ఆఫ్
