@@ -1984,6 +1984,133 @@ fn deleting_pages_keeps_the_label_ranges_on_their_pages() {
 }
 
 #[test]
+fn extracting_splitting_and_combining_preserve_page_labels() {
+    use crate::{
+        LabelRange,
+        LabelStyle::{Decimal, LowerRoman, UpperAlpha},
+        SplitBy,
+    };
+    let ten = || {
+        let mut d = doc_a();
+        for at in 3..10 {
+            crate::insert_blank_page(&mut d, at, 300.0, 400.0).unwrap();
+        }
+        let ranges = [
+            LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 1 },
+            LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 1 },
+            LabelRange { start: 7, style: Decimal, prefix: "A-".into(), first: 1 },
+        ];
+        crate::set_page_label_ranges(&mut d, &ranges).unwrap();
+        d
+    };
+    let d = ten();
+
+    // Extracting non-contiguous pages (e.g. first front-matter page and first appendix page)
+    // keeps their labels and writes /PageLabels (#2670).
+    let pair = full_roundtrip(&extract_pages(&d, &[0, 7]).unwrap());
+    assert_eq!(crate::page_labels(&pair).unwrap(), ["i", "A-1"]);
+    assert_eq!(
+        crate::page_label_ranges(&pair),
+        [
+            LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 1 },
+            LabelRange { start: 1, style: Decimal, prefix: "A-".into(), first: 1 },
+        ]
+    );
+
+    // Contiguous runs and out-of-order picks keep each page's label and merge continuations.
+    let picked = full_roundtrip(&extract_pages(&d, &[1, 2, 8, 9, 0]).unwrap());
+    assert_eq!(crate::page_labels(&picked).unwrap(), ["ii", "iii", "A-2", "A-3", "i"]);
+    assert_eq!(
+        crate::page_label_ranges(&picked),
+        [
+            LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 2 },
+            LabelRange { start: 2, style: Decimal, prefix: "A-".into(), first: 2 },
+            LabelRange { start: 4, style: LowerRoman, prefix: String::new(), first: 1 },
+        ]
+    );
+
+    // An unlabelled source stays unlabelled after extraction.
+    let unlabelled = full_roundtrip(&extract_pages(&doc_a(), &[2, 0]).unwrap());
+    assert!(crate::page_label_ranges(&unlabelled).is_empty());
+
+    // Splitting preserves each part's labels, including mid-range starting numbers.
+    let parts = crate::split(&d, &SplitBy::PageCount(4)).unwrap();
+    let part_labels: Vec<Vec<String>> = parts.iter().map(|p| crate::page_labels(&full_roundtrip(p)).unwrap()).collect();
+    assert_eq!(part_labels, vec![vec!["i", "ii", "iii", "1"], vec!["2", "3", "4", "A-1"], vec!["A-2", "A-3"],]);
+
+    // Combining whole files, selected pages, and grouped runs preserves labels from each source.
+    let mut b = doc_b();
+    crate::set_page_label_ranges(&mut b, &[LabelRange { start: 0, style: UpperAlpha, prefix: "B-".into(), first: 1 }]).unwrap();
+    let combined = full_roundtrip(&combine_selected(&[("D", &d, Some(&[0, 1, 7])), ("Plain", &doc_a(), Some(&[0, 1])), ("B", &b, None)]).unwrap());
+    assert_eq!(crate::page_labels(&combined).unwrap(), ["i", "ii", "A-1", "1", "2", "B-A", "B-B"]);
+
+    let grouped =
+        full_roundtrip(&crate::combine_grouped(&[(0, "D", &d, Some(&[0, 1])), (1, "B", &b, Some(&[1])), (0, "D", &d, Some(&[2, 7]))]).unwrap());
+    assert_eq!(crate::page_labels(&grouped).unwrap(), ["i", "ii", "B-B", "iii", "A-1"]);
+
+    // Ranges starting after page 0 and prefix-only ranges (LabelStyle::None) merge and carry over.
+    let mut late = doc_a();
+    crate::set_page_label_ranges(
+        &mut late,
+        &[
+            LabelRange { start: 1, style: crate::LabelStyle::None, prefix: "Cover".into(), first: 1 },
+            LabelRange { start: 2, style: LowerRoman, prefix: String::new(), first: 4 },
+        ],
+    )
+    .unwrap();
+    let from_late = full_roundtrip(&extract_pages(&late, &[0, 1, 1, 2]).unwrap());
+    assert_eq!(crate::page_labels(&from_late).unwrap(), ["1", "Cover", "Cover", "iv"]);
+    assert_eq!(
+        crate::page_label_ranges(&from_late),
+        [
+            LabelRange { start: 0, style: Decimal, prefix: String::new(), first: 1 },
+            LabelRange { start: 1, style: crate::LabelStyle::None, prefix: "Cover".into(), first: 1 },
+            LabelRange { start: 3, style: LowerRoman, prefix: String::new(), first: 4 },
+        ]
+    );
+
+    // An empty selection from a labelled source in combine_selected does not add /PageLabels.
+    let empty_pick = full_roundtrip(&combine_selected(&[("D", &d, Some(&[])), ("Plain", &doc_a(), Some(&[0, 1]))]).unwrap());
+    assert!(crate::page_label_ranges(&empty_pick).is_empty());
+
+    // A damaged (cyclic) /PageLabels tree does not prevent extracting pages.
+    let mut cyclic = doc_a();
+    let tree = cyclic.add(Object::Null);
+    let mut dict = Dict::new();
+    dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(tree)]));
+    cyclic.set(tree, Object::Dict(dict));
+    cyclic.update_dict(cyclic.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let extracted_cyclic = full_roundtrip(&extract_pages(&cyclic, &[0, 2]).unwrap());
+    assert_eq!(crate::page_labels(&extracted_cyclic).unwrap(), ["1", "2"]);
+
+    // An empty prefix-only range falls back to physical page numbers in the source; extracting a
+    // later page covered by it preserves that physical page number across save/reopen.
+    let mut empty_prefix = doc_a();
+    crate::set_page_label_ranges(
+        &mut empty_prefix,
+        &[
+            LabelRange { start: 0, style: crate::LabelStyle::None, prefix: String::new(), first: 1 },
+            LabelRange { start: 2, style: LowerRoman, prefix: String::new(), first: 1 },
+        ],
+    )
+    .unwrap();
+    assert_eq!(crate::PageLabels::new(&empty_prefix).unwrap().label(1).unwrap(), "2");
+    let extracted_empty_prefix = full_roundtrip(&extract_pages(&empty_prefix, &[1]).unwrap());
+    assert_eq!(crate::PageLabels::new(&extracted_empty_prefix).unwrap().label(0).unwrap(), "2");
+
+    // Repeated non-continuing ranges that exceed the 4 MiB total-prefix limit or the range-count
+    // limit are refused rather than writing an unreadable tree or silently dropping labels.
+    let mut one = flat_doc(1);
+    crate::number_pages(&mut one, 0, 0, Decimal, &"x".repeat(1_000), 1).unwrap();
+    let err = extract_pages(&one, &vec![0; 4_195]).unwrap_err().to_string();
+    assert!(err.contains("decoded prefixes exceed 4 MiB in total"), "{err}");
+
+    crate::number_pages(&mut one, 0, 0, LowerRoman, "", 2).unwrap();
+    let err = extract_pages(&one, &vec![0; pdfcraft_cos::page_labels::MAX_LABEL_TREE_WORK]).unwrap_err().to_string();
+    assert!(err.contains("the number tree has too many entries"), "{err}");
+}
+
+#[test]
 fn page_label_limits_reject_unsupported_edits_before_mutating() {
     use crate::LabelStyle::*;
     for (style, prefix, first) in [
