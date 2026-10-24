@@ -175,7 +175,7 @@ fn prepare(job: Job) -> ResultKind {
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
-    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
+    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
         return ResultKind::Conversion(bytes);
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
