@@ -104,6 +104,350 @@ fn a_whole_line_under_a_mark_goes_even_without_widths() {
     assert_eq!(under(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]]), 0, "{}", content(&doc, 0));
 }
 
+/// Issue #2448: the redacted words are often in the document information dictionary and the XMP
+/// metadata too. Applying removes the entries and streams that repeat them, and keeps the rest.
+#[test]
+fn redacted_text_does_not_survive_in_info_or_xmp() {
+    let xmp = |body: &str| {
+        stream(
+            "/Type /Metadata /Subtype /XML",
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{body}</rdf:RDF></x:xmpmeta>"#
+            )
+            .as_bytes(),
+        )
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Metadata 9 0 R >>".to_vec(),
+        // "BLUEFIN" spans x 55-90.
+        stream("", b"BT /F1 10 Tf 10 100 Td (Codename BLUEFIN report) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        // 7: the document's XMP names it in an attribute, through a character reference.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" pdf:Keywords="tuna, Blue&#x46;in"/>"#),
+        // 8: the information dictionary.
+        b"<< /Title (Codename BLUEFIN report) /Keywords (tuna, bluefin) /Author (Ada Lovelace) /Producer (Test) >>".to_vec(),
+        // 9: the page's XMP doesn't mention it.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Annual figures</dc:title></rdf:Description>"#),
+    ];
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 8 0 R").build())).unwrap();
+    mark(&mut doc, 0, &[[55.0, 95.0, 90.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.metadata), (7, 3), "{r:?}");
+    // Without object streams, so the byte search below can see the `/Info` dictionary.
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle));
+    assert!(has(b"Ada Lovelace"), "the kept /Info entry is visible to the search");
+    assert!(!has(b"bluefin") && !has(b"Blue&#x46;in"), "the redacted word survived in the metadata");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let info = saved.trailer().get(b"Info").and_then(|i| saved.resolve(i).as_dict().cloned()).unwrap();
+    let text = |k: &[u8]| info.get(k).and_then(|v| saved.resolve(v).as_string().map(|s| s.to_text()));
+    assert_eq!((text(b"Title"), text(b"Keywords")), (None, None));
+    assert_eq!((text(b"Author").as_deref(), text(b"Producer").as_deref()), (Some("Ada Lovelace"), Some("Test")));
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(!catalog.contains(b"Metadata"), "the document XMP named the redacted word");
+    assert!(pdfcraft_model::pages(&saved)[0].dict.contains(b"Metadata"), "the page XMP didn't, and stays");
+}
+
+/// An `/Info` value that is itself part of the removed text goes, though its words are too short
+/// to be terms ("J. Li"); a value with fewer than three letters or digits stays.
+#[test]
+fn an_info_value_inside_the_redacted_text_goes() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (Prepared by J. Li) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Author (J.  li) /Subject (by) /Producer (Test) >>".to_vec(),
+    ];
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 7 0 R").build())).unwrap();
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 1, "{r:?}");
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    assert!(!info.contains(b"Author"), "the author's name was redacted from the page");
+    assert!(info.contains(b"Subject") && info.contains(b"Producer"));
+}
+
+/// Removed glyphs whose text isn't known (no `/ToUnicode`, glyph names outside the glyph list)
+/// leave nothing to search the metadata for, so every `/Info` string goes, as when the collected
+/// text was cut short (review on #2539). Glyphs whose text is known keep the targeted check.
+#[test]
+fn removed_glyphs_with_no_known_text_clear_the_metadata() {
+    let page = |codes: &[u8], font: &str| -> Document {
+        let content = [&b"BT /F1 10 Tf 10 100 Td ("[..], codes, b") Tj ET"].concat();
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            stream("", &content),
+            font.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+            b"<< /Title (Project Nightjar) /Producer (Test) >>".to_vec(),
+        ];
+        Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 7 0 R").build())).unwrap()
+    };
+    let unnamed = FONT.replace(" /Widths", " /Encoding << /Differences [65 /g17 /g18 /g19] >> /Widths");
+    let mut doc = page(b"ABC", &unnamed);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    assert!(!info.contains(b"Title") && !info.contains(b"Producer"), "fail closed: {r:?}");
+    // Control: the same glyphs with known text don't touch unrelated metadata.
+    let mut doc = page(b"ABC", FONT);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    assert!(info.contains(b"Title") && info.contains(b"Producer"));
+}
+
+/// One page showing `content`, with `/Info` `info` and catalog XMP whose `rdf:RDF` holds
+/// `xmp_body`.
+fn with_metadata(content: &[u8], info: &str, xmp_body: &str) -> Document {
+    let xmp = format!(
+        r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{xmp_body}</rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#
+    );
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", content),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream("/Type /Metadata /Subtype /XML", xmp.as_bytes()),
+        info.as_bytes().to_vec(),
+    ];
+    Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 8 0 R").build())).unwrap()
+}
+
+fn info_keys(doc: &Document) -> Vec<String> {
+    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+    info.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect()
+}
+
+fn has_xmp(doc: &Document) -> bool {
+    doc.get(doc.root().unwrap()).as_dict().is_some_and(|c| c.contains(b"Metadata"))
+}
+
+/// Letter-spaced text (character spacing wider than a word gap between plain glyphs) is still
+/// one word, so `/Title (Bluefin)` goes when "B L U E F I N" is redacted (#2539 review).
+#[test]
+fn letter_spaced_redacted_text_still_matches_metadata() {
+    let body = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Bluefin</dc:title></rdf:Description>"#;
+    let mut doc = with_metadata(b"BT /F1 10 Tf 3 Tc 10 100 Td (BLUEFIN) Tj ET", "<< /Title (Bluefin) /Producer (Test) >>", body);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 2, "{r:?}");
+    assert_eq!(info_keys(&doc), ["Producer"]);
+    assert!(!has_xmp(&doc));
+}
+
+/// An XMP value that is part of the removed text goes, as an `/Info` value does, though its
+/// words are too short to be terms ("J. Li"). Values are compared as whole words, so "True"
+/// doesn't go with "untrue", and namespace URIs and the `xpacket` wrapper aren't searched, so
+/// redacting "Adobe … end" keeps a packet declared under `adobe:ns:meta/` and closed by
+/// `<?xpacket end="w"?>`.
+#[test]
+fn xmp_values_inside_the_redacted_text_go_as_whole_words() {
+    let creator = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>J. Li</dc:creator></rdf:Description>"#;
+    let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (Prepared by J. Li) Tj ET", "<< /Producer (Test) >>", creator);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 1, "{r:?}");
+    assert!(!has_xmp(&doc), "the packet named J. Li");
+
+    let trapped = r#"<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" pdf:Trapped="True"/>"#;
+    let mut doc = with_metadata(b"BT /F1 10 Tf 10 100 Td (Adobe said untrue at the end) Tj ET", "<< /Subject (True) /Producer (Test) >>", trapped);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 0, "{r:?}");
+    assert!(has_xmp(&doc));
+    assert_eq!(info_keys(&doc), ["Subject", "Producer"]);
+}
+
+/// When the removed text was too much to collect, what wasn't collected can't be searched for:
+/// every `/Info` string and the XMP go (fail-closed), even though the runs that were kept match
+/// nothing.
+#[test]
+fn metadata_is_cleared_when_the_removed_text_was_cut_short() {
+    // More separate runs of one letter than are kept: each `A` is too far from the last to join.
+    let mut content = b"BT /F1 10 Tf 10 100 Td".to_vec();
+    for _ in 0..50_001 {
+        content.extend_from_slice(b" (A) Tj 30 0 Td (A) Tj -30 0 Td");
+    }
+    content.extend_from_slice(b" ET");
+    let body = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Annual figures</dc:title></rdf:Description>"#;
+    let mut doc = with_metadata(&content, "<< /Title (Annual figures) /Producer (Test) /Trapped /False >>", body);
+    mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.metadata, 3, "{r:?}");
+    assert_eq!(info_keys(&doc), ["Trapped"], "strings go, the name stays");
+    assert!(!has_xmp(&doc));
+}
+
+/// #2539 review: the searching a scrub may do is one budget for all of it, not a check per
+/// value: very many small `/Info` values each fit, but together they don't, and past the budget
+/// the rest counts as matching (fail-closed). With room to search, nothing that doesn't mention
+/// the removed text goes.
+#[test]
+fn metadata_search_has_one_budget_for_every_value() {
+    let entries: String = (0..50).map(|i| format!("/K{i} (an unrelated value number {i:02} in the list) ")).collect();
+    let info = format!("<< {entries}/Producer (Test) >>");
+    let fresh = || with_metadata(b"BT /F1 10 Tf 10 100 Td (Bluefin) Tj ET", &info, "");
+    let mut doc = fresh();
+    assert_eq!(metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1 << 28).unwrap(), 0, "room to search: nothing goes");
+    let mut doc = fresh();
+    // Each value costs about 40; fifty of them don't fit in 1000.
+    let n = metadata::scrub_within(&mut doc, &["Bluefin".into()], true, 1000).unwrap();
+    assert!(n > 20, "past the budget the rest goes ({n} went)");
+}
+
+/// #2539 review: an entity is looked for only in the 12 bytes after its `&`, so a packet of bare
+/// `&` characters is read in linear time, and decoding is unchanged.
+#[test]
+fn xml_entities_are_found_near_their_ampersand_only() {
+    assert_eq!(metadata::xml_values("<a>R&#233;sum&eacute; &amp; &#x41;&#65; &#1234567890123;</a>"), ["Résum&eacute; & AA &#1234567890123;"]);
+    // #2539 review: a character reference with many leading zeros still decodes, so it can't
+    // hide a redacted word from the search; a reference that never ends stays as written.
+    assert_eq!(metadata::xml_values("<a>&#00000000000066;LUEFIN &#x000000000000000042;LUEFIN &#0000000000;</a>"), ["BLUEFIN BLUEFIN &#0000000000;"]);
+    let bare = "&".repeat(200_000);
+    let started = std::time::Instant::now();
+    let values = metadata::xml_values(&format!("<a>{bare}</a>"));
+    assert_eq!(values.concat().len(), bare.len());
+    let zeros = format!("&#{}", "0".repeat(10)).repeat(20_000);
+    assert_eq!(metadata::xml_values(&format!("<a>{zeros}</a>")).concat().len(), zeros.len());
+    eprintln!("200000 bare ampersands, 20000 unended references: {:?}", started.elapsed());
+}
+
+/// #2539 review: Apply removes a form XObject whole when it is nested past the depth limit (or
+/// its stream can't be decoded), without reading its text, so what it held is unknown: the
+/// metadata check fails closed.
+#[test]
+fn a_form_removed_unread_clears_the_metadata() {
+    // Forms 5..=20 each draw the next; the last one shows text. The page draws form 5.
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R >> >> >>".to_vec(),
+        stream("", b"q /Fm Do Q"),
+    ];
+    for n in 5..=20 {
+        objs.push(stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Fm {} 0 R >> >>", n + 1),
+            b"q /Fm Do Q",
+        ));
+    }
+    objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"0 g 10 10 50 50 re f"));
+    objs.push(b"<< /Title (Annual figures) /Producer (Test) >>".to_vec());
+    let info = objs.len();
+    let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry(&format!("/Info {info} 0 R")).build())).unwrap();
+    mark(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert!(r.forms_removed >= 1, "{r:?}");
+    assert!(!info_keys(&doc).contains(&"Title".to_string()), "the deep form's text was never read: {:?}", info_keys(&doc));
+}
+
+/// A value shorter than the redacted sentence goes from XMP too, in a custom schema's element or
+/// attribute, as from `/Info` (the regression #2598 suggested keeping): the packets holding it are
+/// removed, one that doesn't stays.
+#[test]
+fn a_shorter_value_in_custom_xmp_goes() {
+    let xmp = |body: &str| {
+        stream(
+            "/Type /Metadata /Subtype /XML",
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{body}</rdf:RDF></x:xmpmeta>"#
+            )
+            .as_bytes(),
+        )
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Metadata 8 0 R >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (JAMES BOND IS A SPY) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        // 7: an element of a custom schema.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:acme="https://example.org/acme/"><acme:Agent>James Bond</acme:Agent></rdf:Description>"#),
+        // 8: an attribute of a custom schema.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:acme="https://example.org/acme/" acme:code="James Bond"/>"#),
+        // 9: a third packet, on no holder yet; swapped onto the page below to show a clean one stays.
+        xmp(r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Annual figures</dc:title></rdf:Description>"#),
+        b"<< /Author (James Bond) /Subject (Annual figures) >>".to_vec(),
+    ];
+    for (holder_of_8, expected) in [("8 0 R", 3), ("9 0 R", 2)] {
+        let objs: Vec<Vec<u8>> =
+            objs.iter().map(|o| String::from_utf8_lossy(o).replace("/Metadata 8 0 R", &format!("/Metadata {holder_of_8}")).into_bytes()).collect();
+        let mut doc = Document::open(Arc::new(Pdf::new().objs(objs).trailer_entry("/Info 10 0 R").build())).unwrap();
+        mark(&mut doc, 0, &[[5.0, 95.0, 200.0, 110.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.metadata, expected, "{holder_of_8}: {r:?}");
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        assert!(!catalog.contains(b"Metadata"), "the custom element named him");
+        let page_keeps = pdfcraft_model::pages(&doc)[0].dict.contains(b"Metadata");
+        assert_eq!(page_keeps, holder_of_8 == "9 0 R", "the attribute packet goes, a clean one stays");
+        let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().cloned()).unwrap();
+        assert!(!info.contains(b"Author") && info.contains(b"Subject"), "the author goes, the unrelated subject stays");
+    }
+}
+
+/// The removed text is collected in runs by position, not by operator: glyphs shown one operator
+/// at a time still make one word, a gap makes a space, and separate marks make separate runs.
+#[test]
+fn removed_text_is_collected_in_runs() {
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 10 100 Td (BLU) Tj 15 0 Td (E) Tj 5 0 Td [(F) -300 (IN)] TJ ( 7) Tj ET BT /F1 10 Tf 10 200 Td (Gary) Tj ET",
+        "",
+        vec![],
+    );
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let (_, data) = page_streams(&doc, &page.dict, 0).unwrap();
+    let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let mut rep = Report::default();
+    let rects = [[10.0, 95.0, 300.0, 110.0], [10.0, 195.0, 30.0, 210.0]];
+    let mut scope = Scope::new(&rects, Mode::Apply, &mut rep, pdfcraft_cos::DecodeBudget::page());
+    process(&mut doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY);
+    scope.flush();
+    assert_eq!(scope.removed_text, ["BLUEF IN 7", "Gary"]);
+}
+
+#[test]
+fn metadata_terms_and_xmp_text() {
+    // Runs of two letters or digits or more are matched whole, and by their words of three or
+    // more, ignoring case and spacing.
+    let t = metadata::terms(&["John  Smith".into(), "7".into(), "of".into(), "A-12".into()]);
+    assert_eq!(t.as_deref(), Some(&["john smith", "john", "smith", "of", "a-12"].map(String::from)[..]));
+    // A run too long to search for whole can't be matched: the caller clears everything.
+    assert_eq!(metadata::terms(&["x".repeat(5000)]), None);
+    // XMP values: element content, attribute values, CDATA, comments and processing instructions,
+    // entities decoded; not names, and not namespace declarations.
+    let x = metadata::xml_values(
+        r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><?audit James Bond?><?xpacketAudit SECRET?><x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns="http://example.org/" xmlns:y = "adobe:ns:y/" b = "spaced"><dc:title a="x &amp; y"><!-- hidden --><rdf:li>R&#233;sum&eacute; <![CDATA[<raw>]]></rdf:li></dc:title></x:xmpmeta>"#,
+    );
+    // Only the `xpacket` wrapper itself is skipped, and a declaration is one with spaces around
+    // `=` too.
+    assert_eq!(x, ["audit James Bond", "xpacketAudit SECRET", "spaced", "x & y", " hidden ", "Résum&eacute; ", "<raw>"]);
+}
+
+/// XMP is decoded from UTF-8 or UTF-16, the latter also without a byte-order mark at the start
+/// (a packet's mark sits inside `<?xpacket begin="…"`); anything that isn't valid is not read.
+#[test]
+fn xmp_packets_decode_or_fail_closed() {
+    let text = "<?xpacket begin=\"\u{feff}\"?><a>Bond</a>";
+    let utf16 = |be: bool| text.encode_utf16().flat_map(|u| if be { u.to_be_bytes() } else { u.to_le_bytes() }).collect::<Vec<u8>>();
+    assert_eq!(metadata::decode_xmp(text.as_bytes()).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(&utf16(true)).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(&utf16(false)).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(&[[0xFF, 0xFE].as_slice(), &utf16(false)].concat()).as_deref(), Some(text));
+    assert_eq!(metadata::decode_xmp(b"<a>Bond \xE9</a>"), None, "Latin-1 isn't searched lossily");
+    assert_eq!(metadata::decode_xmp(&utf16(false)[1..]), None, "odd length");
+}
+
 #[test]
 fn added_text_parameters_do_not_keep_redacted_text() {
     // An Edit ▸ Add content item: its stream dictionary keeps the source text under /PCAdded.

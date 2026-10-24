@@ -29,7 +29,19 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
   widget under a mark;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
-  page as a `/PCMark /Redaction` stream.
+  page as a `/PCMark /Redaction` stream;
+- **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly
+  part of it as whole words (three letters or digits at least), and the catalog's and pages'
+  XMP streams whose text (element content, attribute values other than `xmlns` declarations,
+  comments and processing instructions, entities decoded) contains it or has a value wholly
+  part of it, removed whole, together with any PDF/A identification in that packet. XMP that
+  isn't valid UTF-8 or UTF-16 goes too, and when the removed text was too much to collect
+  every `/Info` string and every XMP stream goes (fail-closed). The removed glyphs' text is
+  collected in runs by position (character and word spacing included, so letter-spaced text
+  stays one word), and each run (two or more letters or digits) and each of its words of three
+  or more are matched without regard to case or spacing. A value that shares only words of one
+  or two letters with the removed text, and isn't wholly part of it, stays: Sanitize's
+  metadata category removes the rest. `Report::metadata` counts what went.
 
 A verification pass re-reads each redacted page and fails the operation if any glyph or inline
 image is still under an area. It checks every content stream the page had, whatever its
