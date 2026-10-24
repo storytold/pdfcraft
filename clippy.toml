@@ -12,4 +12,39 @@ disallowed-methods = [
     { path = "egui::Ui::radio", reason = "use radio from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
     { path = "egui::Ui::radio_value", reason = "use radio_value from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
     { path = "egui::RadioButton::new", reason = "use radio from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
+    # The raw RSA private-key operations: see disallowed-types below.
+    { path = "rsa::hazmat::rsa_decrypt", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::hazmat::rsa_decrypt_and_check", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    # The ways to make or use an `rsa` private key, so a key whose type is never named (one
+    # returned by another crate, or a generic over these traits) is caught too. The generic
+    # `signature` and `pkcs8` traits are left out: the ECDSA keys use them as well.
+    { path = "rsa::RsaPrivateKey::new", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::new_unchecked", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::new_with_exp", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::new_with_exp_unchecked", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::from_components", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::from_components_with_large_exponent", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::from_p_q", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::from_primes", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::decrypt", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::decrypt_blinded", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::sign", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::RsaPrivateKey::sign_with_rng", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::traits::Decryptor::decrypt", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::traits::RandomizedDecryptor::decrypt_with_rng", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::traits::PaddingScheme::decrypt", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::traits::SignatureScheme::sign", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+]
+
+# deny.toml ignores the Marvin advisory (RUSTSEC-2023-0071) because `rsa` is only used to verify
+# signatures; RSA private-key operations use aws-lc-rs (ADR-0009). These are the `rsa` types
+# that hold a private key, and above are the functions and methods that make or use one, so a
+# private-key operation through `rsa` fails clippy instead.
+disallowed-types = [
+    { path = "rsa::RsaPrivateKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::pkcs1v15::SigningKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::pkcs1v15::DecryptingKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::pss::SigningKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::pss::BlindedSigningKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
+    { path = "rsa::oaep::DecryptingKey", reason = "rsa is for verification only (RUSTSEC-2023-0071, ADR-0009); use aws-lc-rs" },
 ]
