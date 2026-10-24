@@ -2012,6 +2012,50 @@ fn numbering_pages_through_tools() {
     assert!(matches!(a.call("page_number", &json!({ "doc": doc, "from": 1, "to": 1, "style": "klingon" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// ISO 32000-2 §12.5.6.3: a state is "for the specified user" (`/T`), so there is one status per
+/// reviewer (their latest), and a checkmark ("marked by the user", Table 174) belongs only to the
+/// reviewer who set it. `comment_list` reports each reviewer's status and who has a checkmark on;
+/// the replies written are hidden (a state reply records a state, not a note) and a reviewer's
+/// later change replies to their earlier one.
+#[test]
+fn review_statuses_are_per_reviewer_through_tools() {
+    let dir = workdir("statuses");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let id =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Check", "author": "Ada" }))["comment"]
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    for (status, author) in [("accepted", "Bob"), ("completed", "Carol"), ("rejected", "Bob")] {
+        ok(&mut a, "comment_set_status", json!({ "doc": doc, "id": id, "status": status, "author": author }));
+    }
+    ok(&mut a, "comment_mark", json!({ "doc": doc, "id": id, "author": "Bob" }));
+    ok(&mut a, "comment_mark", json!({ "doc": doc, "id": id, "author": "Carol" }));
+    ok(&mut a, "comment_mark", json!({ "doc": doc, "id": id, "author": "Carol", "marked": false }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "statuses.pdf" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "statuses.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1, "status replies aren't comments: {list}");
+    let c = &list["comments"][0];
+    assert_eq!(c["statuses"], json!([{ "author": "Bob", "status": "Rejected" }, { "author": "Carol", "status": "Completed" }]));
+    assert_eq!(c["status"], "Rejected", "the latest set by anyone");
+    assert_eq!((c["marked"].clone(), c["marked_by"].clone()), (json!(true), json!(["Bob"])));
+    assert_eq!(c["replies"], json!([]));
+
+    let bytes = std::fs::read(dir.join("statuses.pdf")).unwrap();
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let replies: Vec<pdfcraft_cos::Dict> = saved
+        .object_numbers()
+        .into_iter()
+        .filter_map(|n| saved.get(pdfcraft_cos::ObjRef { num: n, generation: 0 }).as_dict().cloned())
+        .filter(|d| d.contains(b"StateModel"))
+        .collect();
+    assert_eq!(replies.len(), 6);
+    assert!(replies.iter().all(|d| d.int(b"F") == Some(30)), "every state reply is hidden: {replies:?}");
+}
+
 #[test]
 fn comments_through_tools() {
     let dir = workdir("comments");

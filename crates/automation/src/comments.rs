@@ -193,6 +193,7 @@ impl Automation {
             }
             v
         };
+        let states = pdfcraft_render::ReviewStates::new(&all);
         let roots: Vec<Value> = all
             .iter()
             .filter(|c| c.in_reply_to.is_none() && only.is_none_or(|p| c.page == p))
@@ -215,9 +216,16 @@ impl Automation {
                     Some(nm) => all.iter().filter(|r| r.in_reply_to.is_some() && descends_from(r, nm)).collect(),
                     None => Vec::new(),
                 };
-                let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone());
-                v["status"] = json!(status);
-                v["marked"] = json!(thread.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked")));
+                // States are each reviewer's own, and a reviewer's later change replies to their
+                // earlier one (ISO 32000-2 §12.5.6.3). `status` is the latest set by anyone;
+                // `statuses` has each reviewer's latest (a state is "for the specified user").
+                // Checkmarks are each reviewer's own too: `marked_by` names who has one on.
+                let history = states.history(c);
+                v["status"] = json!(history.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()));
+                v["statuses"] = json!(states.statuses(c).iter().map(|(who, state)| json!({ "author": who, "status": state })).collect::<Vec<_>>());
+                let marked_by = states.marked(c);
+                v["marked"] = json!(!marked_by.is_empty());
+                v["marked_by"] = json!(marked_by);
                 v["locked"] = json!(c.locked);
                 v["replies"] = thread.iter().filter(|r| r.state.is_none()).map(|r| view(r)).collect();
                 v

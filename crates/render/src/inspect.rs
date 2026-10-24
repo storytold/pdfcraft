@@ -511,6 +511,120 @@ fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
     [x0, y1 - h, x0 + w, y1]
 }
 
+/// The status and checkmark replies of a document's comments, by the comment they are about.
+///
+/// A state is the author's own (ISO 32000-2 §12.5.6.3: a state reply updates "the state of the
+/// original annotation for the specified user", `/T`), and a later change replies to that
+/// author's previous state reply rather than to the comment, so a reply whose `/IRT` is another
+/// state reply belongs to the comment that chain starts from ("Additional state changes shall be
+/// made by adding text annotations in reply to the previous reply for a given user"). So there is
+/// one status per reviewer, and a checkmark only for the reviewer who set it.
+pub struct ReviewStates<'a> {
+    by_target: HashMap<&'a str, Vec<&'a Annotation>>,
+}
+
+impl<'a> ReviewStates<'a> {
+    pub fn new(all: &'a [Annotation]) -> Self {
+        let by_name: HashMap<&str, &Annotation> = all.iter().filter_map(|a| Some((a.name.as_deref()?, a))).collect();
+        // The comment each name's chain reaches past state replies, `None` for a loop or a dead
+        // end; filled in once per name, so a long history costs one walk, not one per reply.
+        let mut reaches: HashMap<&str, Option<&str>> = HashMap::new();
+        let mut by_target: HashMap<&str, Vec<&Annotation>> = HashMap::new();
+        for r in all.iter().filter(|a| a.state.is_some()) {
+            let mut path: Vec<&str> = Vec::new();
+            let mut seen: HashSet<&str> = HashSet::new();
+            let mut at = r.in_reply_to.as_deref();
+            let target = loop {
+                let Some(nm) = at else { break None };
+                if let Some(&known) = reaches.get(nm) {
+                    break known;
+                }
+                if !seen.insert(nm) {
+                    break None;
+                }
+                match by_name.get(nm) {
+                    Some(p) if p.state.is_some() => {
+                        path.push(nm);
+                        at = p.in_reply_to.as_deref();
+                    }
+                    _ => break Some(nm),
+                }
+            };
+            for nm in path {
+                reaches.insert(nm, target);
+            }
+            if let Some(t) = target {
+                by_target.entry(t).or_default().push(r);
+            }
+        }
+        Self { by_target }
+    }
+
+    /// Every status and checkmark reply about `target`, in document order.
+    pub fn history(&self, target: &Annotation) -> &[&'a Annotation] {
+        target.name.as_deref().and_then(|nm| self.by_target.get(nm)).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Each reviewer's review status on `target`: their latest, in the order they first set one.
+    /// Empty when nobody set one; a status set back to "None" stays listed, since None is a state
+    /// (ISO 32000-2 Table 174: "The user has indicated nothing about the change").
+    pub fn statuses(&self, target: &Annotation) -> Vec<(&'a str, &'a str)> {
+        self.by_reviewer(target, false).into_iter().filter_map(|(who, mine)| Some((who, latest(&mine)?.state.as_deref()?))).collect()
+    }
+
+    /// Whether `author`'s latest checkmark on `target` is "Marked". Checkmarks are each
+    /// reviewer's own (ISO 32000-2 Table 174: "The annotation has been marked by the user").
+    pub fn marked_by(&self, target: &Annotation, author: &str) -> bool {
+        let mine: Vec<&Annotation> = self.history(target).iter().copied().filter(|r| r.is_mark() && reviewer(r) == author.trim()).collect();
+        latest(&mine).is_some_and(|r| r.state.as_deref() == Some("Marked"))
+    }
+
+    /// The reviewers whose latest checkmark on `target` is "Marked".
+    pub fn marked(&self, target: &Annotation) -> Vec<&'a str> {
+        self.by_reviewer(target, true)
+            .into_iter()
+            .filter(|(_, mine)| latest(mine).is_some_and(|r| r.state.as_deref() == Some("Marked")))
+            .map(|(who, _)| who)
+            .collect()
+    }
+
+    /// The checkmark (`marks`) or status replies about `target`, by reviewer, in the order each
+    /// reviewer first set one.
+    fn by_reviewer(&self, target: &Annotation, marks: bool) -> Vec<(&'a str, Vec<&'a Annotation>)> {
+        let mut out: Vec<(&str, Vec<&Annotation>)> = Vec::new();
+        for &r in self.history(target).iter().filter(|r| r.is_mark() == marks) {
+            match out.iter_mut().find(|(who, _)| *who == reviewer(r)) {
+                Some((_, mine)) => mine.push(r),
+                None => out.push((reviewer(r), vec![r])),
+            }
+        }
+        out
+    }
+}
+
+/// Of one reviewer's replies in one state model, the latest: the end of their chain, a reply none
+/// of the others replies to, whatever order the file lists them in. Among several such (changes
+/// that don't chain), the last listed.
+fn latest<'b>(mine: &[&'b Annotation]) -> Option<&'b Annotation> {
+    let answered: HashSet<&str> = mine.iter().filter_map(|r| r.in_reply_to.as_deref()).collect();
+    mine.iter().rev().find(|r| r.name.as_deref().is_none_or(|n| !answered.contains(n))).copied()
+}
+
+/// A reply's state: `/State`, or for a reply that gives only `/StateModel` the model's default
+/// (ISO 32000-2 Table 175: "Unmarked if StateModel is Marked; None if StateModel is Review").
+fn state_or_default(state: Option<String>, model: Option<&str>) -> Option<String> {
+    state.or_else(|| match model? {
+        "Marked" => Some("Unmarked".into()),
+        "Review" => Some("None".into()),
+        _ => None,
+    })
+}
+
+/// Who set a state: `/T`, trimmed (an author setting typed with spaces is the same reviewer).
+fn reviewer(r: &Annotation) -> &str {
+    r.author.as_deref().unwrap_or("").trim()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldKind {
     Text,
@@ -1433,7 +1547,7 @@ impl<'a> Inspector<'a> {
                     rect,
                     color,
                     index,
-                    state: self.text(d, b"State"),
+                    state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
                     quads,
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
@@ -2129,6 +2243,169 @@ fn xfa_config_dynamic_render(packet: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Annotation, ReviewStates};
+
+    fn note(nm: &str, irt: Option<&str>, author: &str, state: Option<&str>) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: Some(author.into()),
+            contents: None,
+            modified: None,
+            name: Some(nm.into()),
+            in_reply_to: irt.map(Into::into),
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: state.map(Into::into),
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+        }
+    }
+
+    /// The states these replies set (ISO 32000-2 §12.5.6.3, with synthetic files): one status per
+    /// reviewer, their latest, whether or not their changes chain; "None" stays listed; a
+    /// checkmark only for the reviewer who set it.
+    #[test]
+    fn review_states_are_each_reviewers_latest_through_chains() {
+        let all = vec![
+            note("c", None, "Alice", None),
+            note("b1", Some("c"), "Bob", Some("Accepted")),
+            note("k1", Some("c"), "Carol", Some("Completed")),
+            note("b2", Some("b1"), "Bob", Some("Rejected")), // chained, per §12.5.6.3
+            note("r", Some("c"), "Dan", None),               // a reply, not a state
+            note("rs", Some("r"), "Dan", Some("Cancelled")), // a state on the reply, not on c
+            note("m1", Some("c"), "Bob", Some("Marked")),
+            note("m2", Some("m1"), "Bob", Some("Unmarked")),
+            note("m3", Some("c"), "Carol", Some("Marked")),
+            note("n", None, "Alice", None),
+            note("n1", Some("n"), "Bob", Some("Completed")),
+            note("n2", Some("n"), "Bob", Some("None")), // unchained, as PdfCraft wrote it before
+            // A loop of state replies belongs to nothing.
+            note("x", Some("y"), "Eve", Some("Accepted")),
+            note("y", Some("x"), "Eve", Some("Accepted")),
+        ];
+        let states = ReviewStates::new(&all);
+        assert_eq!(states.statuses(&all[0]), [("Bob", "Rejected"), ("Carol", "Completed")]);
+        assert_eq!(states.history(&all[0]).len(), 6, "every change, the checkmarks included");
+        assert_eq!(states.statuses(&all[4]), [("Dan", "Cancelled")]);
+        assert!(!states.marked_by(&all[0], "Bob"), "Bob took his off");
+        assert!(states.marked_by(&all[0], "Carol"));
+        assert!(!states.marked_by(&all[0], "Alice"), "nobody else's checkmark shows");
+        assert_eq!(states.marked(&all[0]), ["Carol"]);
+        assert_eq!(states.statuses(&all[9]), [("Bob", "None")], "a status set back to None stays listed");
+        assert!(states.statuses(&all[12]).is_empty() && states.history(&all[12]).is_empty());
+    }
+
+    /// The inspector reads a `/StateModel`-only reply as the model's default state, so it counts
+    /// as Bob's status (None) on the note.
+    #[test]
+    fn the_inspector_reads_a_state_model_alone_as_its_default() {
+        let objs: Vec<&[u8]> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R] >>",
+            b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (note) /T (Ann) >>",
+            b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (bare) /T (Bob) /IRT 4 0 R /F 30 /StateModel (Review) >>",
+        ];
+        let mut out = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{} 0 obj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+            out.extend_from_slice(o);
+            out.extend_from_slice(
+                b"
+endobj
+",
+            );
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offsets {
+            out.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        let info = super::inspect(std::sync::Arc::new(out), None).expect("inspects");
+        let note = info.annotations.iter().find(|a| a.name.as_deref() == Some("note")).expect("the note");
+        assert_eq!(ReviewStates::new(&info.annotations).statuses(note), [("Bob", "None")]);
+    }
+
+    /// ISO 32000-2 Table 175: a missing `/State` is "Unmarked if StateModel is Marked; None if
+    /// StateModel is Review".
+    #[test]
+    fn a_state_model_alone_gives_its_default_state() {
+        use super::state_or_default;
+        assert_eq!(state_or_default(None, Some("Review")).as_deref(), Some("None"));
+        assert_eq!(state_or_default(None, Some("Marked")).as_deref(), Some("Unmarked"));
+        assert_eq!(state_or_default(None, Some("Other")), None);
+        assert_eq!(state_or_default(None, None), None);
+        assert_eq!(state_or_default(Some("Accepted".into()), Some("Review")).as_deref(), Some("Accepted"));
+    }
+
+    /// Review on #4126: a history has no length limit, and a reviewer's name is compared without
+    /// surrounding spaces.
+    #[test]
+    fn a_long_chain_still_reaches_its_comment_and_names_are_trimmed() {
+        let mut all = vec![note("c", None, "Alice", None)];
+        for i in 0..200 {
+            let parent = if i == 0 { "c".to_string() } else { format!("s{}", i - 1) };
+            let state = if i == 199 { "Completed" } else { "Accepted" };
+            all.push(note(&format!("s{i}"), Some(&parent), "Bob", Some(state)));
+        }
+        all.push(note("m", Some("c"), " Carol ", Some("Marked")));
+        let states = ReviewStates::new(&all);
+        assert_eq!(states.history(&all[0]).len(), 201);
+        assert_eq!(states.statuses(&all[0]), [("Bob", "Completed")]);
+        assert!(states.marked_by(&all[0], "Carol") && states.marked_by(&all[0], "Carol "));
+        assert_eq!(states.marked(&all[0]), ["Carol"]);
+        // Listed newest first, the first reply read walks the whole chain at once.
+        all.reverse();
+        let states = ReviewStates::new(&all);
+        let c = all.iter().find(|a| a.name.as_deref() == Some("c")).unwrap();
+        assert_eq!(states.statuses(c), [("Bob", "Completed")]);
+        assert_eq!(states.history(c).len(), 201);
+    }
+
     #[test]
     fn png_predictor_rows_longer_than_the_data_are_refused_before_allocating() {
         // Vendored lopdf patch: a fuzzed `/Columns 4294967295` allocated two 4 GiB rows before

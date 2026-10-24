@@ -1678,6 +1678,68 @@ fn the_panel_filters_by_colour_and_checkmark() {
     assert_eq!(cards(&h), before);
 }
 
+/// ISO 32000-2 §12.5.6.3 and Table 174: a comment shows each reviewer's latest status, with
+/// their name, and a status set back to None stays shown; a checkmark shows only for the
+/// reviewer who set it.
+#[test]
+fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let me = h.state().comment_prefs.author.clone();
+    let other = format!("{me} (other)");
+    for (state, author) in [
+        (pdfcraft_engine::ReviewState::Accepted, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Carol"),
+        (pdfcraft_engine::ReviewState::Rejected, "Bob"),
+        (pdfcraft_engine::ReviewState::Completed, "Dan"),
+        (pdfcraft_engine::ReviewState::None, "Dan"),
+    ] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetAnnotationStatus { page: 0, index: 0, state, author: author.into() });
+    }
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: other.clone() });
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.get_by_label("Bob: Rejected");
+    h.get_by_label("Carol: Completed");
+    h.get_by_label("Dan: None");
+    assert_eq!(h.query_all_by_label("Bob: Accepted").count(), 0, "only Bob's latest");
+    assert!(h.query_all_by_label("Remove checkmark").next().is_none(), "another reviewer's checkmark isn't mine");
+    h.get_by_label("Mark with checkmark");
+
+    // Filters: a comment stays while any reviewer's status is shown; one nobody set a status on
+    // counts as None; the checkmark filter goes by my checkmark only.
+    h.state_mut().set_option("quick", "circle").unwrap();
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    let cards = |h: &Harness<'static, PdfCraftApp>| (h.query_all_by_label("Rectangle").count(), h.query_all_by_label("Oval").count());
+    let shown = cards(&h);
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "Carol's and Dan's statuses still show the rectangle");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0, shown.1 - 1), "the oval has no status, so it counts as None");
+    h.state_mut().views[0].comments.hidden_statuses = vec!["Rejected".into(), "Completed".into(), "None".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), (shown.0 - 1, shown.1 - 1), "every status hidden");
+    h.state_mut().views[0].comments.hidden_statuses.clear();
+    h.state_mut().views[0].comments.hidden_checks = vec!["Checked".into()];
+    h.run_steps(2);
+    assert_eq!(cards(&h), shown, "another reviewer's checkmark isn't mine");
+
+    h.state_mut().views[0].comments.hidden_checks.clear();
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().comment_prefs.author = other;
+    h.run_steps(2);
+    h.get_by_label("Remove checkmark");
+}
+
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {
