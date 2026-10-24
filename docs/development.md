@@ -120,6 +120,19 @@ the app logs the failure and continues using the original preferences folder.
 The existing PrintCraft-to-PdfCraft migration runs first. macOS, Windows and portable
 copies retain their current preferences locations.
 
+Preferences ▸ Documents and view ▸ **Show form field reminder** controls the ordinary
+"This document contains … interactive form fields" notice. Closing that notice turns the
+preference off for all open and future documents, including after a restart. Turn the checkbox
+back on to restore it immediately. Older settings default to showing the reminder; malformed
+values are ignored. This does not change field highlighting or hide security, repair, signature
+or XFA notices, and it does not modify the PDF.
+Secured forms retain their combined form/security notice and field-highlighting controls with
+either reminder preference. Closing that security notice dismisses it only for the current view.
+
+The opt-in UI control channel uses `ui.set` with `key=form-reminder`, `value=on|off`; the same
+option is available as `pdfcraft --form-reminder off`. `ui.state.show_form_field_reminder`
+reports the persistent choice even with no document open.
+
 ## Environment variables
 
 | Variable | Effect |

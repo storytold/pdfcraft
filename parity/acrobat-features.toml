@@ -9878,11 +9878,11 @@ title = "Preferences: forms"
 area = "N"
 tier = "P1"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["app.preferences"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/form_reminder.rs::dismissing_form_reminder_survives_new_documents_and_restart", "crates/ui-egui/tests/it/form_reminder.rs::preferences_can_restore_the_form_reminder", "crates/ui-egui/tests/it/form_reminder.rs::stored_form_reminder_choice_preserves_old_settings_defaults", "crates/ui-egui/tests/it/form_reminder.rs::a_hidden_form_reminder_does_not_hide_repair_warnings", "crates/ui-egui/tests/it/form_reminder.rs::a_hidden_form_reminder_does_not_hide_security_notices", "crates/ui-egui/tests/it/form_reminder.rs::a_hidden_form_reminder_does_not_hide_xfa_notices", "crates/ui-egui/tests/it/form_reminder.rs::control_form_reminder_is_persistent_and_rejects_invalid_values", "crates/ui-egui/tests/it/form_reminder.rs::a_dismissed_repair_warning_does_not_block_restoring_the_form_reminder"]
+notes = "The ordinary AcroForm field reminder can be persistently dismissed and restored in Preferences or through opt-in UI control. Existing settings default to showing it. Security, repair, signature and XFA notices remain independent; this does not change field highlighting or PDF data. Other Forms preferences, including a Preferences field-highlighting toggle, remain missing."
 
 [[feature]]
 id = "misc.prefs-identity"

@@ -2659,10 +2659,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
     let view = &mut app.views[index];
-    // Opened without the owner password and something is restricted.
-    let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
-    let repaired = !doc.repair_log().is_empty();
-    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
+    match notices(view, doc, app.show_form_field_reminder, crate::sign_ui::banner(&doc.signatures), ui, &t) {
         #[cfg(not(target_arch = "wasm32"))]
         Some(Notice::Reload) => app.watch.reload_request = Some(view.id),
         #[cfg(target_arch = "wasm32")]
@@ -2679,6 +2676,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
+        Some(Notice::DismissFormReminder) => app.show_form_field_reminder = false,
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
         None => {}
     }
@@ -4749,6 +4747,8 @@ enum Notice {
     Repairs,
     /// Highlight fields was turned on or off.
     FieldHighlights(bool),
+    /// Remember dismissal of the ordinary form-field reminder, independently of warnings.
+    DismissFormReminder,
     /// Open the JavaScript console (the form's scripts were turned off; the error is there).
     Console,
     /// Unlock… (enter the permissions password).
@@ -4763,14 +4763,16 @@ enum Notice {
 fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
-    secured: bool,
-    repaired: bool,
+    show_form_field_reminder: bool,
     signed: Option<(&str, Color32, &str, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) -> Option<Notice> {
     let info = &doc.info;
     let xfa = doc.xfa.as_ref();
+    // Opened without the owner password and something is restricted.
+    let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
+    let repaired = !doc.repair_log().is_empty();
     // The file changed on disk while this document has unsaved changes (#431): ask before
     // replacing it, ahead of every other notice.
     if view.disk_changed {
@@ -4827,9 +4829,6 @@ fn notices(
         });
         return open.then_some(Notice::Signatures);
     }
-    if view.notice_dismissed {
-        return None;
-    }
     let mut open_security = false;
     let mut unlock = false;
     let mut open_repairs = false;
@@ -4838,6 +4837,14 @@ fn notices(
     // A form whose scripts were turned off no longer calculates or answers its buttons: that
     // comes before what else there is to say about the document.
     let scripts_off = doc.xfa_scripts_off();
+    // Only the ordinary fillable-field hint is optional. Skipping it must still allow
+    // security, repair and XFA warnings through, and never set the general dismissal flag.
+    let fillable_form = info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton);
+    let form_reminder = show_form_field_reminder && !scripts_off && !secured && xfa.is_none() && info.xfa.is_none() && fillable_form;
+    // Restoring this hint must not be blocked by, or clear, a dismissed repair warning.
+    if view.notice_dismissed && !form_reminder {
+        return None;
+    }
     // What the document is as a form, if it is one: what the bar says first, secured or not.
     let form = if let Some(x) = xfa {
         let lang = crate::i18n::current();
@@ -4863,7 +4870,7 @@ fn notices(
             tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
         ))
-    } else if info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton) {
+    } else if fillable_form && (show_form_field_reminder || secured) {
         // Push buttons alone (LaTeX `animate` frames, navigation buttons) leave nothing to fill in.
         Some((
             "text-cursor-input",
@@ -4895,7 +4902,11 @@ fn notices(
     let (icon, text, fields) = msg?;
     notice_bar(ui, t, icon, t.accent_text, text, |ui| {
         if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
-            view.notice_dismissed = true;
+            if form_reminder {
+                toggled = Some(Notice::DismissFormReminder);
+            } else {
+                view.notice_dismissed = true;
+            }
         }
         if fields {
             let label = if view.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
