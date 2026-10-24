@@ -1879,16 +1879,68 @@ fn label_work(left: &mut usize, count: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// `D:20260930104512-04'00'` → `2026-09-30 10:45`.
-/// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30"; other strings unchanged.
+/// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30" in local time; other strings unchanged.
 pub fn pretty_date(s: &str) -> String {
+    pretty_date_at(s, local_utc_offset())
+}
+
+/// [`pretty_date`] in the zone `local_offset` seconds east of UTC: `D:20260930104512-04'00'` at
+/// +08:00 is "2026-09-30 22:45". A date without its own offset is shown as written, since PDF
+/// leaves its zone unknown.
+pub fn pretty_date_at(s: &str, local_offset: i32) -> String {
     let d = s.trim_start_matches("D:");
-    if let Some(d) = d.get(..12).filter(|d| d.bytes().all(|b| b.is_ascii_digit())) {
-        // Twelve ASCII digits make every slice below a UTF-8 character boundary.
-        format!("{}-{}-{} {}:{}", &d[0..4], &d[4..6], &d[6..8], &d[8..10], &d[10..12])
-    } else {
-        s.to_string()
+    let Some(digits) = d.get(..12).filter(|d| d.bytes().all(|b| b.is_ascii_digit())) else {
+        return s.to_string();
+    };
+    // Twelve ASCII digits make every slice below a UTF-8 character boundary.
+    let written = format!("{}-{}-{} {}:{}", &digits[0..4], &digits[4..6], &digits[6..8], &digits[8..10], &digits[10..12]);
+    let num = |a: usize, b: usize| digits[a..b].parse::<i64>().unwrap_or(0);
+    let (y, mo, day, h, mi) = (num(0, 4), num(4, 6), num(6, 8), num(8, 10), num(10, 12));
+    let Some(zone) = date_offset(&d[12..]) else { return written };
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&day) || h > 23 || mi > 59 {
+        return written;
     }
+    let utc = days_from_civil(y, mo, day) * 86_400 + h * 3600 + mi * 60 - zone;
+    // `pdf_date` gives `D:YYYYMMDDHHmmSSZ`, all ASCII.
+    let l = pdfcraft_cos::pdf_date(utc + i64::from(local_offset));
+    format!("{}-{}-{} {}:{}", &l[2..6], &l[6..8], &l[8..10], &l[10..12], &l[12..14])
+}
+
+/// The offset in seconds east of UTC that ends a PDF date after its minutes: optional seconds,
+/// then `Z`, `+HH'mm'` or `-HH'mm'` (the minutes and apostrophes optional). None when absent.
+fn date_offset(rest: &str) -> Option<i64> {
+    let rest = match rest.get(..2) {
+        Some(ss) if ss.bytes().all(|b| b.is_ascii_digit()) => &rest[2..],
+        _ => rest,
+    };
+    let sign = match rest.as_bytes().first()? {
+        b'Z' => return Some(0),
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let two = |s: &str| s.get(..2).filter(|t| t.bytes().all(|b| b.is_ascii_digit())).and_then(|t| t.parse::<i64>().ok());
+    let hh = two(&rest[1..])?;
+    let mm = two(rest[3..].trim_start_matches('\'')).unwrap_or(0);
+    (hh <= 23 && mm <= 59).then_some(sign * (hh * 3600 + mm * 60))
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Seconds to add to UTC for local time (0 where unknown).
+fn local_utc_offset() -> i32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return chrono::Local::now().offset().local_minus_utc();
+    #[cfg(target_arch = "wasm32")]
+    return 0;
 }
 
 /// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
@@ -3820,8 +3872,22 @@ trailer << /Root 1 0 R >>
 
     #[test]
     fn dates_are_prettified() {
-        assert_eq!(pretty_date("D:20260930104512-04'00'"), "2026-09-30 10:45");
+        assert_eq!(pretty_date_at("D:20260930104512-04'00'", -4 * 3600), "2026-09-30 10:45");
         assert_eq!(pretty_date("yesterday"), "yesterday");
+    }
+
+    #[test]
+    fn dates_are_shown_in_local_time() {
+        const CHINA: i32 = 8 * 3600;
+        assert_eq!(pretty_date_at("D:20261014073000Z", CHINA), "2026-10-14 15:30");
+        assert_eq!(pretty_date_at("D:20261014073000+00'00'", CHINA), "2026-10-14 15:30");
+        assert_eq!(pretty_date_at("D:20261014153000+08'00'", CHINA), "2026-10-14 15:30");
+        assert_eq!(pretty_date_at("D:20260930104512-04'00'", CHINA), "2026-09-30 22:45");
+        assert_eq!(pretty_date_at("D:202610142000Z", CHINA), "2026-10-15 04:00", "no seconds, across midnight");
+        assert_eq!(pretty_date_at("D:20261231200000Z", CHINA), "2027-01-01 04:00", "across the year");
+        assert_eq!(pretty_date_at("D:20260301010000+05'30'", 0), "2026-02-28 19:30", "half-hour zone, back across a month");
+        // Without an offset the PDF leaves the zone unknown: shown as written.
+        assert_eq!(pretty_date_at("D:20261014073000", CHINA), "2026-10-14 07:30");
     }
 
     #[test]

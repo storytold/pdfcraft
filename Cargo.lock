@@ -4309,6 +4309,7 @@ name = "pdfcraft-render"
 version = "0.13.0"
 dependencies = [
  "bytemuck",
+ "chrono",
  "flate2",
  "getrandom 0.4.3",
  "hayro",
