@@ -1139,3 +1139,100 @@ fn named_dest_keys(doc: &Document) -> Vec<Vec<u8>> {
     let arr = doc.resolve(tree.get(b"Names").unwrap()).as_array().cloned().unwrap();
     arr.chunks(2).filter_map(|c| doc.resolve(&c[0]).as_string().map(|s| s.bytes.clone())).collect()
 }
+
+/// A `/PieceInfo` data dictionary holding `private`.
+fn app_data(private: Object) -> Object {
+    let mut d = Dict::new();
+    d.set(b"LastModified".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"D:20260101000000Z".to_vec())));
+    d.set(b"Private".to_vec(), private);
+    Object::Dict(d)
+}
+
+fn marked(doc: &mut Document, marker: &str, extra: &[(&str, Object)]) -> ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Marker".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(marker.as_bytes().to_vec())));
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    doc.add(Object::Dict(d))
+}
+
+fn saved(doc: &Document) -> Vec<u8> {
+    write_full(doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap()
+}
+
+fn contains(bytes: &[u8], text: &str) -> bool {
+    bytes.windows(text.len()).any(|w| w == text.as_bytes())
+}
+
+#[test]
+fn search_indexes_in_the_catalog_go_and_other_application_data_stays() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    // The first index holds two objects that refer to each other, and one the page also uses.
+    let shared = marked(&mut doc, "SHARED-DATA", &[]);
+    let a = marked(&mut doc, "INDEX-A", &[("Shared", Object::Ref(shared))]);
+    let b = marked(&mut doc, "INDEX-B", &[("Next", Object::Ref(a))]);
+    doc.update_dict(a, |d| d.set(b"Next".to_vec(), Object::Ref(b))).unwrap();
+    let c = marked(&mut doc, "INDEX-C", &[]);
+    let keep = marked(&mut doc, "KEEP-APP", &[]);
+    let mut info = Dict::new();
+    info.set(b"IBM-ODIndexes".to_vec(), app_data(Object::Ref(a)));
+    info.set(b"MySearchINDEX".to_vec(), app_data(Object::Ref(c)));
+    info.set(b"Illustrator".to_vec(), app_data(Object::Ref(keep)));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Dict(info))).unwrap();
+    let mut page_info = Dict::new();
+    page_info.set(b"PageIndexer".to_vec(), app_data(Object::Ref(shared)));
+    doc.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Dict(page_info))).unwrap();
+
+    // Off by default: nothing changes.
+    let mut untouched = doc.clone();
+    assert!(!Settings::default().discard_search_index);
+    assert_eq!(optimize(&mut untouched, &Settings::default()).unwrap().search_indexes, 0);
+    let bytes = saved(&untouched);
+    assert!(["INDEX-A", "INDEX-B", "INDEX-C", "KEEP-APP"].iter().all(|m| contains(&bytes, m)));
+
+    let r = optimize(&mut doc, &Settings { discard_search_index: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.search_indexes, 2);
+    let cat = doc.get(root).as_dict().cloned().unwrap();
+    let info = cat.get(b"PieceInfo").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!(info.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), vec![b"Illustrator".to_vec()]);
+    // The saved file leaves out the objects only the indexes held, the cycle included; the
+    // object the page also uses, the other application's data and the page's own entry stay.
+    let bytes = saved(&doc);
+    assert!(!["INDEX-A", "INDEX-B", "INDEX-C"].iter().any(|m| contains(&bytes, m)));
+    assert!(["SHARED-DATA", "KEEP-APP", "PageIndexer"].iter().all(|m| contains(&bytes, m)));
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let cat = reopened.get(reopened.root().unwrap()).as_dict().cloned().unwrap();
+    let info = reopened.dict(cat.get(b"PieceInfo").unwrap()).unwrap();
+    assert!(info.contains(b"Illustrator") && info.len() == 1);
+}
+
+#[test]
+fn an_indirect_piece_info_is_left_for_its_other_users() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let idx = marked(&mut doc, "INDEX-DATA", &[]);
+    let mut info = Dict::new();
+    info.set(b"Index".to_vec(), app_data(Object::Ref(idx)));
+    let info = doc.add(Object::Dict(info));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    doc.update_dict(p, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(info))).unwrap();
+    let settings = Settings { discard_search_index: true, ..Settings::default() };
+    let r = optimize(&mut doc, &settings).unwrap();
+    // The catalog's only entry was an index, so /PieceInfo goes; the page keeps the shared one.
+    assert_eq!(r.search_indexes, 1);
+    assert!(!doc.get(root).as_dict().unwrap().contains(b"PieceInfo"));
+    assert!(doc.get(info).as_dict().unwrap().contains(b"Index"));
+    assert!(contains(&saved(&doc), "INDEX-DATA"));
+
+    // A /PieceInfo that is not a dictionary is left as it is.
+    let mut doc = Document::new_empty();
+    page(&mut doc, &[], "BT ET");
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |cat| cat.set(b"PieceInfo".to_vec(), Object::Int(7))).unwrap();
+    assert_eq!(optimize(&mut doc, &settings).unwrap().search_indexes, 0);
+    assert_eq!(doc.get(root).as_dict().unwrap().int(b"PieceInfo"), Some(7));
+}

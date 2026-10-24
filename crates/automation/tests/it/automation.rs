@@ -5686,6 +5686,36 @@ fn signing_with_translated_labels_through_tools() {
 }
 
 #[test]
+fn optimizing_discards_an_embedded_search_index_through_tools() {
+    use pdfcraft_cos::{Dict, Object};
+    let dir = workdir("optimize-search-index");
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let mut info = Dict::new();
+    for name in ["IBM-ODIndexes", "Illustrator"] {
+        let mut data = Dict::new();
+        data.set(b"Private".to_vec(), Object::Int(1));
+        info.set(name.as_bytes().to_vec(), Object::Dict(data));
+    }
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |c| c.set(b"PieceInfo".to_vec(), Object::Dict(info))).unwrap();
+    std::fs::write(dir.join("indexed.pdf"), pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap()).unwrap();
+    let piece_info = |name: &str| {
+        let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let cat = d.get(d.root().unwrap()).as_dict().cloned().unwrap();
+        let info = d.dict(cat.get(b"PieceInfo").unwrap()).unwrap();
+        info.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>()
+    };
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "indexed.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf" }));
+    assert_eq!(kept["search_indexes"], 0, "{kept}");
+    assert_eq!(piece_info("kept.pdf"), ["IBM-ODIndexes", "Illustrator"]);
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf", "discard_search_index": true }));
+    assert_eq!(r["search_indexes"], 1, "{r}");
+    assert_eq!(piece_info("small.pdf"), ["Illustrator"]);
+}
+
+#[test]
 fn optimizing_through_tools() {
     let dir = workdir("optimize");
     // A 2400 × 1600 photo-like JPEG at 600 dpi: a 4 × 2.67 inch page.

@@ -15,6 +15,8 @@
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one.
+//! - **Discard embedded search index** (off by default): the search indexes stored in the
+//!   catalog's `/PieceInfo` (see [`Settings::discard_search_index`]).
 //!
 //! Metadata, attachments, comments, scripts, private data, hidden layers, bookmarks and form
 //! fields are discarded by `pdfcraft-redact`'s Remove Hidden Information, which the engine
@@ -96,6 +98,11 @@ pub struct Settings {
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
+    /// Remove the entries of the catalog's `/PieceInfo` (data an application keeps for the whole
+    /// document, ISO 32000-2 §14.5) whose application name contains "index" in any letter case,
+    /// and `/PieceInfo` itself when nothing else is left in it. Objects that only those entries
+    /// refer to are left out of the saved file.
+    pub discard_search_index: bool,
     pub discard_print_settings: bool,
     /// Flate-compress streams stored without a filter, and strip a redundant outer ASCII85 or
     /// ASCIIHex layer from streams that have one.
@@ -116,6 +123,7 @@ impl Default for Settings {
             discard_thumbnails: true,
             discard_alternate_images: true,
             discard_tags: false,
+            discard_search_index: false,
             discard_print_settings: false,
             flate_unencoded: true,
             remove_invalid_links: true,
@@ -176,6 +184,8 @@ pub struct Report {
     pub thumbnails: usize,
     pub alternate_images: usize,
     pub tags_removed: bool,
+    /// Search index entries removed from the catalog's `/PieceInfo`.
+    pub search_indexes: usize,
     pub print_settings: usize,
     pub streams_compressed: usize,
     /// Links removed and bookmarks whose destination was cleared (Clean Up).
@@ -246,6 +256,11 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
         }
         report.tags_removed = true;
+    }
+    if settings.discard_search_index
+        && let Some(root) = root
+    {
+        report.search_indexes = discard_search_index(doc, root)?;
     }
     if settings.discard_print_settings
         && let Some(root) = root
@@ -334,4 +349,40 @@ fn stored_len(s: &Stream) -> Option<usize> {
     let mut out = Vec::new();
     serialize(&Object::Dict(dict), &mut out);
     out.len().checked_add(s.raw.len())
+}
+
+/// Remove the search index entries of the catalog's `/PieceInfo` ([`Settings::discard_search_index`])
+/// and return how many there were. An indirect `/PieceInfo` is not edited: the catalog gets a
+/// direct copy without those entries, so other objects that refer to it keep theirs. The objects
+/// the removed entries held are dropped by the full save, which writes only what the trailer
+/// reaches.
+fn discard_search_index(doc: &mut Document, root: ObjRef) -> Result<usize, OptimizeError> {
+    let Some(info) = doc.get(root).as_dict().and_then(|c| c.get(b"PieceInfo").cloned()) else {
+        return Ok(0);
+    };
+    let (info, removed) = match &*doc.resolve(&info) {
+        Object::Dict(d) => {
+            let kept: pdfcraft_cos::Dict = d.iter().filter(|(k, _)| !is_search_index(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            let removed = d.len().saturating_sub(kept.len());
+            (kept, removed)
+        }
+        _ => return Ok(0),
+    };
+    if removed == 0 {
+        return Ok(0);
+    }
+    doc.update_dict(root, |c| {
+        if info.is_empty() {
+            c.remove(b"PieceInfo");
+        } else {
+            c.set(b"PieceInfo".to_vec(), Object::Dict(info));
+        }
+    })?;
+    Ok(removed)
+}
+
+/// Whether a `/PieceInfo` application name names a search index: it contains "index" in any
+/// letter case (such as `IBM-ODIndexes`).
+fn is_search_index(name: &[u8]) -> bool {
+    name.windows(5).any(|w| w.eq_ignore_ascii_case(b"index"))
 }

@@ -205,6 +205,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.discard_alternate_images, tl!("Discard alternate images")));
             ui.add(widgets::checkbox(&mut s.discard_thumbnails, tl!("Discard embedded page thumbnails")));
             ui.add(widgets::checkbox(&mut s.discard_tags, tl!("Discard document tags")));
+            ui.add(widgets::checkbox(&mut s.discard_search_index, tl!("Discard embedded search index")));
             ui.add(widgets::checkbox(&mut s.discard_print_settings, tl!("Discard embedded print settings")));
             discard_box(ui, &mut d.discard, Hidden::Bookmarks, "Discard bookmarks");
             discard_box(ui, &mut d.discard, Hidden::FormFields, "Flatten form fields");

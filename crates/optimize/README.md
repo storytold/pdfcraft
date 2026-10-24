@@ -37,3 +37,10 @@ then this, then merges identical objects and writes a full, compressed save
 (`pdfcraft_engine::optimizer::OptimizeJob`, which the UI runs on a worker thread with a
 progress bar). JPEG decoding and
 encoding and resampling come from the `image` crate.
+
+Discard embedded search index (`discard_search_index`, off by default) removes the entries of
+the catalog's `/PieceInfo` whose application name contains "index" in any letter case, such as
+`IBM-ODIndexes`, and removes `/PieceInfo` when no other entry is left. An indirect `/PieceInfo`
+is copied into the catalog without those entries, and the original object is not changed. The
+full save leaves out the objects that only the removed entries refer to. Pages keep their own
+`/PieceInfo`.

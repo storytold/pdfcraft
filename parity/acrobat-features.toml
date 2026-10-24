@@ -7418,11 +7418,11 @@ title = "Discard embedded search index"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::search_indexes_in_the_catalog_go_and_other_application_data_stays", "crates/optimize/tests/optimize.rs::an_indirect_piece_info_is_left_for_its_other_users", "crates/automation/tests/it/automation.rs::optimizing_discards_an_embedded_search_index_through_tools"]
+notes = "PDF Optimizer ▸ Discard Objects, off by default. The public help page does not say where the index is stored; PdfCraft's rule: an entry of the catalog's /PieceInfo whose application name contains \"index\" in any letter case (such as IBM-ODIndexes) is a search index and is removed, with /PieceInfo itself when nothing else is left. An indirect /PieceInfo is copied into the catalog without those entries and the original object is left for its other users. The full save leaves out objects only the removed entries reach, cycles included; objects something else also uses stay. Page /PieceInfo is not changed. An index stored under an application name that does not contain \"index\" is kept."
 
 [[feature]]
 id = "optimize.discard-print-settings"
