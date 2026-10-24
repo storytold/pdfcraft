@@ -2495,6 +2495,13 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+# Rename… on a document tab (#2102).
+	Rename…	Μετονομασία…
+	Rename “{name}”	Μετονομασία «{name}»
+	This document has unsaved changes. They are saved first, then the file is renamed.	Αυτό το έγγραφο έχει μη αποθηκευμένες αλλαγές. Αποθηκεύονται πρώτα και μετά μετονομάζεται το αρχείο.
+	Save and Rename	Αποθήκευση και μετονομασία
+	Renamed to {name}	Μετονομάστηκε σε {name}
+	Couldn't rename {name}: {e}	Δεν ήταν δυνατή η μετονομασία του {name}: {e}
 	Attach a file…	Επισύναψη αρχείου…
 	Delete attachment	Διαγραφή συνημμένου
 	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό

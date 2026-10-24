@@ -140,6 +140,7 @@ mod organize_panel;
 pub mod portable;
 mod protect;
 mod recovery;
+mod rename_ui;
 pub mod scroll_speed;
 #[cfg(not(target_arch = "wasm32"))]
 mod system_fonts;
@@ -366,6 +367,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Rename… on a document tab.
+    RenameFile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -615,6 +618,8 @@ pub struct PdfCraftApp {
     pub session: Session,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// The Rename dialog's name being typed.
+    pub(crate) rename_draft: Option<rename_ui::RenameDraft>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
@@ -1070,6 +1075,7 @@ impl PdfCraftApp {
             session: Session::new(),
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            rename_draft: None,
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,

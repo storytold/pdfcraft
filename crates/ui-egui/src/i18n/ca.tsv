@@ -2781,6 +2781,12 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Couldn't rename {name}: {e}	No s'ha pogut canviar el nom de {name}: {e}
+	Rename “{name}”	Canvia el nom de «{name}»
+	Renamed to {name}	S'ha canviat el nom a {name}
+	Rename…	Canvia el nom…
+	Save and Rename	Desa i canvia el nom
+	This document has unsaved changes. They are saved first, then the file is renamed.	Aquest document té canvis sense desar. Es desen primer i després es canvia el nom del fitxer.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

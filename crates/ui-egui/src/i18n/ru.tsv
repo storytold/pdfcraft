@@ -2402,6 +2402,13 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+# Rename… on a document tab (#2102).
+	Rename…	Переименовать…
+	Rename “{name}”	Переименовать «{name}»
+	This document has unsaved changes. They are saved first, then the file is renamed.	В этом документе есть несохранённые изменения. Сначала они будут сохранены, затем файл будет переименован.
+	Save and Rename	Сохранить и переименовать
+	Renamed to {name}	Переименовано в {name}
+	Couldn't rename {name}: {e}	Не удалось переименовать {name}: {e}
 	Attach a file…	Прикрепить файл…
 	Delete attachment	Удалить вложение
 	Attaching files is not available on the web yet	Прикрепление файлов в веб-версии пока недоступно

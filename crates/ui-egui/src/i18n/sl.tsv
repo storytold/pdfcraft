@@ -2494,6 +2494,13 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+# Rename… on a document tab (#2102).
+	Rename…	Preimenuj…
+	Rename “{name}”	Preimenuj »{name}«
+	This document has unsaved changes. They are saved first, then the file is renamed.	Ta dokument ima neshranjene spremembe. Najprej se shranijo, nato se datoteka preimenuje.
+	Save and Rename	Shrani in preimenuj
+	Renamed to {name}	Preimenovano v {name}
+	Couldn't rename {name}: {e}	Datoteke {name} ni bilo mogoče preimenovati: {e}
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo

@@ -167,7 +167,15 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         action = Some(crate::tab_context::Action::Reveal(id));
                                         ui.close();
                                     }
+                                    if ui.add_enabled(reveal, egui::Button::new(tl!("Rename…"))).clicked() {
+                                        action = Some(crate::tab_context::Action::Rename(id));
+                                        ui.close();
+                                    }
                                 });
+                                // Double-clicking the tab's name renames its file, as in Finder and File Explorer.
+                                if response.double_clicked() && reveal {
+                                    action = Some(crate::tab_context::Action::Rename(id));
+                                }
                                 if response.clicked() {
                                     app.active = Some(i);
                                 }

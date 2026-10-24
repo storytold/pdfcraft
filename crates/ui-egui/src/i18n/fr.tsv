@@ -2489,6 +2489,13 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+# Rename… on a document tab (#2102).
+	Rename…	Renommer…
+	Rename “{name}”	Renommer « {name} »
+	This document has unsaved changes. They are saved first, then the file is renamed.	Ce document contient des modifications non enregistrées. Elles sont d’abord enregistrées, puis le fichier est renommé.
+	Save and Rename	Enregistrer et renommer
+	Renamed to {name}	Renommé en {name}
+	Couldn't rename {name}: {e}	Impossible de renommer {name} : {e}
 	Attach a file…	Joindre un fichier…
 	Delete attachment	Supprimer la pièce jointe
 	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web

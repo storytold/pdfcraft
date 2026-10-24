@@ -2452,6 +2452,13 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+# Rename… on a document tab (#2102).
+	Rename…	Преименуване…
+	Rename “{name}”	Преименуване на „{name}“
+	This document has unsaved changes. They are saved first, then the file is renamed.	Този документ има незапазени промени. Първо се запазват, след това файлът се преименува.
+	Save and Rename	Запазване и преименуване
+	Renamed to {name}	Преименуван на {name}
+	Couldn't rename {name}: {e}	{name} не може да бъде преименуван: {e}
 	Attach a file…	Прикачване на файл…
 	Delete attachment	Изтриване на прикачения файл
 	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията

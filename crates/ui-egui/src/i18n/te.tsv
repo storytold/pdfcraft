@@ -2398,6 +2398,13 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+# Rename… on a document tab (#2102).
+	Rename…	పేరు మార్చు…
+	Rename “{name}”	“{name}” పేరు మార్చు
+	This document has unsaved changes. They are saved first, then the file is renamed.	ఈ పత్రంలో సేవ్ చేయని మార్పులు ఉన్నాయి. ముందుగా అవి సేవ్ చేయబడతాయి, ఆపై ఫైల్ పేరు మార్చబడుతుంది.
+	Save and Rename	సేవ్ చేసి పేరు మార్చు
+	Renamed to {name}	{name}గా పేరు మార్చబడింది
+	Couldn't rename {name}: {e}	{name} పేరు మార్చలేకపోయాం: {e}
 	Attach a file…	ఫైల్‌ను జోడించు…
 	Delete attachment	జోడింపును తొలగించు
 	Attaching files is not available on the web yet	వెబ్‌లో ఫైల్‌లను జోడించడం ఇంకా అందుబాటులో లేదు

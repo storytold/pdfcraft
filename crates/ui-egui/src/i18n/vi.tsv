@@ -2755,6 +2755,13 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+# Rename… on a document tab (#2102).
+	Rename…	Đổi tên…
+	Rename “{name}”	Đổi tên “{name}”
+	This document has unsaved changes. They are saved first, then the file is renamed.	Tài liệu này có thay đổi chưa lưu. Các thay đổi sẽ được lưu trước, sau đó tệp được đổi tên.
+	Save and Rename	Lưu và đổi tên
+	Renamed to {name}	Đã đổi tên thành {name}
+	Couldn't rename {name}: {e}	Không thể đổi tên {name}: {e}
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

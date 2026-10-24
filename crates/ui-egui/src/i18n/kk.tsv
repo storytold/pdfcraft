@@ -2487,6 +2487,13 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+# Rename… on a document tab (#2102).
+	Rename…	Атын өзгерту…
+	Rename “{name}”	«{name}» атын өзгерту
+	This document has unsaved changes. They are saved first, then the file is renamed.	Бұл құжатта сақталмаған өзгерістер бар. Алдымен олар сақталады, содан кейін файлдың аты өзгертіледі.
+	Save and Rename	Сақтау және атын өзгерту
+	Renamed to {name}	Аты {name} болып өзгертілді
+	Couldn't rename {name}: {e}	{name} атын өзгерту мүмкін болмады: {e}
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз

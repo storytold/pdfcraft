@@ -26,6 +26,17 @@ evidence = ["crates/engine/src/word_count.rs::word_count_filters_are_independent
 notes = "Unicode words and characters for the current snapshot; all or current page in GUI, selected pages headlessly. Desktop background work with cancellation. Optional semantic table/code/Figure and invisible-text exclusions; no OCR or visual layout classification. Unsupported structure remains counted and is reported. Mixed ActualText exclusions fail explicitly. See docs/word-count.md."
 
 [[feature]]
+id = "core.rename-file"
+title = "Rename the file from its tab"
+area = "A"
+tier = "P2"
+milestone = "M2"
+status = "shipped"
+tools = ["doc_rename"]
+evidence = ["crates/engine/src/rename.rs::names_windows_or_other_systems_refuse_are_refused", "crates/engine/src/rename.rs::renaming_moves_the_file_and_refuses_what_it_must", "crates/automation/src/lib.rs::doc_rename_moves_the_file_and_refuses_with_reasons", "crates/ui-egui/src/rename_ui.rs::rename_from_the_tab_menu_moves_the_file_and_keeps_the_tab", "crates/ui-egui/src/rename_ui.rs::unsaved_changes_are_saved_before_the_rename"]
+notes = "Tab context menu Rename… (or a double-click on the tab) renames the open document's file in its own folder; the tab, undo history and view stay, and Recent files, Reopen Closed Tab and the file watcher follow the new name (#2102, #2867). The name is checked as it is typed, with the same rules on every system so a synced folder stays usable: no separators or < > : \" | ? *, no control characters, no Windows device names, no trailing dot, at most 255 characters; the extension is kept. Refused with the reason when the name is taken, the file is read-only or in use, or the document was never saved; unsaved changes are saved first (Save and Rename)."
+
+[[feature]]
 id = "core.open-pdf"
 title = "Open PDF files"
 area = "A"

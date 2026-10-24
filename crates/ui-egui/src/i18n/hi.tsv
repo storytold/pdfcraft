@@ -2757,6 +2757,12 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Couldn't rename {name}: {e}	{name} का नाम बदला नहीं जा सका: {e}
+	Rename “{name}”	“{name}” का नाम बदलें
+	Renamed to {name}	नाम बदलकर {name} किया गया
+	Rename…	नाम बदलें…
+	Save and Rename	सहेजें और नाम बदलें
+	This document has unsaved changes. They are saved first, then the file is renamed.	इस दस्तावेज़ में बिना सहेजे बदलाव हैं। पहले उन्हें सहेजा जाता है, फिर फ़ाइल का नाम बदला जाता है।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

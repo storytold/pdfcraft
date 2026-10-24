@@ -220,6 +220,7 @@ impl Automation {
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
+            "doc_rename" => self.doc_rename(&a)?,
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
@@ -1109,6 +1110,31 @@ impl Automation {
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
         self.publish_save(id, &target, bytes, incremental, write)
+    }
+
+    /// Rename the document's file in its own folder (#2102). Both the old and the new name are
+    /// writes there, so the automation write root must allow the folder; unsaved changes are refused
+    /// rather than left behind in a file that no longer matches the document.
+    fn doc_rename(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let own = doc.path.clone().ok_or_else(|| failed("the document has no file yet: save it with doc_save and a path first"))?;
+        let name = a.str("name")?;
+        let own_path = PathBuf::from(&own);
+        self.check_roots(&own, &own_path, file_access::Access::Write)?;
+        if self.root.is_some() {
+            self.resolve_in_root(&own, true)?;
+        }
+        if let Some(target) = pdfcraft_engine::rename_target(&own_path, name).map_err(failed)? {
+            let shown = target.to_string_lossy().into_owned();
+            self.check_roots(&shown, &target, file_access::Access::Write)?;
+            if self.root.is_some() {
+                self.resolve_in_root(&shown, true)?;
+            }
+        }
+        let path = self.session.rename_file(id, name).map_err(failed)?;
+        let doc = self.session.get(id).ok_or_else(|| failed("the renamed document is no longer open"))?;
+        Ok(json!({ "path": path, "name": doc.name.clone(), "document": summary(doc) }))
     }
 
     /// Validate the prepared bytes before publishing them or marking the document saved.
@@ -3263,6 +3289,34 @@ mod tests {
         json(&mut a, "doc_save", json!({"doc": id.0}));
         assert!(!a.session.get(id).unwrap().dirty);
         assert_ne!(std::fs::read(&target).unwrap(), old);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn doc_rename_moves_the_file_and_refuses_with_reasons() {
+        let dir = staging_dir("rename");
+        let mut a = Automation::new().with_root(&dir).unwrap();
+        let id = search_document(&mut a, 2);
+        let err = |a: &mut Automation, args: Value| a.call("doc_rename", &args).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err(&mut a, json!({"doc": id.0, "name": "x"})).contains("no file yet"), "never saved");
+        json(&mut a, "doc_save", json!({"doc": id.0, "path": "first.pdf"}));
+        std::fs::write(dir.join("taken.pdf"), b"other").unwrap();
+        assert!(err(&mut a, json!({"doc": id.0, "name": "taken"})).contains("already exists"));
+        assert!(err(&mut a, json!({"doc": id.0, "name": "CON"})).contains("reserves"));
+        assert!(err(&mut a, json!({"doc": id.0, "name": "a/b"})).contains("can't contain"));
+        let out = json(&mut a, "doc_rename", json!({"doc": id.0, "name": "Second"}));
+        assert_eq!(out["name"], "Second.pdf");
+        assert!(dir.join("Second.pdf").exists() && !dir.join("first.pdf").exists());
+        assert_eq!(listing(&dir), ["Second.pdf", "taken.pdf"]);
+        // Unsaved changes are never left behind in a renamed file.
+        json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+        assert!(err(&mut a, json!({"doc": id.0, "name": "third"})).contains("unsaved changes"));
+        json(&mut a, "doc_save", json!({"doc": id.0}));
+        json(&mut a, "doc_rename", json!({"doc": id.0, "name": "third.pdf"}));
+        assert_eq!(
+            a.session.get(id).unwrap().path.as_deref().map(Path::new).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).as_deref(),
+            Some("third.pdf")
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

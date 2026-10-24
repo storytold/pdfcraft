@@ -2766,6 +2766,13 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+# Rename… on a document tab (#2102).
+	Rename…	إعادة التسمية…
+	Rename “{name}”	إعادة تسمية «{name}»
+	This document has unsaved changes. They are saved first, then the file is renamed.	يحتوي هذا المستند على تغييرات غير محفوظة. تُحفظ أولًا، ثم تُعاد تسمية الملف.
+	Save and Rename	حفظ وإعادة التسمية
+	Renamed to {name}	أُعيدت التسمية إلى {name}
+	Couldn't rename {name}: {e}	تعذّرت إعادة تسمية {name}: {e}
 	Attach a file…	إرفاق ملف…
 	Delete attachment	حذف المرفق
 	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد

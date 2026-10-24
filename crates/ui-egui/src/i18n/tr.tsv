@@ -2485,6 +2485,13 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+# Rename… on a document tab (#2102).
+	Rename…	Yeniden adlandır…
+	Rename “{name}”	“{name}” öğesini yeniden adlandır
+	This document has unsaved changes. They are saved first, then the file is renamed.	Bu belgede kaydedilmemiş değişiklikler var. Önce kaydedilir, ardından dosya yeniden adlandırılır.
+	Save and Rename	Kaydet ve yeniden adlandır
+	Renamed to {name}	{name} olarak yeniden adlandırıldı
+	Couldn't rename {name}: {e}	{name} yeniden adlandırılamadı: {e}
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor

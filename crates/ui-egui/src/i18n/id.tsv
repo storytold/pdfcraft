@@ -2758,6 +2758,12 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Couldn't rename {name}: {e}	Tidak dapat mengganti nama {name}: {e}
+	Rename “{name}”	Ganti nama “{name}”
+	Renamed to {name}	Diganti namanya menjadi {name}
+	Rename…	Ganti nama…
+	Save and Rename	Simpan dan Ganti Nama
+	This document has unsaved changes. They are saved first, then the file is renamed.	Dokumen ini memiliki perubahan yang belum disimpan. Perubahan disimpan lebih dulu, lalu file diganti namanya.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

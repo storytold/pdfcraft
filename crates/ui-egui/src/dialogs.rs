@@ -71,6 +71,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut import_words = false;
     let mut print_go = false;
     let mut revert_now = false;
+    let mut rename_now = false;
     let mut overwrite_now = false;
     let mut overwrite_elsewhere = false;
     let mut summarize_now = false;
@@ -813,6 +814,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::RenameFile => {
+                let (shut, go) = crate::rename_ui::body(app, ui);
+                close |= shut;
+                rename_now = go;
+                return;
+            }
             Dialog::Revert => {
                 let name = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.name.clone()).unwrap_or_default();
                 ui.label(egui::RichText::new(tl!("Revert")).font(theme::semibold(18.0)));
@@ -1455,6 +1462,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if alt_now {
         app.save_alt_text();
+    }
+    // After the dialog has gone: Save and Rename may ask about a file changed on disk.
+    if rename_now {
+        app.rename_with_draft();
+    } else if app.dialog.is_none() {
+        app.rename_draft = None;
     }
     if stamp_now {
         app.save_custom_stamp();

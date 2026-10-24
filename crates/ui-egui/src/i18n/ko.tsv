@@ -2757,6 +2757,12 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Couldn't rename {name}: {e}	{name}의 이름을 바꿀 수 없습니다: {e}
+	Rename “{name}”	“{name}” 이름 바꾸기
+	Renamed to {name}	{name}(으)로 이름을 바꿨습니다
+	Rename…	이름 바꾸기…
+	Save and Rename	저장 후 이름 바꾸기
+	This document has unsaved changes. They are saved first, then the file is renamed.	이 문서에 저장되지 않은 변경 사항이 있습니다. 먼저 저장한 후 파일 이름을 바꿉니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

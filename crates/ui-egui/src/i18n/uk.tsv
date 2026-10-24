@@ -2511,6 +2511,13 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+# Rename… on a document tab (#2102).
+	Rename…	Перейменувати…
+	Rename “{name}”	Перейменувати «{name}»
+	This document has unsaved changes. They are saved first, then the file is renamed.	У цьому документі є незбережені зміни. Спершу їх буде збережено, потім файл буде перейменовано.
+	Save and Rename	Зберегти й перейменувати
+	Renamed to {name}	Перейменовано на {name}
+	Couldn't rename {name}: {e}	Не вдалося перейменувати {name}: {e}
 	Attach a file…	Прикріпити файл…
 	Delete attachment	Видалити вкладення
 	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне
