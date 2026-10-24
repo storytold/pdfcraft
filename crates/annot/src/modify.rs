@@ -200,6 +200,22 @@ fn fits_text(w: f64, text: &str, size: f64, pad: f64) -> bool {
         || ((w - 40.0).abs() <= 0.5 && longest + 8.0 <= 40.0)
 }
 
+/// Whether FreeText `d`'s upright box fits its text as it is: as wide as [`fits_text`] takes and as
+/// tall as its lines.
+fn fits_its_text(d: &Dict) -> bool {
+    let Some(rect) = d.get(b"Rect").and_then(|o| o.as_array()).and_then(|a| four(&a.iter().filter_map(|o| o.as_f64()).collect::<Vec<f64>>())) else {
+        return false;
+    };
+    let rect = normalize(rect);
+    let upright = d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) == 0;
+    let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
+    let (_, size) = appearance::parse_da(d);
+    let pad = 2.0 + border_width_of(d);
+    let w = rect[2] - rect[0];
+    let lines = appearance::wrap(&text, size, (w - 2.0 * pad).max(1.0)).len();
+    upright && fits_text(w, &text, size, pad) && ((rect[3] - rect[1]) - appearance::text_box_height(lines, size, pad)).abs() <= 1.5
+}
+
 /// The rectangle a FreeText annotation's text box needs for `text`: the top edge stays and the
 /// height fits the wrapped lines, as at creation. The width stays too, unless the box fit `was`
 /// (its text and font size before the change) and is upright: then it fits `text` as a new box
@@ -604,8 +620,19 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     }
     refuse_foreign_text(doc, &d)?;
     let free_text = subtype == "FreeText";
+    // A text box that fits its text keeps fitting it with a thicker or thinner border: the box
+    // grows (or shrinks) by the change on every side, so the text keeps its place and its lines.
+    let regrow = width.filter(|_| free_text && !d.contains(b"CL") && fits_its_text(&d)).and_then(|w| {
+        let by = w.max(0.0) - if d.contains(b"BS") || d.contains(b"Border") { border_width_of(&d) } else { 0.0 };
+        let rect: Vec<f64> = d.get(b"Rect")?.as_array()?.iter().filter_map(|o| o.as_f64()).collect();
+        let rect = grow(normalize(four(&rect)?), by);
+        (by != 0.0 && finite(&rect) && rect[2] - rect[0] >= 1.0 && rect[3] - rect[1] >= 1.0).then_some(rect)
+    });
     let before = d;
     doc.update_dict(r, |d| {
+        if let Some(rect) = regrow {
+            d.set(b"Rect".to_vec(), num_array(&rect));
+        }
         if let Some(c) = color {
             if free_text {
                 let (_, size) = appearance::parse_da(d);

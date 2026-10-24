@@ -356,6 +356,27 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert!(matches!(set_rect(&mut doc, 0, l, [0.0, 0.0, 5.0, 5.0], &meta("")), Err(AnnotError::Invalid(_))));
 }
 
+/// A text box that fits its text keeps fitting it with a thicker border: it grows by the change on
+/// every side, so its text keeps its place and its lines (it wrapped in the box it had). One sized
+/// by hand keeps its box.
+#[test]
+fn a_text_box_that_fits_its_text_grows_with_its_border() {
+    let mut doc = fixture();
+    let (w, h) = (appearance::text_box_width("Testtext", 12.0, 2.0), appearance::text_box_height(1, 12.0, 2.0));
+    let mut b = new(0, Shape::TextBox { rect: [100.0, 700.0 - h, 100.0 + w, 700.0], font_size: 12.0 });
+    (b.contents, b.style.width) = ("Testtext".into(), 0.0);
+    let t = add_annotation(&mut doc, &b, &meta("t")).unwrap();
+    set_style(&mut doc, 0, t, None, None, Some(1.0), None, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    let want = [99.0, 699.0 - h, 101.0 + w, 701.0];
+    assert!(r.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "1 pt on every side: {r:?}");
+    assert_eq!(ap_content(&doc, &list(&doc, 0)[t]).matches(" Tj").count(), 1, "Testtext on one line");
+    b.shape = Shape::TextBox { rect: [100.0, 500.0, 200.0, 540.0], font_size: 12.0 };
+    let o = add_annotation(&mut doc, &b, &meta("o")).unwrap();
+    set_style(&mut doc, 0, o, None, None, Some(1.0), None, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[o]), vec![100.0, 500.0, 200.0, 540.0]);
+}
+
 #[test]
 fn shapes_can_be_filled_and_unfilled() {
     let mut doc = fixture();
