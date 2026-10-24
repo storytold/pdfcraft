@@ -104,24 +104,27 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
     }
 }
 
-/// Select a radio button, if it isn't selected already.
-fn select_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
-    (w.on_state.as_ref() != f.value.first()).then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(w.on_state.clone()) })
+/// Select radio button `wi`, if it isn't selected already. The button itself, not its on state:
+/// buttons sharing a state are exclusive unless the group has RadiosInUnison (ISO 32000-2
+/// Table 229).
+fn select_edit(f: &FormField, wi: usize) -> Option<Edit> {
+    let selectable = f.widgets.get(wi).is_some_and(|w| w.on_state.is_some()) && !f.widget_on(wi);
+    selectable.then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Widget(wi) })
 }
 
-/// What clicking a check box or radio button does.
-fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
+/// What clicking widget `wi` of a check box or radio button does.
+fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     let value = match f.kind {
         FormFieldKind::CheckBox => FieldValue::Check(f.value.is_empty()),
-        FormFieldKind::Radio => {
-            let on = w.on_state.clone();
-            // Clicking the selected button again turns it off unless the group forbids it.
-            let value = if f.value.first() == on.as_ref() && !f.has(field_flags::NO_TOGGLE_TO_OFF) { None } else { on };
-            if value.as_ref() == f.value.first() {
+        // Clicking the selected button again turns it off unless the group forbids it
+        // (NoToggleToOff, Table 229).
+        FormFieldKind::Radio if f.widget_on(wi) => {
+            if f.has(field_flags::NO_TOGGLE_TO_OFF) {
                 return None;
             }
-            FieldValue::Radio(value)
+            FieldValue::Radio(None)
         }
+        FormFieldKind::Radio => return select_edit(f, wi),
         _ => return None,
     };
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
@@ -419,7 +422,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
-                paint_unbaked_widget(painter, xf, f, w, r);
+                paint_unbaked_widget(painter, xf, f, wi, w, r);
             } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
@@ -456,7 +459,7 @@ pub fn field_text_size(painter: &egui::Painter, f: &FormField, w: &FormWidget, t
     size.min(300.0) as f32
 }
 
-fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, wi: usize, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
             let text = f.value.first().map(String::as_str).unwrap_or("");
@@ -524,7 +527,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
         FormFieldKind::Radio => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
+            let selected = f.widget_on(wi);
             if selected {
                 let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
                 painter.circle_filled(r.center(), radius, Color32::BLACK);
@@ -795,11 +798,11 @@ pub(crate) fn overlay(
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {
-                edit = toggle_edit(f, w);
+                edit = toggle_edit(f, focus.widget);
             } else if space {
                 // Space toggles a check box and selects a radio button, as in browsers: it never
                 // turns the selected button off.
-                edit = if f.kind == FormFieldKind::Radio { select_edit(f, w) } else { toggle_edit(f, w) };
+                edit = if f.kind == FormFieldKind::Radio { select_edit(f, focus.widget) } else { toggle_edit(f, focus.widget) };
             } else if let Some(forward) = step {
                 // The arrows move to the group's next or previous button and select it, wrapping.
                 let stops: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(|(i, _)| i).collect();
@@ -807,7 +810,7 @@ pub(crate) fn overlay(
                     let k = if forward { (pos + 1) % stops.len() } else { (pos + stops.len() - 1) % stops.len() };
                     if let Some((wi, target)) = stops.get(k).and_then(|&wi| Some((wi, f.widgets.get(wi)?))) {
                         view.forms.focus = Some(open_focus(f, wi));
-                        edit = select_edit(f, target);
+                        edit = select_edit(f, wi);
                         if let Some(p) = target.page
                             && view.page_screen_rect(p).is_none()
                         {

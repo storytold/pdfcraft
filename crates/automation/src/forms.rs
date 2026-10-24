@@ -164,6 +164,16 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
     let wrong = |what: &str| ToolError::InvalidArgs(format!("{}: {what}", f.name));
     Ok(match (f.kind, v) {
         (FormFieldKind::CheckBox, Value::Bool(b)) => FieldValue::Check(*b),
+        // {"widget": n} turns on button n (1-based, as form_fields numbers them), as clicking it
+        // does: radio buttons that share an on state then stay exclusive (ISO 32000-2 Table 229).
+        (FormFieldKind::CheckBox | FormFieldKind::Radio, Value::Object(o)) => {
+            let n = o.get("widget").and_then(Value::as_u64).filter(|&n| n >= 1).ok_or_else(|| wrong("use {\"widget\": n} with n from 1"))?;
+            let i = usize::try_from(n - 1).map_err(|_| wrong("there is no such widget"))?;
+            if f.widgets.get(i).and_then(|w| w.on_state.as_ref()).is_none() {
+                return Err(wrong(&format!("there is no button {n} with an on state (the field has {})", f.widgets.len())));
+            }
+            FieldValue::Widget(i)
+        }
         (FormFieldKind::Radio, Value::Null) => FieldValue::Radio(None),
         (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(s.clone())),
         (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(
@@ -248,6 +258,11 @@ impl Automation {
                     }
                     FormFieldKind::Radio => {
                         o.insert("options".into(), json!((0..f.widgets.len()).filter_map(|i| f.export_of(i)).collect::<Vec<_>>()));
+                        // Buttons sharing an on state have the same value: which is on (1-based).
+                        o.insert(
+                            "on_widgets".into(),
+                            json!((0..f.widgets.len()).filter(|&i| f.widget_on(i)).map(|i| i.saturating_add(1)).collect::<Vec<_>>()),
+                        );
                     }
                     FormFieldKind::Combo | FormFieldKind::List => {
                         o.insert("options".into(), f.options.iter().map(|(e, d)| json!({ "value": e, "label": d })).collect());
