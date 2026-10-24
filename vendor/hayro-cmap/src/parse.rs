@@ -1,0 +1,469 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use hayro_postscript::{Object, Scanner};
+
+#[cfg(feature = "embed-cmaps")]
+use crate::bcmap;
+use crate::{
+    BfRange, CMap, CMapName, CharacterCollection, CidFamily, CidRange, CodespaceRange,
+    MAX_NESTING_DEPTH, Metadata, PartitionedRanges, Range, WritingMode,
+};
+
+struct Context<F> {
+    buf: Vec<u8>,
+    get_cmap: F,
+}
+
+pub(crate) fn parse_inner<'a>(
+    data: &[u8],
+    get_cmap: impl Fn(CMapName<'_>) -> Option<&'a [u8]> + Clone + 'a,
+    depth: u32,
+) -> Option<CMap> {
+    // Prevent stack overflow for malicious cmap files or circular references.
+    if depth >= MAX_NESTING_DEPTH {
+        return None;
+    }
+
+    // Check if it's in our custom embedded cmap format.
+    #[cfg(feature = "embed-cmaps")]
+    if data.starts_with(b"bcmap") {
+        return bcmap::parse(data, get_cmap, depth);
+    }
+
+    let mut scanner = Scanner::new(data);
+    let mut ctx = Context {
+        buf: Vec::new(),
+        get_cmap,
+    };
+    let mut _codespace_ranges = Vec::new();
+    let mut ranges = PartitionedRanges::new();
+    let mut notdef_ranges = PartitionedRanges::new();
+    let mut bf_entries = Vec::new();
+    let mut base = None;
+
+    let mut registry = None;
+    let mut ordering = None;
+    let mut supplement = None;
+    let mut cmap_name = None;
+    let mut writing_mode = None;
+    let mut last_name: Option<Vec<u8>> = None;
+
+    // PdfCraft patch: track whether the scan was cut short. A CMap with an
+    // unparseable tail, including one that ends inside a `begin…` block,
+    // keeps the entries read so far (the block parsers push into the shared
+    // lists as they go) instead of being discarded wholesale; one that
+    // yielded nothing still reports failure.
+    let mut truncated = false;
+
+    // PdfCraft patch: track a `usecmap` reference that could not be resolved
+    // or parsed. When the stream yields no mappings of its own, the caller
+    // must see failure rather than an empty map, so its encoding fallback
+    // paths run exactly as they did before the tolerant-usecmap change.
+    let mut usecmap_failed = false;
+    while !scanner.at_end() {
+        let Ok(obj) = scanner.parse_object() else {
+            truncated = true;
+            break;
+        };
+
+        let Object::Name(name) = &obj else { continue };
+
+        if name.is_literal() {
+            match name.as_str() {
+                // Strictly speaking, Registry and Ordering should be strings,
+                // but some PDF generators emit names instead, so be lenient
+                // and try both.
+                Some("Registry") => {
+                    registry = parse_string_or_name(&mut scanner);
+                }
+                Some("Ordering") => {
+                    ordering = parse_string_or_name(&mut scanner);
+                }
+                Some("Supplement") => {
+                    supplement = scanner.parse_number().ok().map(|n| n.as_i32());
+                }
+                Some("CMapName") => {
+                    cmap_name = scanner.parse_name().ok().and_then(|n| n.decode().ok());
+                }
+                Some("WMode") => {
+                    writing_mode = parse_writing_mode(&mut scanner);
+                }
+                _ => {
+                    last_name = name.decode().ok();
+                }
+            }
+        } else {
+            match name.as_str() {
+                Some("begincodespacerange") => {
+                    if parse_codespace_range(&mut scanner, &mut _codespace_ranges, &mut ctx).is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("begincidrange") => {
+                    if parse_range(&mut scanner, &mut ranges, &mut ctx, "endcidrange").is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("begincidchar") => {
+                    if parse_char(&mut scanner, &mut ranges, &mut ctx, "endcidchar").is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("beginnotdefrange") => {
+                    if parse_range(&mut scanner, &mut notdef_ranges, &mut ctx, "endnotdefrange").is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("beginnotdefchar") => {
+                    if parse_char(&mut scanner, &mut notdef_ranges, &mut ctx, "endnotdefchar").is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("beginbfchar") => {
+                    if parse_bf_char(&mut scanner, &mut bf_entries, &mut ctx).is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("beginbfrange") => {
+                    if parse_bf_range(&mut scanner, &mut bf_entries, &mut ctx).is_none() {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Some("usecmap") => {
+                    // PdfCraft patch: an unresolvable or unparseable `usecmap`
+                    // reference drops only the base, not the whole CMap, but
+                    // is remembered so a stream that then yields no mappings
+                    // at all still reports failure.
+                    let resolved = last_name.as_deref().and_then(|name| {
+                        (ctx.get_cmap)(CMapName::from_bytes(name))
+                    });
+                    match resolved {
+                        Some(nested_data) => {
+                            match parse_inner(nested_data, ctx.get_cmap.clone(), depth + 1) {
+                                Some(nested) => base = Some(Box::new(nested)),
+                                None => usecmap_failed = true,
+                            }
+                        }
+                        None => usecmap_failed = true,
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+
+    // Since we will use binary search for finding the correct entry, sort now.
+    ranges.sort();
+    notdef_ranges.sort();
+    bf_entries.sort_by(|a, b| a.range.start.cmp(&b.range.start));
+
+    // See PDFJS-3323, which has an invalid CIDSystemInfo entry.
+    // We ignore it if it's invalid.
+    let character_collection = if let (Some(registry), Some(ordering), Some(supplement)) =
+        (registry, ordering, supplement)
+    {
+        Some(CharacterCollection {
+            family: CidFamily::from_registry_ordering(&registry, &ordering),
+            supplement,
+        })
+    } else {
+        None
+    };
+
+    let metadata = Metadata {
+        character_collection,
+        name: cmap_name,
+        writing_mode,
+    };
+
+    // PdfCraft patch: a CMap that was cut short or whose `usecmap` base could
+    // not be resolved, and that yielded no mappings of its own, still reports
+    // failure, so callers fall back to the font's own encoding exactly as
+    // before.
+    if (truncated || usecmap_failed)
+        && ranges.is_empty()
+        && notdef_ranges.is_empty()
+        && bf_entries.is_empty()
+        && base.is_none()
+    {
+        return None;
+    }
+
+    Some(CMap {
+        metadata,
+        _codespace_ranges,
+        cid_ranges: ranges,
+        notdef_ranges,
+        bf_entries,
+        base,
+    })
+}
+
+fn parse_writing_mode(scanner: &mut Scanner<'_>) -> Option<WritingMode> {
+    match scanner.parse_number().ok()?.as_i32() {
+        0 => Some(WritingMode::Horizontal),
+        1 => Some(WritingMode::Vertical),
+        _ => None,
+    }
+}
+
+fn parse_string_or_name(scanner: &mut Scanner<'_>) -> Option<Vec<u8>> {
+    match scanner.parse_object().ok()? {
+        Object::String(s) => s.decode().ok(),
+        Object::Name(n) => n.decode().ok(),
+        _ => None,
+    }
+}
+
+fn parse_codespace_range<F>(
+    scanner: &mut Scanner<'_>,
+    ranges: &mut Vec<CodespaceRange>,
+    ctx: &mut Context<F>,
+) -> Option<()> {
+    loop {
+        let obj = scanner.parse_object().ok()?;
+
+        if name_matches(&obj, "endcodespacerange") {
+            return Some(());
+        }
+
+        // PdfCraft patch: a malformed codespace entry is skipped, not fatal.
+        let Some(low) = extract_u32_code(&obj, &mut ctx.buf) else { continue };
+        let Ok(n_bytes) = u8::try_from(ctx.buf.len()) else { continue };
+        let Some(high) = read_u32_code(scanner, &mut ctx.buf) else { continue };
+
+        if ctx.buf.len() != usize::from(n_bytes) {
+            continue;
+        }
+
+        ranges.push(CodespaceRange {
+            number_bytes: n_bytes,
+            low,
+            high,
+        });
+    }
+}
+
+fn parse_range<F>(
+    scanner: &mut Scanner<'_>,
+    ranges: &mut PartitionedRanges,
+    ctx: &mut Context<F>,
+    end_marker: &str,
+) -> Option<()> {
+    loop {
+        let obj = scanner.parse_object().ok()?;
+
+        if name_matches(&obj, end_marker) {
+            return Some(());
+        }
+
+        // PdfCraft patch: a malformed range entry is skipped, not fatal.
+        let Some(start) = extract_u32_code(&obj, &mut ctx.buf) else { continue };
+        let byte_len = ctx.buf.len();
+        let Some(end) = read_u32_code(scanner, &mut ctx.buf) else { continue };
+        let Some(cid_start) = scanner.parse_number().ok().and_then(|n| u32::try_from(n.as_i32()).ok()) else { continue };
+
+        ranges.push(
+            byte_len,
+            CidRange {
+                range: Range { start, end },
+                cid_start,
+            },
+        );
+    }
+}
+
+fn parse_char<F>(
+    scanner: &mut Scanner<'_>,
+    ranges: &mut PartitionedRanges,
+    ctx: &mut Context<F>,
+    end_marker: &str,
+) -> Option<()> {
+    loop {
+        let obj = scanner.parse_object().ok()?;
+
+        if name_matches(&obj, end_marker) {
+            return Some(());
+        }
+
+        // PdfCraft patch: a malformed char entry is skipped, not fatal.
+        let Some(code) = extract_u32_code(&obj, &mut ctx.buf) else { continue };
+        let byte_len = ctx.buf.len();
+        let Some(cid_start) = scanner.parse_number().ok().and_then(|n| u32::try_from(n.as_i32()).ok()) else { continue };
+
+        ranges.push(
+            byte_len,
+            CidRange {
+                range: Range {
+                    start: code,
+                    end: code,
+                },
+                cid_start,
+            },
+        );
+    }
+}
+
+fn parse_bf_char<F>(
+    scanner: &mut Scanner<'_>,
+    entries: &mut Vec<BfRange>,
+    ctx: &mut Context<F>,
+) -> Option<()> {
+    loop {
+        let obj = scanner.parse_object().ok()?;
+
+        if name_matches(&obj, "endbfchar") {
+            return Some(());
+        }
+
+        // PdfCraft patch: a malformed bfchar entry (e.g. a non-hex destination)
+        // is skipped, not fatal - the entries after it still apply.
+        let Some(code) = extract_u32_code(&obj, &mut ctx.buf) else {
+            // The malformed code is still followed by its destination
+            // object; skip it so later entries stay aligned.
+            let _ = scanner.parse_object();
+            continue;
+        };
+        let Ok(dst) = scanner.parse_string() else { continue };
+        if dst.decode_into(&mut ctx.buf).is_err() { continue }
+        let Some(dst_base) = decode_be(&ctx.buf) else { continue };
+
+        entries.push(BfRange {
+            range: Range {
+                start: code,
+                end: code,
+            },
+            dst_base,
+        });
+    }
+}
+
+fn parse_bf_range<F>(
+    scanner: &mut Scanner<'_>,
+    entries: &mut Vec<BfRange>,
+    ctx: &mut Context<F>,
+) -> Option<()> {
+    loop {
+        let obj = scanner.parse_object().ok()?;
+
+        if name_matches(&obj, "endbfrange") {
+            return Some(());
+        }
+
+        // PdfCraft patch: a malformed bfrange entry is skipped, not fatal.
+        let Some(start) = extract_u32_code(&obj, &mut ctx.buf) else {
+            // Skip the range's end and destination objects too, so later
+            // entries stay aligned.
+            let _ = scanner.parse_object();
+            let _ = scanner.parse_object();
+            continue;
+        };
+        let Some(end) = read_u32_code(scanner, &mut ctx.buf) else {
+            // Skip the destination object as well to stay aligned.
+            let _ = scanner.parse_object();
+            continue;
+        };
+
+        let Ok(next) = scanner.parse_object() else { continue };
+
+        match &next {
+            Object::String(s) => {
+                if s.decode_into(&mut ctx.buf).is_err() { continue }
+                let Some(dst_base) = decode_be(&ctx.buf) else { continue };
+
+                entries.push(BfRange {
+                    range: Range { start, end },
+                    dst_base,
+                });
+            }
+            Object::Array(array) => {
+                let mut array_scanner = array.objects();
+
+                for code in start..=end {
+                    // An exhausted or broken array cannot be resynced to a
+                    // member boundary; stop instead of spinning over the
+                    // remaining codes. A decodable-but-bad member still
+                    // drops only itself.
+                    let Ok(s) = array_scanner.parse_string() else { break };
+                    if s.decode_into(&mut ctx.buf).is_err() { continue }
+                    let Some(dst_base) = decode_be(&ctx.buf) else { continue };
+
+                    entries.push(BfRange {
+                        range: Range {
+                            start: code,
+                            end: code,
+                        },
+                        dst_base,
+                    });
+                }
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// Convert the buffer into native-endian u16, so that we can use `String::from_utf16`.
+fn decode_be(bytes: &[u8]) -> Option<Vec<u16>> {
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(2));
+    let mut i = 0;
+
+    // My understanding is that the bf strings should always be UTF16-BE encoded,
+    // but it seems like some PDFs only have a single byte there? I guess we just
+    // pad them? Wasn't able to find anything specific in the specifications.
+    if !bytes.len().is_multiple_of(2) {
+        out.push(u16::from(bytes[0]));
+        i = 1;
+    }
+
+    while i < bytes.len() {
+        out.push(u16::from_be_bytes([bytes[i], bytes[i + 1]]));
+        i += 2;
+    }
+
+    Some(out)
+}
+
+#[inline]
+fn read_u32_code(scanner: &mut Scanner<'_>, buf: &mut Vec<u8>) -> Option<u32> {
+    let s = scanner.parse_string().ok()?;
+    s.decode_into(buf).ok()?;
+    bytes_to_u32(buf)
+}
+
+#[inline]
+fn extract_u32_code(obj: &Object<'_>, buf: &mut Vec<u8>) -> Option<u32> {
+    let Object::String(s) = obj else { return None };
+    s.decode_into(buf).ok()?;
+    bytes_to_u32(buf)
+}
+
+#[inline]
+fn bytes_to_u32(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() || bytes.len() > 4 {
+        return None;
+    }
+
+    let mut val = 0_u32;
+    for &b in bytes {
+        val = (val << 8) | b as u32;
+    }
+
+    Some(val)
+}
+
+fn name_matches(obj: &Object<'_>, expected: &str) -> bool {
+    matches!(obj, Object::Name(name) if !name.is_literal() && name.as_str() == Some(expected))
+}

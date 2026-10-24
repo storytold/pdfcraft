@@ -1,0 +1,2794 @@
+# Catalan (ca) catalog. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_one_other` in i18n/mod.rs): one (1) | other.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Catalan computing vocabulary (standard Catalan, commands in the second-person imperative, informal
+# "tu" or impersonal wording in notices). No proprietary localisation resource, string table or
+# product UI (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# the trailing "…" of dialog commands is kept.
+
+	Menu	Menú
+	File	Fitxer
+	Edit	Edita
+	Pages	Pàgines
+	View	Visualitza
+	Help	Ajuda
+	Preferences	Preferències
+	Preferences…	Preferències…
+	Interface language	Idioma de la interfície
+	Interface size	Mida de la interfície
+	Auto ({percent}%)	Automàtica ({percent} %)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	L'opció automàtica segueix la mida del text del sistema. Les pàgines sempre es renderitzen a la resolució completa de la pantalla.
+	Identity	Identitat
+	Name on new comments	Nom als comentaris nous
+	Open…	Obre…
+	Open Recent	Obre un recent
+	Clear Recent Files	Esborra els fitxers recents
+	Remove from Recent	Elimina dels recents
+	Remove {name} from Recent	Elimina {name} dels recents
+	Pin folder to Home…	Fixa la carpeta a l'inici…
+	Folders	Carpetes
+	Pin a folder…	Fixa una carpeta…
+	Pin a folder to Home	Fixa una carpeta a l'inici
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fixa una carpeta per llistar-hi els PDF més recents, com ara on els desa l'escàner o una unitat al núvol sincronitzada.
+	Unpin	Deixa de fixar
+	Unpin {folder}	Deixa de fixar {folder}
+	Looking for PDFs…	Cercant PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Aquesta carpeta no està disponible ara mateix. Pot haver-se mogut, o la seva unitat o la sincronització al núvol no té connexió.
+	No PDFs in this folder yet	Encara no hi ha cap PDF en aquesta carpeta
+	Show less	Mostra'n menys
+	Show {n} more	Mostra'n {n} més
+	The newest {n} of {total} PDFs	Els {n} més recents de {total} PDF
+	Pinned folders need the desktop app	Les carpetes fixades requereixen l'aplicació d'escriptori
+	Choose a folder on this computer to pin	Tria una carpeta d'aquest ordinador per fixar-la
+	{folder} is already pinned to Home	{folder} ja està fixada a l'inici
+	You can pin up to {n} folders. Unpin one first.	Es poden fixar fins a {n} carpetes. Primer deixa'n de fixar una.
+	Pinned {folder} to Home	S'ha fixat {folder} a l'inici
+	No recent files	No hi ha fitxers recents
+	New blank PDF	Nou PDF en blanc
+	Create PDF from file…	Crea un PDF des d'un fitxer…
+	Create PDF from images…	Crea un PDF des d'imatges…
+	Create PDF from multiple files…	Crea un PDF des de diversos fitxers…
+	Create separate PDFs…	Crea PDF separats…
+	Create PDF from clipboard	Crea un PDF des del porta-retalls
+	Combine files…	Combina fitxers…
+	Save	Desa
+	Save as…	Anomena i desa…
+	Close file	Tanca el fitxer
+	Close all	Tanca-ho tot
+	Revert	Reverteix
+	Print…	Imprimeix…
+	Document properties…	Propietats del document…
+	Undo	Desfés
+	Redo	Refés
+	Find…	Cerca…
+	Advanced search…	Cerca avançada…
+	Copy pages	Copia pàgines
+	Cut pages	Retalla pàgines
+	Paste pages	Enganxa pàgines
+	Fit visible	Ajusta a l'àrea visible
+	Marquee zoom	Zoom de marc
+	Take a snapshot	Fes una captura
+	Column select	Selecció per columnes
+	Full screen mode	Mode de pantalla completa
+	Read mode	Mode de lectura
+	Next tab	Pestanya següent
+	Previous tab	Pestanya anterior
+	Switch light / dark theme	Canvia el tema clar / fosc
+	Comments panel	Tauler de comentaris
+	Form fields panel	Tauler de camps de formulari
+	Clear form	Neteja el formulari
+	Find tools and commands…	Cerca eines i ordres…
+	Zoom	Zoom
+	Actual size	Mida real
+	Zoom to page level	Zoom a nivell de pàgina
+	Fit to width	Ajusta a l'amplada
+	Display theme	Tema de visualització
+	Side panels	Taulers laterals
+	Enable Acrobat JavaScript	Activa Acrobat JavaScript
+	Flatten Fill & Sign when saving	Aplana Omple i signa en desar
+	Text, marks and signatures become part of the page. Other comments stay editable.	El text, les marques i les signatures passen a formar part de la pàgina. Els altres comentaris continuen sent editables.
+	OK	D'acord
+	Join our Discord	Uneix-te al nostre Discord
+	Close	Tanca
+	Next / previous match	Coincidència següent / anterior
+	Copy selected text	Copia el text seleccionat
+	Double-click	Doble clic
+	Select a word	Selecciona una paraula
+	Clear selection / close find	Esborra la selecció / tanca la cerca
+	Zoom in / out (also pinch or {key}-scroll)	Apropa / allunya (també amb pessic o {key} i desplaçament)
+	Rotate view	Gira la visualització
+	First / last page	Primera / última pàgina
+	Previous / next page	Pàgina anterior / següent
+	Delete selected pages (Organize)	Suprimeix les pàgines seleccionades (Organitza)
+	Select all pages (Organize)	Selecciona totes les pàgines (Organitza)
+	Home	Inici
+	Open	Obre
+	Open a PDF ({key})	Obre un PDF ({key})
+	Dark gray theme	Tema gris fosc
+	Light theme	Tema clar
+	Appearance mode	Mode d'aparença
+	Light	Clar
+	Dark	Fosc
+	Active	Actiu
+	Dark theme	Tema fosc
+	Appearance settings…	Configuració de l'aparença…
+	All tools	Totes les eines
+	Read	Llegeix
+	Convert	Converteix
+	E-Sign	Signatura electrònica
+	Print ({key})	Imprimeix ({key})
+	Save ({key})	Desa ({key})
+	Document properties ({key})	Propietats del document ({key})
+	Find tools and commands	Cerca eines i ordres
+	Fit to height	Ajusta a l'alçada
+	Zoom in	Apropa
+	Zoom out	Allunya
+	Rotate view clockwise	Gira la visualització en sentit horari
+	Rotate view counterclockwise	Gira la visualització en sentit antihorari
+	Page navigation	Navegació per pàgines
+	Previous view	Visualització anterior
+	Next view	Visualització següent
+	Page display	Visualització de pàgines
+	Continuous scrolling	Desplaçament continu
+	Show gaps between pages	Mostra els espais entre pàgines
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Amaga els espais per unir les vores de les pàgines. Els marges dins del PDF no canvien.
+	Two-page view	Visualització de dues pàgines
+	Single page	Pàgina única
+	Show cover page in two-page view	Mostra la portada en la visualització de dues pàgines
+	Use system setting	Usa la configuració del sistema
+	Light gray	Gris clar
+	Dark gray	Gris fosc
+	Comments	Comentaris
+	Bookmarks	Marcadors
+	Fields	Camps
+	Layers	Capes
+	Attachments	Adjunts
+	Signatures	Signatures
+	Accessibility Checker	Verificador d'accessibilitat
+	Search	Cerca
+	Compare	Compara
+	Page thumbnails	Miniatures de pàgina
+	Form fields	Camps de formulari
+	Zoom out ({key})	Allunya ({key})
+	Zoom in ({key})	Apropa ({key})
+	Rotate view clockwise ({key})	Gira la visualització en sentit horari ({key})
+	Toggle fit page / fit width	Alterna entre ajustar a la pàgina / a l'amplada
+	Next page	Pàgina següent
+	Previous page	Pàgina anterior
+	Current page — type a page number or label (such as iv) and press Enter	Pàgina actual — escriu un número o una etiqueta de pàgina (com ara iv) i prem Retorn
+	Welcome to PdfCraft	Et donem la benvinguda a PdfCraft
+	An open-source PDF workbench — local, private, and scriptable.	Un banc de treball de PDF de codi obert — local, privat i programable.
+	Join the ArtCraft community	Uneix-te a la comunitat d'ArtCraft
+	Get help, share feedback and follow development on Discord.	Obtén ajuda, comparteix comentaris i segueix el desenvolupament a Discord.
+	Recommended tools	Eines recomanades
+	Use now	Utilitza-ho ara
+	Open file	Obre el fitxer
+	Recent	Recents
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Els fitxers que obris a PdfCraft apareixen aquí. Deixa anar un PDF en qualsevol lloc per obrir-lo.
+	Privacy	Privadesa
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funciona sense connexió. Sense telemetria, sense compte i sense processament al núvol tret que afegeixis un proveïdor.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Els scripts s'executen en un entorn aïllat sense accés a fitxers ni a la xarxa. Amb JavaScript desactivat, les funcions estàndard de format, validació i càlcul d'Acrobat continuen funcionant.
+	Back to all tools	Torna a totes les eines
+	Close panel	Tanca el tauler
+	View less	Mostra'n menys
+	View more	Mostra'n més
+	Available	Disponible
+	Ready	Llest
+	Search tools and commands…	Cerca eines i ordres…
+	No matching tools	Cap eina coincident
+	Tool	Eina
+	Command	Ordre
+	Add a sticky note	Afegeix una nota adhesiva
+	Add a text box	Afegeix un quadre de text
+	Highlight text	Ressalta el text
+	Underline text	Subratlla el text
+	Strikethrough text	Ratlla el text
+	Squiggly underline text	Subratlla el text amb ondulació
+	Draw freehand	Dibuixa a mà alçada
+	Draw a line	Dibuixa una línia
+	Draw an arrow	Dibuixa una fletxa
+	Draw a rectangle	Dibuixa un rectangle
+	Draw an oval	Dibuixa un oval
+	Draw a polygon	Dibuixa un polígon
+	Draw connected lines	Dibuixa línies connectades
+	Draw a cloud	Dibuixa un núvol
+	Add a callout	Afegeix una llegenda
+	Insert text	Insereix text
+	Replace text	Substitueix el text
+	Attach a file	Adjunta un fitxer
+	Erase drawings	Esborra els dibuixos
+	Flatten comments	Aplana els comentaris
+	Import comments…	Importa comentaris…
+	Add a stamp	Afegeix un segell
+	Export all comments to data file…	Exporta tots els comentaris a un fitxer de dades…
+	Hide all comments	Amaga tots els comentaris
+	Summarize comments	Resumeix els comentaris
+	Import form data…	Importa dades de formulari…
+	Export form data…	Exporta dades de formulari…
+	PDF/A…	PDF/A…
+	Action Wizard…	Assistent d'accions…
+	Prepare for distribution…	Prepara per a la distribució…
+	Optimize scanned documents…	Optimitza documents escanejats…
+	Compare files…	Compara fitxers…
+	Detect form fields	Detecta camps de formulari
+	Merge data files into spreadsheet…	Combina fitxers de dades en un full de càlcul…
+	Flatten form fields	Aplana els camps de formulari
+	Prepare a form	Prepara un formulari
+	Tab order: by rows	Ordre de tabulació: per files
+	Tab order: by columns	Ordre de tabulació: per columnes
+	Tab order: by document structure	Ordre de tabulació: per estructura del document
+	Add text	Afegeix text
+	Edit text & images	Edita text i imatges
+	Add or edit links	Afegeix o edita enllaços
+	Create links from URLs	Crea enllaços a partir d'URL
+	Remove all links	Elimina tots els enllaços
+	No links to remove	No hi ha enllaços per eliminar
+	Removed 1 link	S'ha eliminat 1 enllaç
+	Removed {n} links	S'han eliminat {n} enllaços
+	Add Bates numbering…	Afegeix numeració Bates…
+	Add image…	Afegeix una imatge…
+	Redact text and images	Censura text i imatges
+	Redact pages…	Censura pàgines…
+	Find text and redact…	Cerca text i censura…
+	Redaction properties…	Propietats de la censura…
+	Apply redactions…	Aplica les censures…
+	Clear redaction marks	Esborra les marques de censura
+	Remove hidden information…	Elimina la informació oculta…
+	Sanitize document…	Neteja el document…
+	Field properties…	Propietats del camp…
+	Add a text field	Afegeix un camp de text
+	Add a checkbox	Afegeix una casella de selecció
+	Add a radio button	Afegeix un botó d'opció
+	Add a drop-down list	Afegeix una llista desplegable
+	Add a list box	Afegeix un quadre de llista
+	Add a button	Afegeix un botó
+	Add an image field	Afegeix un camp d'imatge
+	Add a date field	Afegeix un camp de data
+	Add a digital signature field	Afegeix un camp de signatura digital
+	Digitally sign	Signa digitalment
+	Certify (visible signature)	Certifica (signatura visible)
+	Certify (invisible signature)	Certifica (signatura invisible)
+	Validate all signatures	Valida totes les signatures
+	Signatures panel	Tauler de signatures
+	Fill & Sign: add text	Omple i signa: afegeix text
+	Fill & Sign: checkmark	Omple i signa: marca de verificació
+	Fill & Sign: cross	Omple i signa: creu
+	Fill & Sign: dot	Omple i signa: punt
+	Fill & Sign: line	Omple i signa: línia
+	Fill & Sign: date	Omple i signa: data
+	Fill & Sign: sign	Omple i signa: signa
+	Fill & Sign: initials	Omple i signa: inicials
+	Export to image…	Exporta a imatge…
+	Reduce file size…	Redueix la mida del fitxer…
+	Optimize PDF…	Optimitza el PDF…
+	Export to text…	Exporta a text…
+	Export to Word…	Exporta a Word…
+	Export to PowerPoint…	Exporta a PowerPoint…
+	Export to HTML…	Exporta a HTML…
+	Export to RTF…	Exporta a RTF…
+	JavaScript console…	Consola de JavaScript…
+	Document JavaScripts…	JavaScripts del document…
+	Recognize text…	Reconeix el text…
+	Recognize text in multiple files…	Reconeix el text en diversos fitxers…
+	Check for accessibility…	Comprova l'accessibilitat…
+	Open accessibility report	Obre l'informe d'accessibilitat
+	Change reading options…	Canvia les opcions de lectura…
+	Add alternate text…	Afegeix text alternatiu…
+	Export all images…	Exporta totes les imatges…
+	Add header & footer…	Afegeix capçalera i peu de pàgina…
+	Update header & footer…	Actualitza la capçalera i el peu de pàgina…
+	Remove header & footer	Elimina la capçalera i el peu de pàgina
+	Add watermark…	Afegeix una marca d'aigua…
+	Update watermark…	Actualitza la marca d'aigua…
+	Remove watermark	Elimina la marca d'aigua
+	Add background…	Afegeix un fons…
+	Update background…	Actualitza el fons…
+	Remove background	Elimina el fons
+	Protect using password…	Protegeix amb contrasenya…
+	Remove security	Elimina la seguretat
+	Security properties…	Propietats de seguretat…
+	Organize pages	Organitza pàgines
+	New bookmark	Marcador nou
+	New bookmarks from structure	Marcadors nous a partir de l'estructura
+	Rotate pages clockwise	Gira les pàgines en sentit horari
+	Rotate pages counterclockwise	Gira les pàgines en sentit antihorari
+	Delete pages	Suprimeix pàgines
+	Insert blank page	Insereix una pàgina en blanc
+	Rotate pages…	Gira pàgines…
+	Duplicate pages	Duplica pàgines
+	Crop pages	Escapça pàgines
+	Set page boxes…	Defineix els quadres de pàgina…
+	Insert pages from file…	Insereix pàgines des d'un fitxer…
+	Replace pages…	Substitueix pàgines…
+	Extract pages…	Extreu pàgines…
+	Split document…	Divideix el document…
+	Number pages…	Numera les pàgines…
+	Keyboard shortcuts	Dreceres de teclat
+	Join the ArtCraft Discord	Uneix-te al Discord d'ArtCraft
+	PdfCraft web page	Pàgina web de PdfCraft
+	PdfCraft on GitHub	PdfCraft a GitHub
+	ArtCraft website	Lloc web d'ArtCraft
+	Check for updates…	Cerca actualitzacions…
+	About PdfCraft	Quant a PdfCraft
+	Export a PDF	Exporta un PDF
+	Export to	Exporta a
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	Full de càlcul (.xlsx)
+	Presentation (.pptx)	Presentació (.pptx)
+	Image (PNG)	Imatge (PNG)
+	Export all images	Exporta totes les imatges
+	HTML web page	Pàgina web HTML
+	Rich Text Format (.rtf)	Format de text enriquit (.rtf)
+	Text (plain)	Text (net)
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	Omple i signa
+	Fill	Omple
+	Checkmark	Marca de verificació
+	Cross	Creu
+	Dot	Punt
+	Line	Línia
+	Date	Data
+	Signature	Signatura
+	Initials	Inicials
+	Edit a PDF	Edita un PDF
+	Modify page	Modifica la pàgina
+	Rotate pages	Gira pàgines
+	Insert pages	Insereix pàgines
+	Extract pages	Extreu pàgines
+	Add content	Afegeix contingut
+	Text	Text
+	Image	Imatge
+	Header and footer	Capçalera i peu de pàgina
+	Watermark	Marca d'aigua
+	Link	Enllaç
+	Bates numbering	Numeració Bates
+	Background	Fons
+	Attach file	Adjunta un fitxer
+	Create a PDF	Crea un PDF
+	Create from	Crea des de
+	Single file	Fitxer únic
+	Multiple files	Diversos fitxers
+	Separate PDFs	PDF separats
+	Images	Imatges
+	Clipboard	Porta-retalls
+	Blank page	Pàgina en blanc
+	Combine files	Combina fitxers
+	Combine	Combina
+	Add files to combine	Afegeix fitxers per combinar
+	Page options	Opcions de pàgina
+	Page grid	Quadrícula de pàgines
+	Rotate	Gira
+	Delete	Suprimeix
+	Extract	Extreu
+	Insert	Insereix
+	Replace	Substitueix
+	Split	Divideix
+	More	Més
+	Set page boxes	Defineix els quadres de pàgina
+	Page labels	Etiquetes de pàgina
+	Page transitions	Transicions de pàgina
+	Add comments	Afegeix comentaris
+	Markup	Marcatge
+	Sticky note	Nota adhesiva
+	Underline	Subratlla
+	Strikethrough	Ratllat
+	Squiggly underline	Subratllat ondulat
+	Text box	Quadre de text
+	Drawing	Dibuix
+	Rectangle	Rectangle
+	Oval	Oval
+	Arrow	Fletxa
+	Cloud	Núvol
+	Stamp	Segell
+	Review	Revisa
+	Comment list	Llista de comentaris
+	Scan & OCR	Escaneig i OCR
+	Recognize text	Reconeixement de text
+	In this file	En aquest fitxer
+	In multiple files	En diversos fitxers
+	Enhance scanned file	Millora el fitxer escanejat
+	Correct recognized text	Corregeix el text reconegut
+	Protect a PDF	Protegeix un PDF
+	Protect	Protegeix
+	Protect with password	Protegeix amb contrasenya
+	Remove hidden information	Elimina la informació oculta
+	Advanced options	Opcions avançades
+	Encrypt with certificate	Xifra amb certificat
+	Security properties	Propietats de seguretat
+	Redact a PDF	Censura un PDF
+	Redact	Censura
+	Redact pages	Censura pàgines
+	Find text and redact	Cerca text i censura
+	Set properties	Defineix les propietats
+	Sanitize document	Neteja el document
+	Compress a PDF	Comprimeix un PDF
+	Optimize	Optimitza
+	Reduce file size	Redueix la mida del fitxer
+	Advanced optimization	Optimització avançada
+	Audit space usage	Audita l'ús d'espai
+	Field list	Llista de camps
+	Field properties	Propietats del camp
+	Tab order by rows	Ordre de tabulació per files
+	Tab order by columns	Ordre de tabulació per columnes
+	Import data	Importa dades
+	Export data	Exporta dades
+	Add form components	Afegeix components de formulari
+	Text field	Camp de text
+	Checkbox	Casella de selecció
+	Radio button	Botó d'opció
+	Drop-down list	Llista desplegable
+	List box	Quadre de llista
+	Button	Botó
+	Image field	Camp d'imatge
+	Date field	Camp de data
+	Digital signature	Signatura digital
+	Stamps	Segells
+	Stamp palette	Paleta de segells
+	Use a certificate	Utilitza un certificat
+	Certificates	Certificats
+	Timestamp	Marca de temps
+	Use print production	Utilitza la producció d'impressió
+	Print production	Producció d'impressió
+	Output preview	Previsualització de sortida
+	Preflight	Verificació prèvia (preflight)
+	Convert colors	Converteix els colors
+	Add printer marks	Afegeix marques d'impressora
+	Fix hairlines	Corregeix les línies fines
+	Measure objects	Mesura objectes
+	Measure	Mesura
+	Measuring tool	Eina de mesura
+	Geospatial location	Ubicació geoespacial
+	Compare files	Compara fitxers
+	Select files to compare	Selecciona els fitxers per comparar
+	Use guided actions	Utilitza accions guiades
+	Actions list	Llista d'accions
+	Action Wizard	Assistent d'accions
+	Make accessible	Fes-lo accessible
+	Prepare for distribution	Prepara per a la distribució
+	Optimize scanned documents	Optimitza documents escanejats
+	Archive documents	Arxiva documents
+	Prepare for accessibility	Prepara per a l'accessibilitat
+	Accessibility	Accessibilitat
+	Automatically tag PDF	Etiqueta el PDF automàticament
+	Change reading options	Canvia les opcions de lectura
+	Check for accessibility	Comprova l'accessibilitat
+	Add alternate text	Afegeix text alternatiu
+	Fix reading order	Corregeix l'ordre de lectura
+	Apply PDF standards	Aplica estàndards PDF
+	Standards	Estàndards
+	Save as PDF/A	Anomena i desa com a PDF/A
+	Save as PDF/X	Anomena i desa com a PDF/X
+	Save as PDF/UA	Anomena i desa com a PDF/UA
+	Add search index	Afegeix un índex de cerca
+	Index	Índex
+	Manage embedded index	Gestiona l'índex incrustat
+	Use JavaScript	Utilitza JavaScript
+	JavaScript	JavaScript
+	Console	Consola
+	Document JavaScripts	JavaScripts del document
+	Document actions	Accions del document
+	AI assistant	Assistent d'IA
+	Bring your own model (off by default)	Porta el teu propi model (desactivat per defecte)
+	Summarize	Resumeix
+	Ask about this document	Pregunta sobre aquest document
+	Translate	Tradueix
+	pages	pàgines
+	Planned	Planificat
+	Planned for milestone	Planificat per a la fita
+	open to see what it will include	obre per veure què inclourà
+	Optional: needs an AI provider you configure	Opcional: requereix un proveïdor d'IA que configuris
+	Coming in milestone	Arribarà a la fita
+	Items marked Ready work today.	Les opcions marcades com a Llest ja funcionen.
+	Preview	Previsualitza
+	Edit fields	Edita els camps
+	Try the form as people filling it in will see it	Prova el formulari tal com el veuran les persones que l'ompliran
+	Redact all	Censura-ho tot
+	Clear all	Esborra-ho tot
+	Rotate page	Gira la pàgina
+	Delete page	Suprimeix la pàgina
+	Move page	Mou la pàgina
+	Move pages	Mou les pàgines
+	Duplicate page	Duplica la pàgina
+	Replace page	Substitueix la pàgina
+	Replace pages	Substitueix les pàgines
+	Crop page	Escapça la pàgina
+	Cancel	Cancel·la
+	Don't save	No desis
+	Apply	Aplica
+	Run	Executa
+	Clear	Esborra
+	Sanitize	Neteja
+	Mark all	Marca-ho tot
+	Save changes to “{name}” before closing?	Vols desar els canvis a “{name}” abans de tancar?
+	Your changes will be lost if you don't save them.	Els canvis es perdran si no els deses.
+	Password required	Cal una contrasenya
+	“{name}” is protected. Enter a password to open it.	“{name}” està protegit. Introdueix una contrasenya per obrir-lo.
+	Password	Contrasenya
+	Incorrect password. Try again.	Contrasenya incorrecta. Torna-ho a provar.
+	Recognize Text	Reconeixement de text
+	Password protection will be applied when you save	La protecció amb contrasenya s'aplicarà en desar
+	Saved the print-ready PDF to {path}	S'ha desat el PDF llest per imprimir a {path}
+	Could not save: {e}	No s'ha pogut desar: {e}
+	Earlier in tab order	Abans en l'ordre de tabulació
+	Later in tab order	Després en l'ordre de tabulació
+	From:	De:
+	To:	A:
+	High Resolution	Alta resolució
+	Print	Imprimeix
+	Verify to see what the document needs.	Verifica per veure què necessita el document.
+	Set Page Boxes	Defineix els quadres de pàgina
+	Signature panel	Tauler de signatures
+	{month} {day}, {y}	{day} de {month} de {y}
+	The document's security settings don't allow filling in form fields	La configuració de seguretat del document no permet omplir camps de formulari
+	{name} is read-only	{name} és de només lectura
+	{name} has no action	{name} no té cap acció
+	Previous month	Mes anterior
+	Next month	Mes següent
+	January	gener
+	February	febrer
+	March	març
+	April	abril
+	May	maig
+	June	juny
+	July	juliol
+	August	agost
+	September	setembre
+	October	octubre
+	November	novembre
+	December	desembre
+	Done	Fet
+	This certificate is in your list of trusted certificates.	Aquest certificat és a la teva llista de certificats de confiança.
+	This certificate is trusted through a certificate above it in the chain.	Aquest certificat és de confiança mitjançant un certificat superior de la cadena.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Aquest certificat no és de confiança. Les signatures fetes amb ell mostren una identitat desconeguda.
+	Add to Trusted Certificates	Afegeix als certificats de confiança
+	Export…	Exporta…
+	PDF Optimizer	Optimitzador de PDF
+	Discard Objects	Descarta objectes
+	Discard User Data	Descarta dades d'usuari
+	Clean Up	Neteja
+	Color Images	Imatges en color
+	Grayscale Images	Imatges en escala de grisos
+	Bicubic downsampling to	Reducció bicúbica de resolució a
+	for images above	per a imatges de més de
+	Compression	Compressió
+	ZIP	ZIP
+	Retain existing	Conserva l'existent
+	Minimum	Mínima
+	Low	Baixa
+	High	Alta
+	Maximum	Màxima
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Cada imatge es mesura allà on les pàgines la dibuixen; una imatge només se substitueix si el resultat és més petit.
+	Discard all links, actions and JavaScript	Descarta tots els enllaços, accions i JavaScript
+	Discard alternate images	Descarta les imatges alternatives
+	Discard embedded page thumbnails	Descarta les miniatures de pàgina incrustades
+	Discard document tags	Descarta les etiquetes del document
+	Discard embedded print settings	Descarta la configuració d'impressió incrustada
+	Discard bookmarks	Descarta els marcadors
+	Discard hidden layer content	Descarta el contingut de capes ocultes
+	Discard all comments, forms and multimedia	Descarta tots els comentaris, formularis i multimèdia
+	Discard document information and metadata	Descarta la informació i les metadades del document
+	Discard all object data (file attachments)	Descarta totes les dades d'objecte (fitxers adjunts)
+	Discard private data of other applications	Descarta les dades privades d'altres aplicacions
+	Discard hidden text	Descarta el text ocult
+	Use Flate to encode streams that are not encoded	Utilitza Flate per codificar els fluxos que no estan codificats
+	In streams that use LZW encoding, use Flate instead	Als fluxos que utilitzen codificació LZW, utilitza Flate
+	Remove invalid links and bookmarks	Elimina els enllaços i marcadors no vàlids
+	Remove unreferenced named destinations	Elimina les destinacions amb nom sense referència
+	Compress document structure (object streams)	Comprimeix l'estructura del document (fluxos d'objectes)
+	Remove unused objects and merge identical ones	Elimina els objectes no utilitzats i combina els idèntics
+	Audit space usage…	Auditoria de l'espai utilitzat…
+	Space Audit	Auditoria d'espai
+	Bytes	Bytes
+	Content Streams	Fluxos de contingut
+	X Object Forms	Formularis X Object
+	Structure Info	Informació d'estructura
+	Thumbnails	Miniatures
+	Named Destinations	Destinacions amb nom
+	Color Spaces	Espais de color
+	Shadings	Degradats
+	Patterns (graphics objects)	Patrons (objectes gràfics)
+	Extended Graphics States	Estats gràfics ampliats
+	Embedded Files	Fitxers incrustats
+	Document Overhead	Sobrecàrrega del document
+	Total	Total
+	Text Field Properties	Propietats del camp de text
+	Check Box Properties	Propietats de la casella de selecció
+	Radio Button Properties	Propietats del botó d'opció
+	Dropdown Properties	Propietats de la llista desplegable
+	List Box Properties	Propietats del quadre de llista
+	Button Properties	Propietats del botó
+	Digital Signature Properties	Propietats de la signatura digital
+	Position	Posició
+	Options	Opcions
+	Validate	Valida
+	Calculate	Calcula
+	Actions	Accions
+	This field is locked. Unlock it to change its properties.	Aquest camp està bloquejat. Desbloqueja'l per canviar-ne les propietats.
+	Tooltip:	Suggeriment:
+	Common Properties	Propietats comunes
+	Read Only	Només lectura
+	Required	Obligatori
+	Font Size:	Mida del tipus de lletra:
+	Auto	Automàtica
+	Text Color:	Color del text:
+	Borders and Colors	Vores i colors
+	Border Color:	Color de la vora:
+	Fill Color:	Color de farciment:
+	No color	Sense color
+	Beveled	Bisellat
+	Left:	Esquerra:
+	Bottom:	Inferior:
+	Width:	Amplada:
+	Height:	Alçada:
+	Rotation:	Rotació:
+	Points from the page's bottom-left corner.	Punts des de la cantonada inferior esquerra de la pàgina.
+	Alignment:	Alineació:
+	Default Value:	Valor per defecte:
+	Multi-line	Diverses línies
+	Scroll long text	Desplaça el text llarg
+	Allow Rich Text Formatting	Permet el format de text enriquit
+	Limit of	Límit de
+	characters	caràcters
+	Field is used for file selection	El camp s'utilitza per seleccionar fitxers
+	Check spelling	Revisa l'ortografia
+	Comb of	Pentinat de
+	Export Value: {on}	Valor d'exportació: {on}
+	Check box is checked by default	La casella de selecció està marcada per defecte
+	Button is checked by default	El botó està marcat per defecte
+	Buttons with the same name and value are selected in unison	Els botons amb el mateix nom i valor se seleccionen alhora
+	Item:	Element:
+	Item List	Llista d'elements
+	Up	Amunt
+	Delete {o}	Suprimeix {o}
+	Add the choices people pick from.	Afegeix les opcions entre les quals es pot triar.
+	Default:	Per defecte:
+	(none)	(cap)
+	Sort items	Ordena els elements
+	Allow user to enter custom text	Permet introduir text personalitzat
+	Multiple selection	Selecció múltiple
+	Commit selected value immediately	Confirma immediatament el valor seleccionat
+	Number	Número
+	Percentage	Percentatge
+	Time	Hora
+	Special	Especial
+	Select format category:	Selecciona la categoria de format:
+	The value is shown as typed.	El valor es mostra tal com s'ha escrit.
+	Decimal places:	Posicions decimals:
+	Separator style:	Estil del separador:
+	Currency symbol:	Símbol de moneda:
+	Before the number	Abans del número
+	Negative number style:	Estil dels números negatius:
+	Format:	Format:
+	Custom:	Personalitzat:
+	Zip Code	Codi postal
+	Zip Code + 4	Codi postal + 4
+	Phone Number	Número de telèfon
+	Social Security Number	Número de la seguretat social
+	Arbitrary Mask	Màscara arbitrària
+	Mask:	Màscara:
+	9 digit, A letter, O letter or digit, X any character	9 dígit, A lletra, O lletra o dígit, X qualsevol caràcter
+	Example: {sample}	Exemple: {sample}
+	Field value is not validated	El valor del camp no es valida
+	Field value is in range:	El valor del camp és dins de l'interval:
+	Add an Action	Afegeix una acció
+	Select Trigger:	Selecciona l'activador:
+	Mouse Up	Ratolí amunt
+	Mouse Down	Ratolí avall
+	Mouse Enter	El ratolí entra
+	Mouse Exit	El ratolí surt
+	On Focus	En rebre el focus
+	On Blur	En perdre el focus
+	Select Action:	Selecciona l'acció:
+	Open a web link	Obre un enllaç web
+	Reset a form	Restableix un formulari
+	Execute a menu item	Executa un element de menú
+	Show a field	Mostra un camp
+	Hide a field	Amaga un camp
+	Submit a form	Envia un formulari
+	Fields to reset (comma-separated; empty: all)	Camps per restablir (separats per comes; buit: tots)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage o LastPage
+	Field names (comma-separated)	Noms dels camps (separats per comes)
+	URL to submit to	URL on enviar
+	Script:	Script:
+	Value:	Valor:
+	No actions	Cap acció
+	Value is not calculated	El valor no es calcula
+	Value is the	El valor és
+	sum (+)	suma (+)
+	product (x)	producte (x)
+	average	mitjana
+	minimum	mínim
+	maximum	màxim
+	of the following fields:	dels camps següents:
+	Simplified field notation:	Notació simplificada de camps:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Noms de camps amb + - * / i parèntesis; posa \\ abans dels espais als noms.
+	Finding document fonts…	Cerca de tipus de lletra del document…
+	Installed fonts…	Tipus de lletra instal·lats…
+	Keep source fonts	Conserva els tipus de lletra d'origen
+	Load font…	Carrega un tipus de lletra…
+	No openly licensed document fonts found. Load a font file.	No s'ha trobat cap tipus de lletra de document amb llicència oberta. Carrega un fitxer de tipus de lletra.
+	Format text	Dona format al text
+	Bold	Negreta
+	Italic	Cursiva
+	Align left	Alinea a l'esquerra
+	Centre	Centra
+	Align right	Alinea a la dreta
+	Justify	Justifica
+	Thai and Arabic use regular fallback fonts when available.	El tailandès i l'àrab utilitzen tipus de lletra alternatius normals quan estan disponibles.
+	Edit image	Edita la imatge
+	Rotate counterclockwise	Gira en sentit antihorari
+	Rotate clockwise	Gira en sentit horari
+	Flip horizontal	Capgira horitzontalment
+	Flip vertical	Capgira verticalment
+	Replace image	Substitueix la imatge
+	Crop (% trimmed from each side)	Escapça (% escapçat de cada costat)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Fes clic a la pàgina per afegir text; cada clic comença un quadre nou i ✓ finalitza. Arrossega els elements per moure'ls, arrossega una cantonada per canviar-ne la mida i fes doble clic al text per editar-lo.
+	Choose an image	Tria una imatge
+	Export to Image	Exporta a imatge
+	Export to Text	Exporta a text
+	Export All Images	Exporta totes les imatges
+	Resolution	Resolució
+	Format	Format
+	Quality	Qualitat
+	One {f} file per page, named after the document.	Un fitxer {f} per pàgina, amb el nom del document.
+	Exclude images smaller than	Exclou les imatges més petites de
+	No limit	Sense límit
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Cada imatge una sola vegada, amb el nom del document i la pàgina. Les imatges JPEG es desen sense canvis; les altres com a PNG.
+	Plain text in reading order; pages are separated by form feeds.	Text sense format en ordre de lectura; les pàgines se separen amb salts de pàgina.
+	Create {what}	Crea {what}
+	initials	inicials
+	signature	signatura
+	Create Custom Stamp	Crea un segell personalitzat
+	From {file}	Des de {file}
+	Category:	Categoria:
+	e.g. My stamps	p. ex. Els meus segells
+	Name:	Nom:
+	Custom	Personalitzat
+	Delete stamp	Suprimeix el segell
+	Create custom stamp…	Crea un segell personalitzat…
+	From a PDF page or an image	Des d'una pàgina PDF o una imatge
+	Line spacing	Interlineat
+	Character spacing	Espaiat de caràcters
+	Horizontal scale	Escala horitzontal
+	Rotate Clockwise	Gira en sentit horari
+	Rotate Counterclockwise	Gira en sentit antihorari
+	Flip Horizontal	Capgira horitzontalment
+	Flip Vertical	Capgira verticalment
+	Replace Image…	Substitueix la imatge…
+	Save Image As…	Anomena i desa la imatge…
+	Copy Image	Copia la imatge
+	The image has been copied ({w} × {h} pixels)	S'ha copiat la imatge ({w} × {h} píxels)
+	Couldn't copy the image: {e}	No s'ha pogut copiar la imatge: {e}
+	Copy Image in Original Format	Copia la imatge en el format original
+	The image has been copied as a {ext} file	S'ha copiat la imatge com a fitxer {ext}
+	The page has changed; select the image again	La pàgina ha canviat; torna a seleccionar la imatge
+	Check for updates	Cerca actualitzacions
+	No check has run yet.	Encara no s'ha fet cap comprovació.
+	Checking for a newer version…	S'està cercant una versió més recent…
+	PdfCraft {v} is available.	PdfCraft {v} està disponible.
+	You have version {c}. Download the new version from its release page.	Tens la versió {c}. Baixa la versió nova des de la seva pàgina de publicació.
+	PdfCraft {c} is up to date.	PdfCraft {c} està actualitzat.
+	Couldn't check for updates: {e}	No s'han pogut cercar actualitzacions: {e}
+	You have version {c}. All releases are listed at {page}.	Tens la versió {c}. Totes les versions es llisten a {page}.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub la darrera versió. No es baixa ni s'instal·la res automàticament.
+	Download	Baixa
+	Later	Més tard
+	none	cap
+	Declared conformance: {shown}	Conformitat declarada: {shown}
+	Output intent: {list}	Intenció de sortida: {list}
+	Conformance level:	Nivell de conformitat:
+	No problems found: the document conforms to {level}.	No s'ha trobat cap problema: el document és conforme a {level}.
+	 (page {p})	 (pàgina {p})
+	  · not fixable here	  · no es pot corregir aquí
+	Verify	Verifica
+	Box	Quadre
+	Units	Unitats
+	Set to zero	Posa a zero
+	Current page ({n})	Pàgina actual ({n})
+	Subset	Subconjunt
+	Update	Actualitza
+	Add	Afegeix
+	{verb} Header and Footer	{verb} capçalera i peu de pàgina
+	{verb} Watermark	{verb} marca d'aigua
+	{verb} Background	{verb} fons
+	Margins	Marges
+	Left Header Text	Text de la capçalera esquerra
+	Center Header Text	Text de la capçalera central
+	Right Header Text	Text de la capçalera dreta
+	Left Footer Text	Text del peu de pàgina esquerre
+	Center Footer Text	Text del peu de pàgina central
+	Right Footer Text	Text del peu de pàgina dret
+	Insert Page Number	Insereix el número de pàgina
+	Insert Date	Insereix la data
+	Start page number	Número de pàgina inicial
+	Source	Origen
+	Fit to page	Ajusta a la pàgina
+	Rotation	Rotació
+	Appear behind page	Apareix darrere de la pàgina
+	Appear on top of page	Apareix sobre la pàgina
+	Offset from centre	Desplaçament des del centre
+	From colour	Des del color
+	Page Range Options	Opcions de l'interval de pàgines
+	Preview: page {p} of {n}	Previsualització: pàgina {p} de {n}
+	Applies to 1 page	S'aplica a 1 pàgina
+	Applies to {n} pages	S'aplica a {n} pàgines
+	Replaces the existing one on those pages.	Substitueix l'existent en aquestes pàgines.
+	PDF or image	PDF o imatge
+	No file chosen	Cap fitxer triat
+	Page number	Número de pàgina
+	Scale relative to target page	Escala relativa a la pàgina de destinació
+	Link Properties	Propietats de l'enllaç
+	Create Link	Crea un enllaç
+	Link Appearance	Aparença de l'enllaç
+	Link Type:	Tipus d'enllaç:
+	Visible Rectangle	Rectangle visible
+	Invisible Rectangle	Rectangle invisible
+	Highlight Style:	Estil de ressaltat:
+	Invert	Inverteix
+	Outline	Contorn
+	Inset	Enfonsat
+	Line Thickness:	Gruix de línia:
+	Thin	Fina
+	Thick	Gruixuda
+	Line Style:	Estil de línia:
+	Solid	Contínua
+	Dashed	Discontínua
+	Color:	Color:
+	Link Action	Acció de l'enllaç
+	Open a web page	Obre una pàgina web
+	Go to a page view	Ves a una vista de pàgina
+	Type the web address.	Escriu l'adreça web.
+	This document has no signatures.	Aquest document no té signatures.
+	The Keychain's digital IDs couldn't be listed: {e}	No s'han pogut llistar els identificadors digitals del Clauer: {e}
+	Signed and saved to {path}	Signat i desat a {path}
+	Couldn't open revision {n}: {e}	No s'ha pogut obrir la revisió {n}: {e}
+	Couldn't open the signed version: {e}	No s'ha pogut obrir la versió signada: {e}
+	Sign with a Digital ID	Signa amb un identificador digital
+	Choose the digital ID that you want to use for signing:	Tria l'identificador digital que vols utilitzar per signar:
+	Keychain  ·  	Clauer  ·  
+	Windows store  ·  	Magatzem de Windows  ·  
+	Issued by: 	Emès per: 
+	, Expires: 	, caduca: 
+	No digital IDs yet.	Encara no hi ha cap identificador digital.
+	Configure New Digital ID	Configura un identificador digital nou
+	Remove "{name}" from this list? The file itself is not deleted.	Vols eliminar "{name}" d'aquesta llista? El fitxer en si no se suprimeix.
+	Continue	Continua
+	Configure a Digital ID for Signing	Configura un identificador digital per signar
+	Use a Digital ID from a file	Utilitza un identificador digital d'un fitxer
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Crea un identificador digital nou (autosignat, desat en un fitxer protegit amb contrasenya)
+	Name	Nom
+	Organizational Unit	Unitat organitzativa
+	Organization Name	Nom de l'organització
+	Email Address	Adreça electrònica
+	Country/Region	País/regió
+	Key Algorithm	Algorisme de clau
+	Confirm Password	Confirma la contrasenya
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	Vàlid durant 5 anys, per a signatures digitals. Els identificadors autosignats normalment no són de confiança per a altres persones.
+	File (.p12, .pfx)	Fitxer (.p12, .pfx)
+	Digital ID	Identificador digital
+	Browse…	Navega…
+	{verb} as "{name}"	{verb} com a "{name}"
+	Certify	Certifica
+	The signature will be invisible.	La signatura serà invisible.
+	Distinguished name	Nom distingit
+	Labels	Etiquetes
+	Graphic	Gràfic
+	Signer's name	Nom del signant
+	Fill & Sign signature	Signatura d'Omple i signa
+	Choose image…	Tria una imatge…
+	Permitted actions after certifying	Accions permeses després de certificar
+	No changes allowed	No es permet cap canvi
+	Annotations, form fill-in, and digital signatures	Anotacions, emplenament de formularis i signatures digitals
+	Form fill-in and digital signatures	Emplenament de formularis i signatures digitals
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La clau és al clauer de macOS, que pot demanar permís perquè PdfCraft la utilitzi.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	La clau és al magatzem de certificats de Windows, que pot demanar permís perquè PdfCraft la utilitzi.
+	Digital ID password	Contrasenya de l'identificador digital
+	Back	Enrere
+	Validate all	Valida-ho tot
+	Sign this field…	Signa aquest camp…
+	Signature is valid:	La signatura és vàlida:
+	Signature validity is UNKNOWN:	La validesa de la signatura és DESCONEGUDA:
+	Signature is INVALID:	La signatura NO és vàlida:
+	Signature Details	Detalls de la signatura
+	Reason	Motiu
+	Signing time	Hora de signatura
+	Algorithm	Algorisme
+	Signer	Signant
+	Issued by	Emès per
+	Valid	Vàlid
+	Field	Camp
+	Field: {field} on page {p}	Camp: {field} a la pàgina {p}
+	Add to trusted certificates	Afegeix als certificats de confiança
+	View signed version	Mostra la versió signada
+	Show certificate…	Mostra el certificat…
+	Export certificate…	Exporta el certificat…
+	Certificate Viewer	Visor de certificats
+	This dialog shows the details of a certificate and its chain.	Aquest diàleg mostra els detalls d'un certificat i la seva cadena.
+	Trust	Confia
+	Issued to	Emès per a
+	Valid from	Vàlid des de
+	Valid to	Vàlid fins a
+	Intended usage	Ús previst
+	Any	Qualsevol
+	Version	Versió
+	Serial number	Número de sèrie
+	Issuer	Emissor
+	Validity starts	La validesa comença
+	Validity ends	La validesa acaba
+	Public key	Clau pública
+	Key usage	Ús de la clau
+	Not present	No present
+	Self-signed	Autosignat
+	Edit Action	Edita l'acció
+	New Action	Acció nova
+	Action name:	Nom de l'acció:
+	Description:	Descripció:
+	Steps	Passos
+	Add the steps this action runs, in order.	Afegeix els passos que executa aquesta acció, per ordre.
+	Add Step	Afegeix un pas
+	An action with this name already exists.	Ja existeix una acció amb aquest nom.
+	New Action…	Acció nova…
+	Edit…	Edita…
+	Add watermark	Afegeix una marca d'aigua
+	Add header	Afegeix una capçalera
+	Add footer	Afegeix un peu de pàgina
+	Set document title	Defineix el títol del document
+	Run a JavaScript	Executa un JavaScript
+	Prepare for Distribution	Prepara per a la distribució
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Elimina la informació oculta i aplana els comentaris i els camps de formulari, de manera que els destinataris només vegin les pàgines.
+	Optimize Scanned Documents	Optimitza els documents escanejats
+	Make scans searchable, then make them smaller.	Fes que els escanejats siguin cercables i després redueix-ne la mida.
+	Add Page Numbers	Afegeix números de pàgina
+	Number every page in the footer.	Numera cada pàgina al peu de pàgina.
+	Mark as Confidential	Marca com a confidencial
+	A diagonal CONFIDENTIAL watermark on every page.	Una marca d'aigua diagonal CONFIDENCIAL a cada pàgina.
+	Sanitize Documents	Neteja els documents
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Elimina la informació oculta, les metadades, els scripts i el contingut incrustat, i reescriu els fitxers.
+	Type text	Escriu text
+	Text to insert	Text per inserir
+	Inserted text	Text inserit
+	Replacement text	Text de substitució
+	Edit text…	Edita el text…
+	Add a sticky note here	Afegeix aquí una nota adhesiva
+	{kind} Properties	Propietats de {kind}
+	Appearance	Aparença
+	General	General
+	Review History	Historial de revisió
+	This comment's appearance can't be changed yet.	L'aparença d'aquest comentari encara no es pot canviar.
+	Icon	Icona
+	Thickness	Gruix
+	Line ending	Final de línia
+	Modified	Modificat
+	No status has been set.	No s'ha definit cap estat.
+	Compare Files	Compara fitxers
+	Old file:	Fitxer antic:
+	Open the older version first	Obre primer la versió més antiga
+	New file:	Fitxer nou:
+	Text is compared word by word; the differences are shown on the new file.	El text es compara paraula per paraula; les diferències es mostren al fitxer nou.
+	Compare this file with an older version: Compare files… in All tools.	Compara aquest fitxer amb una versió més antiga: Compara fitxers… a Totes les eines.
+	No differences in the text.	No hi ha diferències al text.
+	{n} {kind}	{n} {kind}
+	Inserted	Inserit
+	Deleted	Suprimit
+	Replaced	Substituït
+	Visual	Visual
+	Mark as comments	Marca com a comentaris
+	Report…	Informe…
+	{kind} · page {p}	{kind} · pàgina {p}
+	Set Alternate Text	Defineix el text alternatiu
+	This document has no tagged figures.	Aquest document no té figures etiquetades.
+	 on page {p}	 a la pàgina {p}
+	Figure {i} of {n}{page}	Figura {i} de {n}{page}
+	No preview	Sense previsualització
+	Alternate text	Text alternatiu
+	Describe the figure	Descriu la figura
+	Decorative figure	Figura decorativa
+	Previous figure	Figura anterior
+	Next figure	Figura següent
+	Save & Close	Desa i tanca
+	Accessibility Checker Options	Opcions del verificador d'accessibilitat
+	Report Options	Opcions de l'informe
+	Create accessibility report	Crea un informe d'accessibilitat
+	Page Range	Interval de pàgines
+	All pages in document	Totes les pàgines del document
+	Checking Options ({on} of 32 in all categories)	Opcions de comprovació ({on} de 32 en totes les categories)
+	Show this dialog when the Checker starts	Mostra aquest diàleg quan s'iniciï el verificador
+	Select All	Selecciona-ho tot
+	Clear All	Esborra-ho tot
+	Start Checking	Inicia la comprovació
+	This document hasn't been checked yet.	Aquest document encara no s'ha comprovat.
+	No issues found	No s'ha trobat cap problema
+	1 issue	1 problema
+	{n} issues	{n} problemes
+	{label} (1 issue)	{label} (1 problema)
+	{label} ({n} issues)	{label} ({n} problemes)
+	Check again	Torna a comprovar
+	Report	Informe
+	Show the accessibility report	Mostra l'informe d'accessibilitat
+	Collapse	Replega
+	Expand	Desplega
+	{rule} - {status}	{rule} - {status}
+	Passed	Superada
+	Failed	Fallida
+	Needs manual check	Cal comprovació manual
+	Skipped	Omesa
+	Fix	Corregeix
+	Skip Rule	Omet la regla
+	Explain	Explica
+	Check Again	Torna a comprovar
+	Show Report	Mostra l'informe
+	Options…	Opcions…
+	Go to the page	Ves a la pàgina
+	Page Content	Contingut de la pàgina
+	Forms	Formularis
+	Alternate Text	Text alternatiu
+	Tables	Taules
+	Lists	Llistes
+	Headings	Encapçalaments
+	Accessibility permission flag	Indicador de permís d'accessibilitat
+	Accessibility permission flag is set	L'indicador de permís d'accessibilitat està activat
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	La configuració de seguretat ha de permetre que la tecnologia d'assistència llegeixi el contingut ("Enable text access for screen reader devices"). Canvia la seguretat del document per permetre-ho.
+	Image-only PDF	PDF només d'imatge
+	Document is not image-only PDF	El document no és un PDF només d'imatge
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Les pàgines que només són imatges de text no es poden llegir en veu alta ni cercar. Reconeix el text (OCR) per afegir-hi una capa de text.
+	Document is tagged PDF	El document és un PDF etiquetat
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Les etiquetes donen al document una estructura lògica que segueix la tecnologia d'assistència. Etiqueta el document (Automatically tag PDF).
+	Logical Reading Order	Ordre de lectura lògic
+	Document structure provides a logical reading order	L'estructura del document proporciona un ordre de lectura lògic
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Comprova que les etiquetes es llegeixin en l'ordre en què ho faria un lector amb visió. Utilitza l'eina d'ordre de lectura o el tauler d'etiquetes per corregir-lo.
+	Primary language	Idioma principal
+	Text language is specified	S'ha especificat l'idioma del text
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Els lectors de pantalla trien la veu segons l'idioma del document. Defineix-lo a Propietats del document > Avançat > Idioma.
+	Document title is showing in title bar	El títol del document es mostra a la barra de títol
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	La finestra hauria de mostrar un títol significatiu en lloc del nom del fitxer. Defineix un títol i Visualització inicial > Mostra: Títol del document.
+	Bookmarks are present in large documents	Hi ha marcadors en documents grans
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Els documents de més de 20 pàgines necessiten marcadors per navegar-hi. Afegeix marcadors per a les seccions principals.
+	Color contrast	Contrast de color
+	Document has appropriate color contrast	El document té un contrast de color adequat
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	El text ha de contrastar prou amb el fons per a les persones amb baixa visió. Comprova els colors a ull o amb una eina de contrast.
+	Tagged content	Contingut etiquetat
+	All page content is tagged	Tot el contingut de la pàgina està etiquetat
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Tot el que hi ha en una pàgina ha d'estar etiquetat o marcat com a artefacte (decoració, capçaleres, peus de pàgina). Etiqueta el contingut sense etiquetar.
+	Tagged annotations	Anotacions etiquetades
+	All annotations are tagged	Totes les anotacions estan etiquetades
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Els comentaris, els enllaços i els camps han de ser a l'arbre d'etiquetes perquè es puguin anunciar. Etiqueta les anotacions.
+	Tab order	Ordre de tabulació
+	Tab order is consistent with structure order	L'ordre de tabulació coincideix amb l'ordre de l'estructura
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Les pàgines amb enllaços, comentaris o camps haurien de tabular segons l'ordre de l'estructura. La correcció estableix l'ordre de tabulació de cada pàgina a Utilitza l'estructura del document.
+	Character encoding	Codificació de caràcters
+	Reliable character encoding is provided	Es proporciona una codificació de caràcters fiable
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Els tipus de lletra han d'associar els seus caràcters a Unicode perquè el text es pugui llegir i copiar. Corregeix els tipus de lletra o torna a crear el PDF.
+	Tagged multimedia	Multimèdia etiquetada
+	All multimedia objects are tagged	Tots els objectes multimèdia estan etiquetats
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	El vídeo, el so i el contingut multimèdia enriquit han d'estar etiquetats per ser anunciats. Etiqueta les anotacions multimèdia.
+	Screen flicker	Parpelleig de pantalla
+	Page will not cause screen flicker	La pàgina no provocarà parpelleig de pantalla
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Les animacions amb llampecs poden provocar convulsions. Revisa els scripts i el contingut multimèdia per detectar parpelleig.
+	Scripts	Scripts
+	No inaccessible scripts	Cap script inaccessible
+	Timed responses	Respostes cronometrades
+	Page does not require timed responses	La pàgina no requereix respostes cronometrades
+	People may need more time to respond. Check that nothing has a time limit.	És possible que les persones necessitin més temps per respondre. Comprova que res tingui un límit de temps.
+	Navigation links	Enllaços de navegació
+	Navigation links are not repetitive	Els enllaços de navegació no són repetitius
+	Repeated navigation links should be skippable. Check links that appear on every page.	Els enllaços de navegació repetits haurien de poder-se ometre. Revisa els enllaços que apareixen a totes les pàgines.
+	Tagged form fields	Camps de formulari etiquetats
+	All form fields are tagged	Tots els camps de formulari estan etiquetats
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Els camps de formulari han de ser a l'arbre d'etiquetes (etiquetes Form) per ser anunciats. Etiqueta els camps de formulari.
+	Field descriptions	Descripcions dels camps
+	All form fields have description	Tots els camps de formulari tenen descripció
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Cada camp necessita un suggeriment que digui què cal introduir. Afegeix-ne un a Propietats del camp > General > Suggeriment.
+	Figures alternate text	Text alternatiu de les figures
+	Figures require alternate text	Les figures requereixen text alternatiu
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Les imatges necessiten un text alternatiu que les descrigui, o s'han de marcar com a decoratives. Afegeix text alternatiu a cada figura.
+	Nested alternate text	Text alternatiu imbricat
+	Alternate text that will never be read	Text alternatiu que mai es llegirà
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	El text alternatiu dins d'un element que ja en té mai es llegeix. Elimina el text alternatiu interior.
+	Associated with content	Associat amb contingut
+	Alternate text must be associated with some content	El text alternatiu ha d'estar associat amb algun contingut
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	El text alternatiu d'un element sense contingut de pàgina mai s'assoleix. Elimina'l o vincula l'element a contingut.
+	Hides annotation	Amaga l'anotació
+	Alternate text should not hide annotation	El text alternatiu no hauria d'amagar l'anotació
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	El text alternatiu d'un element que conté un enllaç o un camp amaga aquesta anotació a la tecnologia d'assistència. Mou el text alternatiu.
+	Other elements alternate text	Text alternatiu d'altres elements
+	Other elements that require alternate text	Altres elements que requereixen text alternatiu
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Les fórmules i altres elements que no són text necessiten text alternatiu. Afegeix-hi text alternatiu.
+	Rows	Files
+	TR must be a child of Table, THead, TBody, or TFoot	TR ha de ser fill de Table, THead, TBody o TFoot
+	Table cells belong in a row. Fix the table's tags.	Les cel·les de taula pertanyen a una fila. Corregeix les etiquetes de la taula.
+	Headers	Capçaleres
+	Tables should have headers	Les taules haurien de tenir capçaleres
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Les cel·les de capçalera (TH) indiquen als oients què conté cada columna o fila. Marca les cel·les de capçalera.
+	Regularity	Regularitat
+	Tables must contain the same number of columns in each row and rows in each column	Les taules han de contenir el mateix nombre de columnes a cada fila i de files a cada columna
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Les taules irregulars confonen la navegació per cel·les. Dona a cada fila el mateix nombre de cel·les (comptant els abastos).
+	Summary	Resum
+	Tables must have a summary	Les taules han de tenir un resum
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Un resum descriu la finalitat i la disposició de la taula. Afegeix un atribut Summary a cada taula.
+	List items	Elements de llista
+	LI must be a child of L	LI ha de ser fill de L
+	List items belong in a list. Fix the list's tags.	Els elements de llista pertanyen a una llista. Corregeix les etiquetes de la llista.
+	Lbl and LBody	Lbl i LBody
+	Lbl and LBody must be children of LI	Lbl i LBody han de ser fills de LI
+	List labels and bodies belong in a list item. Fix the list's tags.	Les etiquetes i els cossos de llista pertanyen a un element de llista. Corregeix les etiquetes de la llista.
+	Appropriate nesting	Imbricació adequada
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Els nivells d'encapçalament no s'haurien de saltar (un H1 seguit d'un H3). Torna a etiquetar els encapçalaments.
+	TH and TD	TH i TD
+	TH and TD must be children of TR	TH i TD han de ser fills de TR
+	Mark Page Range	Marca l'interval de pàgines
+	Pages from	Pàgines des de
+	Single word or phrase	Una sola paraula o frase
+	Text to find	Text que cal cercar
+	Patterns	Patrons
+	Phone Numbers	Números de telèfon
+	Email Addresses	Adreces de correu electrònic
+	Credit Cards	Targetes de crèdit
+	Social Security Numbers	Números de la seguretat social
+	Dates	Dates
+	Text in images isn't found; recognise text (OCR) first.	El text de les imatges no es troba; reconeix el text (OCR) primer.
+	No matches.	Cap coincidència.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Alguns marcadors no es mostren aquí: el tauler en llista un nombre limitat, imbricats fins a una profunditat limitada.
+	{n} match(es) marked for redaction.	{n} coincidència(es) marcada(es) per censurar.
+	Multiple words or phrases	Diverses paraules o frases
+	One word or phrase per line	Una paraula o frase per línia
+	Import list…	Importa una llista…
+	{n} word(s) or phrase(s)	{n} paraula(es) o frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} és massa gran per a una llista de paraules (com a màxim 1 MB).
+	Redaction Tool Properties	Propietats de l'eina de censura
+	Redacted area fill colour:	Color d'emplenament de l'àrea censurada:
+	Use overlay text	Utilitza text superposat
+	Custom text:	Text personalitzat:
+	Redaction code:	Codi de censura:
+	Font:	Tipus de lletra:
+	Font size:	Mida del tipus de lletra:
+	Auto-size text to fit redaction region	Ajusta automàticament la mida del text a la regió censurada
+	Font colour:	Color del tipus de lletra:
+	Repeat overlay text	Repeteix el text superposat
+	Text alignment:	Alineació del text:
+	Center	Centrat
+	Apply redactions	Aplica les censures
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Estàs a punt d'aplicar 1 marca de censura. El text, les imatges i els dibuixos que hi ha sota les marques, i els comentaris i camps de formulari que se superposen, se suprimeixen de manera permanent.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Estàs a punt d'aplicar {n} marques de censura. El text, les imatges i els dibuixos que hi ha sota les marques, i els comentaris i camps de formulari que se superposen, se suprimeixen de manera permanent.
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Desa el document després: en desar, es reescriu tot el fitxer perquè no hi quedi cap rastre del contingut suprimit.
+	Select the items to remove from this document.	Selecciona els elements que s'han d'eliminar d'aquest document.
+	Metadata	Metadades
+	File attachments	Fitxers adjunts
+	Comments and markups	Comentaris i marques
+	Hidden text	Text ocult
+	Hidden layers	Capes ocultes
+	Links, actions and JavaScripts	Enllaços, accions i JavaScripts
+	Private data of other applications	Dades privades d'altres aplicacions
+	None found	No se n'ha trobat cap
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Els camps de formulari s'aplanen: els valors continuen visibles. En desar, es reescriu tot el fitxer.
+	Remove	Elimina
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	La neteja elimina la informació oculta del document: metadades, fitxers adjunts, comentaris, camps de formulari (aplanats), text i capes ocults, marcadors, enllaços, accions i scripts, i dades privades d'aplicacions.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Desa el document després; en desar, es reescriu tot el fitxer perquè no hi quedi res del que s'ha eliminat.
+	Printer:	Impressora:
+	Save as PDF	Anomena i desa com a PDF
+	{name} (default)	{name} (per defecte)
+	Copies:	Còpies:
+	Collate	Intercala
+	Print in grayscale	Imprimeix en escala de grisos
+	Two-sided:	A doble cara:
+	Off	Desactivat
+	Flip on long edge	Gira pel costat llarg
+	Flip on short edge	Gira pel costat curt
+	Paper:	Paper:
+	Pages to Print	Pàgines per imprimir
+	More options:	Més opcions:
+	All pages in range	Totes les pàgines de l'interval
+	Odd pages only	Només les pàgines senars
+	Even pages only	Només les pàgines parelles
+	Reverse pages	Inverteix les pàgines
+	Page Sizing & Handling	Mida i gestió de les pàgines
+	Size	Mida
+	Poster	Pòster
+	Multiple	Múltiple
+	Booklet	Quadern
+	Fit	Ajusta
+	Shrink oversized pages	Redueix les pàgines que no hi caben
+	Custom scale:	Escala personalitzada:
+	Tile scale:	Escala de mosaic:
+	Overlap:	Superposició:
+	Cut marks	Marques de tall
+	Pages per sheet:	Pàgines per full:
+	Page order:	Ordre de les pàgines:
+	Horizontal	Horitzontal
+	Horizontal reversed	Horitzontal invertit
+	Vertical	Vertical
+	Vertical reversed	Vertical invertit
+	Print page border	Imprimeix la vora de la pàgina
+	Auto-rotate pages	Gira les pàgines automàticament
+	Booklet subset:	Subconjunt del quadern:
+	Both sides	Les dues cares
+	Front side only	Només la cara anterior
+	Back side only	Només la cara posterior
+	Binding:	Enquadernació:
+	Left	Esquerra
+	Right	Dreta
+	Orientation:	Orientació:
+	Auto portrait/landscape	Vertical/horitzontal automàtic
+	Portrait	Vertical
+	Landscape	Horitzontal
+	Comments & Forms	Comentaris i formularis
+	Document	Document
+	Document and markups	Document i marques
+	Document and stamps	Document i segells
+	Form fields only	Només els camps de formulari
+	Previous sheet	Full anterior
+	Next sheet	Full següent
+	No sheets	Cap full
+	Sheet {s} of {n}	Full {s} de {n}
+	Removed 1 hidden item. Save to remove them from the file.	S'ha eliminat 1 element ocult. Desa per eliminar-lo del fitxer.
+	Removed {n} hidden items. Save to remove them from the file.	S'han eliminat {n} elements ocults. Desa per eliminar-los del fitxer.
+	Document sanitized. Save to finish: saving rewrites the whole file.	Document netejat. Desa per acabar: en desar, es reescriu tot el fitxer.
+	Applied 1 redaction mark. Save to remove the content from the file.	S'ha aplicat 1 marca de censura. Desa per eliminar el contingut del fitxer.
+	Applied {n} redaction marks. Save to remove the content from the file.	S'han aplicat {n} marques de censura. Desa per eliminar el contingut del fitxer.
+	JavaScript Console	Consola de JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript està desactivat (Preferències > JavaScript).
+	Output appears here.	La sortida apareix aquí.
+	Script Name:	Nom de l'script:
+	This document has no document-level scripts.	Aquest document no té scripts a nivell de document.
+	No form fields were detected	No s'ha detectat cap camp de formulari
+	Detected 1 form field	S'ha detectat 1 camp de formulari
+	Detected {n} form fields	S'han detectat {n} camps de formulari
+	{field}: {e}	{field}: {e}
+	Current page	Pàgina actual
+	Selected pages	Pàgines seleccionades
+	Document language	Idioma del document
+	Output	Sortida
+	Searchable Image (Exact)	Imatge amb text cercable (exacte)
+	Adds invisible text over each word; the page image is not changed	Afegeix text invisible sobre cada paraula; la imatge de la pàgina no canvia
+	Downsample to	Redueix la resolució a
+	Also recognize pages that already have text	Reconeix també les pàgines que ja tenen text
+	Pictures on those pages are recognized too; words already in the page's text are not added again	També es reconeixen les imatges d'aquestes pàgines; les paraules que ja són al text de la pàgina no es tornen a afegir
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	El reconeixement de text no està instal·lat: falten els seus fitxers de model. Reinstal·la PdfCraft o defineix PDFCRAFT_MODELS amb la carpeta que els conté.
+	Settings	Configuració
+	Optional	Opcional
+	Planned · {m}	Previst · {m}
+	Planned for milestone {m} — open to see what it will include	Previst per a la fita {m} — obre per veure què inclourà
+	Coming in milestone {m}. Items marked Ready work today.	Arribarà a la fita {m}. Els elements marcats com a Llest funcionen avui.
+	1 mark	1 marca
+	{n} marks	{n} marques
+	Dynamic	Dinàmic
+	Sign Here	Signa aquí
+	Standard Business	Empresarial estàndard
+	Choose a stamp, then click on the page to place it.	Tria un segell i fes clic a la pàgina per col·locar-lo.
+	Note	Nota
+	Polyline	Polilínia
+	Attachment	Adjunt
+	Callout	Crida
+	Typewriter	Màquina d'escriure
+	Checked	Marcat
+	Unchecked	Desmarcat
+	Marked	Assenyalat
+	Locked	Bloquejat
+	Search comments	Cerca comentaris
+	Add a comment	Afegeix un comentari
+	No comments yet.	Encara no hi ha comentaris.
+	Pick a tool in the quick bar, or type above.	Tria una eina a la barra ràpida o escriu a dalt.
+	No comments match.	Cap comentari coincideix.
+	Unknown author	Autor desconegut
+	No colour	Sense color
+	Remove checkmark	Elimina la marca de verificació
+	Mark with checkmark	Marca amb una marca de verificació
+	Reply	Respon
+	Add a reply	Afegeix una resposta
+	Post	Publica
+	Page {label}	Pàgina {label}
+	{kind} — click to show it on the page	{kind} — fes clic per mostrar-ho a la pàgina
+	Set status	Defineix l'estat
+	Copy text	Copia el text
+	Properties…	Propietats…
+	Make Current Properties Default	Estableix les propietats actuals com a per defecte
+	More options	Més opcions
+	Sort by	Ordena per
+	Author	Autor
+	Type	Tipus
+	Colour	Color
+	Show all comments	Mostra tots els comentaris
+	Create PDF comment summary…	Crea un resum de comentaris en PDF…
+	Export all to data file…	Exporta-ho tot a un fitxer de dades…
+	Filter comments	Filtra els comentaris
+	Status	Estat
+	Accepted	Acceptat
+	Rejected	Rebutjat
+	Cancelled	Cancel·lat
+	Completed	Completat
+	Show all	Mostra-ho tot
+	Yellow	Groc
+	Orange	Taronja
+	Red	Vermell
+	Pink	Rosa
+	Purple	Porpra
+	Blue	Blau
+	Light blue	Blau clar
+	Green	Verd
+	Gray	Gris
+	Black	Negre
+	Bookmark options	Opcions dels marcadors
+	Expand all bookmarks	Expandeix tots els marcadors
+	Expand top-level bookmarks	Expandeix els marcadors de primer nivell
+	Collapse all bookmarks	Replega tots els marcadors
+	New bookmark ({key})	Marcador nou ({key})
+	This document has no bookmarks.	Aquest document no té marcadors.
+	This document has no layers.	Aquest document no té capes.
+	This document has no attachments.	Aquest document no té adjunts.
+	Hide layer	Amaga la capa
+	Show layer	Mostra la capa
+	Set layer visibility	Defineix la visibilitat de la capa
+	on page {label}	a la pàgina {label}
+	Save attachment…	Desa l'adjunt…
+	Open in a new tab	Obre en una pestanya nova
+	This document has no pages.	Aquest document no té pàgines.
+	Find text	Cerca text
+	No matches	Cap coincidència
+	Searching… {s}/{p}	Cercant… {s}/{p}
+	{c} of {n}{more}	{c} de {n}{more}
+	Previous ({key})	Anterior ({key})
+	Next ({key})	Següent ({key})
+	Find options	Opcions de cerca
+	Whole words only	Només paraules senceres
+	Case-sensitive	Distingeix majúscules i minúscules
+	Close (Esc)	Tanca (Esc)
+	Align	Alinea
+	Top	Superior
+	Bottom	Inferior
+	Center horizontally	Centra horitzontalment
+	Center vertically	Centra verticalment
+	Distribute	Distribueix
+	Horizontally	Horitzontalment
+	Vertically	Verticalment
+	Set Fields to Same Size	Estableix els camps a la mateixa mida
+	Height	Alçada
+	Width	Amplada
+	Both	Ambdues
+	Duplicate…	Duplica…
+	All pages	Totes les pàgines
+	Odd pages	Pàgines senars
+	Even pages	Pàgines parelles
+	Landscape pages	Pàgines horitzontals
+	Portrait pages	Pàgines verticals
+	Move earlier	Mou abans
+	Move later	Mou després
+	Back to the document	Torna al document
+	Protect Using Password	Protegeix amb contrasenya
+	Requires user to enter a password for:	Requereix que l'usuari introdueixi una contrasenya per a:
+	Viewing	Visualització
+	Editing	Edició
+	Type Password	Escriu la contrasenya
+	Re-type Password	Torna a escriure la contrasenya
+	Strength: {s}	Fortalesa: {s}
+	Strong	Forta
+	Medium	Mitjana
+	Weak	Feble
+	Advanced Options {chevron}	Opcions avançades {chevron}
+	Compatibility	Compatibilitat
+	Acrobat X and later (256-bit AES)	Acrobat X i posteriors (AES de 256 bits)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 i posteriors (AES de 128 bits)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 i posteriors (RC4 de 128 bits)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 i posteriors (RC4 de 40 bits)
+	Encrypt	Xifra
+	All document contents	Tot el contingut del document
+	All document contents except metadata	Tot el contingut del document excepte les metadades
+	Printing allowed	Impressió permesa
+	Low Resolution (150 dpi)	Baixa resolució (150 dpi)
+	Changes allowed	Canvis permesos
+	Inserting, deleting, and rotating pages	Inserció, supressió i gir de pàgines
+	Filling in form fields and signing existing signature fields	Emplenament de camps de formulari i signatura de camps de signatura existents
+	Commenting, filling in form fields, and signing existing signature fields	Comentaris, emplenament de camps de formulari i signatura de camps de signatura existents
+	Any except extracting pages	Qualsevol excepte l'extracció de pàgines
+	Enable copying of text, images, and other content	Permet copiar text, imatges i altre contingut
+	Enable text access for screen reader devices for the visually impaired	Permet l'accés al text als lectors de pantalla per a persones amb discapacitat visual
+	Type a password.	Escriu una contrasenya.
+	The passwords don't match.	Les contrasenyes no coincideixen.
+	This compatibility level supports only plain ASCII passwords.	Aquest nivell de compatibilitat només admet contrasenyes en ASCII simple.
+	Anyone opening the document will need this password. It's applied when you save.	Qualsevol persona que obri el document necessitarà aquesta contrasenya. S'aplica en desar.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	El document s'obre sense contrasenya; aquesta contrasenya cal per canviar les restriccions. S'aplica en desar.
+	Recover unsaved documents?	Vols recuperar els documents no desats?
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft no s'ha tancat amb normalitat. Aquests documents tenien canvis desats automàticament:
+	just now	ara mateix
+	{n} min ago	fa {n} min
+	{n} h ago	fa {n} h
+	 · password-protected	 · protegit amb contrasenya
+	Recover	Recupera
+	Discard	Descarta
+	Version {v}	Versió {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Una aplicació PDF de codi obert i clean-room escrita en Rust. MIT OR Apache-2.0.
+	Part of	Part de
+	Summarize Options	Opcions de resum
+	Choose a layout:	Tria una disposició:
+	Comments only	Només comentaris
+	Sort comments by:	Ordena els comentaris per:
+	Create PDF Comment Summary	Crea un resum de comentaris en PDF
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Vols revertir a la versió desada anteriorment de “{name}”? Els canvis fets des d'aleshores no es podran desfer després.
+	Number pages	Numera les pàgines
+	Style	Estil
+	None (prefix only)	Cap (només prefix)
+	Prefix	Prefix
+	Start	Inici
+	Labels: {preview}. Later pages keep their labels.	Etiquetes: {preview}. Les pàgines posteriors mantenen les seves etiquetes.
+	Even and Odd Pages	Pàgines parelles i senars
+	Even Pages Only	Només pàgines parelles
+	Odd Pages Only	Només pàgines senars
+	Landscape and Portrait Pages	Pàgines horitzontals i verticals
+	Landscape Pages	Pàgines horitzontals
+	Portrait Pages	Pàgines verticals
+	Duplicate Field	Duplica el camp
+	Duplicate "{name}" onto:	Duplica "{name}" a:
+	1 page selected.	1 pàgina seleccionada.
+	{n} pages selected.	{n} pàgines seleccionades.
+	Delete pages after extracting	Suprimeix les pàgines després d'extreure-les
+	Extract pages as separate files	Extreu les pàgines com a fitxers separats
+	Rotate Pages	Gira les pàgines
+	Direction:	Direcció:
+	Clockwise 90 degrees	90 graus en sentit horari
+	Counterclockwise 90 degrees	90 graus en sentit antihorari
+	180 degrees	180 graus
+	Pages:	Pàgines:
+	All	Totes
+	Selection	Selecció
+	From	Des de
+	Rotate:	Gira:
+	Repairs	Reparacions
+	Repair log	Registre de reparacions
+	Split document	Divideix el document
+	Number of pages	Nombre de pàgines
+	Pages per file	Pàgines per fitxer
+	File size	Mida del fitxer
+	At most	Com a màxim
+	Top-level bookmarks ({n})	Marcadors de primer nivell ({n})
+	Before each selected page (select pages in Organize)	Abans de cada pàgina seleccionada (selecciona pàgines a Organitza)
+	Creates 1 file from {n} pages.	Crea 1 fitxer a partir de {n} pàgines.
+	Creates {f} files from {n} pages.	Crea {f} fitxers a partir de {n} pàgines.
+	Each file holds as many of the {n} pages as fit.	Cada fitxer conté tantes de les {n} pàgines com hi càpiguen.
+	Replace Pages	Substitueix pàgines
+	Original: replace pages	Original: substitueix les pàgines
+	to	a
+	to {n}	a {n}
+	Replacement: pages of {name}	Substitució: pàgines de {name}
+	of {name}	de {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Només canvia el contingut de la pàgina: els enllaços, comentaris, camps de formulari i marcadors de les pàgines originals es mantenen.
+	The replacement file doesn't have that many pages.	El fitxer de substitució no té tantes pàgines.
+	Tagged PDF	PDF etiquetat
+	Document Properties	Propietats del document
+	Description	Descripció
+	Initial View	Visualització inicial
+	Security	Seguretat
+	Fonts	Tipus de lletra
+	Advanced	Avançat
+	Title	Títol
+	Subject	Assumpte
+	Keywords	Paraules clau
+	Application	Aplicació
+	PDF producer	Productor del PDF
+	Layout and Magnification	Disposició i ampliació
+	Navigation tab	Pestanya de navegació
+	Page Only	Només la pàgina
+	Bookmarks Panel and Page	Tauler de marcadors i pàgina
+	Pages Panel and Page	Tauler de pàgines i pàgina
+	Attachments Panel and Page	Tauler d'adjunts i pàgina
+	Layers Panel and Page	Tauler de capes i pàgina
+	Page layout	Disposició de la pàgina
+	Default	Per defecte
+	Single Page	Pàgina única
+	Single Page Continuous	Pàgina única contínua
+	Two-Up (Facing)	Dues pàgines (enfrontades)
+	Two-Up Continuous (Facing)	Dues pàgines contínues (enfrontades)
+	Two-Up (Cover Page)	Dues pàgines (amb coberta)
+	Two-Up Continuous (Cover Page)	Dues pàgines contínues (amb coberta)
+	Magnification	Ampliació
+	Actual Size	Mida real
+	Fit Page	Ajusta a la pàgina
+	Fit Width	Ajusta a l'amplada
+	Fit Height	Ajusta a l'alçada
+	Fit Visible	Ajusta a la part visible
+	Open to page	Obre a la pàgina
+	of {pages}	de {pages}
+	Window Options	Opcions de finestra
+	Resize window to initial page	Redimensiona la finestra a la pàgina inicial
+	Center window on screen	Centra la finestra a la pantalla
+	Open in Full Screen mode	Obre en mode de pantalla completa
+	Show:	Mostra:
+	File Name	Nom del fitxer
+	Document Title	Títol del document
+	User Interface Options	Opcions de la interfície d'usuari
+	Hide menu bar	Amaga la barra de menús
+	Hide toolbars	Amaga les barres d'eines
+	Hide window controls	Amaga els controls de la finestra
+	Security method	Mètode de seguretat
+	No security	Sense seguretat
+	Restrictions	Restriccions
+	None — everything is allowed	Cap — tot està permès
+	Password security	Seguretat amb contrasenya
+	Encryption	Xifratge
+	Opened with	S'ha obert amb
+	— (protection is applied when you save)	— (la protecció s'aplica en desar)
+	Owner password (no restrictions apply)	Contrasenya del propietari (no s'aplica cap restricció)
+	User password	Contrasenya de l'usuari
+	Change settings…	Canvia la configuració…
+	Printing	Impressió
+	Not allowed	No permès
+	Allowed	Permès
+	High resolution	Alta resolució
+	Low resolution	Baixa resolució
+	Changing the document	Canvi del document
+	Document assembly	Assemblatge del document
+	Content copying	Còpia del contingut
+	Content copying for accessibility	Còpia del contingut per a l'accessibilitat
+	Commenting	Comentaris
+	Filling of form fields	Emplenament de camps de formulari
+	No fonts are referenced by the pages.	Les pàgines no fan referència a cap tipus de lletra.
+	PDF version	Versió del PDF
+	Location	Ubicació
+	Page size	Mida de la pàgina
+	Yes	Sí
+	No	No
+	Revisions	Revisions
+	View revision {n}	Mostra la revisió {n}
+	Open the file as it was saved then	Obre el fitxer tal com es va desar aleshores
+	Binding	Enquadernació
+	Left Edge	Vora esquerra
+	Right Edge	Vora dreta
+	Language	Idioma
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	S'ha desat {place}: {before} → {after} ({pct} % més petit){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Aquest fitxer ja és tan petit com es pot fer ({size}). No s'ha desat cap còpia.
+	Saved {place}: {before} → {after} (not smaller){detail}	S'ha desat {place}: {before} → {after} (no és més petit){detail}
+	Couldn't save the image: {e}	No s'ha pogut desar la imatge: {e}
+	Adding images arrives on the web with file pickers for images	L'addició d'imatges arribarà al web amb selectors de fitxers d'imatge
+	Replacing images on page {p} arrives on the web with image pickers ({i})	La substitució d'imatges a la pàgina {p} arribarà al web amb selectors d'imatges ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: la selecció d'imatges arribarà al web amb selectors de fitxers d'imatge
+	Replacing images arrives on the web with image file pickers	La substitució d'imatges arribarà al web amb selectors de fitxers d'imatge
+	Couldn't create a PDF: {e}	No s'ha pogut crear un PDF: {e}
+	The clipboard has no image or text	El porta-retalls no té cap imatge ni text
+	On the web, open or drop an image to convert it	Al web, obre o deixa anar una imatge per convertir-la
+	Couldn't optimize the file: {e}	No s'ha pogut optimitzar el fitxer: {e}
+	Couldn't write {path}: {e}	No s'ha pogut escriure {path}: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	El formulari demana que s'enviï a {u}; PdfCraft no envia dades de formularis. Desa el document per conservar les dades introduïdes.
+	This PDF uses the unsupported {s} action.	Aquest PDF utilitza l'acció {s}, que no és compatible.
+	{name}: the {other} action isn't supported yet	{name}: l'acció {other} encara no és compatible
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} envia el formulari a {url}; PdfCraft no envia dades de formularis. Desa el document per conservar les dades introduïdes.
+	Export stopped: {e}	Exportació aturada: {e}
+	Exported 1 image	S'ha exportat 1 imatge
+	Exported {n} images	S'han exportat {n} imatges
+	 ({s} not exported: {first})	 ({s} no s'han exportat: {first})
+	Exported the text of 1 page	S'ha exportat el text d'1 pàgina
+	Exported the text of {n} pages	S'ha exportat el text de {n} pàgines
+	{msg} to {dir}	{msg} a {dir}
+	Exporting… {d} of {t}	Exportant… {d} de {t}
+	Choose a folder for the exported files	Tria una carpeta per als fitxers exportats
+	New {tool} comments will look like this one	Els comentaris nous de {tool} tindran aquest aspecte
+	This document can't be checked: it couldn't be read for editing	No es pot comprovar aquest document: no s'ha pogut llegir per editar-lo
+	The checker found no problems in this document.	El verificador no ha trobat cap problema en aquest document.
+	The checker found 1 problem which may prevent the document from being fully accessible.	El verificador ha trobat 1 problema que pot impedir que el document sigui totalment accessible.
+	The checker found {n} problems which may prevent the document from being fully accessible.	El verificador ha trobat {n} problemes que poden impedir que el document sigui totalment accessible.
+	The text is the same	El text és el mateix
+	1 difference found	S'ha trobat 1 diferència
+	{n} differences found	S'han trobat {n} diferències
+	Added 1 comment	S'ha afegit 1 comentari
+	Added {n} comments	S'han afegit {n} comentaris
+	Choose a folder for the results	Tria una carpeta per als resultats
+	Files for {name}	Fitxers de {name}
+	An action is already running	Ja hi ha una acció en execució
+	Running action… file {d} of {t}	Executant l'acció… fitxer {d} de {t}
+	No unlinked web addresses were found in the text	No s'ha trobat cap adreça web sense enllaç al text
+	Created 1 link	S'ha creat 1 enllaç
+	Created {n} links	S'han creat {n} enllaços
+	Text recognition is already running	El reconeixement de text ja s'està executant
+	Optimizing… removing user data	Optimitzant… eliminant les dades d'usuari
+	Optimizing… image {d} of {t}	Optimitzant… imatge {d} de {t}
+	Optimizing… cleaning up	Optimitzant… netejant
+	Optimizing… merging identical objects	Optimitzant… combinant objectes idèntics
+	Optimizing… writing the copy	Optimitzant… escrivint la còpia
+	Cancelling…	Cancel·lant…
+	Optimization is already running	L'optimització ja s'està executant
+	Optimization cancelled	Optimització cancel·lada
+	Couldn't optimize the file	No s'ha pogut optimitzar el fitxer
+	Recognizing text… file {d} of {t}	Reconeixent text… fitxer {d} de {t}
+	Recognizing text… page {d} of {t}	Reconeixent text… pàgina {d} de {t}
+	Recognized 1 word	S'ha reconegut 1 paraula
+	Recognized {n} words	S'han reconegut {n} paraules
+	{words} on {pages}	{words} a {pages}
+	; 1 page already had text	; 1 pàgina ja tenia text
+	; {n} pages already had text	; {n} pàgines ja tenien text
+	Recognized {w} words in 1 file	S'han reconegut {w} paraules en 1 fitxer
+	Recognized {w} words in {n} files	S'han reconegut {w} paraules en {n} fitxers
+	; failed: {list}	; ha fallat: {list}
+	1 file done	1 fitxer fet
+	{n} files done	{n} fitxers fets
+	The selected area has been copied ({w} × {h} pixels)	S'ha copiat l'àrea seleccionada ({w} × {h} píxels)
+	Couldn't take the snapshot: {e}	No s'ha pogut fer la captura: {e}
+	Couldn't recover {name}: {e}	No s'ha pogut recuperar {name}: {e}
+	The document now conforms to {level}; save it to keep the changes	El document ara compleix {level}; desa'l per conservar els canvis
+	Fixed what could be fixed; 1 problem remains	S'ha corregit el que s'ha pogut; queda 1 problema
+	Fixed what could be fixed; {n} problems remain	S'ha corregit el que s'ha pogut; queden {n} problemes
+	Custom stamps arrive on the web with file pickers for images	Els segells personalitzats arriben a la web amb selectors de fitxers per a les imatges
+	{file} is too large for a stamp (at most {n} MB)	{file} és massa gran per a un segell (com a màxim {n} MB)
+	Sent to {printer}	Enviat a {printer}
+	Sent to {printer}: {msg}	Enviat a {printer}: {msg}
+	Looking for printers…	Cercant impressores…
+	Sending to {printer}…	Enviant a {printer}…
+	Choose a folder for the searchable files	Tria una carpeta per als fitxers amb text cercable
+	Files are combined in this order. Leave Pages empty to take every page.	Els fitxers es combinen en aquest ordre. Deixa Pàgines en blanc per agafar totes les pàgines.
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Els fitxers es combinen de dalt a baix. Deixa Pàgines en blanc per agafar totes les pàgines.
+	Unlock…	Desbloqueja…
+	Select a password-protected file first	Selecciona primer un fitxer protegit amb contrasenya
+	Enter the permissions password to allow combining	Introdueix la contrasenya de permisos per permetre la combinació
+	Enter the password that opens it	Introdueix la contrasenya que l'obre
+	Unlock {name}	Desbloqueja {name}
+	Unlock {n} files	Desbloqueja {n} fitxers
+	The same password is tried on each file.	Es prova la mateixa contrasenya a cada fitxer.
+	Hide password	Amaga la contrasenya
+	Show password	Mostra la contrasenya
+	Wrong password	Contrasenya incorrecta
+	The password is only used to read the file; it isn't saved.	La contrasenya només s'utilitza per llegir el fitxer; no es desa.
+	Unlock	Desbloqueja
+	Opened, but its security settings don't allow combining. Enter the permissions password.	S'ha obert, però la seva configuració de seguretat no permet combinar. Introdueix la contrasenya de permisos.
+	Unlocked: the combined file won't be password-protected	Desbloquejat: el fitxer combinat no estarà protegit amb contrasenya
+	Unlocked {n} of {m} files	S'han desbloquejat {n} de {m} fitxers
+	Drop PDFs, images, text files or folders here, or choose them.	Deixa aquí PDF, imatges, fitxers de text o carpetes, o tria'ls.
+	Add folder…	Afegeix una carpeta…
+	Add folder and subfolders…	Afegeix una carpeta i les subcarpetes…
+	More ways to add files	Més maneres d'afegir fitxers
+	Every PDF, image and text file in the folder	Tots els PDF, imatges i fitxers de text de la carpeta
+	Every PDF, image and text file in the folder and the folders inside it	Tots els PDF, imatges i fitxers de text de la carpeta i de les carpetes que conté
+	Add folder	Afegeix una carpeta
+	Add folder and subfolders	Afegeix una carpeta i les subcarpetes
+	No PDFs, images or text files found in {folder}	No s'ha trobat cap PDF, imatge ni fitxer de text a {folder}
+	Added the first {n} files in {folder}	S'han afegit els primers {n} fitxers de {folder}
+comment menu	Edit	Edita
+	Undo {action}	Desfés {action}
+	Redo {action}	Refés {action}
+certificate	Subject	Subjecte
+action wizard	Start	Inicia
+	Click to sort, drag to move the column. Drag its edge to resize it.	Fes clic per ordenar i arrossega per moure la columna. Arrossega'n la vora per canviar-ne la mida.
+	Reset columns	Restableix les columnes
+	Remove {n} files	Elimina {n} fitxers
+	{n} selected	{n} seleccionats
+	sorted ascending	ordenat de manera ascendent
+	sorted descending	ordenat de manera descendent
+	Protected: the combined file won't keep its security settings	Protegit: el fitxer combinat no conservarà la configuració de seguretat
+	Add open documents	Afegeix els documents oberts
+	All open documents	Tots els documents oberts
+	No documents are open	No hi ha cap document obert
+	Select a file first	Selecciona primer un fitxer
+	1 file	1 fitxer
+	{n} files	{n} fitxers
+	1 file needs attention	1 fitxer requereix atenció
+	{n} files need attention	{n} fitxers requereixen atenció
+	{name} can't be combined: {why}	{name} no es pot combinar: {why}
+	Check the pages of {name}: {why}	Comprova les pàgines de {name}: {why}
+	Add the files to combine	Afegeix els fitxers que vulguis combinar
+	File name	Nom del fitxer
+	Warnings	Avisos
+	Drag to reorder	Arrossega per reordenar
+	{k} of {n}	{k} de {n}
+	? of {n}	? de {n}
+	Added more than once	Afegit més d'una vegada
+	yesterday	ahir
+	{n} days ago	fa {n} dies
+	No pages selected	Cap pàgina seleccionada
+	Password-protected	Protegit amb contrasenya
+	Its security settings don't allow copying pages	La seva configuració de seguretat no permet copiar pàgines
+	Can't be read: {e}	No es pot llegir: {e}
+	Leave out files that can't be read?	Vols excloure els fitxers que no es poden llegir?
+	These files can't be read, so they won't be in the combined PDF:	Aquests fitxers no es poden llegir, de manera que no apareixeran al PDF combinat:
+	Combine the rest	Combina la resta
+	and {n} more	i {n} més
+	Includes unsaved changes	Inclou canvis sense desar
+	Pages of {name} to combine, e.g. 1-3, 6	Pàgines de {name} que cal combinar, p. ex. 1-3, 6
+	Remove {name}	Elimina {name}
+	Add files…	Afegeix fitxers…
+	Add at least two files	Afegeix almenys dos fitxers
+	Couldn't add {name}: {e}	No s'ha pogut afegir {name}: {e}
+	Couldn't combine files: {e}	No s'han pogut combinar els fitxers: {e}
+	Export comments	Exporta els comentaris
+	Export form data	Exporta les dades del formulari
+	Comment and form data	Dades de comentaris i formularis
+	Export	Exporta
+	Select data files to merge	Selecciona els fitxers de dades que vols combinar
+	Form data and PDF forms	Dades de formulari i formularis PDF
+	Save the spreadsheet	Desa el full de càlcul
+	Save the accessibility report	Desa l'informe d'accessibilitat
+	Save image	Desa la imatge
+	Export certificate	Exporta el certificat
+	Choose a folder for the extracted pages	Tria una carpeta per a les pàgines extretes
+	Choose a folder for the split files	Tria una carpeta per als fitxers dividits
+	Couldn't use {name}: {e}	No s'ha pogut utilitzar {name}: {e}
+	Couldn't extract pages: {e}	No s'han pogut extreure les pàgines: {e}
+	Couldn't write {name}: {e}	No s'ha pogut escriure {name}: {e}
+	Wrote 1 file to {dir}	S'ha escrit 1 fitxer a {dir}
+	Wrote {n} files to {dir}	S'han escrit {n} fitxers a {dir}
+	No pages match those choices	Cap pàgina coincideix amb aquestes opcions
+	Couldn't split: {e}	No s'ha pogut dividir: {e}
+	Couldn't summarize comments: {e}	No s'han pogut resumir els comentaris: {e}
+	Couldn't open the result: {e}	No s'ha pogut obrir el resultat: {e}
+	Importing data arrives on the web with file pickers for data files	La importació de dades arriba a la web amb selectors de fitxers per als fitxers de dades
+	Exported to {path}	Exportat a {path}
+	Merging data files needs the desktop app	Combinar fitxers de dades requereix l'aplicació d'escriptori
+	Merged 1 file into {path}	S'ha combinat 1 fitxer a {path}
+	Merged {n} files into {path}	S'han combinat {n} fitxers a {path}
+	Combined {n} files	S'han combinat {n} fitxers
+	Extracted 1 page	S'ha extret 1 pàgina
+	Extracted {n} pages	S'han extret {n} pàgines
+	Created a comment summary	S'ha creat un resum de comentaris
+	Couldn't open {name}: {e}	No s'ha pogut obrir {name}: {e}
+	Couldn't read {name}: {e}	No s'ha pogut llegir {name}: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	El mode portàtil està desactivat: no es pot escriure a {folder} ({error}). La configuració es conserva a la carpeta d'usuari.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft dibuixa sense processador gràfic, de manera que pot anar lent. Pot ajudar actualitzar el controlador gràfic.
+	Couldn't save: {e}	No s'ha pogut desar: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	La baixada d'adjunts a la web arriba amb M3.10 ({n} bytes preparats)
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	arriba a la fita {m}
+	needs an AI provider (off by default)	requereix un proveïdor d'IA (desactivat per defecte)
+	is available	està disponible
+	is not available yet	encara no està disponible
+	{label} failed: {e}	{label} ha fallat: {e}
+	Undid {label}	S'ha desfet {label}
+	Redid {label}	S'ha refet {label}
+	A document needs at least one page: copy instead	Un document necessita almenys una pàgina: copia-la en lloc de retallar-la
+	Cut {what}	S'ha retallat {what}
+	Copied {what}	S'ha copiat {what}
+	1 page	1 pàgina
+	{n} pages	{n} pàgines
+	Copy or cut pages first	Copia o retalla primer unes pàgines
+	Couldn't save {name}: {e}	No s'ha pogut desar {name}: {e}
+	Saved {name}	S'ha desat {name}
+	Saved, but reopening failed: {e}	S'ha desat, però no s'ha pogut tornar a obrir: {e}
+	Downloaded {name}	S'ha baixat {name}
+	Couldn't download {name}: {e}	No s'ha pogut baixar {name}: {e}
+	Reverted to the last saved version	S'ha revertit a l'última versió desada
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Això no ha funcionat: un error intern l'ha aturat ({m}). Els teus documents no s'han modificat.
+	Nothing to undo	No hi ha res per desfer
+	Nothing to redo	No hi ha res per refer
+	This document has no form fields you can fill in	Aquest document no té camps de formulari que es puguin emplenar
+	This document has no comments to flatten	Aquest document no té comentaris per aplanar
+	This document has no form fields to flatten	Aquest document no té camps de formulari per aplanar
+	There are no redaction marks (mark text, areas or pages first)	No hi ha marques de censura (marca primer text, àrees o pàgines)
+	This document has no {kind} to change	Aquest document no té cap {kind} per canviar
+	header or footer	capçalera o peu de pàgina
+	watermark	marca d'aigua
+	background	fons
+	This document isn't password-protected	Aquest document no està protegit amb contrasenya
+	Enter permissions password…	Introdueix la contrasenya de permisos…
+	Permissions password	Contrasenya de permisos
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” té restriccions de seguretat. Introdueix-ne la contrasenya de permisos per aixecar-les.
+	Restrictions lifted	Restriccions aixecades
+	Couldn't unlock {name}: {e}	No s'ha pogut desbloquejar {name}: {e}
+	This document has no restrictions to lift	Aquest document no té restriccions per aixecar
+	The document's security settings don't allow this change	La configuració de seguretat del document no permet aquest canvi
+	The document's security settings don't allow copying text and images	La configuració de seguretat del document no permet copiar text ni imatges
+	Open a document first	Obre primer un document
+	Security will be removed when you save	La seguretat s'eliminarà en desar
+	Click text or an image to edit it	Fes clic en un text o una imatge per editar-lo
+	Drag a rectangle to create a link; double-click a link to edit it	Arrossega un rectangle per crear un enllaç; fes doble clic en un enllaç per editar-lo
+	There are no redaction marks to apply	No hi ha marques de censura per aplicar
+	Drag to draw the area where the signature should appear.	Arrossega per dibuixar l'àrea on ha d'aparèixer la signatura.
+	Couldn't fit the visible content: {e}	No s'ha pogut ajustar el contingut visible: {e}
+	Drag a rectangle around the area to copy	Arrossega un rectangle al voltant de l'àrea que vols copiar
+	Click on the page to add a {tool}, or drag to set its size	Fes clic a la pàgina per afegir-hi un element {tool}, o arrossega per definir-ne la mida
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Arrossega un rectangle sobre una pàgina per escapçar-la; fes doble clic en una pàgina per definir els quadres de pàgina
+	Keep tool selected: on	Mantén l'eina seleccionada: activat
+	Keep tool selected	Mantén l'eina seleccionada
+	Opacity	Opacitat
+	Line thickness	Gruix de línia
+	What word or phrase would you like to search for?	Quina paraula o frase vols cercar?
+	Searching… {s} of {p} pages	Cercant… {s} de {p} pàgines
+	 (searching… {s} of {p} pages)	 (cercant… {s} de {p} pàgines)
+	1 instance	1 coincidència
+	{n} instances	{n} coincidències
+	Go to this result	Ves a aquest resultat
+	Highlight	Ressalta
+	Draw	Dibuixa
+	Polygon	Polígon
+	Connected lines	Línies connectades
+	Eraser	Goma d'esborrar
+	Sign	Signa
+	Certified by {by}	Certificat per {by}
+	At least one signature is invalid.	Almenys una signatura no és vàlida.
+	Signed and all signatures are valid.	Signat i totes les signatures són vàlides.
+	At least one signature has problems.	Almenys una signatura té problemes.
+	This document is secured. Some changes are restricted by its security settings.	Aquest document està protegit. Alguns canvis estan restringits per la seva configuració de seguretat.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Aquest és un formulari XFA dinàmic, que PdfCraft encara no pot mostrar. El que veus és la pàgina de substitució del fitxer.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Aquest formulari també conté dades XFA, que PdfCraft encara no llegeix. Pots emplenar-ne els camps, però Acrobat pot mostrar els valors XFA.
+	This document contains {n} interactive form fields.	Aquest document conté {n} camps de formulari interactius.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	Aquest fitxer estava malmès i s'ha reparat. En desar, es conserva la versió reparada.
+	Dismiss	Descarta
+	Hide field highlights	Amaga el ressaltat dels camps
+	Highlight fields	Ressalta els camps
+	Security settings	Configuració de seguretat
+	Details	Detalls
+	Select (V)	Selecciona (V)
+	Hand (H)	Mà (H)
+	Delete pages (Delete)	Suprimeix pàgines (Supr)
+	Insert a blank page after the selection	Insereix una pàgina en blanc després de la selecció
+	Insert pages from a file…	Insereix pàgines d'un fitxer…
+	Extract pages to a new document	Extreu pàgines a un document nou
+	Split into files…	Divideix en fitxers…
+	Select pages	Selecciona pàgines
+	Cut	Retalla
+	Copy	Copia
+	Paste after	Enganxa després
+	Rename	Canvia el nom
+	Set to current page ({n})	Defineix com a pàgina actual ({n})
+	Move up	Mou amunt
+	Move down	Mou avall
+	Indent	Sagna
+	Outdent	Treu el sagnat
+	This document has no form fields.	Aquest document no té camps de formulari.
+	Tab order: move a field with its arrows.	Ordre de tabulació: mou un camp amb les fletxes.
+	Unplaced	Sense col·locar
+	Has JavaScript actions (run in M6)	Té accions de JavaScript (s'executen a M6)
+	Page	Pàgina
+	None	Cap
+	Delete selected fields	Suprimeix els camps seleccionats
+	Diagnostic details	Detalls de diagnòstic
+	The operation failed.	L'operació ha fallat.
+	no such document	no existeix aquest document
+	nothing to undo	no hi ha res per desfer
+	nothing to redo	no hi ha res per refer
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	aquest document està signat: reescriure'l invalidaria les signatures (desa'l de manera incremental)
+	the document is protected by a password	el document està protegit amb una contrasenya
+	the password is incorrect	la contrasenya és incorrecta
+	the document has no page tree	el document no té arbre de pàgines
+	a document must keep at least one page	un document ha de conservar almenys una pàgina
+	a bookmark cannot be moved inside itself	un marcador no es pot moure dins d'ell mateix
+	the title must not be empty	el títol no pot estar buit
+	the document has no form fields	el document no té camps de formulari
+	there are no redaction marks to apply	no hi ha marques de censura per aplicar
+	there are no pages to print	no hi ha pàgines per imprimir
+	the document has no tags	el document no té etiquetes
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	els models de reconeixement de text no estan instal·lats (reinstal·la PdfCraft o defineix PDFCRAFT_MODELS amb la carpeta que els conté)
+	the image is empty	la imatge és buida
+	this file isn't XFDF, FDF, XML or text form data	aquest fitxer no és de dades de formulari XFDF, FDF, XML ni de text
+	nothing in the file matches this document	res del fitxer coincideix amb aquest document
+	This page couldn't be displayed.\n{e}	No s'ha pogut mostrar aquesta pàgina.\n{e}
+	Go to page {p}	Ves a la pàgina {p}
+	{s} action	Acció {s}
+	Page {p} of {n}	Pàgina {p} de {n}
+	1 page selected	1 pàgina seleccionada
+	{n} pages selected	{n} pàgines seleccionades
+	{name} — unsaved changes	{name} — canvis sense desar
+	{kind} field	Camp de tipus {kind}
+	Select a file for the stamp	Selecciona un fitxer per al segell
+	JavaScript, e.g. getField("total").value	JavaScript, p. ex. getField("total").value
+	Font: Helvetica	Tipus de lletra: Helvetica
+	e.g. en-US	p. ex. ca-ES
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Renderització: hayro (bootstrap) · Interfície: egui · Icones: Lucide (ISC) · Tipus de lletra: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	Casella de selecció
+	Radio	Botó d'opció
+	PushButton	Botó d'acció
+	Combo	Llista combinada
+	List	Llista
+	Unknown	Desconegut
+	The document has no XMP metadata	El document no té metadades XMP
+	The title in the metadata and the document information differ	El títol de les metadades i la informació del document difereixen
+	The document is encrypted	El document està xifrat
+	Device colour is used, but there is no PDF/A output intent	S'utilitza color de dispositiu, però no hi ha cap intenció de sortida PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	S'utilitza DeviceCMYK: necessita una intenció de sortida CMYK (no s'afegeix automàticament)
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	S'utilitza DeviceCMYK, però la intenció de sortida PDF/A no és un perfil CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	S'utilitza DeviceRGB, però la intenció de sortida PDF/A no és un perfil RGB
+	The document has additional actions (/AA)	El document té accions addicionals (/AA)
+	The document has document-level JavaScript	El document té JavaScript a nivell de document
+	The form asks viewers to make appearances (NeedAppearances)	El formulari demana als visualitzadors que generin aparences (NeedAppearances)
+	A form field has additional actions	Un camp de formulari té accions addicionals
+	A stream uses LZW compression	Un flux utilitza compressió LZW
+	A stream refers to an external file	Un flux fa referència a un fitxer extern
+	An image asks to be interpolated	Una imatge demana ser interpolada
+	An image has alternates or OPI information	Una imatge té alternatives o informació OPI
+	PostScript XObjects aren't allowed	No es permeten els XObjects PostScript
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Els fitxers incrustats han de ser fitxers PDF/A (utilitza PDF/A-3 per a la resta)
+	An embedded file has no AFRelationship	Un fitxer incrustat no té AFRelationship
+	Select Icon	Selecciona la icona
+	Choose images	Tria imatges
+	{dpi} pixels/inch	{dpi} píxels/polzada
+	Type your {what}.	Escriu {what}.
+	Draw your {what} below.	Dibuixa {what} a sota.
+	Your name	El teu nom
+	Images and text (converted to PDF)	Imatges i text (convertits a PDF)
+	Images and text	Imatges i text
+	Check Box Style:	Estil de la casella de selecció:
+	Button Style:	Estil del botó:
+	Check	Marca
+	Circle	Cercle
+	Diamond	Rombe
+	Square	Quadrat
+	Star	Estrella
+	{month} {y}	{month} {y}
+	Change {key}	Canvia {key}
+	Insert pages from {name}	Insereix pàgines de {name}
+	Insert pages from {name} — 1 field renamed	Insereix pàgines de {name} — 1 camp s'ha reanomenat
+	Insert pages from {name} — fields renamed	Insereix pàgines de {name} — camps reanomenats
+	Fill in {name}	Emplena {name}
+	Set the image of {name}	Defineix la imatge de {name}
+	Edit script of {name}	Edita l'script de {name}
+	Import {name}	Importa {name}
+	Add bookmark	Afegeix un marcador
+	Rename bookmark	Canvia el nom del marcador
+	Delete bookmark	Suprimeix el marcador
+	Move bookmark	Mou el marcador
+	Set bookmark destination	Defineix la destinació del marcador
+	Add stamp	Afegeix un segell
+	Delete comment	Suprimeix el comentari
+	Edit comment	Edita el comentari
+	Erase	Esborra
+	Lock comment	Bloqueja el comentari
+	Unlock comment	Desbloqueja el comentari
+	Move comment	Mou el comentari
+	Resize comment	Canvia la mida del comentari
+	Change comment properties	Canvia les propietats del comentari
+	Add field	Afegeix un camp
+	Change field properties	Canvia les propietats del camp
+	Delete field	Suprimeix el camp
+	Duplicate field	Duplica el camp
+	Set tab order	Defineix l'ordre de tabulació
+	Change initial view	Canvia la visualització inicial
+	Set alternate text	Defineix el text alternatiu
+	Mark figure as decorative	Marca la figura com a decorativa
+	Run JavaScript	Executa JavaScript
+	Delete document JavaScript	Suprimeix el JavaScript del document
+	Edit document JavaScript	Edita el JavaScript del document
+	Edit text	Edita el text
+	Load document font	Carrega el tipus de lletra del document
+	Move image	Mou la imatge
+	Rotate image	Gira la imatge
+	Flip image	Inverteix la imatge
+	Delete image	Suprimeix la imatge
+	Add header & footer	Afegeix capçalera i peu de pàgina
+	Update header & footer	Actualitza la capçalera i el peu de pàgina
+	Update watermark	Actualitza la marca d'aigua
+	Add background	Afegeix un fons
+	Update background	Actualitza el fons
+	Add image	Afegeix una imatge
+	Edit content	Edita el contingut
+	Delete content	Suprimeix el contingut
+	Remove redaction marks	Elimina les marques de censura
+	Add link	Afegeix un enllaç
+	Change link properties	Canvia les propietats de l'enllaç
+	Delete link	Suprimeix l'enllaç
+	Create link	Crea un enllaç
+	Flatten	Aplana
+	Flatten Fill & Sign	Aplana Emplena i signa
+	Add sticky note	Afegeix una nota adhesiva
+	Add highlight	Afegeix un ressaltat
+	Add underline	Afegeix un subratllat
+	Add strikethrough	Afegeix un ratllat
+	Add squiggly underline	Afegeix un subratllat ondulat
+	Add rectangle	Afegeix un rectangle
+	Add oval	Afegeix un oval
+	Add arrow	Afegeix una fletxa
+	Add line	Afegeix una línia
+	Add drawing	Afegeix un dibuix
+	Add text box	Afegeix un quadre de text
+	Add checkmark	Afegeix una marca de verificació
+	Add cross	Afegeix una creu
+	Add dot	Afegeix un punt
+	Add signature	Afegeix una signatura
+	Add redaction mark	Afegeix una marca de censura
+	Add cloud	Afegeix un núvol
+	Add polygon	Afegeix un polígon
+	Add connected lines	Afegeix línies connectades
+	Add callout	Afegeix una crida
+	Add inserted text	Afegeix un text inserit
+	Add file attachment	Afegeix un fitxer adjunt
+	Set status Accepted	Defineix l'estat Acceptat
+	Set status Rejected	Defineix l'estat Rebutjat
+	Set status Cancelled	Defineix l'estat Cancel·lat
+	Set status Completed	Defineix l'estat Completat
+	Set status None	Defineix l'estat Cap
+	Set status Unmarked	Defineix l'estat Sense marcar
+	Save as PDF/A-1b	Anomena i desa com a PDF/A-1b
+	Save as PDF/A-2b	Anomena i desa com a PDF/A-2b
+	Save as PDF/A-3b	Anomena i desa com a PDF/A-3b
+	Fill & Sign: change signature	Emplena i signa: canvia la signatura
+	Fill & Sign: change initials	Emplena i signa: canvia les inicials
+	Fill & Sign: remove saved signature	Emplena i signa: elimina la signatura desada
+	Fill & Sign: remove saved initials	Emplena i signa: elimina les inicials desades
+	Change signature	Canvia la signatura
+	Change initials	Canvia les inicials
+	Measure distance	Mesura la distància
+	Measure perimeter	Mesura el perímetre
+	Measure area	Mesura l'àrea
+	Set measurement scale	Defineix l'escala de mesura
+	Measurement information	Informació de mesura
+	Measurement snapping	Ajust de mesura
+	Export measurements as CSV	Exporta les mesures com a CSV
+	Distance	Distància
+	Perimeter	Perímetre
+	Area	Àrea
+	Drawing scale	Escala del dibuix
+	Scale	Escala
+	Common scales	Escales habituals
+	Enter a scale such as 1:50.	Introduïu una escala com 1:50.
+	Applying a scale switches units to m / mm.	En aplicar una escala, les unitats canvien a m / mm.
+	Snapping	Ajust
+	Export measurements	Exporta les mesures
+	Open a PDF to measure it.	Obre un PDF per mesurar-lo.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Fes clic als vèrtexs. Retorn o doble clic finalitza un perímetre o una àrea. Fes clic al primer punt per tancar una àrea.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Maj restringeix a 45 graus. Retrocés elimina un vèrtex. Esc cancel·la.
+	Angle	Angle
+	Click the first point to begin.	Fes clic al primer punt per començar.
+	Snap to drawing	Ajusta al dibuix
+	Endpoints	Extrems
+	Midpoints	Punts mitjans
+	Intersections	Interseccions
+	Paths	Traçats
+	Sensitivity	Sensibilitat
+	Unit	Unitat
+	Decimals	Decimals
+	Calibrate from two points	Calibra a partir de dos punts
+	Entire page	Pàgina sencera
+	Viewport rectangle in page points (x, y, width, height)	Rectangle de la zona visible en punts de pàgina (x, y, amplada, alçada)
+	Viewport	Zona visible
+	Apply scale	Aplica l'escala
+	Saved measurements	Mesures desades
+	Saved measurements.	Mesures desades.
+	Endpoint	Extrem
+	Midpoint	Punt mitjà
+	Intersection	Intersecció
+	Path	Traçat
+	This drawing exceeds the snapping limit; only the first paths are used.	Aquest dibuix supera el límit d'ajust; només s'utilitzen els primers traçats.
+	Some page content couldn't be read; snapping uses the rest.	Part del contingut de la pàgina no s'ha pogut llegir; l'ajust utilitza la resta.
+	Unsupported measurements	Mesures no compatibles
+	Label	Etiqueta
+	{n} measurements use an unsupported format and are left out.	{n} mesures utilitzen un format no compatible i s'han deixat fora.
+	This area has too many overlapping paths; intersection snapping is limited.	Aquesta àrea té massa traçats superposats; l'ajust a les interseccions és limitat.
+	This measurement needs at least {n} points.	Aquesta mesura necessita almenys {n} punts.
+	Change {what}	Canvia {what}
+	Cut and stack	Cascada i apilat
+	Default workspace mode	Mode d'espai de treball per defecte
+	Documents and view	Documents i visualització
+	Open email app	Obre l'aplicació de correu
+	Open link	Obre l'enllaç
+	Open this web page?	Vols obrir aquesta pàgina web?
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Els scripts s'executen en un entorn aïllat sense accés a fitxers ni a la xarxa. Un script que demana obrir una pàgina web necessita primer el teu permís. Amb JavaScript desactivat, les funcions estàndard de format, validació i càlcul d'Acrobat continuen funcionant.
+	Sign yourself	Signa tu mateix
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	S'utilitza en obrir PDF. Un mode d'inici o de control explícit té prioritat durant la sessió.
+	Write this email?	Vols escriure aquest correu?
+	{who} in this document wants to open this address in your browser:	{who} d'aquest document vol obrir aquesta adreça al navegador:
+	{who} in this document wants to open your email app with this address:	{who} d'aquest document vol obrir l'aplicació de correu amb aquesta adreça:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Aquesta adreça web barreja lletres de diferents alfabets, una manera habitual d'imitar el nom d'un altre lloc.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Aquesta adreça web utilitza lletres d'un altre alfabet, que poden semblar-se a les habituals.
+	Create PDF from images	Crea un PDF a partir d'imatges
+	Selected image files: {count}	Fitxers d'imatge seleccionats: {count}
+	Use image resolution	Utilitza la resolució de la imatge
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Utilitza els DPI incrustats de cada imatge; si no n'hi ha, utilitza 72 DPI.
+	Use 72 DPI (one point per pixel)	Utilitza 72 DPI (un punt per píxel)
+	Use custom DPI	Utilitza uns DPI personalitzats
+	DPI sets the printed page size without resampling the image.	Els DPI defineixen la mida de la pàgina impresa sense remostrejar la imatge.
+	Create	Crea
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulari XFA dinàmic disposat a partir de la seva plantilla: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Els scripts d'aquest formulari estan desactivats perquè un s'ha executat massa temps. Torna a obrir el document per executar-los de nou.
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulari XFA: els seus camps i les seves dades XFA es mantenen sincronitzats, de manera que altres visualitzadors mostren el que emplenes.
+@plural	{n} page|{n} pages	{n} pàgina|{n} pàgines
+@plural	{n} field|{n} fields	{n} camp|{n} camps
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} camp té un nom que col·lideix amb fitxers anteriors i es reanomenarà: {list}|{n} camps tenen un nom que col·lideix amb fitxers anteriors i es reanomenaran: {list}
+	Switch to two-page view first to show the cover page	Canvia primer a la visualització de dues pàgines per mostrar la portada
+	Page display: {layout}	Visualització de pàgina: {layout}
+	Fit to width scrolling	Desplaçament ajustat a l'amplada
+	Fit one full page	Ajusta una pàgina sencera
+	Default page display	Visualització de pàgina per defecte
+	Default zoom	Zoom per defecte
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	S'utilitza quan un PDF no demana cap disposició ni zoom. El desplaçament continu mai no salta entre pàgines.
+	Show	Mostra
+	Sort	Ordena
+	Reverse the order	Inverteix l'ordre
+	Grab bag	Calaix de sastre
+	Table	Taula
+	Username	Nom d'usuari
+	Display name	Nom visible
+	Real name	Nom real
+	Name (A–Z)	Nom (A–Z)
+	Merged PRs	PR combinats
+	PRs	PR
+	Commits	Commits
+	Lines added	Línies afegides
+	+LOC	+LOC
+	Lines deleted	Línies suprimides
+	−LOC	−LOC
+	Line delta	Diferència de línies
+	ΔLOC	ΔLOC
+	Binary assets added	Recursos binaris afegits
+	+Bin	+Bin
+	Binary assets removed	Recursos binaris eliminats
+	−Bin	−Bin
+	First commit	Primera contribució
+	First	Primera
+	Last commit	Última contribució
+	Last	Última
+	No contributor data was built into this copy.	En aquesta còpia no s'han inclòs dades de contribuïdors.
+	No model credits were built into this copy.	En aquesta còpia no s'han inclòs crèdits de models.
+	{n} contributors · {c} commits	{n} contribuïdors · {c} contribucions
+	Company	Empresa
+	Model	Model
+	% of all commits	% de totes les contribucions
+	Lines +/−	Línies +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} contribucions, +{added} / −{deleted} línies (Δ {delta}), +{bin_added} / −{bin_deleted} recursos binaris, {first} – {last}
+	Reopen the files that were open when PdfCraft last closed	Reobre els fitxers que eren oberts l'última vegada que es va tancar PdfCraft
+	Add {what}	Afegeix {what}
+	Use {what}	Utilitza {what}
+	Place saved {what}	Col·loca {what} desats
+	Remove saved {what}	Elimina {what} desats
+	A link	Un enllaç
+	A button	Un botó
+	A script	Un script
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} d'aquest document ha intentat obrir una adreça que PdfCraft no obre: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} d'aquest document ha intentat obrir una adreça que PdfCraft no obre: {e}. Als documents només s'hi poden obrir enllaços web (http, https) i de correu electrònic (mailto).
+	Another file dialog is still open. Finish with it first.	Hi ha un altre diàleg de fitxers obert. Acaba'l primer.
+	Couldn't show the file picker. Please try again.	No s'ha pogut mostrar el selector de fitxers. Torna-ho a provar.
+	The document changed while you were choosing a file, so nothing was changed.	El document ha canviat mentre triaves un fitxer, de manera que no s'ha modificat res.
+	The document was closed before it could be saved.	El document s'ha tancat abans de poder-se desar.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Les pàgines s'han extret però no s'han suprimit, perquè el document ha canviat mentre triaves una carpeta.
+	That didn't work: an internal error stopped it ({m}).	No ha funcionat: un error intern ho ha aturat ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	No s'han pogut llistar els identificadors digitals de l'emmagatzematge de Windows: {e}
+	Align fields	Alinea els camps
+	Distribute fields	Distribueix els camps
+	Match field sizes	Iguala la mida dels camps
+	Mark for redaction	Marca per censurar
+	Mark pages for redaction	Marca pàgines per censurar
+	Change document properties	Canvia les propietats del document
+	Mark differences	Marca les diferències
+	Run form script	Executa l'script del formulari
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	El contingut amb scripts ha de ser utilitzable amb teclat i amb tecnologies d'assistència. Revisa els scripts del document.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Les files d'una taula han d'anar directament dins la taula o dins de la seva capçalera, cos o peu. Corregeix les etiquetes de la taula.
+	Basic constraints	Restriccions bàsiques
+	SHA-1 digest	Resum SHA-1
+	SHA-256 digest	Resum SHA-256
+	Squiggly	Ondulat
+	Home / End	Inici / Fi
+	H / Space (hold)	H / Espai (mantén premut)
+	Reload documents when their files change on disk	Torna a carregar els documents quan els seus fitxers canviïn al disc
+	Don't show again	No ho tornis a mostrar
+	Show a notice when a document is secured	Mostra un avís quan un document està protegit
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Aquest fitxer ha canviat al disc. Torna'l a carregar per veure'n la versió nova; es perdran els canvis sense desar.
+	Reload	Torna a carregar
+	Couldn't reload {name}: {e}	No s'ha pogut tornar a carregar {name}: {e}
+	Created a PDF from {n} files	S'ha creat un PDF a partir de {n} fitxers
+	PDF, images and text	PDF, imatges i text
+	Insert a file before page {label}	Insereix un fitxer abans de la pàgina {label}
+	Insert a file at the end	Insereix un fitxer al final
+	Save pages	Desa les pàgines
+	Save these pages as one PDF	Desa aquestes pàgines com un sol PDF
+	No changes to save	No hi ha canvis per desar
+	Created a PDF from {n} files; left out: {names}	S'ha creat un PDF a partir de {n} fitxers; exclosos: {names}
+	Created a PDF from the first {n} files	S'ha creat un PDF a partir dels primers {n} fitxers
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Cap d'aquests fitxers es pot convertir en PDF; utilitza PDF, imatges o fitxers .txt
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Tria una imatge PNG o JPEG (fins a 4 MiB). Es conserva la transparència.
+	Couldn't import the signature image: {e}	No s'ha pogut importar la imatge de la signatura: {e}
+	Go to page…	Vés a la pàgina…
+	About	Quant a
+	Contributors	Contribuïdors
+	Models	Models
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continua només si confies en aquest document. Una adreça pot dur informació del document, com ara el que has escrit al formulari.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Imprimeix a una cara. Mantén els fulls en ordre, talla per les marques i apila els munts d'esquerra a dreta i de dalt a baix.
+	For page sizes and margins.	Per a les mides de pàgina i els marges.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Els tipus de lletra de text del PDF no poden dibuixar “{c}” ({code}). Tria un text compatible.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Els tipus de lletra estàndard no poden dibuixar “{c}” ({code}). De moment només es poden afegir com a text caràcters d'Europa occidental.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	El tipus de lletra d'aquest camp no pot dibuixar “{c}” ({code}), de manera que PdfCraft hi mostra un ?. El valor es desa i altres visors de PDF tornen a dibuixar el camp a partir d'ell.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Els tipus de lletra amb què escriu PdfCraft no poden dibuixar “{c}” ({code}), de manera que es mostra com a ? a tots els visors de PDF. El text es desa.
+	Open arrow	Fletxa oberta
+	Closed arrow	Fletxa tancada
+	Butt	Pla
+	Reverse open arrow	Fletxa oberta inversa
+	Reverse closed arrow	Fletxa tancada inversa
+	Slash	Barra inclinada
+	Larger pages	Pàgines més grans
+	Smaller pages	Pàgines més petites
+	Reset page size	Restableix la mida de la pàgina
+	Date format	Format de data
+	Fill & Sign dates	Dates d'Omple i signa
+	Pattern	Patró
+	Today: {date}	Avui: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy o yy any · m o mm mes · mmm o mmmm nom del mes · d o dd dia · ddd o dddd dia de la setmana. H, h, M, s i t són lletres d'hora i no es poden usar soles: posa {escape} davant d'una lletra per mostrar-la tal com és.
+	Same as interface ({language})	Igual que la interfície ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} encara no es pot escriure al PDF: el text d'Omple i signa només admet l'europeu occidental. Tria un format numèric com dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Obre les preferències del controlador de la impressora. Es desen per a totes les impressions d'aquest ordinador; les còpies, la impressió a doble cara, l'escala de grisos i el paper triats aquí continuen aplicant-se.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	La configuració pròpia del controlador de la impressora per a aquesta impressió: safata de paper, tipus de paper, acabats i més.
+	Couldn't open the printer's preferences: {e}	No s'han pogut obrir les preferències de la impressora: {e}
+	Printer properties	Propietats de la impressora
+	Reset to printer defaults	Restableix els valors per defecte de la impressora
+	This printer offers no settings of its own.	Aquesta impressora no ofereix cap configuració pròpia.
+	Scroll tabs left	Desplaça les pestanyes cap a l'esquerra
+	Scroll tabs right	Desplaça les pestanyes cap a la dreta
+	Shared Field Properties	Propietats compartides dels camps
+	{n} fields selected	{n} camps seleccionats
+	Mixed	Barrejat
+	Custom font	Tipus de lletra personalitzat
+	Only checked properties will change. Mixed means the selected fields have different values.	Només canviaran les propietats marcades. Barrejat vol dir que els camps seleccionats tenen valors diferents.
+	Shift- or Ctrl/Command-click to select several fields.	Fes clic amb Maj o Ctrl/Ordre premuts per seleccionar diversos camps.
+	Font size 0 uses automatic sizing.	La mida de lletra 0 utilitza la mida automàtica.
+	Character limit:	Límit de caràcters:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Un límit de caràcters 0 vol dir sense límit. Una pinta de caràcters necessita un límit.
+	To change locked fields, also set Locked to No.	Per canviar camps bloquejats, defineix també Bloquejat com a No.
+	Comb of characters	Pinta de caràcters
+	The document changed while you were editing field properties.	El document ha canviat mentre n'editaves les propietats dels camps.
+	The document is no longer open.	El document ja no és obert.
+	The field properties dialog is no longer open.	El diàleg de propietats dels camps ja no és obert.
+	The field properties could not be changed.	No s'han pogut canviar les propietats dels camps.
+	The selected fields could not be found. Select them again.	No s'han trobat els camps seleccionats. Torna'ls a seleccionar.
+	The field {name} no longer exists.	El camp {name} ja no existeix.
+	A selected field has no widget on any page, so the fields can't be edited together.	Un camp seleccionat no té cap giny a cap pàgina, de manera que els camps no es poden editar junts.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, la mida més gran a la qual es poden dibuixar)
+	The security settings don't allow screen readers to read the text	La configuració de seguretat no permet que els lectors de pantalla llegeixin el text
+	No page has text: the document appears to be images of pages	Cap pàgina no té text: el document sembla ser imatges de pàgines
+	The document has no tags (structure tree)	El document no té etiquetes (arbre d'estructura)
+	The document isn't marked as tagged (MarkInfo Marked)	El document no està marcat com a etiquetat (MarkInfo Marked)
+	No document language is set	No s'ha definit cap idioma del document
+	The document has no title	El document no té títol
+	The window shows the file name, not the title (Initial View > Show)	La finestra mostra el nom del fitxer, no el títol (Visualització inicial > Mostra)
+	{n} pages and no bookmarks	{n} pàgines i cap marcador
+	The document isn't tagged, so none of its content is	El document no està etiquetat, de manera que cap dels seus continguts ho està
+	Page {p}: {n} untagged content item	Pàgina {p}: {n} element de contingut sense etiquetar
+	Page {p}: {n} untagged content items	Pàgina {p}: {n} elements de contingut sense etiquetar
+	Form field on page {p} isn't tagged	El camp de formulari de la pàgina {p} no està etiquetat
+	{} annotation on page {p} isn't tagged	L'anotació {} de la pàgina {p} no està etiquetada
+	Page {p} doesn't tab in structure order	La pàgina {p} no segueix l'ordre d'estructura en tabular
+	Font {} on page {p} doesn't map its characters to Unicode	El tipus de lletra {} de la pàgina {p} no assigna els seus caràcters a Unicode
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	El tipus de lletra (sense nom) de la pàgina {p} no assigna els seus caràcters a Unicode
+	Field "{}" on page {p} has no description (tooltip)	El camp "{}" de la pàgina {p} no té descripció (suggeriment)
+	{ty} element: {what}	Element {ty}: {what}
+	{ty} element on page {p}: {what}	Element {ty} a la pàgina {p}: {what}
+	no alternate text	sense text alternatiu
+	its alternate text is inside another element's and will never be read	el seu text alternatiu és dins del d'un altre element i no es llegirà mai
+	alternate text on an element with no page content	text alternatiu en un element sense contingut de pàgina
+	alternate text hides an annotation inside it	el text alternatiu amaga una anotació que hi ha dins
+	not in a Table, THead, TBody or TFoot	no és dins d'un Table, THead, TBody o TFoot
+	not in a TR	no és dins d'un TR
+	no header cells (TH)	sense cel·les de capçalera (TH)
+	rows have between {min} and {max} columns	les files tenen entre {min} i {max} columnes
+	no summary	sense resum
+	not in an L (list)	no és dins d'un L (llista)
+	not in an LI (list item)	no és dins d'un LI (element de llista)
+	the first heading is an H{n}; headings should not skip levels	el primer encapçalament és un H{n}; els encapçalaments no haurien de saltar nivells
+	H{n} follows an H{d}; headings should not skip levels	H{n} va després d'un H{d}; els encapçalaments no haurien de saltar nivells
+	… and {n} more	… i {n} més
+	Accessibility Report	Informe d'accessibilitat
+	Filename	Nom del fitxer
+	Report created	Informe creat
+	The checker found problems which may prevent the document from being fully accessible.	El verificador ha trobat problemes que poden impedir que el document sigui plenament accessible.
+	Detailed Report	Informe detallat
+	Rule Name	Nom de la regla
+	The metadata doesn't identify the file as {}	Les metadades no identifiquen el fitxer com a {}
+	Page {} has additional actions	La pàgina {} té accions addicionals
+	A {} action isn't allowed	No es permet una acció {}
+	{} annotations aren't allowed	No es permeten les anotacions {}
+	A {} annotation isn't set to print, or is hidden	Una anotació {} no està configurada per imprimir-se, o està amagada
+	A {} annotation has no appearance stream	Una anotació {} no té flux d'aparença
+	A {} annotation has additional actions	Una anotació {} té accions addicionals
+	The font {} isn't embedded	El tipus de lletra {} no està incrustat
+	A font isn't embedded	Un tipus de lletra no està incrustat
+	The signature has no valid byte range.	La signatura no té un interval de bytes vàlid.
+	The signature's byte range does not match the file.	L'interval de bytes de la signatura no coincideix amb el fitxer.
+	The signature's byte range does not exclude exactly its contents.	L'interval de bytes de la signatura no exclou exactament el seu contingut.
+	The signature contents are not hexadecimal.	El contingut de la signatura no és hexadecimal.
+	The signature could not be read ({}).	No s'ha pogut llegir la signatura ({}).
+	PdfCraft can't check this signature yet: {}.	PdfCraft encara no pot comprovar aquesta signatura: {}.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	La signatura utilitza el format antic adbe.x509.rsa_sha1.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	La signatura està codificada en BER (longituds indefinides) en lloc de DER; s'ha llegit de manera permissiva.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	El contingut signat és un OCTET STRING construït (segmentat), com permet el BER; s'ha llegit igualment.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	El valor de la signatura RSA no té la longitud del mòdul de la clau (s'han suprimit o afegit bytes zero inicials); s'ha llegit igualment.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	El DigestInfo de la signatura RSA no té el paràmetre NULL (els signants més antics l'escriuen així); s'ha llegit igualment.
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	La signatura ECDSA no està en DER canònic (bytes finals, farciment o byte de signe que falta); s'ha llegit igualment.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	La signatura ECDSA són els valors r i s en brut en lloc d'una seqüència DER; s'ha llegit igualment.
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	L'algorisme de signatura i l'algorisme de resum del SignerInfo indiquen resums diferents; la signatura es va fer amb el del SignerInfo.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Aquesta signatura utilitza SHA-1, un algorisme de resum feble: se n'han demostrat col·lisions. Encara se'n valida perquè molts documents signats fa anys l'utilitzen, però no s'hi ha de confiar.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Aquesta signatura utilitza RIPEMD-160, un algorisme de resum antic de 160 bits que ja no es recomana per a signatures. Encara es valida, però no s'hi ha de confiar.
+	The document has been altered or corrupted since the signature was applied.	El document ha estat alterat o s'ha corromput des que es va aplicar la signatura.
+	The signer's certificate is not in the signature.	El certificat del signant no és a la signatura.
+	The signature value does not match the signer's certificate: the signature is corrupt.	El valor de la signatura no coincideix amb el certificat del signant: la signatura està corrompuda.
+	The signature could not be checked ({}).	No s'ha pogut comprovar la signatura ({}).
+	The signature could not be verified ({}).	No s'ha pogut verificar la signatura ({}).
+	This document has not been modified since this signature was applied.	Aquest document no s'ha modificat des que es va aplicar aquesta signatura.
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	El document s'ha modificat des que es va aplicar aquesta signatura, però els canvis són permesos ({}).
+	The document has been altered since this signature was applied in ways it does not permit ({}).	El document ha estat alterat des que es va aplicar aquesta signatura d'una manera que no permet ({}).
+	The signer's certificate was not valid at the time of signing.	El certificat del signant no era vàlid en el moment de signar.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	El certificat del signant no permet signatures digitals (el seu ús de clau no inclou ni signatura digital ni no repudi).
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	El certificat del signant no s'ha emès per signar documents (el seu ús estès de clau no inclou el propòsit de signatura de documents).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	El certificat del signant té extensions crítiques que PdfCraft no reconeix ({}).
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	El certificat de {} no és un certificat de CA que pugui emetre certificats, de manera que no s'utilitza per avalar {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	El certificat de {} no permet tants certificats de CA per sota seu (longitud de camí), de manera que no s'utilitza per avalar {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	El certificat de {} no era vàlid en el moment de signar, de manera que no s'utilitza per avalar {}.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	La identitat del signant és desconeguda perquè no s'ha inclòs a la llista de certificats de confiança i cap dels seus certificats pare és un certificat de confiança.
+	The signer's identity is valid.	La identitat del signant és vàlida.
+	The signature includes an embedded timestamp.	La signatura inclou una marca de temps incrustada.
+	Signing time is from the clock on the signer's computer.	L'hora de signatura prové del rellotge de l'ordinador del signant.
+	The signature's timestamp token does not cover the signature value.	El testimoni de marca de temps de la signatura no cobreix el valor de la signatura.
+	The signature's timestamp token could not be verified ({}).	No s'ha pogut verificar el testimoni de marca de temps de la signatura ({}).
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	El testimoni de marca de temps incrustat és vàlid i la seva autoritat és de confiança; l'hora de confiança és {}.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	La signatura porta una marca de temps no verificada ({}): l'autoritat de marca de temps no és a la llista de certificats de confiança, de manera que s'utilitza l'hora de signatura indicada pel signant.
+	The signer's certificate has been revoked ({}).	El certificat del signant ha estat revocat ({}).
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	La informació de revocació incrustada al document mostra que el certificat del signant no ha estat revocat.
+	The timestamp has no valid byte range.	La marca de temps no té un interval de bytes vàlid.
+	The timestamp's byte range does not match the file.	L'interval de bytes de la marca de temps no coincideix amb el fitxer.
+	The timestamp's byte range does not exclude exactly its contents.	L'interval de bytes de la marca de temps no exclou exactament el seu contingut.
+	The timestamp contents are not hexadecimal.	El contingut de la marca de temps no és hexadecimal.
+	The timestamp token could not be read ({}).	No s'ha pogut llegir el testimoni de marca de temps ({}).
+	The document has been altered or corrupted since the timestamp was applied.	El document ha estat alterat o s'ha corromput des que es va aplicar la marca de temps.
+	The timestamp authority's certificate was not valid at the time of timestamping.	El certificat de l'autoritat de marca de temps no era vàlid en el moment de marcar el temps.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
+	This document has not been modified since this timestamp was applied.	Aquest document no s'ha modificat des que es va aplicar aquesta marca de temps.
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	El document s'ha modificat des que es va aplicar aquesta marca de temps, però els canvis són permesos ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El document ha estat alterat des que es va aplicar aquesta marca de temps d'una manera que no permet ({}).
+	The timestamp token is valid and its authority is trusted.	El testimoni de marca de temps és vàlid i la seva autoritat és de confiança.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	El testimoni de marca de temps és vàlid, però l'autoritat de marca de temps no és a la llista de certificats de confiança.
+	Unsigned signature field	Camp de signatura sense signar
+	Signature is valid	La signatura és vàlida
+	Signature validity is unknown	La validesa de la signatura és desconeguda
+	Signature is invalid	La signatura no és vàlida
+	page content	contingut de la pàgina
+	form fill	emplenament de formulari
+	comments	comentaris
+	document security store	magatzem de seguretat del document
+	metadata	metadades
+	links	enllaços
+	document structure	estructura del document
+	pages added or removed	pàgines afegides o eliminades
+	other changes	altres canvis
+	the signed version could not be read	no s'ha pogut llegir la versió signada
+	page {n} is out of range (1–{count})	la pàgina {n} és fora de l'interval (1–{count})
+	{page} is not a page number or label	{page} no és un número ni una etiqueta de pàgina
+	Change Title	Canvia el títol
+	Change Author	Canvia l'autor
+	Change Subject	Canvia l'assumpte
+	Change Keywords	Canvia les paraules clau
+	Save as {level}	Anomena i desa com a {level}
+	Create links	Crea enllaços
+@plural	{n} object selected|{n} objects selected	{n} objecte seleccionat|{n} objectes seleccionats
+	Drag the selection to move it. Esc clears the selection.	Arrossega la selecció per moure-la. Esc esborra la selecció.
+	Shift-click to select several objects. Drag empty space to select an area.	Fes clic amb Maj per seleccionar diversos objectes. Arrossega per un espai buit per seleccionar una àrea.
+	Select at most 1000 objects at a time.	Selecciona com a màxim 1000 objectes alhora.
+	Finish or discard the text being edited before selecting several objects.	Acaba o descarta el text que s'està editant abans de seleccionar diversos objectes.
+	Move object	Mou l'objecte
+	Move objects	Mou els objectes
+	Vertical text cannot be moved with this selection.	El text vertical no es pot moure amb aquesta selecció.
+	Text used as a clipping path cannot be moved with this selection.	El text utilitzat com a traçat de retall no es pot moure amb aquesta selecció.
+	These objects could not be moved. Select them again and try a smaller move.	No s'han pogut moure aquests objectes. Torna'ls a seleccionar i prova amb un moviment més petit.
+	This page contains objects that cannot be selected together.	Aquesta pàgina conté objectes que no es poden seleccionar junts.
+	Fill colour	Color de farciment
+	No fill	Sense farciment
+	Fill colour: none	Color de farciment: cap
+key	Ctrl	Ctrl
+key	Shift	Maj
+key	Delete	Supr
+key	Esc	Esc
+key	Home	Inici
+key	End	Fi
+key	Space	Espai
+	Grid view	Visualització en quadrícula
+	List view	Visualització en llista
+	Files are combined in the order shown. Drag them to change it.	Els fitxers es combinen en l'ordre mostrat. Arrossega'ls per canviar-lo.
+	Preview unavailable: {e}	Previsualització no disponible: {e}
+	Pages: {k} of {n}	Pàgines: {k} de {n}
+	Check the pages	Revisa les pàgines
+	Switch to List view to change the pages it takes.	Canvia a la visualització en llista per canviar les pàgines que utilitza.
+	Expand all	Expandeix-ho tot
+	Collapse all	Replega-ho tot
+	Remove page	Elimina la pàgina
+	Remove {n} pages	Elimina {n} pàgines
+	Reset panel layout	Restableix la disposició dels taulers
+	Float panel	Fes flotant el tauler
+	Move to group	Mou al grup
+	Panels	Taulers
+	Resize panels	Canvia la mida dels taulers
+	Resize panel window	Canvia la mida de la finestra del tauler
+	Tools	Eines
+	Inspector	Inspector
+	Select page {label}	Selecciona la pàgina {label}
+	Rotate page {label} counterclockwise	Gira la pàgina {label} en sentit antihorari
+	Rotate page {label} clockwise	Gira la pàgina {label} en sentit horari
+	Delete page {label}	Suprimeix la pàgina {label}
+	Mouse wheel scroll speed	Velocitat de desplaçament de la roda del ratolí
+scroll speed	Slow	Lenta
+scroll speed	Normal	Normal
+scroll speed	Fast	Ràpida
+	Animation effects	Efectes d'animació
+animation effects	On	Activats
+animation effects	Off	Desactivats
+	Enhance camera image	Millora la imatge de la càmera
+	Drag the corners onto the document's edges, then choose Enhance page.	Arrossega les cantonades fins a les vores del document i tria Millora la pàgina.
+	Enhance page	Millora la pàgina
+	Certificate authority	Autoritat de certificació
+	End entity	Entitat final
+	Clean-up	Neteja
+	Original	Original
+	Greyscale	Escala de grisos
+	Black and white	Blanc i negre
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	El controlador d'aquesta impressora no accepta la configuració de doble cara d'altres programes, de manera que s'aplica la seva pròpia configuració. Canvia-la a Propietats…
+	Browser's print dialog	Diàleg d'impressió del navegador
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Les còpies, la impressió a doble cara i el color es trien al diàleg d'impressió del navegador.
+	Preparing {n} sheets for printing…	Preparant {n} fulls per imprimir…
+	Preparing sheet {done} of {total} for printing…	Preparant el full {done} de {total} per imprimir…
+	Opening the browser's print dialog…	Obrint el diàleg d'impressió del navegador…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	No s'ha pogut imprimir des del navegador ({e}); s'ha baixat {name} per imprimir-lo en lloc d'això
+	Tools panel side	Costat del tauler d'eines
+	Add comment	Afegeix un comentari
+	Change tag properties	Canvia les propietats de l'etiqueta
+	Tags panel	Tauler d'etiquetes
+	Tags	Etiquetes
+	Tag type	Tipus d'etiqueta
+	Actual text	Text real
+	Find a tag	Cerca una etiqueta
+	Collapse tag	Replega l'etiqueta
+	Expand tag	Expandeix l'etiqueta
+	Revert changes	Reverteix els canvis
+	Save tag properties	Desa les propietats de l'etiqueta
+	This document has no editable structure tags.	Aquest document no té etiquetes d'estructura editables.
+	{n} tags	{n} etiquetes
+	Save or revert changes before selecting another tag.	Desa o reverteix els canvis abans de seleccionar una altra etiqueta.
+	Left out: {names}	Exclosos: {names}
+	already a PDF	ja és un PDF
+	no unused output name	cap nom de sortida sense utilitzar
+	no output folder was chosen	no s'ha triat cap carpeta de sortida
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	S'ha baixat {n} PDF|S'han baixat {n} PDF
+	Scan	Escaneja
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Signa un full de paper blanc i fes-ne una foto amb llum intensa i uniforme (utilitza el flaix). Tria la foto o deixa-la anar aquí: PdfCraft troba la signatura i elimina el paper.
+	Choose photo…	Tria una foto…
+	No photo chosen	No s'ha triat cap foto
+	Photo	Foto
+	Ink sensitivity	Sensibilitat de la tinta
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	No s'ha trobat cap signatura al marc. Mou el marc sobre la signatura o augmenta la sensibilitat de la tinta.
+	Couldn't use the photo: {e}	No s'ha pogut utilitzar la foto: {e}
+	Close Tab	Tanca la pestanya
+	Reopen Closed Tab	Reobre la pestanya tancada
+	Reveal in Finder	Mostra al Finder
+	Reveal in File Explorer	Mostra a l'Explorador de fitxers
+	Other colour…	Un altre color…
+	Recent colours	Colors recents
+	Reading colours	Colors de lectura
+	Replace document colours	Substitueix els colors del document
+	Page background	Fons de la pàgina
+	Only change the colour of black text or line art	Canvia només el color del text negre o dels dibuixos de línies
+	Change the colour of line art as well as text	Canvia el color dels dibuixos de línies i també del text
+	Colours are remapped while rendering; the document itself never changes.	Els colors es reassignen en renderitzar; el document en si mai no canvia.
+	Black on white	Negre sobre blanc
+	White on black	Blanc sobre negre
+	Yellow on black	Groc sobre negre
+	Green on black	Verd sobre negre
+	Couldn't follow linked PDF: {reason}	No s'ha pogut seguir el PDF enllaçat: {reason}
+	The linked PDF opened, but its named destination was not applied.	S'ha obert el PDF enllaçat, però no s'ha aplicat la seva destinació amb nom.
+	The linked PDF opened, but its page destination was out of range.	S'ha obert el PDF enllaçat, però la seva destinació de pàgina era fora de l'interval.
+	Local cross-PDF links require the desktop app	Els enllaços locals entre PDF requereixen l'aplicació d'escriptori
+	The existing action will be preserved.	Es conservarà l'acció existent.
+	Minimize	Minimitza
+	Maximize	Maximitza
+	Restore	Restaura
+	Use system title bar	Utilitza la barra de títol del sistema
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostra una barra de títol bàsica per als botons de la finestra en lloc de la tira de pestanyes. GNOME no dibuixa barres de títol per a les aplicacions, de manera que aquesta no segueix el seu tema.
+	Allow	Permet
+	Only allow this if you trust the source document.	Permet-ho només si confies en el document d'origen.
+	Open this local PDF?	Vols obrir aquest PDF local?
+	This document is trying to open a local file:	Aquest document intenta obrir un fitxer local:
+	Move tag earlier	Mou l'etiqueta cap amunt
+	Move tag later	Mou l'etiqueta cap avall
+	Margins (in)	Marges (polz.)
+signature pad	Type	Escriu
+calendar date	January	Gener
+calendar date	February	Febrer
+calendar date	March	Març
+calendar date	April	Abril
+calendar date	May	Maig
+calendar date	June	Juny
+calendar date	July	Juliol
+calendar date	August	Agost
+calendar date	September	Setembre
+calendar date	October	Octubre
+calendar date	November	Novembre
+calendar date	December	Desembre
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	El reconeixement de text no està instal·lat: falten els seus models (executa `cargo xtask models` o defineix PDFCRAFT_MODELS).
+	PDF page: {size}	Pàgina del PDF: {size}
+	Match page at 100%	Ajusta la pàgina al 100 %
+	PDF scale: {scale}%	Escala del PDF: {scale} %
+	Printer paper and scaling may differ. Check driver settings.	El paper i l'escala de la impressora poden ser diferents. Revisa la configuració del controlador.
+	Drawing scale changes. Use Actual size for full-scale plans.	L'escala del dibuix canvia. Utilitza Mida real per a plànols a escala completa.
+	Done adding text	Acaba d'afegir text
+	Discard this text (Esc)	Descarta aquest text (Esc)
+	Save (M4)	Desa (M4)
+	Only the document's owner can change its security (open it with the permissions password)	Només el propietari del document en pot canviar la seguretat (obre'l amb la contrasenya de permisos)
+	Creator	Creador
+	Producer	Productor
+	Enter a name.	Escriu un nom.
+	The password must have at least 6 characters.	La contrasenya ha de tenir almenys 6 caràcters.
+	The passwords do not match.	Les contrasenyes no coincideixen.
+	There is no folder to save the digital ID in.	No hi ha cap carpeta on desar l'identificador digital.
+	The password is incorrect.	La contrasenya és incorrecta.
+	Choose a digital ID.	Tria un identificador digital.
+	Unsigned signature field: {name}	Camp de signatura sense signar: {name}
+	Rev. {rev}: Signed by {name}	Rev. {rev}: signat per {name}
+	Rev. {rev}: Signed by an unknown signer	Rev. {rev}: signat per un signant desconegut
+	Rev. {rev}: Certified by {name}	Rev. {rev}: certificat per {name}
+	Rev. {rev}: Certified by an unknown signer	Rev. {rev}: certificat per un signant desconegut
+	{who}, certificate issued by {issuer}.	{who}, certificat emès per {issuer}.
+	{who}, certificate issued by an unknown issuer.	{who}, certificat emès per un emissor desconegut.
+	Digital Signature	Signatura digital
+	Non-Repudiation	No repudi
+	Key Encipherment	Xifratge de claus
+	Data Encipherment	Xifratge de dades
+	Key Agreement	Acord de claus
+	Certificate Signing	Signatura de certificats
+	CRL Signing	Signatura de CRL
+	Encipher Only	Només xifratge
+	Decipher Only	Només desxifratge
+	Enter a page number	Introdueix un número de pàgina
+	Enter a URL	Introdueix una URL
+	Enter the field names	Introdueix els noms dels camps
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Tallar i apilar requereix Doble cara: desactivat. Imprimeix fulls a una cara.
+	Panel layout could not be restored: {error}	No s'ha pogut restaurar la disposició dels taulers: {error}
+	Panel move was not applied: {error}	No s'ha aplicat el moviment del tauler: {error}
+	Rendering…	Renderitzant…
+	Still rendering — this page is unusually complex…	Encara es renderitza — aquesta pàgina és inusualment complexa…
+	English	Anglès
+@plural	{n} image optimized|{n} images optimized	{n} imatge optimitzada|{n} imatges optimitzades
+@plural	{n} item discarded|{n} items discarded	{n} element descartat|{n} elements descartats
+@plural	{n} byte|{n} bytes	{n} byte|{n} bytes
+@plural	{n} pixel|{n} pixels	{n} píxel|{n} píxels
+@plural	Delete {n} field|Delete {n} fields	Suprimeix {n} camp|Suprimeix {n} camps
+	 on page {label}	 a la pàgina {label}
+	Drop PDFs or folders here, or choose them.	Deixa anar aquí PDF o carpetes, o tria'ls.
+	Every PDF in the folder	Tots els PDF de la carpeta
+	Every PDF in the folder and the folders inside it	Tots els PDF de la carpeta i de les carpetes que conté
+	No PDFs found in {folder}	No s'ha trobat cap PDF a {folder}
+	Added the first {n} PDFs in {folder}	S'han afegit els primers {n} PDF de {folder}
+	Add the PDFs to combine	Afegeix els PDF per combinar
+	Document properties (⌘D)	Propietats del document (⌘D)
+	New bookmark (⌘B)	Marcador nou (⌘B)
+	Next (⌘G)	Següent (⌘G)
+	Open a PDF (⌘O)	Obre un PDF (⌘O)
+	Previous (⇧⌘G)	Anterior (⇧⌘G)
+	Print (⌘P)	Imprimeix (⌘P)
+	Rotate view clockwise (⇧⌘+)	Gira la visualització en sentit horari (⇧⌘+)
+	Zoom in (⌘+)	Amplia (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Amplia / redueix (també amb pessic o ⌘-desplaçament)
+	Zoom out (⌘−)	Redueix (⌘−)
+	Paste	Enganxa
+	Select all	Selecciona-ho tot
+	Next	Següent
+	Previous	Anterior
+	Choose…	Tria…
+	Refresh	Actualitza
+	Loading…	Carregant…
+	Save changes?	Vols desar els canvis?
+	Page {n}	Pàgina {n}
+	of	de
+	Comment	Comentari
+	Font	Tipus de lletra
+	Color	Color
+	Theme	Tema
+	System	Sistema
+	Save file	Desa el fitxer
+	Import	Importa
+	Help…	Ajuda…
+	Automatically	Automàticament
+	Never	Mai
+	Always	Sempre
+	On	Activat
+	Enabled	Habilitat
+	Disabled	Inhabilitat
+	Error	Error
+	Warning	Avís
+	Information	Informació
+	Success	Èxit
+	Folder	Carpeta
+	Choose a file…	Tria un fitxer…
+	Choose a folder…	Tria una carpeta…
+	Open folder	Obre la carpeta
+	Create folder	Crea una carpeta
+	Duplicate	Duplica
+	Move	Mou
+	Copy to clipboard	Copia al porta-retalls
+	Copied to clipboard	S'ha copiat al porta-retalls
+	Organize	Organitza
+	Comment and review	Comenta i revisa
+	Search results	Resultats de la cerca
+	No results	Cap resultat
+	Page {n} of {total}	Pàgina {n} de {total}
+calendar weekday	Su	dg.
+calendar weekday	Mo	dl.
+calendar weekday	Tu	dt.
+calendar weekday	We	dc.
+calendar weekday	Th	dj.
+calendar weekday	Fr	dv.
+calendar weekday	Sa	ds.
+certificate	Issued to	Emès per a
+certificate	Issued by	Emès per
+certificate	Valid from	Vàlid des de
+certificate	Valid to	Vàlid fins a
+certificate	Intended usage	Ús previst
+certificate	Version	Versió
+certificate	Serial number	Número de sèrie
+certificate	Issuer	Emissor
+certificate	Validity starts	La validesa comença
+certificate	Validity ends	La validesa acaba
+certificate	Public key	Clau pública
+certificate	Basic constraints	Restriccions bàsiques
+certificate	Key usage	Ús de la clau
+certificate	Self-signed	Autosignat
+certificate	SHA-1 digest	Resum SHA-1
+certificate	SHA-256 digest	Resum SHA-256
+@plural	{n} file|{n} files	{n} fitxer|{n} fitxers
+@plural	{n} comment|{n} comments	{n} comentari|{n} comentaris
+@plural	{n} result|{n} results	{n} resultat|{n} resultats
+	4 x 6 in label (101.6 x 152.4 mm)	Etiqueta de 4 x 6 polz. (101,6 x 152,4 mm)
+	Characters	Caràcters
+	Characters without spaces	Caràcters sense espais
+	Collapse all pages	Replega totes les pàgines
+	Counting words… {n} pages read	S'estan comptant les paraules… {n} pàgines llegides
+	Create Link…	Crea un enllaç…
+	Crop Image	Escapça la imatge
+	Current page only	Només la pàgina actual
+	Cut Image	Retalla la imatge
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Escapça cada pàgina a la seva àrea impresa, la posa dreta i l'ajusta al full sense deformar-la. Una etiqueta per full.
+	DN: 	DN: 
+	Date: 	Data: 
+	Digitally signed by	Signat digitalment per
+	Exclude image/OCR text	Exclou el text d'imatges i OCR
+	Exclude tagged code blocks	Exclou els blocs de codi etiquetats
+	Exclude tagged tables	Exclou les taules etiquetades
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Les exclusions utilitzen les etiquetes del PDF. Les taules i el codi sense etiquetar continuen inclosos. Excloure imatges també elimina el text invisible.
+	Expand all pages	Desplega totes les pàgines
+	Fill colour:	Color d'emplenament:
+	Find untagged content	Cerca contingut sense etiquetar
+	Font size	Mida del tipus de lletra
+	Found {n} untagged content problems.	S'han trobat {n} problemes de contingut sense etiquetar.
+	Full Screen	Pantalla completa
+	Hide hover previews for highlights without comment text	Amaga les previsualitzacions en passar-hi per sobre dels ressaltats sense text de comentari
+	Location: 	Ubicació: 
+	Make Properties Default	Fes que les propietats siguin les predeterminades
+	Make properties default	Fes que les propietats siguin les predeterminades
+	Mark as artifact	Marca com a artefacte
+	Mark content as artifact	Marca el contingut com a artefacte
+	Merge image fragments	Fusiona els fragments d'imatge
+	Mobile	Mòbil
+	New file only	Només el fitxer nou
+	New file: {name}	Fitxer nou: {name}
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	No s'ha trobat cap impressora. Comprova que la impressora estigui instal·lada i que el servei d'impressió s'estigui executant, i torna a obrir Imprimeix.
+	No untagged content was found.	No s'ha trobat contingut sense etiquetar.
+	Not now	Ara no
+	Old file: {name}	Fitxer antic: {name}
+	Opacity:	Opacitat:
+	Open in Full Screen mode?	Vols obrir en mode de pantalla completa?
+	Optimizing… merging image fragments	S'està optimitzant… fusionant fragments d'imatge
+	Outline colour:	Color del contorn:
+	Page properties	Propietats de la pàgina
+	Pages counted	Pàgines comptades
+	Pages selected	Pàgines seleccionades
+	Print as image	Imprimeix com a imatge
+	Reason: 	Motiu: 
+	Recognize Text…	Reconeix el text…
+	Redact Image	Censura la imatge
+	Redaction mark appearance	Aparença de la marca de censura
+	Remove Crop	Elimina l’escapçat
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Elimina aquesta etiqueta final de l'ordre de lectura i marca el seu contingut directe com a artefacte
+	Resolution:	Resolució:
+	Save anyway	Desa igualment
+	Save over the changed file?	Vols desar sobre el fitxer modificat?
+	Scroll speed (mouse wheel and arrow keys)	Velocitat de desplaçament (roda del ratolí i tecles de fletxa)
+	Sending sheet {s} of {n} to {printer}…	S'està enviant el full {s} de {n} a {printer}…
+	Set page transitions	Defineix les transicions de pàgina
+	Shown while the pointer is over a mark.	Es mostra mentre el punter és sobre una marca.
+	Side by side	Un al costat de l'altre
+	Some content could not be classified safely and was kept in the count.	Part del contingut no s'ha pogut classificar amb seguretat i s'ha mantingut al recompte.
+	Some pages contain no countable text. Scanned images need OCR first.	Algunes pàgines no tenen text comptable. Les imatges escanejades necessiten OCR abans.
+	Standard	Estàndard
+	Tag form fields	Etiqueta els camps del formulari
+	The labels are in English: the signature's font can't draw them in this language.	Les etiquetes són en anglès: el tipus de lletra de la signatura no pot dibuixar-les en aquesta llengua.
+	The password must have at least 8 characters.	La contrasenya ha de tenir almenys 8 caràcters.
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Aquest document demana obrir-se en mode de pantalla completa: la pàgina omple la pantalla i no es veu res més. Prem Esc en qualsevol moment per sortir-ne.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Aquest fitxer ha canviat al disc. Recarrega mostra la versió nova i descarta els canvis sense desar; Desa la substitueix per aquesta versió.
+	Trim the picture with its handles; Enter or Done applies	Escapça la imatge amb els seus tiradors; Retorn o Fet ho aplica
+	Turn upside down (180°)	Gira cap per avall (180°)
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Fes-ho servir quan una impressora ometi text, ombrejats o transparències. La impressió deixa de ser text cercable; amb Imprimeix en escala de grisos, les imatges són grises.
+	What takes up the space in this file, by kind of content.	El que ocupa l'espai d'aquest fitxer, per tipus de contingut.
+	Word count	Recompte de paraules
+	Word counting stopped unexpectedly.	El recompte de paraules s'ha aturat de manera inesperada.
+	Word count…	Recompte de paraules…
+	Words	Paraules
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» ha canviat al disc després d'obrir-lo o d'haver-lo desat per última vegada. Si ara el deses, aquesta versió substituirà la més recent.
+@id	file.word_count	Recompte de paraules…
+theme	Appearance	Aspecte
+# Untranslated: English text until a translator fills these in.
+	Zoom — type a percentage and press Enter	Zoom — type a percentage and press Enter
+	Calculation order	Calculation order
+	Fix order	Fix order
+	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
+	Earlier in calculation order	Earlier in calculation order
+	Later in calculation order	Later in calculation order
+	Too early	Too early
+	Reads {name}, which calculates later, so it shows an old value.	Reads {name}, which calculates later, so it shows an old value.
+	Loop	Loop
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
+	Not in order	Not in order
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Back to Prepare a form	Back to Prepare a form
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.
+	{names} and {last}	{names} and {last}
+	{field} reads no other field	{field} reads no other field
+	{field} reads {fields}	{field} reads {fields}
+	No field reads it	No field reads it
+	The order saved in the PDF needs tidying	The order saved in the PDF needs tidying
+	Moves only what must move	Moves only what must move
+	Every field calculates after the fields it reads.	Every field calculates after the fields it reads.
+	Every field outside a loop calculates after the fields it reads.	Every field outside a loop calculates after the fields it reads.
+	{field} reads its own value	{field} reads its own value
+	{fields} read each other	{fields} read each other
+	No order can fix a loop. Change one of the formulas.	No order can fix a loop. Change one of the formulas.
+	Edit {field}'s formula	Edit {field}'s formula
+	Order · top calculates first	Order · top calculates first
+	Script	Script
+	Links on page	Links on page
+	Show on the page which fields each field reads	Show on the page which fields each field reads
+	Drag a field to move it, or select it and press {up} or {down}.	Drag a field to move it, or select it and press {up} or {down}.
+	the name is not a plain file name	the name is not a plain file name
+	Set calculation order	Set calculation order
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calculation now uses the new name.|{n} calculations now use the new name.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.
+@plural	{fields} reads it|{fields} read it	{fields} reads it|{fields} read it
+@plural	{n} field shows an old value|{n} fields show old values	{n} field shows an old value|{n} fields show old values
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} more field calculates too early.|{n} more fields calculate too early.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.
+	Bulleted list	Bulleted list
+	Numbered list	Numbered list
+	Alignment	Alignment
+	Superscript	Superscript
+	Subscript	Subscript
+	Paragraph spacing	Paragraph spacing
+	Less	Less
+	Other options	Other options
+	Always use my default zoom and page layout	Always use my default zoom and page layout
+	Larger thumbnails	Larger thumbnails
+	Layer options	Layer options
+	Printer default	Printer default
+	Reading the printer's settings…	Reading the printer's settings…
+	Reset to Initial Visibility	Reset to Initial Visibility
+	Shrink the page content to make room for the header and footer	Shrink the page content to make room for the header and footer
+	Smaller thumbnails	Smaller thumbnails
+	The document's security settings don't allow printing	The document's security settings don't allow printing
+	Thumbnail size	Thumbnail size
+	Reshape comment	Reshape comment
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	The signature's signed attributes have no content type, which CMS requires; it was read anyway.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
+	Remove {standard} identification	Remove {standard} identification
+
+# Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
+	Add text field table	Afegeix una taula de camps de text
+	Text field table	Taula de camps de text
+	Text Field Table	Taula de camps de text
+	Columns	Columnes
+	Row spacing	Espai entre files
+	Column spacing	Espai entre columnes
+	First row number	Número de la primera fila
+	Column widths	Amplades de les columnes
+	Distribute evenly	Distribueix uniformement
+	Field names	Noms dels camps
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N o {row} és el número de fila, {col} el de columna i {seq} el de cel·la. Si no n'hi ha cap, el número de fila va al final.
+	Column {n}	Columna {n}
+	Add fields	Afegeix els camps
+	a table has 1 to {max} rows	una taula té d'1 a {max} files
+	a table has 1 to {max} columns	una taula té d'1 a {max} columnes
+	the first row number can be at most {max}	el número de la primera fila pot ser com a màxim {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	l'àrea, l'espaiat i les amplades de les columnes han de ser nombres; l'espaiat, 0 o més, i cada amplada, més de 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	les files són massa baixes: fes l'àrea més alta o fes servir menys files o menys espai entre files
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	una columna és massa estreta: fes l'àrea més ampla, dona-li més part a la columna o fes servir menys columnes o menys espai entre columnes
+	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
+	two cells would both be named {name}	dues cel·les es dirien {name}
+	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Avui
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Restaura l'última vista (pàgina, zoom i visualització de pàgina) quan es torna a obrir un document
+	Attach a file…	Adjunta un fitxer…
+	Attach {name}	Adjunta {name}
+	Attaching files is not available on the web yet	Encara no es poden adjuntar fitxers al web
+	Delete attachment	Elimina l'adjunt
+	Delete attachment {key}	Elimina l'adjunt {key}

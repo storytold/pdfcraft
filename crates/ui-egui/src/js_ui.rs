@@ -2,7 +2,7 @@
 //! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
 
 use egui::{Align, Layout};
-use pdfcraft_engine::js::{JsOutput, Request};
+use pdfcraft_engine::js::{JsOutput, Panel, Request};
 use pdfcraft_engine::{DocId, Edit};
 
 use crate::theme::{self, Tokens};
@@ -67,6 +67,20 @@ impl PdfCraftApp {
                     &[("u", &u)],
                 ),
                 Request::SaveAs => self.run_command("file.save_as"),
+                Request::ShowPanel(p) => {
+                    let panel = match p {
+                        Panel::Bookmarks => crate::RightPanel::Bookmarks,
+                        Panel::Pages => crate::RightPanel::Pages,
+                        Panel::Attachments => crate::RightPanel::Attachments,
+                        Panel::Signatures => crate::RightPanel::Signatures,
+                        Panel::Layers => crate::RightPanel::Layers,
+                    };
+                    // Show/Hide: a panel already showing closes.
+                    self.right = (self.right != Some(panel)).then_some(panel);
+                    if self.right.is_some() {
+                        self.pending_panel_reveals.push(crate::docking::Panel::Inspector);
+                    }
+                }
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
         }
@@ -88,7 +102,13 @@ impl PdfCraftApp {
                 {
                     self.views[i].document_changed(&info);
                 }
-                let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: o.error.into_iter().collect() };
+                let out = JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().collect(),
+                    doc_errors: Vec::new(),
+                };
                 self.handle_js(id, out);
             }
             Err(e) => self.notify_fmt("{field}: {e}", &[("field", field), ("e", &e.to_string())]),
@@ -128,7 +148,7 @@ impl PdfCraftApp {
                     self.views[i].document_changed(&info);
                 }
                 let (error, result) = (o.error.clone(), o.result.clone());
-                let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new() };
+                let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
                 self.handle_js(id, out);
                 match error {
                     Some(e) => self.js_console.log.push(format!("Error: {e}")),
@@ -260,8 +280,18 @@ fn reading_mode_label(mode: &str) -> &'static str {
     }
 }
 
-/// Preferences: interface language and size, appearance, identity and JavaScript. Returns `true` to close.
-pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
+/// The height the Preferences dialog keeps below its scrolling settings for the OK row: the
+/// button, and the space above it.
+pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
+
+/// The least height the scrolling settings are given. The dialog around them takes about 80 more,
+/// so this still fits the smallest window (520 pt) at the largest interface size (300%, which
+/// leaves 173 pt): a taller floor would push OK off the screen again.
+pub(crate) const PREFERENCES_MIN_SCROLL: f32 = 60.0;
+
+/// Preferences: interface language and size, appearance, identity and JavaScript. Drawn in a scroll
+/// area; [`preferences_buttons`] goes below it, outside the scroll, so OK is always in reach.
+pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
         ui.label(tl!("Interface language"));
@@ -271,7 +301,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                 ui.close();
             }
-            for language in crate::i18n::Lang::all() {
+            for language in crate::i18n::Lang::for_picker() {
                 if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
                     ui.close();
                 }
@@ -351,6 +381,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
         ui.add(widgets::checkbox(&mut defaults.continuous, tl!("Continuous scrolling")));
     });
+    ui.add(widgets::checkbox(&mut defaults.show_page_gaps, tl!("Show gaps between pages")));
+    ui.label(egui::RichText::new(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")).small().color(t.text_muted));
     ui.horizontal(|ui| {
         use crate::canvas::Fit;
         ui.label(tl!("Default zoom"));
@@ -368,6 +400,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.add(widgets::checkbox(&mut app.always_default_view, tl!("Always use my default zoom and page layout")));
     ui.horizontal(|ui| {
         ui.label(tl!("Units"));
         for u in crate::units::Unit::ALL {
@@ -378,9 +411,14 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
+    // Acrobat's "Restore last view settings when reopening documents" (#1767).
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.add(widgets::checkbox(&mut app.restore_last_view, tl!("Restore the last view (page, zoom and page display) when a document is opened again")));
     // The web build has no files on disk to watch.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
+    // The notice's "Don't show again" turns this off (#4035); the restrictions stay either way.
+    ui.add(widgets::checkbox(&mut app.show_secured_notice, tl!("Show a notice when a document is secured")));
     ui.horizontal(|ui| {
         ui.label(tl!("Scroll speed (mouse wheel and arrow keys)"));
         for speed in crate::scroll_speed::ScrollSpeed::ALL {
@@ -490,6 +528,10 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
                 .color(t.text_muted),
         );
     });
+}
+
+/// The Preferences dialog's OK row. Returns `true` to close.
+pub(crate) fn preferences_buttons(ui: &mut egui::Ui) -> bool {
     ui.add_space(10.0);
     buttons(ui, tl!("OK"), &[]).is_some()
 }

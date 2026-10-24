@@ -36,8 +36,11 @@
 //!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
-//! - `ui.open {path}`: accept a file open; native opens report `pending: true` until they
-//!   complete and are listed in `ui.state.pending_opens`.
+//!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
+//!   `ui.state.comment_tool_pinned` reports the same preference.
+//! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
+//!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until
+//!   they complete and are listed in `ui.state.pending_opens`; only a failed open replies `Err`.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
 use std::collections::{HashMap, VecDeque};
@@ -410,12 +413,23 @@ impl Control {
         let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200) as usize;
         let modifiers = modifiers(p.get("modifiers"))?;
         let which = pointer_button(p, "ui.drag")?;
+        // The events carry the modifiers and so does the input state: gestures that read
+        // `ui.input(|i| i.modifiers)` (a Ctrl-drag copy, an Alt-drag column select) see them.
+        let held = |mut events: Vec<egui::Event>| {
+            if modifiers != egui::Modifiers::NONE {
+                events.insert(0, egui::Event::ModifiersChanged(modifiers));
+            }
+            events
+        };
         let button = |pos, pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers };
-        let mut frames = vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)]];
+        let mut frames = vec![held(vec![egui::Event::PointerMoved(from)]), held(vec![button(from, true)])];
         for k in 1..=steps {
-            frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]);
+            frames.push(held(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]));
         }
-        frames.push(vec![button(to, false)]);
+        frames.push(held(vec![button(to, false)]));
+        if modifiers != egui::Modifiers::NONE {
+            frames.push(vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        }
         let n = self.inject(frames);
         Ok(Handled::AfterFrames(n, json!({ "dragged": [[from.x, from.y], [to.x, to.y]] })))
     }
@@ -667,8 +681,11 @@ impl Host for crate::PdfCraftApp {
                 "zoom_percent": (v.zoom * 100.0).round(),
                 "fit": format!("{:?}", v.fit),
                 "layout": format!("{:?}", v.layout),
+                "continuous": v.continuous(),
+                "page_gaps": v.show_page_gaps,
                 "organize": v.organize,
                 "grid_zoom": v.grid_zoom(),
+                "thumbnail_zoom": v.thumbnail_zoom(),
                 // Pages picked in the organize grid or the Pages panel (empty: the current page).
                 "selected_pages": v.selected.iter().map(|p| p + 1).collect::<Vec<_>>(),
                 "auto_scrolling": v.auto_scrolling(),
@@ -716,6 +733,7 @@ impl Host for crate::PdfCraftApp {
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
             "default_mode": self.default_mode,
+            "comment_tool_pinned": self.comment_prefs.pinned,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": if self.docking.tools_on_right() { "right" } else { "left" },
             "right_panel": self.right.map(|r| format!("{r:?}")),
@@ -755,14 +773,11 @@ impl Host for crate::PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open(&mut self, path: &str) -> Reply {
-        let before = self.views.len();
-        self.open_path(path);
-        if self.views.len() > before || self.password_prompt.is_some() {
-            Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() }))
-        } else if self.pending_opens.iter().any(|pending| pending.path.as_deref() == Some(path)) {
-            Ok(json!({ "accepted": path, "pending": true }))
-        } else {
-            Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}")))
+        match self.open_path(path) {
+            crate::OpenOutcome::Opened => Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() })),
+            crate::OpenOutcome::Focused => Ok(json!({ "opened": path, "focused": true })),
+            crate::OpenOutcome::Pending => Ok(json!({ "accepted": path, "pending": true })),
+            crate::OpenOutcome::Failed => Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}"))),
         }
     }
 
@@ -793,14 +808,27 @@ struct Limits {
     max_unauthenticated: usize,
     /// How long a write may block on a client that never reads its replies.
     write_timeout: std::time::Duration,
+    /// How long a connection refused after a reply is kept half-open, discarding input, so the
+    /// reply is not lost to a reset (see [`close_after_reply`]).
+    linger: std::time::Duration,
+    /// How many refused connections may linger at once. A lingering connection has given back
+    /// its place among [`Self::max_unauthenticated`], so this is what bounds their threads;
+    /// beyond it a refused connection is closed at once.
+    max_lingering: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const LIMITS: Limits =
-    Limits { auth_deadline: std::time::Duration::from_secs(10), max_unauthenticated: 8, write_timeout: std::time::Duration::from_secs(30) };
+const LIMITS: Limits = Limits {
+    auth_deadline: std::time::Duration::from_secs(10),
+    max_unauthenticated: 8,
+    write_timeout: std::time::Duration::from_secs(30),
+    linger: std::time::Duration::from_secs(1),
+    max_lingering: 8,
+};
 
-/// One of the [`Limits::max_unauthenticated`] places, given back when dropped: when the
-/// connection authenticates, and on every way its thread can end.
+/// One of a limited number of places, given back when dropped: a place among
+/// [`Limits::max_unauthenticated`] (given back when the connection authenticates or is refused,
+/// and on every way its thread can end), or among [`Limits::max_lingering`].
 #[cfg(not(target_arch = "wasm32"))]
 struct Slot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
@@ -850,6 +878,38 @@ impl std::io::Read for Reading {
     }
 }
 
+/// Close a connection whose last reply has just been written without losing that reply.
+///
+/// Closing a socket with input still unread makes the kernel send a reset instead of a FIN, and
+/// the reset can discard the reply before the client reads it (Linux does): a client still
+/// sending when it is refused would never learn why. So send FIN first, then read and discard
+/// whatever arrives until the client closes its side or `linger` passes, and only then close.
+///
+/// Only [`Limits::max_lingering`] connections linger at once: `place` is one of those places,
+/// taken by [`refuse`] before the reply was written, and held for the drain only. Without one
+/// the connection is closed at once after the FIN, accepting the risk of a reset rather than
+/// holding another thread.
+#[cfg(not(target_arch = "wasm32"))]
+fn close_after_reply(reading: &mut Reading, place: Option<Slot>, linger: std::time::Duration) {
+    use std::io::Read;
+    let _ = reading.stream.shutdown(std::net::Shutdown::Write);
+    let Some(_place) = place else { return };
+    reading.until = Some(std::time::Instant::now() + linger);
+    let mut sink = [0u8; 1024];
+    // Each read is bounded by the time left, and none is made once `linger` has passed.
+    while matches!(reading.read(&mut sink), Ok(n) if n > 0) {}
+}
+
+/// A connection is being refused before `auth`: give back its place among those waiting to
+/// authenticate, so it does not keep a real client out while it lingers, and take a place to
+/// linger in if one is free. Done before the reply is written, so a client that has read the
+/// reply sees the places as they will be.
+#[cfg(not(target_arch = "wasm32"))]
+fn refuse(slot: &mut Option<Slot>, lingering: &std::sync::Arc<std::sync::atomic::AtomicUsize>, limits: Limits) -> Option<Slot> {
+    drop(slot.take());
+    Slot::take(lingering, limits.max_lingering)
+}
+
 /// Listen on `127.0.0.1` (random port) and forward authenticated requests to `client`.
 ///
 /// Protocol: newline-delimited JSON-RPC 2.0. The first request on a connection must be
@@ -860,6 +920,18 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
     serve_with(client, LIMITS)
 }
 
+/// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
+/// example while the process has no file descriptors left, and retrying at once would keep a
+/// core busy until it recovers. The single-instance listener waits the same way.
+#[cfg(not(target_arch = "wasm32"))]
+const ACCEPT_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The connections `incoming` accepts, calling `wait` after each failed accept.
+#[cfg(not(target_arch = "wasm32"))]
+fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: impl FnMut()) -> impl Iterator<Item = T> {
+    incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint> {
     use std::io::{BufReader, Write};
@@ -868,8 +940,9 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
     let token = random_token()?;
     let expected = token.clone();
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let lingering = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     std::thread::Builder::new().name("pdfcraft-control".into()).spawn(move || {
-        for stream in listener.incoming().flatten() {
+        for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
             let _ = stream.set_write_timeout(Some(limits.write_timeout));
             // Admitted only while fewer than the limit wait to authenticate: refused on the
             // accepting thread, so a refused connection costs no thread at all.
@@ -881,6 +954,7 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
             };
             let client = client.clone();
             let expected = expected.clone();
+            let lingering = lingering.clone();
             let _ = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
                 // Held until `auth` succeeds; given back however this thread ends.
                 let mut slot = Some(slot);
@@ -899,14 +973,20 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                         Err(e) if !authed && matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {
                             let secs = limits.auth_deadline.as_secs_f64();
                             let e = rpc_error(Value::Null, -32004, &format!("not authenticated within {secs} s"));
-                            let _ = writeln!(write, "{e}").and_then(|_| write.flush());
+                            let place = refuse(&mut slot, &lingering, limits);
+                            if writeln!(write, "{e}").and_then(|_| write.flush()).is_ok() {
+                                close_after_reply(reader.get_mut(), place, limits.linger);
+                            }
                             break;
                         }
                         // End of stream or a failed read ends the connection, as before.
                         Ok(LineRead::End) | Err(_) => break,
                         Ok(LineRead::TooLong) => {
                             let e = rpc_error(Value::Null, -32600, &format!("request line longer than {max} bytes before auth"));
-                            let _ = writeln!(write, "{e}").and_then(|_| write.flush());
+                            let place = refuse(&mut slot, &lingering, limits);
+                            if writeln!(write, "{e}").and_then(|_| write.flush()).is_ok() {
+                                close_after_reply(reader.get_mut(), place, limits.linger);
+                            }
                             break;
                         }
                     }
@@ -945,7 +1025,13 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                             }
                         }
                     };
-                    if writeln!(write, "{reply}").and_then(|_| write.flush()).is_err() || close {
+                    // `close` is only ever set before `auth`.
+                    let place = if close { refuse(&mut slot, &lingering, limits) } else { None };
+                    if writeln!(write, "{reply}").and_then(|_| write.flush()).is_err() {
+                        break;
+                    }
+                    if close {
+                        close_after_reply(reader.get_mut(), place, limits.linger);
                         break;
                     }
                 }
@@ -1013,6 +1099,19 @@ fn random_token() -> std::io::Result<String> {
 
 #[cfg(test)]
 mod transport_tests {
+    /// A failed accept is followed by a wait before the next one, so a listener that keeps
+    /// failing does not spin, and the connections around the failures still come through.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_failed_accept_waits_before_the_next() {
+        let failed = || Err(std::io::Error::other("no file descriptors left"));
+        let incoming = vec![failed(), Ok(1), failed(), failed(), Ok(2)];
+        let mut waits = 0;
+        let connections: Vec<i32> = super::accepted(incoming.into_iter(), || waits += 1).collect();
+        assert_eq!(connections, [1, 2]);
+        assert_eq!(waits, 3, "one wait per failed accept");
+    }
+
     /// Before authenticating, a line that isn't JSON gets a parse error and closes the
     /// connection, as [`super::serve`] documents for any first request other than `auth`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1089,6 +1188,8 @@ mod transport_tests {
         auth_deadline: std::time::Duration::from_millis(300),
         max_unauthenticated: 2,
         write_timeout: std::time::Duration::from_secs(5),
+        linger: std::time::Duration::from_secs(1),
+        max_lingering: 2,
     };
 
     /// The next line the server sends, as JSON, or `None` when it closed the connection instead.
@@ -1144,6 +1245,93 @@ mod transport_tests {
         assert!(took < std::time::Duration::from_secs(2), "the deadline is absolute: {took:?}");
         drop(r);
         drip.join().unwrap();
+    }
+
+    /// A client refused while the server still has its input unread gets the reason, not a
+    /// reset: closing on top of unread input sends a reset, which can discard the reply before
+    /// the client reads it (Linux does). Here a line far over the limit leaves most of itself
+    /// unread when the server refuses it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_client_refused_with_input_unread_gets_the_reason() {
+        use std::io::{BufReader, Write};
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve_with(client, TEST_LIMITS).unwrap();
+        let s = connect(ep.port);
+        let mut w = s.try_clone().unwrap();
+        w.write_all(&vec![b'x'; 16 * super::MAX_AUTH_LINE]).unwrap();
+        // Let the server refuse it (and, before the fix, close) before reading the reply.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut r = BufReader::new(s);
+        let reply = next_line(&mut r).expect("the server says why before closing");
+        assert_eq!(reply["error"]["code"], -32600, "{reply}");
+    }
+
+    /// A refused connection gives back its place among those waiting to authenticate before it
+    /// lingers, so lingering does not keep real clients out.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_lingering_connection_holds_no_place_to_authenticate() {
+        use std::io::{BufReader, Write};
+        // A linger far longer than the checks below take, even on a loaded machine.
+        let limits = super::Limits { linger: std::time::Duration::from_secs(5), ..TEST_LIMITS };
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve_with(client, limits).unwrap();
+        let auth = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": ep.token } });
+        // Refused with most of its line unread, and left open: it lingers for `linger`.
+        let refused = connect(ep.port);
+        refused.try_clone().unwrap().write_all(&vec![b'x'; 16 * super::MAX_AUTH_LINE]).unwrap();
+        let mut r = BufReader::new(refused.try_clone().unwrap());
+        assert_eq!(next_line(&mut r).expect("refused with a reason")["error"]["code"], -32600);
+        // Well within the linger, both places are free for new connections.
+        let started = std::time::Instant::now();
+        let others: Vec<_> = (0..limits.max_unauthenticated).map(|_| connect(ep.port)).collect();
+        for s in &others {
+            // A refused one has already been closed, so its write may fail; its reply says why.
+            let _ = writeln!(s.try_clone().unwrap(), "{auth}");
+            let reply = next_line(&mut BufReader::new(s.try_clone().unwrap())).expect("a reply");
+            assert_eq!(reply["result"]["ok"], true, "admitted while the refused one lingers: {reply}");
+        }
+        assert!(started.elapsed() < limits.linger, "checked while it lingered: {:?}", started.elapsed());
+        drop(refused);
+    }
+
+    /// Only [`super::Limits::max_lingering`] refused connections linger at once: one more still
+    /// gets its reply, and is then closed at once instead of lingering.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn only_so_many_refused_connections_linger() {
+        use std::io::{BufReader, Write};
+        // A linger far longer than the checks below take, even on a loaded machine.
+        let limits = super::Limits { linger: std::time::Duration::from_secs(5), max_lingering: 1, ..TEST_LIMITS };
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve_with(client, limits).unwrap();
+        let bad = r#"{"jsonrpc": "2.0", "id": 1, "method": "page_count"}"#;
+        // The first refused connection takes the only lingering place and keeps it.
+        let first = connect(ep.port);
+        writeln!(first.try_clone().unwrap(), "{bad}").unwrap();
+        let mut r1 = BufReader::new(first.try_clone().unwrap());
+        assert_eq!(next_line(&mut r1).expect("refused with a reason")["error"]["code"], -32001);
+        // The second still gets its reason (it has nothing unread, so no reset)...
+        let second = connect(ep.port);
+        let mut w2 = second.try_clone().unwrap();
+        writeln!(w2, "{bad}").unwrap();
+        let mut r2 = BufReader::new(second.try_clone().unwrap());
+        assert_eq!(next_line(&mut r2).expect("refused with a reason")["error"]["code"], -32001);
+        // ...and is closed outright, not lingering: writing to it soon fails, where a lingering
+        // connection would read and discard for the whole of `linger`.
+        let started = std::time::Instant::now();
+        let closed = loop {
+            if w2.write_all(b"x").is_err() {
+                break true;
+            }
+            if started.elapsed() > limits.linger {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(closed && started.elapsed() < limits.linger / 2, "it lingered: {:?}", started.elapsed());
+        drop(first);
     }
 
     /// #1806: only so many connections may wait to authenticate at once. One more is refused

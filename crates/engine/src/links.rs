@@ -137,7 +137,8 @@ pub enum RemoteDocumentPathError {
     Empty,
     TooLong,
     Hidden,
-    UrlOrNetwork,
+    /// A URL, a network or device path, or a path that climbs above its root.
+    NotLocal(craft_docpath::Refused),
     MissingSourcePath,
     /// The target doesn't end in `.pdf`.
     NotPdf,
@@ -155,7 +156,7 @@ impl std::fmt::Display for RemoteDocumentPathError {
             Self::Empty => f.write_str("the file specification is empty"),
             Self::TooLong => f.write_str("the file specification is too long"),
             Self::Hidden => f.write_str("the file specification contains hidden or control characters"),
-            Self::UrlOrNetwork => f.write_str("only local document paths are supported"),
+            Self::NotLocal(r) => write!(f, "only local document paths are supported: {r}"),
             Self::MissingSourcePath => f.write_str("a relative link needs a source document path"),
             Self::NotPdf => f.write_str("the linked file is not a .pdf file"),
             Self::NotAFile => f.write_str("the linked path is not a regular file"),
@@ -173,7 +174,9 @@ pub fn remote_document_path_is_absolute(raw: &str) -> bool {
 }
 
 /// Resolve a PDF remote-Go-To file specification to a local path without opening it.
-/// Relative paths are based on the source document; an in-memory source has no fallback to CWD.
+/// Relative paths are based on the source document, which should be an absolute path; an
+/// in-memory source has no fallback to CWD. URLs (including `file:`), network and device paths are
+/// refused ([`craft_docpath::resolve_absolute`]).
 pub fn resolve_remote_document_path(source: Option<&Path>, raw: &str) -> Result<PathBuf, RemoteDocumentPathError> {
     if raw.is_empty() || raw.trim().is_empty() {
         return Err(RemoteDocumentPathError::Empty);
@@ -184,25 +187,24 @@ pub fn resolve_remote_document_path(source: Option<&Path>, raw: &str) -> Result<
     if raw.chars().any(hides_text) {
         return Err(RemoteDocumentPathError::Hidden);
     }
-    if raw.starts_with("//") || raw.starts_with("\\\\") || raw.starts_with("/\\") || raw.starts_with("\\/") {
-        return Err(RemoteDocumentPathError::UrlOrNetwork);
-    }
-    let path = Path::new(raw);
-    let drive_absolute = remote_document_path_is_absolute(raw);
+    // A GoToR file specification is a path, not a URL: any scheme of two or more characters is
+    // refused (one letter is a drive), `file:` and names such as `custom:target.pdf` included.
     if let Some((scheme, _)) = raw.split_once(':') {
-        let valid_scheme = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        let is_scheme = scheme.len() > 1
+            && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-        let windows_drive = scheme.len() == 1 && drive_absolute;
-        if valid_scheme && !windows_drive {
-            return Err(RemoteDocumentPathError::UrlOrNetwork);
+        if is_scheme {
+            return Err(RemoteDocumentPathError::NotLocal(craft_docpath::Refused::Url));
         }
     }
-    if drive_absolute {
-        return Ok(path.to_path_buf());
-    }
-    let source = source.ok_or(RemoteDocumentPathError::MissingSourcePath)?;
-    let parent = source.parent().ok_or(RemoteDocumentPathError::MissingSourcePath)?;
-    Ok(parent.join(path))
+    craft_docpath::resolve_absolute(raw, source).map_err(|r| match r {
+        // A path that resolves but not to an absolute one needed a source with an absolute path. With
+        // such a source, it is a path this platform cannot open (`C:\x.pdf` on Unix).
+        craft_docpath::Refused::Invalid if !source.is_some_and(Path::is_absolute) && craft_docpath::resolve(raw, source).is_ok() => {
+            RemoteDocumentPathError::MissingSourcePath
+        }
+        r => RemoteDocumentPathError::NotLocal(r),
+    })
 }
 
 /// Largest linked PDF a GoToR link may open (1 GiB, the largest size the large-file work measures).
@@ -503,21 +505,58 @@ mod tests {
         use super::{RemoteDocumentPathError as E, resolve_remote_document_path as resolve};
         use std::path::Path;
 
-        let source = Path::new("/docs/chapter/source.pdf");
-        assert_eq!(resolve(Some(source), "../target.pdf").as_deref(), Ok(Path::new("/docs/chapter/../target.pdf")));
+        let source = std::env::temp_dir().join("chapter").join("source.pdf");
+        let source = source.as_path();
+        let folder = source.parent().unwrap();
+        assert_eq!(resolve(Some(source), "target.pdf"), Ok(folder.join("target.pdf")));
+        assert_eq!(resolve(Some(source), "../target.pdf").as_deref(), Ok(folder.parent().unwrap().join("target.pdf").as_path()));
+        #[cfg(unix)]
         assert_eq!(resolve(Some(source), "/manual/target.pdf").as_deref(), Ok(Path::new("/manual/target.pdf")));
         assert_eq!(resolve(None, "target.pdf"), Err(E::MissingSourcePath));
+        assert_eq!(resolve(Some(Path::new("source.pdf")), "target.pdf"), Err(E::MissingSourcePath), "a relative source is not used");
+        #[cfg(unix)]
+        assert_eq!(resolve(Some(source), "C:\\x.pdf"), Err(E::NotLocal(craft_docpath::Refused::Invalid)), "a Windows path on Unix needs no source");
         assert_eq!(resolve(Some(source), ""), Err(E::Empty));
         assert_eq!(resolve(Some(source), "   "), Err(E::Empty));
-        for url in ["file:///tmp/a.pdf", "https://example.org/a.pdf", "smb://host/share/a.pdf", "ftp://host/a.pdf", "custom:target.pdf"] {
-            assert_eq!(resolve(Some(source), url), Err(E::UrlOrNetwork), "{url}");
-        }
-        for network_path in ["//server/share/a.pdf", "\\\\server\\share\\a.pdf", "\\\\?\\C:\\a.pdf", "\\\\.\\device\\a.pdf", "/\\server/share/a.pdf"]
+        for url in
+            ["file:///tmp/a.pdf", "file://h/s/a.pdf", "https://example.org/a.pdf", "smb://host/share/a.pdf", "ftp://host/a.pdf", "custom:target.pdf"]
         {
-            assert_eq!(resolve(Some(source), network_path), Err(E::UrlOrNetwork), "{network_path:?}");
+            assert!(matches!(resolve(Some(source), url), Err(E::NotLocal(_))), "{url}");
         }
         assert_eq!(resolve(Some(source), "folder/hidden\u{200B}.pdf"), Err(E::Hidden));
+        #[cfg(windows)]
+        assert_eq!(resolve(Some(source), "folder/a:b.pdf"), Err(E::NotLocal(craft_docpath::Refused::Invalid)));
         assert_eq!(resolve(Some(source), &"a".repeat(super::MAX_REMOTE_DOCUMENT_PATH_BYTES + 1)), Err(E::TooLong));
+    }
+
+    #[test]
+    fn remote_document_paths_to_other_computers_and_devices_are_refused() {
+        use super::{RemoteDocumentPathError as E, resolve_remote_document_path as resolve};
+
+        let source = std::env::temp_dir().join("chapter").join("source.pdf");
+        let source = source.as_path();
+        // Refused before any filesystem access: none of these exist, and a stat of a network path
+        // would contact its host.
+        for not_local in [
+            "//server/share/a.pdf",
+            "\\\\server\\share\\a.pdf",
+            "\\\\h\\s\\a.pdf",
+            "\\\\?\\UNC\\h\\s\\a.pdf",
+            "\\??\\UNC\\h\\s\\a.pdf",
+            "/??/x",
+            "\\??\\C:\\a.pdf",
+            "\\\\.\\device\\a.pdf",
+            "/\\server/share/a.pdf",
+            "NUL.pdf",
+        ] {
+            assert!(matches!(resolve(Some(source), not_local), Err(E::NotLocal(_))), "{not_local:?}");
+        }
+        // Linux reads `//tmp/x` as `/tmp/x`, but on Windows it names a share.
+        #[cfg(unix)]
+        {
+            let doubled = format!("/{}", source.with_file_name("a.pdf").display());
+            assert!(matches!(resolve(Some(source), &doubled), Err(E::NotLocal(_))), "{doubled}");
+        }
     }
 
     #[test]

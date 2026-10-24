@@ -8,9 +8,9 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Widget, WidgetKind};
+use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
 use crate::model::Rect;
-use crate::text::{Face, Family};
+use crate::text::{Face, Family, Span};
 
 /// Private key on generated fields: the template's SOM path, so data can be put back.
 pub const SOM_KEY: &[u8] = b"PCSom";
@@ -129,6 +129,77 @@ fn all_faces() -> Vec<(&'static str, &'static str)> {
     out
 }
 
+/// The content that draws rounded box `r` on a page `page_h` tall: its fill along its curves,
+/// then its edge inside it. A side a page break cut has no edge.
+pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
+    let mut c = String::new();
+    if let Some(color) = r.fill {
+        c.push_str(&format!("{} rg {}f\n", rgb(color), outline(r.rect, r.radii, r.inverted, (false, false), page_h)));
+    }
+    if let Some((w, color, dashed)) = r.edge {
+        // The edge's centre line, half its width inside the box, so the edge stays in: a corner
+        // curving around the box tightens by as much, and one curving into it widens.
+        let inset = Rect::new(r.rect.x + w / 2.0, r.rect.y + w / 2.0, (r.rect.w - w).max(0.0), (r.rect.h - w).max(0.0));
+        let most = inset.w.min(inset.h) / 2.0;
+        let radii: [f64; 4] = std::array::from_fn(|i| match (r.radii[i], r.inverted[i]) {
+            (v, _) if v <= 0.0 => 0.0,
+            (v, true) => (v + w / 2.0).min(most),
+            (v, false) => (v - w / 2.0).clamp(0.0, most),
+        });
+        let path = outline(inset, radii, r.inverted, (r.open_top, r.open_bottom), page_h);
+        c.push_str(&format!("q {} RG {} w {}{path}S Q\n", rgb(color), n(w), if dashed { "[2 2] 0 d " } else { "" }));
+    }
+    c
+}
+
+/// The path around `rect` (top-left based, on a page `page_h` tall) with the corners `radii`
+/// (top-left, top-right, bottom-right, bottom-left), each curving around the box or, when
+/// `inverted`, into it. `open` leaves out the top or bottom side (and doesn't close the path):
+/// those are where a page break cut the box. Ends with a space, for the paint operator.
+fn outline(rect: Rect, radii: [f64; 4], inverted: [bool; 4], open: (bool, bool), page_h: f64) -> String {
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
+    let pt = |q: (f64, f64)| format!("{} {}", n(q.0), n(page_h - q.1));
+    // Corner `i`: its point, then where its curve starts and ends, going clockwise.
+    let corner = |i: usize| {
+        let r = radii.get(i).copied().unwrap_or(0.0);
+        match i {
+            0 => ((x0, y0), (x0, y0 + r), (x0 + r, y0)),
+            1 => ((x1, y0), (x1 - r, y0), (x1, y0 + r)),
+            2 => ((x1, y1), (x1, y1 - r), (x1 - r, y1)),
+            _ => ((x0, y1), (x0 + r, y1), (x0, y1 - r)),
+        }
+    };
+    // Corner `i`'s curve, from its start: a quarter circle as one Bézier curve.
+    let curve = |i: usize| {
+        if radii.get(i).copied().unwrap_or(0.0) <= 0.0 {
+            return String::new();
+        }
+        let (p, a, b) = corner(i);
+        const K: f64 = 0.5523;
+        let (c1, c2) = if inverted.get(i).copied().unwrap_or(false) {
+            // Centred on the corner itself.
+            ((a.0 + (b.0 - p.0) * K, a.1 + (b.1 - p.1) * K), (b.0 + (a.0 - p.0) * K, b.1 + (a.1 - p.1) * K))
+        } else {
+            ((a.0 + (p.0 - a.0) * K, a.1 + (p.1 - a.1) * K), (b.0 + (p.0 - b.0) * K, b.1 + (p.1 - b.1) * K))
+        };
+        format!("{} {} {} c ", pt(c1), pt(c2), pt(b))
+    };
+    // Along corners `from`, joining them with straight sides.
+    let along = |from: &[usize]| {
+        let mut s = String::new();
+        for &i in from {
+            s.push_str(&format!("{} l {}", pt(corner(i).1), curve(i)));
+        }
+        s
+    };
+    match open {
+        (false, false) => format!("{} m {}{}{}{}h ", pt(corner(0).1), curve(0), along(&[1]), along(&[2]), along(&[3])),
+        (true, false) => format!("{} m {}{} l ", pt((x1, y0)), along(&[2, 3]), pt((x0, y0))),
+        (false, true) => format!("{} m {}{} l ", pt((x0, y1)), along(&[0, 1]), pt((x1, y1))),
+        (true, true) => format!("{} m {} l {} m {} l ", pt((x0, y0)), pt((x0, y1)), pt((x1, y0)), pt((x1, y1))),
+    }
+}
+
 /// A PDF appearance-state name for a check button's on value.
 fn state_name(on: &str) -> String {
     let s: String = on.trim().chars().map(|c| if c.is_whitespace() || "()<>[]{}/%#".contains(c) || c.is_control() { '_' } else { c }).collect();
@@ -150,15 +221,26 @@ fn js_action(js: &str) -> Object {
     Object::Dict(a)
 }
 
+/// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
+pub(crate) const USAGE_RIGHTS_REMOVED: &str =
+    "the form's usage rights were removed: laying it out voids them, and a form with void usage rights can open with every field locked";
+
 pub struct Written {
     pub pages: usize,
     pub fields: usize,
     pub warnings: Vec<String>,
+    /// Usage rights were taken off the catalog (laying the form out voided them).
+    pub usage_rights: bool,
 }
 
 /// On a push button generated for an XFA image field: clicking it picks a picture (the forms
 /// layer reads this key).
 pub const IMAGE_FIELD_KEY: &[u8] = b"PCXfaImage";
+
+/// On a check box or radio button generated for a round XFA check button (`shape="round"`): its
+/// background and border are drawn as a circle, not the widget's rectangle (the forms layer
+/// reads this key).
+pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 
 /// On an image XObject written for a picture: the SHA-256 (hex) of the picture's bytes. A
 /// re-layout (after every script event) finds the XObjects on the pages it replaces by this,
@@ -244,6 +326,8 @@ impl Emitter<'_> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
+    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
+    /// its border, background and kind, and return the annotation's object.
     fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
         let r = w.rect;
         let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
@@ -271,6 +355,9 @@ impl Emitter<'_> {
         bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
         bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
         d.set(b"BS".to_vec(), Object::Dict(bs));
+        if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
+            d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
@@ -284,6 +371,10 @@ impl Emitter<'_> {
                 }
                 if w.kind == WidgetKind::Password {
                     ff |= 1 << 13;
+                }
+                // DoNotScroll (ISO 32000-2 Table 228): the field takes no more than it shows.
+                if w.no_scroll {
+                    ff |= 1 << 23;
                 }
                 if let Some(m) = w.max_chars {
                     d.set(b"MaxLen".to_vec(), Object::Int(m.min(100_000) as i64));
@@ -491,8 +582,8 @@ impl Emitter<'_> {
         Ok(Some(r))
     }
 
-    /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs and GIFs decoded
-    /// to samples (`FlateDecode`, with a soft mask for transparency). `None`, with a warning,
+    /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs, GIFs, BMPs and TIFFs
+    /// decoded to samples (`FlateDecode`, with a soft mask for transparency). `None`, with a warning,
     /// for anything else.
     fn image_xobject(&mut self, data: &[u8], content_type: &str) -> Option<ObjRef> {
         let hash = content_hash(data);
@@ -509,6 +600,9 @@ impl Emitter<'_> {
         Some(r)
     }
 
+    /// Write a new image XObject for a picture, tagged with its `hash`: a JPEG as it is, a PNG
+    /// or GIF decoded to samples with a soft mask for any transparency. `None`, with a warning,
+    /// when the picture can't be read or is another kind.
     fn new_image_xobject(&mut self, data: &[u8], content_type: &str, hash: &[u8; 32]) -> Option<ObjRef> {
         let what = if content_type.is_empty() { "picture" } else { content_type };
         let mut d = Dict::new();
@@ -539,7 +633,7 @@ impl Emitter<'_> {
                 d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
                 Some(self.doc.add(Object::Stream(Stream::from_raw(d, data.to_vec()))))
             }
-            Some(crate::image::Kind::Png | crate::image::Kind::Gif) => {
+            Some(crate::image::Kind::Png | crate::image::Kind::Gif | crate::image::Kind::Bmp | crate::image::Kind::Tiff) => {
                 let img = match crate::image::decode(data) {
                     Ok(img) => img,
                     Err(why) => {
@@ -564,12 +658,15 @@ impl Emitter<'_> {
                 Some(self.doc.add(Object::Stream(Stream::flate(d, &img.samples))))
             }
             None => {
-                self.warnings.push(format!("a {what} image is not a JPEG, PNG or GIF and is left out"));
+                self.warnings.push(format!("a {what} image is not a JPEG, PNG, GIF, BMP or TIFF and is left out"));
                 None
             }
         }
     }
 
+    /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
+    /// content stream, the fonts and images it uses as resources, and its widgets and the links
+    /// in its text as annotations. Returns the page object.
     fn page(&mut self, page: &Page, pages_ref: ObjRef) -> Result<ObjRef, XfaError> {
         let page_ref = self.doc.add(Object::Dict(Dict::new()));
         let mut content: Vec<u8> = Vec::new();
@@ -577,11 +674,27 @@ impl Emitter<'_> {
         let mut xobjects = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
+        // The link the text before ended in, which a next piece of it on the line widens.
+        let mut last_link: Option<LinkPiece> = None;
         for (i, item) in page.items.iter().enumerate() {
+            // A link's pieces join only across text and the underline drawn just before it: a fill,
+            // picture, field or any other line (a rule) between them ends the link there.
+            let keeps_link = match item {
+                Item::Text(_) => true,
+                Item::Line { from, to, .. } => matches!(page.items.get(i + 1), Some(Item::Text(s))
+                    if (from.1 - to.1).abs() < 0.01
+                        && (from.0 - s.x).abs() < 0.01
+                        && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
+                _ => false,
+            };
+            if !keeps_link {
+                last_link = None;
+            }
             match item {
                 Item::Fill { rect, color } => {
                     content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
                 }
+                Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
                 Item::Line { from, to, width, color, dashed } => {
                     content.extend(
                         format!(
@@ -612,11 +725,20 @@ impl Emitter<'_> {
                     }
                     let name = s.face.resource_name();
                     fonts.insert(name, s.face.family.base_font(s.face.bold, s.face.italic));
+                    // Horizontal scaling is text state, which outlives the text object: a
+                    // condensed span gets a graphics state of its own, so the next isn't.
+                    let scaled = (s.face.h_scale - 1.0).abs() > 1e-6;
+                    let (open, tz, close) =
+                        if scaled { ("q BT", format!(" {} Tz", n(s.face.h_scale * 100.0)), " ET Q") } else { ("BT", String::new(), " ET") };
                     content.extend(
-                        format!("BT /{name} {} Tf {} rg 1 0 0 1 {} {} Tm ", n(s.face.size), rgb(s.face.color), n(s.x), n(h - s.baseline)).bytes(),
+                        format!("{open} /{name} {} Tf {} rg{tz} 1 0 0 1 {} {} Tm ", n(s.face.size), rgb(s.face.color), n(s.x), n(h - s.baseline))
+                            .bytes(),
                     );
                     content.extend(literal(&win_ansi(&s.text)));
-                    content.extend_from_slice(b" Tj ET\n");
+                    content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
+                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
+                        annots.push(Object::Ref(r));
+                    }
                 }
                 Item::Image { rect, data, content_type } => {
                     let Some(r) = self.image_xobject(data, content_type) else { continue };
@@ -656,6 +778,108 @@ impl Emitter<'_> {
         self.doc.set(page_ref, Object::Dict(pd));
         Ok(page_ref)
     }
+
+    /// A link annotation over span `s` (on a page `page_height` tall), when its text links
+    /// somewhere: over the text it draws, without the spaces around it, and opening its address.
+    /// A span that goes on the link `last` ended in, on the same line, widens that annotation
+    /// instead (a link whose text changes style partway is one link). An address PdfCraft
+    /// wouldn't open from a document leaves the text as plain text, with one warning for the form.
+    fn text_link(&mut self, s: &Span, page_height: f64, page_ref: ObjRef, last: &mut Option<LinkPiece>) -> Result<Option<ObjRef>, XfaError> {
+        let piece = self.link_piece(s, page_height);
+        let Some((target, rect)) = piece else {
+            *last = None;
+            return Ok(None);
+        };
+        if let Some(prev) = last.as_mut()
+            && prev.uri == target
+            && (prev.baseline - s.baseline).abs() < 0.01
+            && (-0.01..=s.face.size).contains(&(rect[0] - prev.rect[2]))
+        {
+            prev.rect = [prev.rect[0].min(rect[0]), prev.rect[1].min(rect[1]), prev.rect[2].max(rect[2]), prev.rect[3].max(rect[3])];
+            let r = prev.rect;
+            self.doc.update_dict(prev.annot, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;
+            return Ok(None);
+        }
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::name("URI"));
+        action.set(b"URI".to_vec(), Object::String(PdfString::literal(target.as_bytes().to_vec())));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"P".to_vec(), Object::Ref(page_ref));
+        d.set(b"F".to_vec(), Object::Int(4));
+        d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0)]));
+        d.set(b"A".to_vec(), Object::Dict(action));
+        let annot = self.doc.add(Object::Dict(d));
+        *last = Some(LinkPiece { annot, uri: target, baseline: s.baseline, rect });
+        Ok(Some(annot))
+    }
+
+    /// Where span `s` links to and the rectangle (PDF user space, on a page `page_height` tall)
+    /// over the text it draws, without the spaces around it. `None` for text that links nowhere,
+    /// draws nothing, or links to an address PdfCraft wouldn't open from a document, which is
+    /// warned about once for the form.
+    fn link_piece(&mut self, s: &Span, page_height: f64) -> Option<(String, [f64; 4])> {
+        let href = s.link.as_deref()?;
+        let shown = s.text.trim();
+        if shown.is_empty() {
+            return None;
+        }
+        let Some(target) = link_target(href) else {
+            if !self.warnings.iter().any(|w| w.starts_with(LINK_LEFT_OUT)) {
+                self.warnings.push(format!("{LINK_LEFT_OUT}: PdfCraft makes links only of web (http, https) and email (mailto) addresses"));
+            }
+            return None;
+        };
+        let lead = s.text.len() - s.text.trim_start().len();
+        let x = s.x + s.face.width(s.text.get(..lead).unwrap_or_default());
+        let w = s.face.width(shown);
+        // The text's ascent and descent, as the layout measures a span's extent.
+        let rect = pdf_rect(Rect::new(x, s.baseline - s.face.size * 0.8, w, s.face.size), page_height);
+        (rect.iter().all(|v| v.is_finite()) && w > 0.0).then(|| (target.to_string(), rect))
+    }
+}
+
+/// The link annotation a page's text last ended in: the next piece of the same link on the same
+/// line widens it.
+struct LinkPiece {
+    annot: ObjRef,
+    uri: String,
+    baseline: f64,
+    rect: [f64; 4],
+}
+
+/// How the layout warning about a link left out starts.
+const LINK_LEFT_OUT: &str = "a link in the form's text was left as plain text";
+
+/// The longest link address kept, in characters: as long as PdfCraft opens from a document.
+const MAX_LINK: usize = 2048;
+
+/// `href` as the address of a link PdfCraft makes from a form's text: a web (http, https) or
+/// email (mailto) address, trimmed, of at most [`MAX_LINK`] characters and without control
+/// characters. `None` for anything else (scripts, files, data, relative paths). Opening it still
+/// goes through the app's own checks and prompt.
+fn link_target(href: &str) -> Option<&str> {
+    let href = href.trim();
+    if href.is_empty() || href.chars().count() > MAX_LINK || href.chars().any(char::is_control) {
+        return None;
+    }
+    let (scheme, rest) = href.split_once(':')?;
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    let ok = if web { rest.strip_prefix("//").is_some_and(has_host) } else { scheme.eq_ignore_ascii_case("mailto") && !rest.is_empty() };
+    ok.then_some(href)
+}
+
+/// Whether `after` (a web address past its `//`) names a host: what comes before the path (which a
+/// backslash starts too, as web addresses read it), query or fragment, past any user name and
+/// before any port, isn't empty.
+fn has_host(after: &str) -> bool {
+    let authority = after.split(['/', '\\', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    // An IPv6 host is bracketed and holds colons of its own.
+    let host = if host.starts_with('[') { host } else { host.split(':').next().unwrap_or_default() };
+    !host.is_empty()
 }
 
 /// Replace the document's pages with the laid-out form and add its fields to the AcroForm. The
@@ -757,6 +981,13 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         z.set(b"BaseFont".to_vec(), Object::name("ZapfDingbats"));
         dr_fonts.set(b"ZaDb".to_vec(), Object::Dict(z));
     }
+    // Each font its own object: Acrobat shows nothing in a text field it redraws after typing
+    // when the field's /DR font is a dictionary written inline (#3441).
+    let inline: Vec<(Vec<u8>, Dict)> = dr_fonts.iter().filter_map(|(k, v)| Some((k.clone(), v.as_dict()?.clone()))).collect();
+    for (name, font) in inline {
+        let r = doc.add(Object::Dict(font));
+        dr_fonts.set(name, Object::Ref(r));
+    }
     dr.set(b"Font".to_vec(), Object::Dict(dr_fonts));
     acro.set(b"DR".to_vec(), Object::Dict(dr));
     if !acro.contains(b"DA") {
@@ -774,10 +1005,12 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
             catalog_changed = true;
         }
     }
-    if catalog_changed {
+    // The pages and fields are new: usage rights signed over the form as it was are void now.
+    let usage_rights = drop_usage_rights(doc, &mut catalog);
+    if catalog_changed || usage_rights {
         doc.set(catalog_ref, Object::Dict(catalog));
     }
-    Ok(Written { pages: count, fields: field_count, warnings })
+    Ok(Written { pages: count, fields: field_count, warnings, usage_rights })
 }
 
 /// What [`strip`] took out, for the user to be told (the packets held more than the fields).
@@ -963,21 +1196,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         None => catalog.set(b"AcroForm".to_vec(), Object::Dict(acro)),
     }
     catalog.remove(b"NeedsRendering");
-    // Reader usage rights are void once the form changed: Reader says so on opening the file
-    // and drops them, so they go now, with a note.
-    if let Some(perms) = catalog.get(b"Perms").map(|p| doc.resolve(p))
-        && let Some(mut perms) = perms.as_dict().cloned()
-        && (perms.contains(b"UR3") || perms.contains(b"UR"))
-    {
-        perms.remove(b"UR3");
-        perms.remove(b"UR");
-        out.usage_rights = true;
-        if perms.is_empty() {
-            catalog.remove(b"Perms");
-        } else {
-            catalog.set(b"Perms".to_vec(), Object::Dict(perms));
-        }
-    }
+    out.usage_rights = drop_usage_rights(doc, &mut catalog);
     doc.set(root, Object::Dict(catalog));
     // The packet streams are referenced from nowhere else: freed, so an incremental save
     // doesn't carry an unreachable copy of the data.
@@ -1022,6 +1241,28 @@ fn unbound_data(doc: &Document) -> Option<usize> {
     let mut count = 0;
     walk(&data, &mut Vec::new(), &bound, &mut count, 0);
     Some(count)
+}
+
+/// Take the usage rights (`/Perms /UR3`, or the older `/UR`) off a catalog, keeping the rest of
+/// `/Perms` (a certification's `/DocMDP`). They are signed over the form as it was: once its
+/// pages or fields change they are void, and a viewer may lock every field of a form whose
+/// usage rights are void, so they go, and the caller says so. Whether there were any.
+fn drop_usage_rights(doc: &mut Document, catalog: &mut Dict) -> bool {
+    let Some(entry) = catalog.get(b"Perms").cloned() else { return false };
+    let Some(mut perms) = doc.resolve(&entry).as_dict().cloned() else { return false };
+    if !perms.contains(b"UR3") && !perms.contains(b"UR") {
+        return false;
+    }
+    perms.remove(b"UR3");
+    perms.remove(b"UR");
+    match entry.as_ref() {
+        _ if perms.is_empty() => {
+            catalog.remove(b"Perms");
+        }
+        Some(r) => doc.set(r, Object::Dict(perms)),
+        None => catalog.set(b"Perms".to_vec(), Object::Dict(perms)),
+    }
+    true
 }
 
 /// The layout a document already carries from an earlier pass, if any.

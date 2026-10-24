@@ -59,7 +59,7 @@ impl Std14 {
     /// report that called it a standard-14 name would be telling the reader something untrue.
     pub fn recognise(base: &str) -> Option<(Self, Match)> {
         let base = base.rsplit('+').next().unwrap_or(base);
-        let flat: String = base.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect();
+        let flat: String = base.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
         let has = |w: &str| flat.contains(w);
         let (bold, italic) = (has("bold"), has("italic") || has("oblique"));
         // Two bools index a four-element array, so the subscript is provably 0..=3.
@@ -81,7 +81,7 @@ impl Std14 {
         if has("times") {
             return Some((times(), Match::Alias));
         }
-        if has("serif") || has("roman") {
+        if (has("serif") && !has("sans")) || has("roman") {
             return Some((times(), Match::FamilyHint));
         }
         if has("helvetica") || has("arial") {
@@ -124,6 +124,12 @@ impl Std14 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sans_serif_names_are_not_mapped_to_times() {
+        assert!(!matches!(Std14::recognise("SansSerif"), Some((Std14::TimesRoman, _))));
+        assert_eq!(Std14::recognise("Arial-SansSerif"), Some((Std14::Helvetica, Match::Alias)));
+    }
 
     /// Widths from the published Core14 metrics, typed in here by hand so the table is checked
     /// against the specification rather than against whatever produced it.

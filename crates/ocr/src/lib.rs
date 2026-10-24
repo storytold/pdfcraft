@@ -215,7 +215,10 @@ fn num(v: f64) -> String {
 /// WinAnsiEncoding), each word stretched to its box so selection and search highlight the
 /// right place. Marked content `/OCR` so it can be told apart from the page's own text.
 pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
-    let mut out = b"/OCR BMC\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
+    // `3 Tr` and the font are graphics state, which `ET` doesn't reset: without `q … Q` they
+    // would stay set for every later content stream on the page, so text added after OCR (a
+    // header or footer) drew invisibly (#3029).
+    let mut out = b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
     for w in words {
         let width = helvetica_width(&w.text, 1.0);
         let height = w.up[0].hypot(w.up[1]);
@@ -235,7 +238,7 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
         out.extend(pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(&w.text)));
         out.extend_from_slice(b" Tj\n");
     }
-    out.extend_from_slice(b"ET\nEMC\n");
+    out.extend_from_slice(b"ET\nQ\nEMC\n");
     out
 }
 
@@ -270,6 +273,26 @@ mod tests {
         // "Hi" has no descender: its box spans the cap height, from the baseline up.
         assert!(s.contains(&format!("{} 0 0 {} 10 20 Tm (Hi) Tj", num(30.0 / width), num(9.3 / CAP_HEIGHT))), "{s}");
         assert!(s.starts_with("/OCR BMC") && s.ends_with("EMC\n"));
+    }
+
+    /// #3029: the layer's invisible rendering mode and font end with the layer. Every operator
+    /// that sets them sits inside a `q … Q` pair that the layer closes itself, so content drawn
+    /// after it on the page starts from the graphics state it had before.
+    #[test]
+    fn the_layer_restores_the_graphics_state_it_changes() {
+        let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
+        let s = String::from_utf8(text_layer(&[w])).unwrap();
+        let mut depth = 0_i32;
+        for token in s.split_ascii_whitespace() {
+            match token {
+                "q" => depth += 1,
+                "Q" => depth -= 1,
+                "Tr" | "Tf" | "Tm" => assert!(depth > 0, "`{token}` outside q … Q in {s:?}"),
+                _ => {}
+            }
+            assert!(depth >= 0, "unbalanced Q in {s:?}");
+        }
+        assert_eq!(depth, 0, "the layer leaves a q open: {s:?}");
     }
 
     /// A word box is tight around the ink, so the text's size and baseline come from the letters:

@@ -2,7 +2,7 @@ use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
 use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
-    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_unicode, read_to_unicode,
+    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode, read_to_unicode,
     strip_subset_prefix, unicode_from_name,
 };
 use crate::util::OptionLog;
@@ -190,10 +190,11 @@ impl TrueTypeFont {
         }
 
         match &self.kind {
-            Kind::Embedded(e) => e
-                .code_to_unicode_name(code as u8)
-                .and_then(glyph_name_to_unicode)
-                .map(BfString::Char),
+            // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
+            // specification's full mapping (`f_i`, `hyphen.case`).
+            Kind::Embedded(e) => e.code_to_unicode_name(code as u8).and_then(|name| {
+                glyph_name_to_unicode(name).map(BfString::Char).or_else(|| glyph_name_to_text(name))
+            }),
             Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
         }
 
@@ -359,26 +360,36 @@ impl EmbeddedKind {
                 }
             }
         } else if let Ok(cmap) = self.base_font.font_ref().cmap() {
-            for record in cmap.encoding_records() {
-                if record.platform_id() == PlatformId::Windows
-                    && matches!(record.encoding_id(), 0 | 1)
-                {
-                    if let Ok(subtable) = record.subtable(cmap.offset_data()) {
-                        for offset in [0x0000_u32, 0xF000, 0xF100, 0xF200] {
-                            glyph = glyph
-                                .or_else(|| subtable.map_codepoint(code as u32 + offset))
-                                .filter(|g| *g != GlyphId::NOTDEF);
-                        }
+            // PdfCraft patch (#4156): the Windows (3, 0) subtable comes first, and the (1, 0) one
+            // only for codes it doesn't map (ISO 32000-2 §9.6.5.4: "If the font contains a (3, 0)
+            // subtable" it is used; "Otherwise, if the font contains a (1, 0) subtable"). The
+            // records are listed by platform ID, so Macintosh came before Windows and a wrong
+            // (1, 0) table, as SAS writes for its AMT fonts, drew "8" as "p" and "+" as "V".
+            for windows_pass in [true, false] {
+                for record in cmap.encoding_records() {
+                    let windows = record.platform_id() == PlatformId::Windows
+                        && matches!(record.encoding_id(), 0 | 1);
+                    if windows != windows_pass {
+                        continue;
                     }
-                } else if matches!(
-                    record.platform_id(),
-                    PlatformId::Macintosh | PlatformId::Unicode
-                ) && record.encoding_id() == 0
-                    && let Ok(subtable) = record.subtable(cmap.offset_data())
-                {
-                    glyph = glyph
-                        .or_else(|| subtable.map_codepoint(code))
-                        .filter(|g| *g != GlyphId::NOTDEF);
+                    if windows {
+                        if let Ok(subtable) = record.subtable(cmap.offset_data()) {
+                            for offset in [0x0000_u32, 0xF000, 0xF100, 0xF200] {
+                                glyph = glyph
+                                    .or_else(|| subtable.map_codepoint(code as u32 + offset))
+                                    .filter(|g| *g != GlyphId::NOTDEF);
+                            }
+                        }
+                    } else if matches!(
+                        record.platform_id(),
+                        PlatformId::Macintosh | PlatformId::Unicode
+                    ) && record.encoding_id() == 0
+                        && let Ok(subtable) = record.subtable(cmap.offset_data())
+                    {
+                        glyph = glyph
+                            .or_else(|| subtable.map_codepoint(code))
+                            .filter(|g| *g != GlyphId::NOTDEF);
+                    }
                 }
             }
         }

@@ -48,6 +48,13 @@ ignore = [
     # winprint's fmt-derive (craft-print's Windows spooler), so it runs at compile time on Windows
     # and is not in the binary.
     { id = "RUSTSEC-2024-0370", reason = "compile-time proc macro of winprint's fmt-derive (craft-print Windows printing, #1107)" },
+    # zvariant, zbus_names and zvariant_derive are unmaintained (no vulnerability, and no fixed
+    # release to move to). They reach the tree as the D-Bus stack behind `accesskit_unix` ->
+    # `atspi`, which is Linux accessibility only, and as a dev-dependency of pdfcraft-platform.
+    # Revisit when the accesskit/zbus chain moves to a maintained successor.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; Linux a11y stack via accesskit_unix" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; Linux a11y stack via accesskit_unix" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; Linux a11y stack via accesskit_unix" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md

@@ -86,7 +86,10 @@ impl PdfCraftApp {
         }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.id != "edit.copy"
-                || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.organize && v.selected_text().is_some_and(|t| !t.is_empty())))
+                || self
+                    .active
+                    .and_then(|i| self.views.get(i))
+                    .is_some_and(|v| !v.organize && (v.all_text || v.selected_text().is_some_and(|t| !t.is_empty()))))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
@@ -143,6 +146,7 @@ impl PdfCraftApp {
                     tl!("The document's security settings don't allow this change").to_string()
                 }
                 commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
+                commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
                 commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
                 _ => tl!("Open a document first").to_string(),
             };
@@ -193,6 +197,7 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
+            "edit.attach" => self.attach_file_dialog(),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");
@@ -251,6 +256,11 @@ impl PdfCraftApp {
                     v.set_continuous(!v.continuous());
                 }
             }
+            "view.page_gaps" => {
+                if let Some(view) = active.and_then(|i| self.views.get(i)) {
+                    self.set_active_page_gaps(!view.show_page_gaps);
+                }
+            }
             "view.layout.cover" => {
                 if let Some(i) = active {
                     let v = &mut self.views[i];
@@ -270,7 +280,7 @@ impl PdfCraftApp {
                 let on = !self.full_screen;
                 match self.ctx.clone() {
                     Some(ctx) => self.set_full_screen(&ctx, on),
-                    None => self.full_screen = on,
+                    None => self.apply_full_screen(on),
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
@@ -313,6 +323,15 @@ impl PdfCraftApp {
                 }
             }
             "form.fields" => self.choose_right_panel(Some(RightPanel::Fields)),
+            "form.calculation_order" => {
+                self.left = crate::LeftPanel::CalculationOrder;
+                // The page edits the fields, so Preview ends; the page grid closes, as for a tool.
+                self.form_preview = false;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.organize = false;
+                }
+                self.reveal_tools();
+            }
             "comment.flatten" => {
                 self.apply_edit(Edit::Flatten { comments: true, fields: false });
             }
@@ -371,6 +390,7 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
             }
             "edit.bates" => {
@@ -381,6 +401,7 @@ impl PdfCraftApp {
                     self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
                 }
                 self.marks_draft.focused_box = 5;
+                self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
             "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
@@ -513,7 +534,7 @@ impl PdfCraftApp {
             }
             "sign.validate" => {
                 let certs = self.session.trusted_certificates().to_vec();
-                self.session.set_trusted_certificates(certs);
+                self.apply_trusted_certificates(certs);
                 self.choose_right_panel(Some(RightPanel::Signatures));
             }
             "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
@@ -627,7 +648,13 @@ impl PdfCraftApp {
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
             "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets });
+                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
+            }
+            // Two or more selected pages reverse among themselves; otherwise the whole document.
+            "page.reverse" => {
+                let all = active.and_then(|i| self.views.get(i)).map_or(0, |v| v.page_count());
+                let pages = if targets.len() >= 2 { targets } else { (0..all).collect() };
+                self.apply_edit(Edit::ReversePages { pages });
             }
             "ocr.enhance_camera" => {
                 // The corners start on the document's edges when they can be found, else
@@ -648,6 +675,9 @@ impl PdfCraftApp {
             }
             "page.crop" => {
                 self.quick_tool = crate::QuickTool::Crop;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.organize = false;
+                }
                 self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
             }
             "page.boxes" => {
@@ -773,17 +803,19 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
             let mut open: Option<String> = None;
             let mut clear = false;
             ui.menu_button(label, |ui| {
-                for r in &app.recent {
-                    if ui.button(&r.name).on_hover_text(&r.path).clicked() {
-                        open = Some(r.path.clone());
+                crate::chrome::scroll_menu(ui, |ui| {
+                    for r in &app.recent {
+                        if ui.button(&r.name).on_hover_text(&r.path).clicked() {
+                            open = Some(r.path.clone());
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button(tl!("Clear Recent Files")).clicked() {
+                        clear = true;
                         ui.close();
                     }
-                }
-                ui.separator();
-                if ui.button(tl!("Clear Recent Files")).clicked() {
-                    clear = true;
-                    ui.close();
-                }
+                })
             });
             if let Some(p) = open {
                 app.open_recent(&p);

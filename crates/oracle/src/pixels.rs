@@ -201,6 +201,10 @@ pub fn decode_pam_gray(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    // `windows(0)` panics.
+    if needle.is_empty() {
+        return None;
+    }
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
@@ -402,6 +406,14 @@ mod tests {
         bytes.extend_from_slice(&[9; 8]);
         let (w, h, px) = decode_pgm(&bytes).expect("a commented P5 image");
         assert_eq!((w, h, px.len()), (4, 2, 8));
+    }
+
+    /// An empty needle is not found, rather than panicking in `windows(0)`.
+    #[test]
+    fn find_with_an_empty_needle_is_none() {
+        assert_eq!(find(b"abc", b""), None);
+        assert_eq!(find(b"", b""), None);
+        assert_eq!(find(b"abcabc", b"ca"), Some(2));
     }
 
     /// Malformed or hostile headers return `None` rather than panicking or inventing a size.

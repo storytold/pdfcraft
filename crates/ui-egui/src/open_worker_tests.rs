@@ -608,3 +608,97 @@ fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
         }
     }
 }
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn inline_tool_open_keeps_its_command_for_pdf_conversion_and_password_retry() {
+    for (name, bytes, encrypted) in
+        [("plain.pdf", fixture(1), false), ("converted.txt", b"Text to export".to_vec(), false), ("locked.pdf", encrypted_tool_fixture(), true)]
+    {
+        let path = std::env::temp_dir().join(format!("pdfcraft-inline-tool-{}-{name}", std::process::id()));
+        std::fs::write(&path, bytes).expect("write selected file");
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").expect("language preference");
+        assert!(app.ctx.is_none(), "this exercises the no-context inline path");
+        app.open_path_then(&path.to_string_lossy(), Some("export.text"));
+        if encrypted {
+            assert!(app.dialog.is_none());
+            assert_eq!(app.password_prompt.as_ref().expect("password prompt").then, Some("export.text"));
+            app.submit_password(Some("wrong".into()));
+            assert!(app.password_prompt.as_ref().expect("wrong-password prompt").error.is_some());
+            assert!(app.dialog.is_none());
+            app.submit_password(Some("tool-password".into()));
+        }
+        assert_eq!(app.views.len(), 1);
+        assert_eq!(app.active, Some(0));
+        assert!(matches!(app.dialog, Some(crate::Dialog::Export(_))), "the inline {name} retains its export command");
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn startup_files_wait_for_absolute_link_consent_and_preparation() {
+    let (mut h, _) = harness();
+    let source = h.state().views[0].id;
+    let path = std::env::temp_dir().join(format!("pdfcraft-open-consented-startup-{}.pdf", std::process::id()));
+    std::fs::write(&path, fixture(2)).expect("write linked PDF");
+    h.state_mut().open_remote_link(source, path.to_string_lossy().into_owned(), pdfcraft_render::RemoteDestination::Default);
+    h.state().startup_inbox.lock().expect("startup queue").push(("startup.pdf".into(), fixture(1)));
+    h.step();
+    assert!(h.state().pending_remote_link.is_some());
+    assert_eq!(h.state().startup_inbox.lock().expect("startup queue").len(), 1);
+    assert_eq!(h.state().views.len(), 1, "startup cannot replace the consent interaction");
+
+    let (gate, started, release, finished) = open_worker::prepare_gate();
+    h.state_mut().open_prepare_gate = Some(gate);
+    h.state_mut().resolve_pending_remote_link(true);
+    started.recv_timeout(Duration::from_secs(5)).expect("worker reached prepare barrier");
+    h.step();
+    let queued = h.state().startup_inbox.lock().expect("startup queue").len();
+    let visible = h.state().views.len();
+    // Always release before asserting: a failure must not strand the worker at the barrier.
+    release.send(()).expect("release prepare barrier");
+    finished.recv_timeout(Duration::from_secs(5)).expect("worker finished preparation");
+    assert_eq!(queued, 1, "startup bytes wait while the approved linked PDF prepares");
+    assert_eq!(visible, 1);
+    h.step();
+    let app = h.state();
+    assert_eq!(app.views.len(), 3);
+    assert_eq!(app.session.get(app.views[1].id).expect("linked document").path.as_deref(), path.to_str());
+    assert_eq!(app.session.get(app.views[2].id).expect("startup document").name, "startup.pdf");
+    assert_eq!(app.active, Some(1), "the user's approved navigation keeps focus");
+    let _ = std::fs::remove_file(path);
+}
+
+/// #1928: a new file handed over by the OS (Finder, or another launch) raises the window at once,
+/// before it is prepared, and is the selected tab once it opens.
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
+    let (mut harness, _client) = harness();
+    let (gate, started, release, finished) = open_worker::prepare_gate();
+    harness.state_mut().open_prepare_gate = Some(gate);
+    let path = std::env::temp_dir().join(format!("pdfcraft-os-open-worker-{}.pdf", std::process::id()));
+    std::fs::write(&path, fixture(2)).expect("write the handed-over PDF");
+    let mut queue = vec![crate::OsEvent::Open(vec![path.to_string_lossy().into_owned()])];
+    harness.state_mut().os_events = Some(Box::new(move || std::mem::take(&mut queue)));
+    harness.step();
+    started.recv_timeout(Duration::from_secs(5)).expect("the handed-over PDF reached preparation");
+    let commands: Vec<_> = harness.output().viewport_output.values().flat_map(|v| v.commands.clone()).collect();
+    let visible = harness.state().views.len();
+    // Always release before asserting: a failure must not strand the worker at the barrier.
+    release.send(()).expect("release the handed-over PDF");
+    finished.recv_timeout(Duration::from_secs(5)).expect("the handed-over PDF prepared");
+    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)), "{commands:?}");
+    assert!(commands.contains(&egui::ViewportCommand::Focus), "{commands:?}");
+    assert_eq!(visible, 1, "the window comes forward while the file is still preparing");
+    harness.step();
+    let app = harness.state();
+    assert_eq!(app.views.len(), 2);
+    let active = app.active.expect("a selected document");
+    let doc = app.session.get(app.views[active].id).expect("the handed-over document");
+    assert_eq!(doc.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the new file is the selected tab");
+    assert_eq!(doc.info.pages.len(), 2);
+    let _ = std::fs::remove_file(path);
+}

@@ -124,6 +124,18 @@ fn text_is_wrapped_and_paginated() {
     assert!(content(p.last().unwrap()).contains("(After a form feed) Tj"), "a form feed starts a page");
 }
 
+#[test]
+fn text_keeps_leading_spaces_and_tabs() {
+    let doc = reopen(&from_text("t", "    indented\n\ttabbed\nplain", LETTER, 11.0).unwrap());
+    let p = pages(&doc);
+    let c = doc.resolve(p[0].get(b"Contents").unwrap());
+    let Object::Stream(s) = &*c else { panic!() };
+    let content = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(content.contains("(    indented) Tj"), "{content}");
+    assert!(content.contains("(    tabbed) Tj"), "{content}");
+    assert!(content.contains("(plain) Tj"), "{content}");
+}
+
 /// Text Helvetica can't draw is refused with its line and character, never set as `?`; text
 /// PdfCraft generates writes such characters as [U+XXXX] and says so.
 #[test]
@@ -671,6 +683,74 @@ fn jpeg_images_with_a_soft_mask_export_as_png_with_alpha() {
 }
 
 #[test]
+/// Both image export paths apply mask intervals independently of the image's component Decode.
+fn soft_mask_decode_ranges_become_exported_alpha() {
+    for indirect in [false, true] {
+        for (range, expected) in [
+            ([0.25, 0.75], [64, 128, 191]),
+            ([0.75, 0.25], [191, 127, 64]),
+            ([1.0, 0.0], [255, 127, 0]),
+            ([-1.0, 2.0], [0, 129, 255]),
+            ([0.5, 0.5], [128, 128, 128]),
+        ] {
+            let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+            with_image(&mut doc, |doc| {
+                let endpoints = range.into_iter().map(|v| {
+                    let value = Object::Real(v);
+                    if indirect { Object::Ref(doc.add(value)) } else { value }
+                });
+                let decode = Object::Array(endpoints.collect());
+                let decode = if indirect { Object::Ref(doc.add(decode)) } else { decode };
+                let mut mask = image_dict(3, 1, "DeviceGray", 8);
+                mask.set(b"Decode".to_vec(), decode);
+                let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0, 128, 255])));
+                let mut image = image_dict(3, 1, "DeviceRGB", 8);
+                image.set(b"SMask".to_vec(), Object::Ref(mask));
+                image.set(b"Decode".to_vec(), decode_array(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0]));
+                Stream::from_raw(image, [0, 64, 255].repeat(3))
+            });
+            let doc = reopen(&doc);
+            let out = extract_images(&doc, &[0], 0);
+            assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+            assert_eq!(out.images.len(), 1);
+            let pixels = exported_png_pixels(&out.images[0].data);
+            assert_eq!(alphas(&pixels), expected, "Decode {range:?}, indirect={indirect}");
+            assert!(pixels.as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 64, 255]), "image component Decode stays independent");
+            let (ext, bytes) = image_file(&doc, out.images[0].object).unwrap();
+            assert_eq!(ext, "png");
+            assert_eq!(exported_png_pixels(&bytes), pixels, "Save Image As and Export all images agree");
+        }
+    }
+}
+
+#[test]
+/// Packed and JPEG samples map to opacity before resizing to their image's dimensions.
+fn soft_mask_decode_maps_packed_and_jpeg_masks_before_resizing() {
+    for jpeg in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mask = if jpeg {
+                let mut mask = image_dict(4, 2, "DeviceGray", 8);
+                mask.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+                mask.set(b"Decode".to_vec(), decode_array(&[0.25, 0.25]));
+                Stream::from_raw(mask, real_jpeg())
+            } else {
+                let mut mask = image_dict(2, 1, "DeviceGray", 1);
+                mask.set(b"Decode".to_vec(), decode_array(&[-1.0, 2.0]));
+                Stream::from_raw(mask, vec![0b0100_0000])
+            };
+            let mask = doc.add(Object::Stream(mask));
+            let mut image = image_dict(4, 2, "DeviceRGB", 8);
+            image.set(b"SMask".to_vec(), Object::Ref(mask));
+            Stream::from_raw(image, vec![10; 24])
+        });
+        // Clipping before resizing differs from resizing first, then clipping to [0, 255].
+        let expected = if jpeg { vec![64; 8] } else { vec![0, 64, 191, 255, 0, 64, 191, 255] };
+        assert_eq!(alphas(&exported_rgba(&reopen(&doc)).1), expected, "jpeg={jpeg}");
+    }
+}
+
+#[test]
 fn soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha() {
     // A 2×1 soft mask on a 4×2 image is scaled to the image's size.
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
@@ -821,6 +901,15 @@ fn indexed_hival_resolves_indirect_values_and_stream_palettes() {
 }
 
 #[test]
+fn indexed_lookup_stream_has_a_size_cap() {
+    // A lookup table needs 256 × 4 bytes at most; a 1 MiB one is refused, not decoded whole.
+    let mut palette = vec![255, 0, 0, 0, 0, 255];
+    palette.resize(1 << 20, 0);
+    let (doc, image) = indexed_export_fixture(Object::Int(1), palette, true, false, 8, vec![0, 1, 0, 1]);
+    assert!(crate::extract::image_file(&doc, image).unwrap_err().contains("lookup table"));
+}
+
+#[test]
 fn indexed_hival_boundary_values_keep_valid_palette_entries() {
     let palette: Vec<u8> = (0..=255u8).flat_map(|i| [i, 255 - i, 17]).collect();
     for high in [0, 255] {
@@ -873,6 +962,193 @@ fn indexed_hival_keeps_existing_short_palette_fallback() {
     let (doc, image) = indexed_export_fixture(Object::Int(1), vec![255, 0, 0], false, false, 2, vec![0x1b]);
     let (_, bytes) = crate::extract::image_file(&doc, image).unwrap();
     assert_eq!(exported_png_pixels(&bytes), vec![255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+/// Save and reopen a synthetic image before checking both export entry points.
+fn decode_fixture(dict: Dict, samples: Vec<u8>) -> (Document, pdfcraft_cos::ObjRef) {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |_| Stream::from_raw(dict, samples));
+    let doc = reopen(&doc);
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let image = xo.as_dict().unwrap().iter().next().unwrap().1.as_ref().unwrap();
+    (doc, image)
+}
+
+fn assert_decode_pixels(dict: Dict, samples: Vec<u8>, expected: &[u8]) {
+    let (doc, image) = decode_fixture(dict, samples);
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(out.images.len(), 1);
+    assert_eq!(exported_png_pixels(&out.images[0].data), expected);
+    let (ext, bytes) = image_file(&doc, image).unwrap();
+    assert_eq!(ext, "png");
+    assert_eq!(exported_png_pixels(&bytes), expected);
+}
+
+fn decode_array(values: &[f64]) -> Object {
+    Object::Array(values.iter().copied().map(Object::Real).collect())
+}
+
+#[test]
+fn lossless_decode_maps_each_component_before_colour_conversion() {
+    for (space, samples, decode, expected) in [
+        ("DeviceRGB", vec![0, 64, 255], vec![1., 0., 0., 1., 0., 1.], [255, 64, 255]),
+        ("DeviceRGB", vec![0, 64, 255], vec![0., 1., 1., 0., 0., 1.], [0, 191, 255]),
+        ("DeviceGray", vec![0], vec![0.2, 0.8], [51, 51, 51]),
+        ("DeviceGray", vec![128], vec![-1., 2.], [129, 129, 129]),
+        ("DeviceCMYK", vec![0, 0, 0, 0], vec![0., 1., 1., 0., 0., 1., 0., 1.], [255, 0, 255]),
+    ] {
+        let mut dict = image_dict(1, 1, space, 8);
+        dict.set(b"Decode".to_vec(), decode_array(&decode));
+        assert_decode_pixels(dict, samples, &expected);
+    }
+}
+
+#[test]
+fn lossless_decode_scales_packed_samples_by_their_bit_depth() {
+    let mut dict = image_dict(4, 1, "DeviceGray", 2);
+    dict.set(b"Decode".to_vec(), decode_array(&[0.2, 0.8]));
+    assert_decode_pixels(dict, vec![0x1b], &[51, 51, 51, 102, 102, 102, 153, 153, 153, 204, 204, 204]);
+}
+
+#[test]
+fn lossless_decode_identity_and_defaults_keep_depth_and_row_padding() {
+    for (bpc, samples, expected) in [
+        (1, vec![0x7f, 0xff], vec![0, 0, 0, 255, 255, 255]),
+        (2, vec![0x7f, 0xbf], vec![85, 85, 85, 170, 170, 170]),
+        (4, vec![0x5f, 0xaf], vec![85, 85, 85, 170, 170, 170]),
+        (8, vec![85, 170], vec![85, 85, 85, 170, 170, 170]),
+        (16, vec![85, 255, 170, 0], vec![85, 85, 85, 170, 170, 170]),
+    ] {
+        for decode in [None, Some(Object::Null), Some(decode_array(&[0., 1.]))] {
+            let mut dict = image_dict(1, 2, "DeviceGray", bpc);
+            if let Some(decode) = decode {
+                dict.set(b"Decode".to_vec(), decode);
+            }
+            assert_decode_pixels(dict, samples.clone(), &expected);
+        }
+    }
+}
+
+#[test]
+fn lossless_indexed_decode_rounds_in_index_units_then_clamps() {
+    let palette = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+    for (bpc, samples, decode, expected) in [
+        (2, vec![0x1b], Some(vec![3., 0.]), vec![100, 110, 120, 70, 80, 90, 40, 50, 60, 10, 20, 30]),
+        (2, vec![0x1b], Some(vec![-1., 5.]), vec![10, 20, 30, 40, 50, 60, 100, 110, 120, 100, 110, 120]),
+        (2, vec![0x1b], Some(vec![0.5, 0.5]), vec![40, 50, 60, 40, 50, 60, 40, 50, 60, 40, 50, 60]),
+        (8, vec![0, 1, 2, 255], None, vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]),
+        // Existing 16-bit policy retains the high byte, 42 / 255 * 3 < 0.5.
+        (16, vec![0x2a, 0xab, 0, 0, 255, 255, 128, 0], Some(vec![0., 3.]), vec![10, 20, 30, 10, 20, 30, 100, 110, 120, 70, 80, 90]),
+    ] {
+        let (mut doc, image) = indexed_export_fixture(Object::Int(3), palette.clone(), false, false, bpc, samples);
+        if let Some(decode) = decode {
+            let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!() };
+            stream.dict.set(b"Decode".to_vec(), decode_array(&decode));
+            doc.set(image, Object::Stream(stream));
+        }
+        let doc = reopen(&doc);
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+        assert_eq!(exported_png_pixels(&out.images[0].data), expected);
+        let (_, bytes) = image_file(&doc, out.images[0].object).unwrap();
+        assert_eq!(exported_png_pixels(&bytes), expected);
+    }
+}
+
+#[test]
+fn lossless_decode_keeps_colour_key_comparisons_in_raw_samples() {
+    let mut dict = image_dict(2, 1, "DeviceGray", 8);
+    dict.set(b"Decode".to_vec(), decode_array(&[0.2, 0.8]));
+    dict.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0)]));
+    assert_decode_pixels(dict, vec![0, 255], &[51, 51, 51, 0, 204, 204, 204, 255]);
+
+    let (mut doc, image) = indexed_export_fixture(Object::Int(1), vec![255, 0, 0, 0, 0, 255], false, false, 2, vec![0x1b]);
+    let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!() };
+    stream.dict.set(b"Decode".to_vec(), decode_array(&[3., 0.]));
+    stream.dict.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(2), Object::Int(2)]));
+    doc.set(image, Object::Stream(stream));
+    let doc = reopen(&doc);
+    let out = extract_images(&doc, &[0], 0);
+    let expected = [0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 0, 255];
+    assert_eq!(exported_png_pixels(&out.images[0].data), expected);
+    let (_, bytes) = image_file(&doc, out.images[0].object).unwrap();
+    assert_eq!(exported_png_pixels(&bytes), expected);
+}
+
+#[test]
+fn lossless_decode_resolves_indirect_arrays_and_endpoints() {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let lo = doc.add(Object::Real(0.2));
+        let hi = doc.add(Object::Real(0.8));
+        let decode = doc.add(Object::Array(vec![Object::Ref(lo), Object::Ref(hi)]));
+        let mut dict = image_dict(1, 1, "DeviceGray", 8);
+        dict.set(b"Decode".to_vec(), Object::Ref(decode));
+        Stream::from_raw(dict, vec![0])
+    });
+    let doc = reopen(&doc);
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_png_pixels(&out.images[0].data), [51, 51, 51]);
+    let (_, bytes) = image_file(&doc, out.images[0].object).unwrap();
+    assert_eq!(exported_png_pixels(&bytes), [51, 51, 51]);
+
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let decode = doc.add(Object::Null);
+        let mut dict = image_dict(1, 1, "DeviceGray", 8);
+        dict.set(b"Decode".to_vec(), Object::Ref(decode));
+        Stream::from_raw(dict, vec![64])
+    });
+    let doc = reopen(&doc);
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_png_pixels(&out.images[0].data), [64, 64, 64]);
+    let (_, bytes) = image_file(&doc, out.images[0].object).unwrap();
+    assert_eq!(exported_png_pixels(&bytes), [64, 64, 64]);
+}
+
+#[test]
+fn lossless_decode_interpolation_avoids_endpoint_difference_overflow() {
+    let (mut doc, image) = decode_fixture(image_dict(3, 1, "DeviceGray", 8), vec![0, 64, 255]);
+    let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!() };
+    stream.dict.set(b"Decode".to_vec(), decode_array(&[-f64::MAX, f64::MAX]));
+    doc.set(image, Object::Stream(stream));
+    let expected = [0, 0, 0, 0, 0, 0, 255, 255, 255];
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_png_pixels(&out.images[0].data), expected);
+    let (_, bytes) = image_file(&doc, image).unwrap();
+    assert_eq!(exported_png_pixels(&bytes), expected);
+}
+
+#[test]
+fn lossless_decode_falls_back_to_the_default_mapping_when_malformed() {
+    for (space, samples, decode, expected) in [
+        ("DeviceRGB", vec![0, 64, 255], decode_array(&[1., 0.]), [0, 64, 255]),
+        ("DeviceGray", vec![64], Object::name("bad"), [64, 64, 64]),
+        ("DeviceGray", vec![64], decode_array(&[]), [64, 64, 64]),
+        ("DeviceGray", vec![64], decode_array(&[0.]), [64, 64, 64]),
+        ("DeviceGray", vec![64], decode_array(&[1., 0., 0., 1.]), [64, 64, 64]),
+        ("DeviceGray", vec![64], Object::Array(vec![Object::Int(1), Object::name("bad")]), [64, 64, 64]),
+        ("DeviceGray", vec![64], Object::Array(vec![Object::Int(1), Object::Null]), [64, 64, 64]),
+    ] {
+        let mut dict = image_dict(1, 1, space, 8);
+        dict.set(b"Decode".to_vec(), decode);
+        assert_decode_pixels(dict, samples, &expected);
+    }
+    // Non-finite reals cannot be serialized as PDF numbers. Exercise the in-memory input.
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut dict = image_dict(1, 1, "DeviceGray", 8);
+        dict.set(b"Decode".to_vec(), decode_array(&[1., value]));
+        let (mut doc, image) = decode_fixture(image_dict(1, 1, "DeviceGray", 8), vec![64]);
+        doc.set(image, Object::Stream(Stream::from_raw(dict, vec![64])));
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+        assert_eq!(exported_png_pixels(&out.images[0].data), [64, 64, 64]);
+        let (_, bytes) = image_file(&doc, image).unwrap();
+        assert_eq!(exported_png_pixels(&bytes), [64, 64, 64]);
+    }
 }
 
 /// An 8×8 baseline JPEG of one flat colour with four components, stored as `samples`, and an
@@ -948,4 +1224,97 @@ fn cmyk_and_ycck_jpegs_export_in_the_colours_the_page_shows() {
             assert_eq!((ext, &extract_images(&doc, &[0], 0).images[0].data), ("jpg", &jpeg), "{what}");
         }
     }
+}
+
+/// A 60 x 20 JPEG at `dpi` x 72 dpi, tagged with EXIF `orientation` (6: shown turned 90 degrees
+/// clockwise).
+pub(crate) fn phone_jpeg(orientation: u8, dpi: u16) -> Vec<u8> {
+    use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
+    let mut jpeg = Vec::new();
+    let mut encoder = JpegEncoder::new(&mut jpeg);
+    encoder.set_pixel_density(PixelDensity { density: (dpi, 72), unit: PixelDensityUnit::Inches });
+    encoder.encode_image(&image::RgbImage::from_pixel(60, 20, image::Rgb([20, 20, 20]))).unwrap();
+    let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+    exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
+    let mut out = jpeg[..2].to_vec();
+    out.extend_from_slice(&[0xff, 0xe1]);
+    out.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(&exif);
+    out.extend_from_slice(&jpeg[2..]);
+    out
+}
+
+#[test]
+fn a_jpeg_with_an_exif_orientation_becomes_an_upright_page() {
+    let doc = reopen(&from_images(&[("photo.jpg".into(), phone_jpeg(6, 144)), ("plain.jpg".into(), phone_jpeg(1, 72))]).unwrap());
+    // Stored 60 x 20 px at 144 x 72 dpi; turned it is 20 x 60 px at 72 x 144 dpi: 20 x 30 pt.
+    let m0 = media(&pages(&doc)[0]);
+    assert!((m0[2] - 20.0).abs() < 0.01 && (m0[3] - 30.0).abs() < 0.01, "{m0:?}");
+    let img = image_of(&doc, 0);
+    assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(20), Some(60)));
+    // "As stored" stays as it is.
+    let m1 = media(&pages(&doc)[1]);
+    assert!((m1[2] - 60.0).abs() < 0.01 && (m1[3] - 20.0).abs() < 0.01, "{m1:?}");
+    let img = image_of(&doc, 1);
+    assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(60), Some(20)));
+}
+
+#[test]
+fn a_cyclic_indexed_colour_space_is_refused() {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    // 5 0 obj [/Indexed 5 0 R 255 <00>]: the base is the indexed space itself.
+    let cs = doc.add(Object::Null);
+    doc.set(cs, Object::Array(vec![Object::name("Indexed"), Object::Ref(cs), Object::Int(255), Object::String(PdfString::literal(vec![0]))]));
+    with_image(&mut doc, |_| {
+        let mut dict = image_dict(1, 1, "DeviceGray", 8);
+        dict.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+        Stream::from_raw(dict, vec![0])
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty());
+    assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+}
+
+/// A TIFF of `pages` 64×64 gray pages, then (with `unreadable`) one whose samples Create can't read.
+fn gray_tiff(pages: usize, unreadable: bool) -> Vec<u8> {
+    let mut tif = std::io::Cursor::new(Vec::new());
+    let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
+    for _ in 0..pages {
+        enc.write_image::<tiff::encoder::colortype::Gray8>(64, 64, &[128; 64 * 64]).unwrap();
+    }
+    if unreadable {
+        enc.write_image::<tiff::encoder::colortype::RGB32Float>(1, 1, &[0.5; 3]).unwrap();
+    }
+    tif.into_inner()
+}
+
+/// Many small IFDs can each decode to a large page: the pages a TIFF keeps in memory together
+/// are bounded, and embedding one image reads only its first page.
+#[test]
+fn tiff_pages_are_decoded_within_a_total_budget() {
+    let tif = gray_tiff(3, false);
+    assert!(matches!(tiff_pages_within("t.tif", &tif, usize::MAX, 10_000), Err(CreateError::Image(..))), "12 KiB of pages past a 10 KB budget");
+    assert_eq!(tiff_pages_within("t.tif", &tif, usize::MAX, 20_000).unwrap().len(), 3);
+    let tif = gray_tiff(1, true);
+    let mut doc = Document::new_empty();
+    assert!(image_xobject(&mut doc, "t.tif", &tif).is_ok(), "the unreadable last page is never decoded");
+}
+
+/// A one-pixel GIF on a `w`×`h` logical screen: the decoder paints it on a canvas that size.
+fn gif_on_screen(w: u16, h: u16) -> Vec<u8> {
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&w.to_le_bytes());
+    gif.extend_from_slice(&h.to_le_bytes());
+    gif.extend_from_slice(&[0x80, 0, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0]);
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 1, 0, 0x3B]);
+    gif
+}
+
+/// The decoder's own limit lets a 74-byte GIF ask for a canvas of hundreds of MB, which the
+/// conversion then copies; a screen past [`MAX_GIF_PIXELS`] is refused before decoding.
+#[test]
+fn a_tiny_gif_on_a_huge_screen_is_refused() {
+    assert!(matches!(from_images(&[("big.gif".into(), gif_on_screen(4200, 4100))]), Err(CreateError::Image(..))));
+    let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }

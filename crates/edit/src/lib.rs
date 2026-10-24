@@ -2,19 +2,22 @@
 //! Watermark, Background and Bates numbering (execution plan M7.6).
 //!
 //! **How marks are stored.** Each mark is one content stream appended to (or, for content behind
-//! the page, prepended to) the page's `/Contents`, drawn in display space (after `/Rotate`) and
-//! wrapped in a marked-content artifact (§14.8.2.2) so readers and screen readers skip it:
+//! the page, inserted after the backgrounds at the start of) the page's `/Contents`, drawn in
+//! display space (after `/Rotate`) and wrapped in a marked-content artifact (§14.8.2.2) so
+//! readers and screen readers skip it:
 //! `/Artifact <</Type /Pagination /Subtype /Header /PCMark /HeaderFooter>> BDC … EMC`. The
 //! `/PCMark` entry (also in the stream dictionary) names the kind of mark, which is how Update and
 //! Remove find them again without decompressing page content. When
 //! anything is drawn on top, the page's original content is wrapped in `q … Q` (two tiny streams)
-//! so its graphics state can't leak into the mark.
+//! so its graphics state cannot reach the mark. The closing stream also ends known unfinished
+//! marked-content sequences before the new mark.
 //!
-//! Text uses standard Helvetica (WinAnsi) added to the page resources as `/PCHelv`.
+//! Text uses standard Helvetica (WinAnsi) added to the page resources as `/PCHelv`; headers and
+//! footers may use standard Times (`/PCTimes`) or Courier (`/PCCour`) instead (#3754).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -54,9 +57,11 @@ pub struct HeaderFooter {
     /// Left, centre and right header text, then left, centre and right footer text. Tokens:
     /// `<<1>>` page number, `<<n>>` page count, `<<1 of n>>`, `<<1/n>>`, `<<Page 1>>`,
     /// `<<Page 1 of n>>`, dates `<<m/d/yyyy>>`, `<<mm/dd/yyyy>>`, `<<d/m/yyyy>>`, `<<yyyy-mm-dd>>`,
-    /// `<<m/d/yy>>`, `<<mmmm d, yyyy>>`, and Bates numbers `<<Bates Number#6#1#PRE#SUF>>`
+    /// `<<yyyy/mm/dd>>`, `<<yyyy/m/d>>`, `<<m/d/yy>>`, `<<mmmm d, yyyy>>`, and Bates numbers `<<Bates Number#6#1#PRE#SUF>>`
     /// (digits, start, prefix, suffix).
     pub text: [String; 6],
+    /// The standard face the text is drawn in (#3754): Helvetica (the default), Times or Courier.
+    pub font: added::Family,
     pub font_size: f64,
     pub color: Rgb,
     pub underline: bool,
@@ -64,12 +69,25 @@ pub struct HeaderFooter {
     pub margins: [f64; 4],
     /// The number `<<1>>` shows on the first page of the range.
     pub start_number: u32,
+    /// Shrink the page content so the header and footer don't cover it (Acrobat's Appearance
+    /// Options): the original content is scaled down evenly into the band the header and footer
+    /// leave free, centred across the page. Remove and Update take the scaling away again.
+    pub shrink: bool,
 }
 
 impl Default for HeaderFooter {
     /// Acrobat's defaults: 8 pt black, margins 0.5 in top and bottom, 1 in left and right.
     fn default() -> Self {
-        Self { text: Default::default(), font_size: 8.0, color: [0.0; 3], underline: false, margins: [36.0, 36.0, 72.0, 72.0], start_number: 1 }
+        Self {
+            text: Default::default(),
+            font: added::Family::Helvetica,
+            font_size: 8.0,
+            color: [0.0; 3],
+            underline: false,
+            margins: [36.0, 36.0, 72.0, 72.0],
+            start_number: 1,
+            shrink: false,
+        }
     }
 }
 
@@ -82,6 +100,42 @@ impl HeaderFooter {
     pub fn first_undrawable(&self) -> Option<char> {
         self.text.iter().flat_map(|t| t.lines()).find_map(pdfcraft_fonts::first_non_win_ansi)
     }
+
+    /// The room the header and the footer take at the top and the bottom of a page, in points:
+    /// the margin, the lines of the tallest box, and a clearance of half the font size. A side
+    /// without text takes none. This is the room [`HeaderFooter::shrink`] keeps free.
+    pub fn bands(&self) -> (f64, f64) {
+        let size = self.font_size;
+        let line_h = size * 1.2;
+        let lines = |boxes: &[String]| boxes.iter().filter(|t| !t.trim().is_empty()).map(|t| t.lines().count().max(1)).max();
+        let (header, footer) = self.text.split_at(3);
+        // Header lines hang below the top margin (a full line each); the footer's last line sits
+        // on the bottom margin, so only its capitals (0.8 of the size) rise above it.
+        let top = lines(header).map_or(0.0, |n| self.margins[0] + size + (n - 1) as f64 * line_h + size / 2.0);
+        let bottom = lines(footer).map_or(0.0, |n| self.margins[1] + size * 0.8 + (n - 1) as f64 * line_h + size / 2.0);
+        (top, bottom)
+    }
+}
+
+/// The `cm` that shrinks a page's original content (user space) into the band `hf` leaves free,
+/// for a page shown `size` (display space) with view matrix `view` (display to user space): an
+/// even scale, centred across, the content's bottom on the footer's band.
+fn shrink_matrix(hf: &HeaderFooter, size: (f64, f64), view: [f64; 6]) -> Result<[f64; 6], EditError> {
+    let (w, h) = size;
+    let (top, bottom) = hf.bands();
+    let free = h - top - bottom;
+    if !(free.is_finite() && free >= 1.0 && w.is_finite() && w > 0.0) {
+        return Err(EditError::Invalid("the header and footer margins leave no room for the page content to shrink into".into()));
+    }
+    let k = free / h;
+    let v = kurbo::Affine::new(view);
+    let det = v.determinant();
+    if !(det.is_finite() && det.abs() > 1e-12) {
+        return Err(EditError::Invalid("the page can't be shrunk: its view matrix is degenerate".into()));
+    }
+    let shrink = kurbo::Affine::new([k, 0.0, 0.0, k, (w - w * k) / 2.0, bottom]);
+    // User space to display space, shrink there, and back.
+    Ok((v * shrink * v.inverse()).as_coeffs())
 }
 
 /// A picture for a background or watermark (Acrobat: Source ▸ File): an XObject already in
@@ -244,6 +298,8 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
             "d/m/yyyy" => format!("{d}/{m}/{y}"),
             "dd/mm/yyyy" => format!("{d:02}/{m:02}/{y}"),
             "yyyy-mm-dd" => format!("{y}-{m:02}-{d:02}"),
+            "yyyy/mm/dd" => format!("{y}/{m:02}/{d:02}"),
+            "yyyy/m/d" => format!("{y}/{m}/{d}"),
             "mmmm d, yyyy" => format!("{} {d}, {y}", MONTHS[(m.clamp(1, 12) - 1) as usize]),
             t if t.starts_with("Bates Number") => {
                 // Bates Number#digits#start#prefix#suffix (start is applied by the caller).
@@ -296,19 +352,57 @@ fn contents(doc: &mut Document, page: &pdfcraft_model::Page) -> Result<Vec<Objec
 
 /// Add the font (and an opacity state) to the page's own resources.
 fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, content: Option<&[u8]>) -> Result<(), EditError> {
-    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    let mut faces: Vec<(Vec<u8>, &str)> = Vec::new();
     for (name, base) in [(&b"PCHelv"[..], "Helvetica"), (b"PCTimes", "Times-Roman"), (b"PCCour", "Courier")] {
         // Helvetica always (marks use it); the others only when the content names them.
         if name != b"PCHelv" && !content.is_some_and(|c| c.windows(name.len() + 1).any(|w| w[0] == b'/' && &w[1..] == name)) {
             continue;
         }
+        faces.push((name.to_vec(), base));
+    }
+    add_page_resources(doc, page, opacity, &faces)
+}
+
+/// The fonts a page draws with: its own resources' or the ones it inherits.
+fn page_fonts(doc: &Document, page: &pdfcraft_model::Page) -> Dict {
+    let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default()
+}
+
+/// A name in `fonts` for the standard face `base` that can't take over a font the page already
+/// draws with: `preferred` when it is free or already names exactly the dictionary
+/// [`add_page_resources`] writes for that face, otherwise the first such `preferred_1`,
+/// `preferred_2`… (one of the first `fonts.len() + 1` always is). A font with anything more
+/// (`/ToUnicode`, `/Widths`…) is someone else's, even in the same face.
+fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base: &str) -> String {
+    let usable = |name: &str| match fonts.get(name.as_bytes()) {
+        None => true,
+        Some(font) => doc.resolve(font).as_dict().is_some_and(|d| {
+            d.len() == 4
+                && d.name(b"Type") == Some(b"Font")
+                && d.name(b"Subtype") == Some(b"Type1")
+                && d.name(b"BaseFont") == Some(base.as_bytes())
+                && d.name(b"Encoding") == Some(b"WinAnsiEncoding")
+        }),
+    };
+    if usable(preferred) {
+        return preferred.to_string();
+    }
+    (1..=fonts.len().saturating_add(1)).map(|k| format!("{preferred}_{k}")).find(|name| usable(name)).unwrap_or_else(|| preferred.to_string())
+}
+
+/// Add the standard `faces` (resource name, base font) and an opacity state to the page's own
+/// resources.
+fn add_page_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, faces: &[(Vec<u8>, &str)]) -> Result<(), EditError> {
+    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    for (name, base) in faces {
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         font.set(b"BaseFont".to_vec(), Object::name(base));
         font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        fonts.set(name.to_vec(), Object::Dict(font));
+        fonts.set(name.clone(), Object::Dict(font));
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     if let Some(o) = opacity {
@@ -327,7 +421,41 @@ fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Optio
 }
 
 const WRAP_OPEN: &[u8] = b"q %PdfCraft\n";
-const WRAP_CLOSE: &[u8] = b"Q %PdfCraft\n";
+/// Starts with an end of line, so a comment left open at the end of the content before it
+/// can't swallow the `Q`. Older files have the close without it.
+const WRAP_CLOSE: &[u8] = b"\nQ %PdfCraft\n";
+const OLD_WRAP_CLOSE: &[u8] = b"Q %PdfCraft\n";
+
+/// Whether `bytes` are a wrapper's close: canonical `EMC` closures, then the existing
+/// graphics closures. Legacy closes without the leading newline remain valid on their own.
+fn is_wrap_close(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Some(shorter) = rest.strip_prefix(b"\nEMC".as_slice()) {
+        rest = shorter;
+    }
+    let legacy = rest.len() == bytes.len();
+    loop {
+        if rest == WRAP_CLOSE || (legacy && rest == OLD_WRAP_CLOSE) {
+            return true;
+        }
+        match rest.strip_prefix(b"\nQ".as_slice()) {
+            Some(shorter) => rest = shorter,
+            None => return false,
+        }
+    }
+}
+
+/// A `Wrap`-tagged stream's role from its exact bytes: `Some(true)` for an open, `Some(false)`
+/// for a close.
+fn wrapper_role(doc: &Document, o: &Object) -> Option<bool> {
+    if stream_tag(doc, o).as_deref() != Some("Wrap") {
+        return None;
+    }
+    let Object::Stream(stream) = &*doc.resolve(o) else { return None };
+    // Wrappers are a few bytes; one that decodes to more isn't PdfCraft's.
+    let bytes = stream.decoded_within(64 * 1024).ok()?;
+    if bytes == WRAP_OPEN { Some(true) } else { is_wrap_close(&bytes).then_some(false) }
+}
 
 #[cfg(test)]
 fn stream_bytes(doc: &Document, o: &Object) -> Option<Vec<u8>> {
@@ -350,31 +478,215 @@ fn tagged(tag: &str) -> Dict {
     d
 }
 
-/// Put a mark's content on a page: behind (prepended) or on top (appended, after wrapping the
-/// original content in q/Q).
-fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind)
+/// What placing a mark on top needs, from the page's actual operators (not the `/PCMark` tags,
+/// which another writer may keep, copy or forge).
+enum Isolation {
+    /// The content parses cleanly with balanced `q`/`Q` and closed text objects and paths.
+    /// `suffix`: the stream from which the content leaves graphics state set (or a comment open)
+    /// that a mark on top must not inherit, so it needs a wrapper from there to the end.
+    /// `wrappers`: PdfCraft wrapper pairs (open, close) as stream indexes.
+    /// `marked`: unfinished marked-content sequences to close before a new mark.
+    Clean { suffix: Option<usize>, wrappers: Vec<(usize, usize)>, marked: usize },
+    /// The content could not be read that precisely (it doesn't decode, is too large, or has
+    /// stray bytes, unbalanced `q`/`Q` or an unfinished text object or path). `unclosed` is
+    /// the count of `q` left open at the end, when known. `marked` counts known unfinished
+    /// marked-content sequences independently of graphics malformation, or zero when unknown.
+    Unknown { unclosed: usize, marked: usize },
+    /// Marked content nests past [`ISOLATION_MAX_DEPTH`]: how many sequences a mark on top would
+    /// have to close (some may be hidden optional content) is unknown.
+    TooDeep,
 }
 
-/// Put content on a page, tagged `tag` (see [`place`]).
-fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
+const ISOLATION_MAX_STREAMS: usize = 100_000;
+const ISOLATION_MAX_BYTES: usize = 128 * 1024 * 1024;
+const ISOLATION_MAX_OPS: usize = 1_000_000;
+const ISOLATION_MAX_DEPTH: usize = 10_000;
+
+fn isolation(doc: &Document, list: &[Object]) -> Isolation {
+    let unknown = Isolation::Unknown { unclosed: 0, marked: 0 };
+    if list.len() > ISOLATION_MAX_STREAMS {
+        return unknown;
+    }
+    let mut remaining = ISOLATION_MAX_BYTES;
+    let mut data = Vec::with_capacity(list.len());
+    for object in list {
+        let resolved = doc.resolve(object);
+        let Object::Stream(stream) = &*resolved else { return unknown };
+        let Ok(bytes) = stream.decoded_within(remaining) else { return unknown };
+        let Some(left) = remaining.checked_sub(bytes.len().saturating_add(1)) else { return unknown };
+        remaining = left;
+        data.push(bytes);
+    }
+    let pieces = pdfcraft_content::Pieces::join(&data);
+    let parsed = pieces.parse();
+    if parsed.skipped != 0 || parsed.ops.len() > ISOLATION_MAX_OPS {
+        return unknown;
+    }
+    let edges = pieces.comment_edges(&parsed);
+    let (mut text_open, mut path_open, mut dirty, mut malformed) = (false, false, false, false);
+    let mut stack: Vec<usize> = Vec::new();
+    let (mut marked, mut marked_known) = (0usize, true);
+    let mut split = 0;
+    let mut previous_last = None;
+    let mut wrappers = Vec::new();
+    for op in &parsed.ops {
+        let (first, last) = pieces.pieces_of(op);
+        // A wrapper can only go in before a whole stream, outside graphics and marked-content
+        // scopes, between operators, where no comment would swallow the wrapper's `q`.
+        if stack.is_empty()
+            && marked_known
+            && marked == 0
+            && !text_open
+            && !path_open
+            && !dirty
+            && previous_last.is_none_or(|previous| first > previous)
+            && !edges.get(first).is_some_and(|edge| edge.0)
+        {
+            split = first;
+        }
+        previous_last = Some(last);
+        // Match the reader's tolerant operands: BMC uses the last name, BDC the last
+        // name/object pair, and EMC ignores surplus operands. Invalid begins are ignored.
+        let begin_marked = match op.op.as_slice() {
+            b"BMC" => op.operands.last().is_some_and(|o| matches!(o, Object::Name(_))),
+            b"BDC" => op.operands.len().checked_sub(2).and_then(|i| op.operands.get(i)).is_some_and(|o| matches!(o, Object::Name(_))),
+            _ => false,
+        };
+        if marked_known {
+            if begin_marked {
+                if marked < ISOLATION_MAX_DEPTH {
+                    marked += 1;
+                } else {
+                    // Once the budget is exceeded, later EMCs cannot restore a known depth.
+                    marked_known = false;
+                    marked = 0;
+                }
+            } else if op.is("EMC") {
+                marked = marked.saturating_sub(1);
+            }
+        }
+        match op.op.as_slice() {
+            b"BT" if !text_open => text_open = true,
+            b"ET" if text_open => text_open = false,
+            b"BT" | b"ET" => malformed = true,
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*" => path_open = true,
+            b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => path_open = false,
+            _ => {}
+        }
+        match op.op.as_slice() {
+            b"q" if op.operands.is_empty() && stack.len() < ISOLATION_MAX_DEPTH => stack.push(first),
+            b"Q" if op.operands.is_empty() => match stack.pop() {
+                Some(open) => {
+                    // Only a standalone PdfCraft wrapper pair may later be removed again.
+                    let wrap = |i: usize| list.get(i).is_some_and(|o| stream_tag(doc, o).as_deref() == Some("Wrap"));
+                    if wrap(open)
+                        && wrap(first)
+                        && data.get(open).is_some_and(|d| d == WRAP_OPEN)
+                        && data.get(first).is_some_and(|d| is_wrap_close(d))
+                    {
+                        wrappers.push((open, first));
+                    }
+                }
+                None => malformed = true,
+            },
+            b"q" | b"Q" => malformed = true,
+            _ if stack.is_empty() => dirty = true,
+            _ => {}
+        }
+    }
+    if !marked_known {
+        return Isolation::TooDeep;
+    }
+    if malformed || text_open || path_open || !stack.is_empty() {
+        return Isolation::Unknown { unclosed: if malformed { 0 } else { stack.len() }, marked };
+    }
+    let comment_open = edges.last().is_some_and(|edge| edge.1);
+    Isolation::Clean { suffix: (dirty || comment_open || marked != 0).then_some(split), wrappers, marked }
+}
+
+/// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
+/// (appended, after wrapping the original content in q/Q).
+fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
+    place_tagged(doc, page, kind.tag(), content, behind).map(drop)
+}
+
+/// Put content on a page, tagged `tag` (see [`place`]). On top, whatever graphics state the
+/// content before leaves set (a `cm`, a clip, text state…) must not reach the mark, including
+/// content appended after an earlier PdfCraft wrapper by another tool (#3084): the stretch of
+/// content that leaves state set is wrapped in q/Q, once. Any known unfinished marked-content
+/// sequences are closed at the end too, so hidden optional content cannot hide the new mark; when
+/// their number is unknown, nothing is placed on top. Returns the new content stream.
+fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<ObjRef, EditError> {
     let mut list = contents(doc, page)?;
-    let mark = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), &content))));
-    if behind {
-        list.insert(0, mark);
+    // The behind-marks at the start: backgrounds in the order added, then watermarks.
+    let behind_kinds = [MarkKind::Background.tag(), MarkKind::Watermark.tag()];
+    let behind_marks = list.iter().take_while(|o| stream_tag(doc, o).is_some_and(|t| behind_kinds.contains(&t.as_str()))).count();
+    let wrap = if behind {
+        None
     } else {
-        let wrapped = list.iter().any(|o| stream_tag(doc, o).as_deref() == Some("Wrap"));
-        let original = list.iter().any(|o| stream_tag(doc, o).is_none());
-        if !wrapped && original {
+        match isolation(doc, &list) {
+            Isolation::Clean { suffix, marked, .. } => suffix.map(|split| (split, 0, marked)),
+            // Content that can't be read precisely is wrapped whole, as before: after the
+            // behind-marks at the start. A `q` it leaves open is closed at its end, where
+            // closing it changes nothing already drawn.
+            Isolation::Unknown { unclosed, marked } => (behind_marks < list.len()).then_some((behind_marks, unclosed, marked)),
+            // Content left inside an optional-content sequence it cannot close could be hidden.
+            Isolation::TooDeep => return Err(too_deep_on_top()),
+        }
+    };
+    let mark_ref = doc.add(Object::Stream(Stream::flate(tagged(tag), &content)));
+    let mark = Object::Ref(mark_ref);
+    if behind {
+        // Right after the backgrounds already there, so a new background is painted over the
+        // older ones (#3591) and a watermark over all of them. Not after the watermarks: on a
+        // page with no content, one on top is at the start too and can't be told apart, so a
+        // newer watermark behind goes under the older ones.
+        let at = list.iter().take(behind_marks).rposition(|o| stream_tag(doc, o).as_deref() == Some(MarkKind::Background.tag())).map_or(0, |i| i + 1);
+        list.insert(at, mark);
+    } else {
+        if let Some((split, unclosed, marked)) = wrap {
+            let mut close_bytes = b"\nEMC".repeat(marked);
+            close_bytes.extend_from_slice(&b"\nQ".repeat(unclosed));
+            close_bytes.extend_from_slice(WRAP_CLOSE);
             let open = Object::Ref(doc.add(Object::Stream(Stream::from_raw(tagged("Wrap"), WRAP_OPEN.to_vec()))));
-            let close = Object::Ref(doc.add(Object::Stream(Stream::from_raw(tagged("Wrap"), WRAP_CLOSE.to_vec()))));
-            // Behind-marks stay outside the wrapper.
-            let split = list.iter().position(|o| stream_tag(doc, o).is_none()).unwrap_or(list.len());
-            list.insert(split, open);
+            let close = Object::Ref(doc.add(Object::Stream(Stream::from_raw(tagged("Wrap"), close_bytes))));
+            list.insert(split.min(list.len()), open);
             list.push(close);
         }
         list.push(mark);
     }
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
+    Ok(mark_ref)
+}
+
+fn too_deep_on_top() -> EditError {
+    EditError::Invalid("the page's marked content is nested too deeply to add anything on top of it".into())
+}
+
+/// The refusal [`place_tagged`] gives for a mark on top of `page`, checked before an edit changes
+/// anything (removing old marks, adding resources) so a refused edit leaves the document as it was.
+fn check_on_top(doc: &Document, page: &pdfcraft_model::Page) -> Result<(), EditError> {
+    let obj = doc.get(page.obj);
+    let list = match obj.as_dict().and_then(|d| d.get(b"Contents")) {
+        None => return Ok(()),
+        Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_else(|| vec![Object::Ref(*r)]),
+        Some(Object::Array(a)) => a.clone(),
+        Some(other) => vec![other.clone()],
+    };
+    match isolation(doc, &list) {
+        Isolation::TooDeep => Err(too_deep_on_top()),
+        _ => Ok(()),
+    }
+}
+
+/// Put content tagged `tag` first inside the q/Q wrapper, so it applies to the page's original
+/// content and nothing else (a header's shrink). A page without a wrapper has no original content
+/// on it and is left alone.
+fn place_inside_wrapper(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>) -> Result<(), EditError> {
+    let mut list = contents(doc, page)?;
+    let Some(open) = list.iter().position(|o| stream_tag(doc, o).as_deref() == Some("Wrap")) else { return Ok(()) };
+    let stream = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), &content))));
+    list.insert(open + 1, stream);
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
     Ok(())
 }
@@ -382,9 +694,11 @@ fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, cont
 /// Draw `content` on top of a page (0-based) as permanent page content, with standard Helvetica
 /// available as `/PCHelv`. The stream is tagged `tag` (not a mark kind, so Remove never takes
 /// it away); the original content is wrapped in q/Q first. Used for applied redaction boxes.
-pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<(), EditError> {
+/// Returns the new content stream.
+pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<ObjRef, EditError> {
     let all = page_list(doc);
     check(&[page], all.len())?;
+    check_on_top(doc, &all[page])?;
     add_resources(doc, &all[page], None, Some(&content))?;
     let p = page_list(doc).swap_remove(page);
     place_tagged(doc, &p, tag, content, false)
@@ -459,6 +773,14 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
             u64::MAX
         )));
     }
+    // Shrinking needs room on every page: refuse before anything is drawn or replaced.
+    let shrinks = pages
+        .iter()
+        .map(|&i| hf.shrink.then(|| shrink_matrix(hf, all[i].display_size(doc), all[i].view_matrix(doc))).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+    for &i in pages {
+        check_on_top(doc, &all[i])?;
+    }
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
@@ -472,7 +794,16 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         let bates = bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()))?;
         let size = hf.font_size;
         let [top, bottom, left, right] = hf.margins;
-        let mut body: Vec<u8> = format!("BT\n/PCHelv {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();
+        // The page resource the face is added under: the usual name, unless the page already
+        // draws another font by it, which must not change under the header.
+        let preferred = match hf.font {
+            added::Family::Helvetica => "PCHelv",
+            added::Family::Times => "PCTimes",
+            added::Family::Courier => "PCCour",
+        };
+        let base = hf.font.base_font(false, false);
+        let resource = free_font_name(doc, &page_fonts(doc, page), preferred, base);
+        let mut body: Vec<u8> = format!("BT\n/{resource} {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();
         let mut underlines = String::new();
         for (slot, template) in hf.text.iter().enumerate() {
             if template.trim().is_empty() {
@@ -482,7 +813,8 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
             let header = slot < 3;
             let line_h = size * 1.2;
             for (li, line) in lines.iter().enumerate() {
-                let tw = helvetica_width(line, size);
+                // Centred and right-aligned text is placed by its width in the chosen face.
+                let tw = hf.font.width(line, size, false, false);
                 let x = match slot % 3 {
                     0 => left,
                     1 => (w - tw) / 2.0,
@@ -503,9 +835,17 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         let mut content = begin(MarkKind::HeaderFooter, "Header", page.view_matrix(doc)).into_bytes();
         content.extend(body);
         content.extend_from_slice(END.as_bytes());
-        add_resources(doc, page, None, None)?;
+        // A name already there is that very font (see `free_font_name`): left as it is.
+        if !page_fonts(doc, page).contains(resource.as_bytes()) {
+            add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
+        }
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        if let Some(Some(m)) = shrinks.get(k) {
+            let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
+            let page = &page_list(doc)[i];
+            place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())?;
+        }
     }
     Ok(())
 }
@@ -528,6 +868,11 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         && wm.offset.iter().all(|o| o.is_finite()))
     {
         return Err(EditError::Invalid("invalid watermark settings".into()));
+    }
+    if !wm.behind {
+        for &i in pages {
+            check_on_top(doc, &all[i])?;
+        }
     }
     if replace {
         remove_marks(doc, pages, MarkKind::Watermark)?;
@@ -613,8 +958,9 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
     Ok(())
 }
 
-/// Remove marks of `kind` from `pages`; returns how many were removed. When no mark is left on
-/// top of a page, the q/Q wrapper goes too, restoring the original content list.
+/// Remove marks of `kind` from `pages`; returns how many were removed. Wrappers left with
+/// nothing after them go too, restoring the original content list; a wrapper that content
+/// after it still relies on (another tool's appended stream) stays.
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -625,12 +971,41 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         let before = list.len();
         let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
         removed += before - kept.len();
-        // Marks on top come after the closing wrapper; without any, the wrapper has no purpose.
-        let is_wrap = |o: &Object| stream_tag(doc, o).as_deref() == Some("Wrap");
-        let close = kept.iter().rposition(&is_wrap);
-        let marks_on_top = close.is_some_and(|c| kept[c + 1..].iter().any(|o| stream_tag(doc, o).is_some_and(|t| t != "Wrap")));
-        if !marks_on_top {
-            kept.retain(|o| !is_wrap(o));
+        // Strip only wrapper pairs whose close ends the list (after stripping the pairs after
+        // it): nothing comes after them to need the state they restore. Pairs come from the
+        // operators; for content that can't be read that precisely, from the wrapper streams
+        // alone, so updating a mark there doesn't nest another wrapper each time.
+        if before != kept.len() {
+            let wrappers = match isolation(doc, &kept) {
+                Isolation::Clean { wrappers, .. } => wrappers,
+                Isolation::Unknown { .. } | Isolation::TooDeep => {
+                    let mut opens = Vec::new();
+                    let mut pairs = Vec::new();
+                    for (i, o) in kept.iter().enumerate() {
+                        match wrapper_role(doc, o) {
+                            Some(true) => opens.push(i),
+                            Some(false) => pairs.extend(opens.pop().map(|open| (open, i))),
+                            None => {}
+                        }
+                    }
+                    pairs
+                }
+            };
+            let pairs: std::collections::HashMap<usize, usize> = wrappers.into_iter().map(|(open, close)| (close, open)).collect();
+            let mut discarded = std::collections::HashSet::new();
+            let mut end = kept.len();
+            while let Some(close) = end.checked_sub(1) {
+                if discarded.contains(&close) {
+                    end = close;
+                } else if let Some(&open) = pairs.get(&close) {
+                    discarded.insert(open);
+                    discarded.insert(close);
+                    end = close;
+                } else {
+                    break;
+                }
+            }
+            kept = kept.into_iter().enumerate().filter(|(i, _)| !discarded.contains(i)).map(|(_, o)| o).collect();
         }
         if before != kept.len() {
             doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept)))?;
@@ -644,20 +1019,22 @@ pub fn marks_present(doc: &Document) -> Vec<MarkKind> {
     added::scan_markers(doc).marks
 }
 
+mod background;
+pub use background::page_background;
 pub mod objects;
 pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
-pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre};
+pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;
 pub mod indic;
 mod linebreak;
 pub mod text;
 pub use text::{
-    BlockStyle, LineEdit, RangeStyle, TextBlock, TextLine, clear_block, reading_blocks, replace_block, replace_line, rewrite_block, text_blocks,
-    text_lines,
+    BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
+    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
 };
 pub mod added;
 pub use added::{
@@ -665,5 +1042,7 @@ pub use added::{
     update_content,
 };
 
+#[cfg(test)]
+mod marked_isolation_tests;
 #[cfg(test)]
 mod tests;

@@ -50,8 +50,65 @@ pub struct SignedData {
     pub signer: SignerInfo,
     /// Encapsulated content (`adbe.pkcs7.sha1` carries the document digest here).
     pub content: Option<Vec<u8>>,
+    /// `eContentType`, the type of the encapsulated content: data for a PDF signature, TSTInfo
+    /// for an RFC 3161 token. The signature does not cover it.
+    pub econtent_type: String,
     /// Encoding irregularities that were tolerated (BER instead of DER, …), for the details.
     pub quirks: Vec<&'static str>,
+}
+
+/// The X.509 certificates in a SignedData `certificates` field (`[0] IMPLICIT CertificateSet`).
+/// Other certificate formats (attribute certificates) and certificates that don't parse are
+/// skipped.
+fn carried_certificates(set: &Tlv) -> Result<Vec<Certificate>, SignError> {
+    let mut out = Vec::new();
+    for c in set.children()? {
+        if c.tag == tag::SEQUENCE
+            && let Ok(cert) = Certificate::parse(c.raw)
+        {
+            out.push(cert);
+        }
+    }
+    Ok(out)
+}
+
+/// The certificates of a PKCS #7 certificate bundle (`.p7b`, `.p7c`): a SignedData with no
+/// signers ("degenerate", RFC 5652 §5.2), which is how Windows, Acrobat and certificate
+/// authorities hand out a chain or a set of CA certificates. Signers and CRLs, if present, are
+/// ignored; only the certificates are read. DER or BER.
+pub fn certificate_bundle(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
+    let (ci, rest) = Tlv::parse_ber(bytes)?;
+    // A trust file is the bundle alone: bytes after it mean a damaged or spliced file.
+    if !rest.is_empty() {
+        return Err(bad("data after the bundle"));
+    }
+    let ci = ci.expect(tag::SEQUENCE, "ContentInfo")?.children()?;
+    let [ct, content] = ci.as_slice() else { return Err(bad("ContentInfo")) };
+    if ct.oid()? != SIGNED_DATA {
+        return Err(bad("not SignedData"));
+    }
+    let sd = content.expect(tag::ctx(0), "content")?.inner()?.children()?;
+    // version, digestAlgorithms, encapContentInfo, the optional [0] certificates and [1] CRLs,
+    // then signerInfos (RFC 5652 §5.1).
+    let [version, digests, encap, middle @ .., signers] = sd.as_slice() else { return Err(bad("SignedData")) };
+    let shape = [(version, tag::INTEGER), (digests, tag::SET), (encap, tag::SEQUENCE), (signers, tag::SET)];
+    // At most one [0] certificates and one [1] CRLs, in that order.
+    const CERTS: u8 = tag::ctx(0);
+    const CRLS: u8 = tag::ctx(1);
+    let middle_ok = matches!(middle.iter().map(|t| t.tag).collect::<Vec<_>>().as_slice(), [] | [CERTS] | [CRLS] | [CERTS, CRLS]);
+    // encapContentInfo starts with its eContentType OID.
+    let encap_ok = encap.children()?.first().is_some_and(|t| t.tag == tag::OID);
+    if shape.iter().any(|(t, want)| t.tag != *want) || !middle_ok || !encap_ok {
+        return Err(bad("SignedData"));
+    }
+    let mut certificates = Vec::new();
+    for t in middle.iter().filter(|t| t.tag == tag::ctx(0)) {
+        certificates.extend(carried_certificates(t)?);
+    }
+    if certificates.is_empty() {
+        return Err(bad("the bundle holds no certificate"));
+    }
+    Ok(certificates)
 }
 
 fn bad(what: &str) -> SignError {
@@ -80,6 +137,7 @@ impl SignedData {
         let _version = it.next();
         let _digest_algs = it.next();
         let encap = it.next().ok_or_else(|| bad("encapContentInfo"))?.children()?;
+        let econtent_type = encap.first().ok_or_else(|| bad("eContentType"))?.oid()?;
         let content = match encap.get(1) {
             Some(c) if c.tag == tag::ctx(0) => {
                 // BER signers may split the content into a constructed OCTET STRING.
@@ -95,23 +153,23 @@ impl SignedData {
         let mut signer_infos = None;
         for t in it {
             match t.tag {
-                t2 if t2 == tag::ctx(0) => {
-                    for c in t.children()? {
-                        // Other certificate formats (attribute certificates) are skipped.
-                        if c.tag == tag::SEQUENCE
-                            && let Ok(cert) = Certificate::parse(c.raw)
-                        {
-                            certificates.push(cert);
-                        }
-                    }
-                }
+                t2 if t2 == tag::ctx(0) => certificates.extend(carried_certificates(&t)?),
                 tag::SET => signer_infos = Some(t),
                 _ => {}
             }
         }
         let infos = signer_infos.ok_or_else(|| bad("no signerInfos"))?.children()?;
         let si = infos.first().ok_or_else(|| bad("no signer"))?;
-        Ok(SignedData { certificates, signer: parse_signer(si)?, content, quirks })
+        let signer = parse_signer(si)?;
+        // RFC 5652 §11.1: the content-type attribute names the type of the encapsulated content.
+        // The signature covers the attribute but not `eContentType`, so when they differ, one of
+        // them was written wrong or changed after signing.
+        if let Some(signed) = &signer.content_type
+            && *signed != econtent_type
+        {
+            return Err(bad("the signed content type is not the encapsulated content type"));
+        }
+        Ok(SignedData { certificates, signer, content, econtent_type, quirks })
     }
 
     /// The signer's certificate among those carried.
@@ -204,13 +262,28 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
         if let Some(t) = set.first_mut() {
             *t = tag::SET;
         }
+        let (mut seen_type, mut seen_digest) = (false, false);
         for a in next.children()? {
             let p = a.children()?;
             let Some(o) = p.first().and_then(|o| o.oid().ok()) else { continue };
-            let value = p.get(1).and_then(|v| v.children().ok()).and_then(|v| v.into_iter().next());
+            let values = p.get(1).and_then(|v| v.children().ok()).unwrap_or_default();
+            // RFC 5652 §11.1 and §11.2: one content-type and one message-digest attribute, each
+            // with one value. With a second one, two readers could each take a different value.
+            let (seen, what) = match o.as_str() {
+                CONTENT_TYPE => (Some(&mut seen_type), "content type"),
+                MESSAGE_DIGEST => (Some(&mut seen_digest), "message digest"),
+                _ => (None, ""),
+            };
+            if let Some(seen) = seen
+                && (std::mem::replace(seen, true) || values.len() != 1)
+            {
+                return Err(bad(&format!("the signed attributes must hold one {what} with one value")));
+            }
+            let value = values.into_iter().next();
             match (o.as_str(), value) {
                 (MESSAGE_DIGEST, Some(v)) => message_digest = Some(v.value.to_vec()),
-                (CONTENT_TYPE, Some(v)) => content_type = v.oid().ok(),
+                // A value that is not an OID would skip every content-type check after this.
+                (CONTENT_TYPE, Some(v)) => content_type = Some(v.oid()?),
                 (SIGNING_TIME, Some(v)) => signing_time = v.time().ok(),
                 (SIGNING_CERT_V2 | SIGNING_CERT, _) => signing_certificate = true,
                 _ => {}
@@ -221,6 +294,24 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
     }
     let (scheme, scheme_digest) = signature_algorithm(&next)?;
     let signature = it.next().ok_or_else(|| bad("signature"))?.octets("signature")?.into_owned();
+    let (timestamp, timestamp_token) = parse_timestamp_token(it)?;
+    Ok(SignerInfo {
+        sid,
+        digest,
+        signed_attrs,
+        message_digest,
+        content_type,
+        signing_time,
+        signing_certificate,
+        scheme,
+        scheme_digest,
+        signature,
+        timestamp,
+        timestamp_token,
+    })
+}
+
+fn parse_timestamp_token<'a>(it: impl Iterator<Item = Tlv<'a>>) -> Result<(bool, Option<Vec<u8>>), SignError> {
     let mut timestamp = false;
     let mut timestamp_token = None;
     for t in it {
@@ -236,20 +327,7 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
             }
         }
     }
-    Ok(SignerInfo {
-        sid,
-        digest,
-        signed_attrs,
-        message_digest,
-        content_type,
-        signing_time,
-        signing_certificate,
-        scheme,
-        scheme_digest,
-        signature,
-        timestamp,
-        timestamp_token,
-    })
+    Ok((timestamp, timestamp_token))
 }
 
 /// Attach an RFC 3161 `signatureTimeStampToken` unsigned attribute to a detached CMS object.

@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-docpath = { workspace = true }
 pdfcraft-measure = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 pdfcraft-render = { workspace = true }
@@ -36,6 +37,9 @@ pdfcraft-model = { workspace = true }
 pdfcraft-geom = { workspace = true }
 thiserror = { workspace = true }
 png = "0.18"
+# Already in the graph (through image and pdfcraft-create): image's TiffEncoder can't set the
+# resolution or the compression of an exported page.
+tiff = "0.11"
 # Already in the graph (url and idna through webbrowser, icu_properties through boa): they show
 # the host of a document's link the way the browser reads it (links::display_host).
 url = "2.5"
@@ -44,5 +48,9 @@ icu_properties = "2.3"
 unicode-segmentation = "1.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Already in the graph through lopdf; used only for the local UTC offset ("today").
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Already in the graph through lopdf; used only for the local UTC offset ("today"). The workspace
+# entry is std-only; this target adds `clock` for `chrono::Local::now`.
+chrono = { workspace = true, features = ["clock"] }
+
+[dev-dependencies]
+pdfcraft-testkit = { workspace = true }

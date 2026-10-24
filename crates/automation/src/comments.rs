@@ -3,9 +3,7 @@
 //! Geometry follows the automation convention: points from the top-left of the displayed page,
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
 
-use pdfcraft_engine::{
-    Edit, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort,
-};
+use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
@@ -13,6 +11,8 @@ use crate::{Args, Automation, Content, DEFAULT_DPI, MAX_DPI, Result, ToolError, 
 
 /// Author used when a tool call names none.
 pub(crate) const DEFAULT_AUTHOR: &str = "PdfCraft";
+/// The largest side of a stamp's box, in points: the largest page PDF allows (ISO 32000-2 Annex C).
+const MAX_STAMP_SIDE: f64 = 14_400.0;
 
 pub(crate) fn parse_color(s: &str) -> Result<Rgb> {
     let named = match s.to_ascii_lowercase().as_str() {
@@ -79,13 +79,11 @@ fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
 }
 
 /// The engine's `at` for a note or attachment icon whose top-left corner *as displayed* is the
-/// view point (x, y): the top-left (`[x0, y1]`) of the icon's square in user space. Converting
-/// the point alone is only right on unrotated pages — under `/Rotate` that corner of the
-/// displayed square is another corner of the user-space one, and the icon lands one icon-width
-/// away from where it was asked for.
+/// view point (x, y): the upper-left corner (`[x0, y1]`) of its `/Rect`. Notes and attachments
+/// are NoRotate, so on a turned page the icon is drawn upright with its top-left at that corner
+/// (ISO 32000-2 §12.5.3), and `comment_list` reports that square (`Annotation::shown_rect`).
 fn icon_anchor(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
-    let r = rect_to_user(p, [x, y, x + NOTE_SIZE, y + NOTE_SIZE]);
-    [r[0], r[3]]
+    to_user(p, x, y)
 }
 
 /// A user-space rectangle as the displayed-page rectangle every tool reports and accepts:
@@ -173,8 +171,7 @@ impl Automation {
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
         let view = |c: &Annotation| -> Value {
-            let p = &doc.info.pages[c.page.min(doc.info.pages.len().saturating_sub(1))];
-            json!({
+            let mut v = json!({
                 "id": c.name,
                 "page": c.page + 1,
                 "index": c.index + 1,
@@ -182,9 +179,19 @@ impl Automation {
                 "author": c.author,
                 "contents": c.contents,
                 "modified": c.modified,
-                "rect": rect_to_view(p, c.rect),
+                "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
-            })
+            });
+            // A line's ends, or the corners of connected lines, a polygon or a cloud, as
+            // comment_edit's `points` takes them.
+            // Unchanged on a page the viewer could not read, as `rect` is.
+            if !c.points.is_empty() {
+                let round = |v: f32| (v * 100.0).round() / 100.0;
+                let page = doc.info.pages.get(c.page);
+                v["points"] =
+                    json!(c.points.iter().map(|q| page.map_or([q[0], q[1]], |p| p.user_to_view(q[0], q[1])).map(round)).collect::<Vec<_>>());
+            }
+            v
         };
         let roots: Vec<Value> = all
             .iter()
@@ -375,7 +382,7 @@ impl Automation {
                 "attachment" => {
                     let [x, y] = a.need::<2>("at", "an attachment (its icon's top-left)")?;
                     let path = self.resolve(a.str("path")?, false)?;
-                    let data = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                    let data = crate::read_input(&path)?;
                     let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let icon = match a.opt_str("icon")? {
                         Some(n) => pdfcraft_engine::AttachIcon::from_name(n)
@@ -551,8 +558,7 @@ impl Automation {
                     "line" => FillMark::Line,
                     other => return Err(ToolError::InvalidArgs(format!("unknown type {other:?}"))),
                 };
-                let (w, h) = if mark == FillMark::Line { (36.0, 4.0) } else { (12.0, 12.0) };
-                (Shape::Mark { rect: [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0], mark }, String::new())
+                (Shape::Mark { rect: mark.rect_at(at, i64::from(info.rotation)), mark }, String::new())
             }
         };
         let style = Style::default_for(&shape);
@@ -589,7 +595,10 @@ impl Automation {
     pub(crate) fn comments_hide(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let hidden = a.opt_bool("hidden")?.unwrap_or(true);
-        self.session.set_hide_comments(id, hidden);
+        if self.session.set_hide_comments(id, hidden) {
+            // The cached renderer drew with the old setting; page_render must read it again.
+            self.renderers.remove(&id);
+        }
         Ok(json!({ "hidden": hidden }))
     }
 
@@ -626,14 +635,34 @@ impl Automation {
             edits.push(Edit::FontSizeAnnotation { page, index, size });
         }
         if let Some(r) = a.nums::<4>("rect")? {
-            edits.push(Edit::ResizeAnnotation { page, index, rect: rect_to_user(&info, r) });
+            // The rectangle as comment_list reports it: where the comment is drawn.
+            let doc = self.doc(a)?;
+            let rect = rect_to_user(&info, r);
+            let rect =
+                doc.info.annotations.iter().find(|c| c.page == page && c.index == index).map_or(rect, |c| c.rect_for_shown(rect, info.rotation));
+            edits.push(Edit::ResizeAnnotation { page, index, rect });
         }
         if let Some([dx, dy]) = a.nums::<2>("move")? {
             let (o, d) = (to_user(&info, 0.0, 0.0), to_user(&info, dx, dy));
             edits.push(Edit::MoveAnnotation { page, index, dx: d[0] - o[0], dy: d[1] - o[1] });
         }
+        if let Some(pts) = a.get("points") {
+            let wrong = || ToolError::InvalidArgs("points must be an array of [x, y] points (a line's two ends, or every corner)".into());
+            let points = pts
+                .as_array()
+                .ok_or_else(wrong)?
+                .iter()
+                .map(|p| match p.as_array().map(|p| p.iter().map(|v| v.as_f64()).collect::<Vec<_>>()).as_deref() {
+                    Some([Some(x), Some(y)]) => Ok(to_user(&info, *x, *y)),
+                    _ => Err(wrong()),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            edits.push(Edit::ReshapeAnnotation { page, index, points });
+        }
         if edits.is_empty() {
-            return Err(ToolError::InvalidArgs("nothing to change: pass contents, color, opacity, width, fill, font_size, rect or move".into()));
+            return Err(ToolError::InvalidArgs(
+                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+            ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };
         self.apply(a, edit)
@@ -647,19 +676,34 @@ impl Automation {
 
 impl Automation {
     /// A custom stamp: a picture file (PDF page or image) centred at `at`, at its natural size
-    /// (at most 200 pt) or `width` points wide.
+    /// (at most 200 pt), or fitted inside `rect`, keeping its shape and centred (#4077).
     pub(crate) fn stamp_custom(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
+        let rect = match (a.nums::<4>("rect")?, a.get("at")) {
+            (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass at (a point) or rect (a box), not both".into())),
+            (Some(r), None) => {
+                let (w, h) = ((r[2] - r[0]).abs(), (r[3] - r[1]).abs());
+                if !((1.0..=MAX_STAMP_SIDE).contains(&w) && (1.0..=MAX_STAMP_SIDE).contains(&h)) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "rect must be [x0, y0, x1, y1] with each side at least 1 pt and at most {MAX_STAMP_SIDE} pt"
+                    )));
+                }
+                rect_to_user(&info, r)
+            }
+            (None, _) => {
+                let [x, y] = a.need::<2>("at", "a stamp (its centre, or pass rect)")?;
+                let [ux, uy] = to_user(&info, x, y);
+                [ux, uy, ux, uy]
+            }
+        };
         let path = self.resolve(a.str("path")?, false)?;
-        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let bytes = crate::read_input(&path)?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
-        let [x, y] = a.need::<2>("at", "a stamp (its centre)")?;
-        let [ux, uy] = to_user(&info, x, y);
         let edit = Edit::AddCustomStamp {
             page,
-            rect: [ux, uy, ux, uy],
+            rect,
             name,
             file: pdfcraft_engine::MarkFile {
                 name: file,

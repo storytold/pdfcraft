@@ -111,6 +111,11 @@
              Resource 1 is the app's lion; resource 2 is the PDF document (build.rs). -->
         <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\DefaultIcon" Value="&quot;[#PdfcraftExe]&quot;,-2" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\shell\open\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <!-- No overlay on thumbnails and in the preview pane: without TypeOverlay, Windows paints
+             the default program's icon (the lion) over the lower-right corner of every PDF
+             thumbnail, covering part of the page. An empty string means none ("Thumbnail
+             Handlers", Microsoft Learn). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document" Name="TypeOverlay" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="PdfCraft.Document" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe" Name="FriendlyAppName" Value="PdfCraft" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe\DefaultIcon" Value="&quot;[#PdfcraftExe]&quot;,-2" Type="string" />
