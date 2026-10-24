@@ -16,6 +16,7 @@ pdfcraft-annot = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror.workspace = true
+zeroize.workspace = true
 # ASN.1 UTCTime/GeneralizedTime conversion goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
 base64 = "0.22"

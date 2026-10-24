@@ -558,6 +558,12 @@ pub struct PasswordPrompt {
     after_open: Option<pdfcraft_render::RemoteDestination>,
 }
 
+impl Drop for PasswordPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct PendingOpen {
     token: u64,
@@ -577,7 +583,7 @@ struct OpenRequest {
     path: Option<String>,
     stamp: Option<file_watch::Stamp>,
     input: open_worker::Input,
-    password: Option<String>,
+    password: Option<zeroize::Zeroizing<String>>,
     activate: bool,
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<RecoveryMeta>,
@@ -593,6 +599,12 @@ pub struct UnlockPrompt {
     pub error: Option<String>,
     /// The command to run once unlocked (Protect using password, Remove security), if any.
     pub then: Option<&'static str>,
+}
+
+impl Drop for UnlockPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
 }
 
 impl UnlockPrompt {
@@ -1861,11 +1873,12 @@ impl PdfCraftApp {
 
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, password: Option<String>) {
-        let Some(p) = self.password_prompt.take() else { return };
-        let Some(pw) = password else {
+        let Some(mut p) = self.password_prompt.take() else { return };
+        zeroize::Zeroize::zeroize(&mut p.input);
+        let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
             // not attach itself to whatever document is unlocked next (#813).
-            if let Some(meta) = p.recovered {
+            if let Some(meta) = p.recovered.take() {
                 self.recoverable.push(meta);
             }
             return;
@@ -1893,7 +1906,9 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         let (path_for_watch, stamp_for_watch) = (p.path.clone(), p.stamp);
         let after_open = p.after_open.clone();
-        match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
+        let opened = self.try_open(&p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
+        drop(pw);
+        match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
             // A recovered encrypted document is open once its prompt is gone.
             Ok(()) if self.password_prompt.is_none() => {
@@ -1921,7 +1936,7 @@ impl PdfCraftApp {
             // and the tool waiting for it.
             Ok(()) => {
                 if let Some(prompt) = self.password_prompt.as_mut() {
-                    prompt.recovered = p.recovered;
+                    prompt.recovered = p.recovered.take();
                     prompt.then = p.then;
                     prompt.after_open = after_open;
                 }
@@ -1938,8 +1953,11 @@ impl PdfCraftApp {
     /// Answer the permissions password prompt (`None` cancels).
     pub fn submit_unlock(&mut self, password: Option<String>) {
         let Some(mut p) = self.unlock_prompt.take() else { return };
-        let Some(pw) = password else { return };
-        match self.session.unlock(p.doc, &pw) {
+        zeroize::Zeroize::zeroize(&mut p.input);
+        let Some(mut pw) = password else { return };
+        let unlocked = self.session.unlock(p.doc, &pw);
+        zeroize::Zeroize::zeroize(&mut pw);
+        match unlocked {
             // Carry on with what asked for the password, if its document is still the one shown.
             Ok(()) => match p.then {
                 Some(command) if self.active_ids().is_some_and(|(_, id)| id == p.doc) => {
@@ -1948,7 +1966,6 @@ impl PdfCraftApp {
                 _ => self.notify_tr("Restrictions lifted"),
             },
             Err(pdfcraft_engine::EditError::WrongPassword) => {
-                p.input.clear();
                 p.error = Some("Incorrect password. Try again.".to_string());
                 self.unlock_prompt = Some(p);
             }
@@ -2902,7 +2919,8 @@ impl PdfCraftApp {
                     }
                     "none" => None,
                     _ => Some(Dialog::About),
-                }
+                };
+                dialogs::discard_inactive_password_drafts(self);
             }
             ("tools", _) => self.all_tools_expanded = value != "collapsed",
             ("palette", _) => {

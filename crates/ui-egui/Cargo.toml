@@ -25,6 +25,7 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+zeroize = { workspace = true }
 # UTC/calendar display (combine modified-time stamp, the form date picker) goes through chrono
 # (no hand-rolled calendar code); std-only, so it stays wasm-safe.
 chrono = { workspace = true }

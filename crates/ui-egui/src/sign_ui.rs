@@ -77,6 +77,15 @@ impl Default for NewIdDraft {
     }
 }
 
+impl Drop for NewIdDraft {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.password.zeroize();
+        self.confirm.zeroize();
+        self.file_password.zeroize();
+    }
+}
+
 /// What a visible signature shows on its left (Acrobat: Configure Signature Appearance ▸ Text,
 /// Draw or Image). The one last signed with is remembered.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -136,6 +145,13 @@ impl SignDraft {
             error: None,
             confirm_remove: None,
         }
+    }
+}
+
+impl Drop for SignDraft {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.password.zeroize();
     }
 }
 
@@ -359,51 +375,57 @@ impl PdfCraftApp {
     /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data
     /// (or in `export_dir_override`). Returns its list index.
     fn create_digital_id(&mut self) -> Result<usize, String> {
-        let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to create".into()) };
-        if d.name.trim().is_empty() {
-            return Err("Enter a name.".into());
-        }
-        // The message is a catalogue key, so it spells the number out; keep the two in step.
-        const _: () = assert!(sign::pkcs12::MIN_PASSWORD_CHARS == 8);
-        if d.password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
-            return Err("The password must have at least 8 characters.".into());
-        }
-        if d.password != d.confirm {
-            return Err("The passwords do not match.".into());
-        }
-        let key = match KEY_ALGORITHMS[d.key.min(KEY_ALGORITHMS.len() - 1)].1 {
-            "rsa3072" => PrivateKey::generate_rsa(3072),
-            "rsa4096" => PrivateKey::generate_rsa(4096),
-            "p256" => PrivateKey::generate_p256(),
-            _ => PrivateKey::generate_rsa(2048),
-        }
-        .map_err(|e| e.to_string())?;
-        let now = self.session.now_secs();
-        let dn = Name::build(&d.name, &d.unit, &d.organization, &d.email, &d.country);
-        let serial = sign::keys::DigestAlg::Sha256.digest(&[d.name.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
-        let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
-        let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
-        let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
-        let dir = match &self.export_dir_override {
-            Some(p) => Some(PathBuf::from(p)),
-            None => id_dir(),
-        }
-        .ok_or("There is no folder to save the digital ID in.")?;
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
+        let (path, cert) = {
+            let Some(d) = self.sign_draft.as_ref().map(|d| &d.new_id) else { return Err("nothing to create".into()) };
+            if d.name.trim().is_empty() {
+                return Err("Enter a name.".into());
+            }
+            // The message is a catalogue key, so it spells the number out; keep the two in step.
+            const _: () = assert!(sign::pkcs12::MIN_PASSWORD_CHARS == 8);
+            if d.password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
+                return Err("The password must have at least 8 characters.".into());
+            }
+            if d.password != d.confirm {
+                return Err("The passwords do not match.".into());
+            }
+            let key = match KEY_ALGORITHMS[d.key.min(KEY_ALGORITHMS.len() - 1)].1 {
+                "rsa3072" => PrivateKey::generate_rsa(3072),
+                "rsa4096" => PrivateKey::generate_rsa(4096),
+                "p256" => PrivateKey::generate_p256(),
+                _ => PrivateKey::generate_rsa(2048),
+            }
+            .map_err(|e| e.to_string())?;
+            let now = self.session.now_secs();
+            let dn = Name::build(&d.name, &d.unit, &d.organization, &d.email, &d.country);
+            let serial = sign::keys::DigestAlg::Sha256.digest(&[d.name.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
+            let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
+            let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
+            let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
+            let dir = match &self.export_dir_override {
+                Some(p) => Some(PathBuf::from(p)),
+                None => id_dir(),
+            }
+            .ok_or("There is no folder to save the digital ID in.")?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+            let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
+            (path, cert)
+        };
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
 
     /// Configure New Digital ID ▸ Use a Digital ID from a file.
     fn import_digital_id(&mut self) -> Result<usize, String> {
-        let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to import".into()) };
-        let bytes = std::fs::read(&d.file).map_err(|e| format!("{}: {e}", d.file))?;
-        let id = sign::pkcs12::open(&bytes, &d.file_password).map_err(|e| match e {
-            sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
-            e => e.to_string(),
-        })?;
-        Ok(self.add_digital_id(&d.file, &id.certificate))
+        let (file, cert) = {
+            let Some(d) = self.sign_draft.as_ref().map(|d| &d.new_id) else { return Err("nothing to import".into()) };
+            let bytes = std::fs::read(&d.file).map_err(|e| format!("{}: {e}", d.file))?;
+            let id = sign::pkcs12::open(&bytes, &d.file_password).map_err(|e| match e {
+                sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+                e => e.to_string(),
+            })?;
+            (d.file.clone(), id.certificate)
+        };
+        Ok(self.add_digital_id(&file, &cert))
     }
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
@@ -414,7 +436,7 @@ impl PdfCraftApp {
             return Err(String::new());
         }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
-        let d = self.sign_draft.clone().ok_or("nothing to sign")?;
+        let d = self.sign_draft.as_ref().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
@@ -846,6 +868,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     error(ui, &d.error);
     ui.horizontal(|ui| {
         if !app.digital_ids.is_empty() && widgets::pill_button(ui, tl!("Back"), false).clicked() {
+            d.new_id = NewIdDraft::default();
             d.step = SignStep::Choose;
             d.error = None;
         }
@@ -1098,6 +1121,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     error(ui, &d.error);
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Back"), false).clicked() {
+            zeroize::Zeroize::zeroize(&mut d.password);
             d.step = SignStep::Choose;
             d.error = None;
         }
@@ -1508,8 +1532,10 @@ mod tests {
         let mut draft = SignDraft::new(0, None, None, None, &[]);
         // P-256 keeps the test fast.
         let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
-        draft.new_id =
-            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret12".into(), confirm: "secret12".into(), ..NewIdDraft::default() };
+        draft.new_id.name = "Grace Hopper".into();
+        draft.new_id.key = key;
+        draft.new_id.password = "secret12".into();
+        draft.new_id.confirm = "secret12".into();
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
@@ -1717,5 +1743,75 @@ mod tests {
         assert_eq!(bar(&[signature(Some(2), Unknown), signature(None, Valid)]), Some(("triangle-alert", "At least one signature has problems.")));
         assert_eq!(bar(&[signature(None, Valid)]), Some(("circle-check", "Signed and all signatures are valid.")));
         assert_eq!(bar(&[SignatureInfo { signed: false, ..signature(None, Invalid) }]), None);
+    }
+
+    #[test]
+    fn dismissing_or_stepping_back_in_the_sign_dialog_clears_passwords() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
+            let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+            draft.step = SignStep::SignAs;
+            draft.password = "secret12".into();
+            app.sign_draft = Some(draft);
+            app.dialog = Some(crate::Dialog::Sign);
+            app
+        });
+        h.run_steps(2);
+
+        // Stepping back from SignAs to Choose clears the typed digital ID password.
+        h.get_by_label("Back").click();
+        h.run_steps(2);
+        assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::Choose);
+        assert!(h.state().sign_draft.as_ref().unwrap().password.is_empty(), "Back from SignAs must clear password");
+
+        // Stepping back from Configure to Choose resets the new-ID password fields.
+        {
+            let d = h.state_mut().sign_draft.as_mut().unwrap();
+            d.step = SignStep::Configure;
+            d.new_id.password = "newsecret12".into();
+            d.new_id.confirm = "newsecret12".into();
+            d.new_id.file_password = "filesecret12".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("Back").click();
+        h.run_steps(2);
+        let d = h.state().sign_draft.as_ref().unwrap();
+        assert_eq!(d.step, SignStep::Choose);
+        assert!(d.new_id.password.is_empty() && d.new_id.confirm.is_empty() && d.new_id.file_password.is_empty());
+
+        // Dismissing the modal with Escape clears sign_draft completely.
+        h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, None);
+        assert!(h.state().sign_draft.is_none(), "sign_draft must be cleared when Dialog::Sign is dismissed");
+
+        // Importing a digital ID file and signing work by borrowing the draft in place.
+        let dir = scratch();
+        let saved = create_in(&dir).unwrap();
+        let mut import_app = PdfCraftApp::new();
+        let mut import_draft = SignDraft::new(0, None, None, None, &[]);
+        import_draft.new_id.create = false;
+        import_draft.new_id.file = saved.to_string_lossy().into_owned();
+        import_draft.new_id.file_password = "secret12".into();
+        import_app.sign_draft = Some(import_draft);
+        assert_eq!(import_app.import_digital_id(), Ok(0));
+        assert_eq!(import_app.digital_ids[0].name, "Grace Hopper");
+
+        let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 200.0, 1).unwrap();
+        import_app.open_bytes("unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
+        let out_pdf = dir.join("signed.pdf");
+        import_app.save_override = Some(out_pdf.to_string_lossy().into_owned());
+        let mut sign_draft = SignDraft::new(0, None, None, None, &import_app.digital_ids);
+        sign_draft.step = SignStep::SignAs;
+        sign_draft.password = "secret12".into();
+        import_app.sign_draft = Some(sign_draft);
+        assert_eq!(import_app.finish_signing(), Ok(()));
+        assert!(out_pdf.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

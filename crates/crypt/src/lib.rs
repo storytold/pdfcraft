@@ -19,6 +19,7 @@ mod rc4;
 
 use md5::{Digest as _, Md5};
 use sha2::{Sha256, Sha384, Sha512};
+use zeroize::Zeroizing;
 
 pub use aes_cbc::{aes_cbc_decrypt, aes_cbc_encrypt};
 pub use rc4::rc4;
@@ -135,9 +136,9 @@ pub enum StreamKind<'a> {
 #[derive(Clone, Debug)]
 pub struct SecurityHandler {
     dict: EncryptDict,
-    key: Vec<u8>,
+    key: Zeroizing<Vec<u8>>,
     auth: Auth,
-    recovered_user: Option<Vec<u8>>,
+    recovered_user: Option<Zeroizing<Vec<u8>>>,
     methods: Methods,
 }
 
@@ -178,7 +179,7 @@ impl Methods {
 }
 
 impl SecurityHandler {
-    fn new(dict: EncryptDict, key: Vec<u8>, auth: Auth, recovered_user: Option<Vec<u8>>) -> Self {
+    fn new(dict: EncryptDict, key: Zeroizing<Vec<u8>>, auth: Auth, recovered_user: Option<Zeroizing<Vec<u8>>>) -> Self {
         let methods = Methods::new(&dict);
         Self { dict, key, auth, recovered_user, methods }
     }
@@ -241,7 +242,7 @@ impl SecurityHandler {
     /// For R2–R4 documents opened with the owner password: the user password, which owner
     /// authentication recovers (Algorithm 7). Lets components that only accept user passwords
     /// open the document too.
-    pub fn recovered_user_password(&self) -> Option<Vec<u8>> {
+    pub fn recovered_user_password(&self) -> Option<Zeroizing<Vec<u8>>> {
         self.recovered_user.clone()
     }
 
@@ -258,7 +259,7 @@ impl SecurityHandler {
         if !matches!(self.dict.r, 5 | 6) {
             return None;
         }
-        let plain = aes_cbc_decrypt(&self.key, &[0; 16], self.dict.perms.first_chunk::<16>()?, false);
+        let plain = Zeroizing::new(aes_cbc_decrypt(&self.key, &[0; 16], self.dict.perms.first_chunk::<16>()?, false));
         let p = i32::from_le_bytes(*plain.first_chunk::<4>()?);
         (plain.get(9..12) == Some(&b"adb"[..])).then_some(p)
     }
@@ -291,7 +292,7 @@ impl SecurityHandler {
     }
 
     /// Algorithm 1 (§7.6.3.3): the key for one object. AES-256 uses the file key directly.
-    fn object_key(&self, method: Method, num: u32, generation: u16) -> Vec<u8> {
+    fn object_key(&self, method: Method, num: u32, generation: u16) -> Zeroizing<Vec<u8>> {
         if method == Method::Aes256 {
             return self.key.clone();
         }
@@ -302,8 +303,9 @@ impl SecurityHandler {
         if method == Method::Aes128 {
             h.update(b"sAlT");
         }
-        let digest = h.finalize();
-        digest[..(self.key.len() + 5).min(16)].to_vec()
+        let mut digest = Zeroizing::new(h.finalize().to_vec());
+        digest.truncate((self.key.len() + 5).min(16));
+        digest
     }
 
     fn apply(&self, method: Method, num: u32, generation: u16, data: &[u8], encrypt: bool) -> Vec<u8> {
@@ -391,31 +393,31 @@ pub fn pdfdoc_byte(c: char) -> Option<u8> {
 
 /// Revisions 2–4: the password in PDFDocEncoding (§7.6.4.3.2, Algorithm 2), at most 32 bytes.
 /// Characters PDFDocEncoding lacks are dropped.
-fn legacy_password(pw: &str) -> Vec<u8> {
-    pw.chars().filter_map(pdfdoc_byte).take(32).collect()
+fn legacy_password(pw: &str) -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(pw.chars().filter_map(pdfdoc_byte).take(32).collect())
 }
 
 /// The bytes an R2–R4 password may have been written as: PDFDocEncoding, as the specification
 /// asks; and for a password with characters PDFDocEncoding lacks (ğ, ş, İ, …), which it gives
 /// no bytes, also its UTF-8 bytes, which qpdf and other tools write for such passwords.
-fn legacy_candidates(pw: &str) -> Vec<Vec<u8>> {
+fn legacy_candidates(pw: &str) -> Vec<Zeroizing<Vec<u8>>> {
     let mut out = vec![legacy_password(pw)];
     if pw.chars().any(|c| pdfdoc_byte(c).is_none()) {
-        out.push(pw.bytes().take(32).collect());
+        out.push(Zeroizing::new(pw.bytes().take(32).collect()));
     }
     out
 }
 
 /// Revisions 5–6: SASLprep (RFC 4013), UTF-8, at most 127 bytes.
-fn sasl_password(pw: &str) -> Vec<u8> {
-    let prepped = stringprep::saslprep(pw).map(|c| c.into_owned()).unwrap_or_else(|_| pw.to_string());
-    let mut bytes = prepped.into_bytes();
+fn sasl_password(pw: &str) -> Zeroizing<Vec<u8>> {
+    let prepped = Zeroizing::new(stringprep::saslprep(pw).map(|c| c.into_owned()).unwrap_or_else(|_| pw.to_string()));
+    let mut bytes = Zeroizing::new(prepped.as_bytes().to_vec());
     bytes.truncate(127);
     bytes
 }
 
-fn pad(pw: &[u8]) -> [u8; 32] {
-    let mut out = PADDING;
+fn pad(pw: &[u8]) -> Zeroizing<[u8; 32]> {
+    let mut out = Zeroizing::new(PADDING);
     let n = pw.len().min(32);
     out[..n].copy_from_slice(&pw[..n]);
     out[n..].copy_from_slice(&PADDING[..32 - n]);
@@ -429,20 +431,20 @@ fn key_len(d: &EncryptDict) -> usize {
 // ── Revisions 2–4 ──────────────────────────────────────────────────────────────────────────────
 
 /// Algorithm 2: file key from a (user) password.
-fn file_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Vec<u8> {
+fn file_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Zeroizing<Vec<u8>> {
     let n = key_len(d);
     let mut h = Md5::new();
-    h.update(pad(pw));
+    h.update(*pad(pw));
     h.update(&d.o[..d.o.len().min(32)]);
     h.update(d.p.to_le_bytes());
     h.update(id0);
     if d.r >= 4 && !d.encrypt_metadata {
         h.update([0xFF; 4]);
     }
-    let mut digest = h.finalize().to_vec();
+    let mut digest = Zeroizing::new(h.finalize().to_vec());
     if d.r >= 3 {
         for _ in 0..50 {
-            digest = Md5::digest(&digest[..n]).to_vec();
+            digest = Zeroizing::new(Md5::digest(&digest[..n]).to_vec());
         }
     }
     digest.truncate(n);
@@ -459,7 +461,7 @@ fn u_value_r4(d: &EncryptDict, id0: &[u8], key: &[u8]) -> Vec<u8> {
     h.update(id0);
     let mut x = rc4(key, &h.finalize());
     for i in 1..=19u8 {
-        let k: Vec<u8> = key.iter().map(|b| b ^ i).collect();
+        let k = Zeroizing::new(key.iter().map(|b| b ^ i).collect::<Vec<u8>>());
         x = rc4(&k, &x);
     }
     x.extend_from_slice(&[0u8; 16]);
@@ -471,7 +473,7 @@ fn u_value_r4(d: &EncryptDict, id0: &[u8], key: &[u8]) -> Vec<u8> {
 /// Some producers ignore `/EncryptMetadata false` when deriving the key (they omit the
 /// `FF FF FF FF` of Algorithm 2, step f). Viewers open those files, so if the strict derivation
 /// fails we retry the other way.
-fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Vec<u8>> {
+fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     let check = |d: &EncryptDict| {
         let key = file_key_r4(d, id0, pw);
         let u = u_value_r4(d, id0, &key);
@@ -482,54 +484,57 @@ fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The RC4 key derived from an owner password (Algorithm 3, steps a–d).
-fn owner_rc4_key(d: &EncryptDict, owner_pw: &[u8]) -> Vec<u8> {
+fn owner_rc4_key(d: &EncryptDict, owner_pw: &[u8]) -> Zeroizing<Vec<u8>> {
     let n = key_len(d);
-    let mut digest = Md5::digest(pad(owner_pw)).to_vec();
+    let mut digest = Zeroizing::new(Md5::digest(*pad(owner_pw)).to_vec());
     if d.r >= 3 {
         for _ in 0..50 {
-            digest = Md5::digest(&digest).to_vec();
+            digest = Zeroizing::new(Md5::digest(&*digest).to_vec());
         }
     }
     digest.truncate(n);
     digest
 }
 
+type SecretBytes = Zeroizing<Vec<u8>>;
+
 /// Algorithm 7: authenticate an owner password (recover the user password from `/O`).
 /// Returns the file key and the recovered user password (padding removed).
-fn owner_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+fn owner_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<(SecretBytes, SecretBytes)> {
     let rk = owner_rc4_key(d, pw);
-    let mut user = d.o[..d.o.len().min(32)].to_vec();
+    let mut user = Zeroizing::new(d.o[..d.o.len().min(32)].to_vec());
     if d.r == 2 {
-        user = rc4(&rk, &user);
+        user = Zeroizing::new(rc4(&rk, &user));
     } else {
         for i in (0..=19u8).rev() {
-            let k: Vec<u8> = rk.iter().map(|b| b ^ i).collect();
-            user = rc4(&k, &user);
+            let k = Zeroizing::new(rk.iter().map(|b| b ^ i).collect::<Vec<u8>>());
+            user = Zeroizing::new(rc4(&k, &user));
         }
     }
     let key = user_key_r4(d, id0, &user)?;
     // The recovered value is the padded password: strip the padding suffix.
     let len = (0..=32).find(|&i| user.len() >= 32 && user[i..32] == PADDING[..32 - i]).unwrap_or(user.len().min(32));
-    Some((key, user[..len].to_vec()))
+    user.truncate(len);
+    Some((key, user))
 }
 
 // ── Revisions 5–6 ──────────────────────────────────────────────────────────────────────────────
 
 /// The hash of a password for R5 (SHA-256) or R6 (Algorithm 2.B).
-fn hash_r6(r: i64, pw: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
-    let mut k = {
+fn hash_r6(r: i64, pw: &[u8], salt: &[u8], udata: &[u8]) -> Zeroizing<Vec<u8>> {
+    let mut k = Zeroizing::new({
         let mut h = Sha256::new();
         h.update(pw);
         h.update(salt);
         h.update(udata);
         h.finalize().to_vec()
-    };
+    });
     if r == 5 {
         return k;
     }
     let mut round = 0u32;
     loop {
-        let mut k1 = Vec::with_capacity(64 * (pw.len() + k.len() + udata.len()));
+        let mut k1 = Zeroizing::new(Vec::with_capacity(64 * (pw.len() + k.len() + udata.len())));
         for _ in 0..64 {
             k1.extend_from_slice(pw);
             k1.extend_from_slice(&k);
@@ -538,13 +543,13 @@ fn hash_r6(r: i64, pw: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
         // `k` is always a SHA-2 digest (32, 48 or 64 bytes): key = its first 16 bytes, IV = the next 16.
         let Some((key, rest)) = k.split_first_chunk::<16>() else { break };
         let Some(iv) = rest.first_chunk::<16>() else { break };
-        let e = aes_cbc_encrypt(key, iv, &k1, false);
+        let e = Zeroizing::new(aes_cbc_encrypt(key, iv, &k1, false));
         let m = e.iter().take(16).map(|b| u32::from(*b)).sum::<u32>() % 3;
-        k = match m {
-            0 => Sha256::digest(&e).to_vec(),
-            1 => Sha384::digest(&e).to_vec(),
-            _ => Sha512::digest(&e).to_vec(),
-        };
+        k = Zeroizing::new(match m {
+            0 => Sha256::digest(&*e).to_vec(),
+            1 => Sha384::digest(&*e).to_vec(),
+            _ => Sha512::digest(&*e).to_vec(),
+        });
         round += 1;
         if round >= 64 && e.last().is_none_or(|b| u32::from(*b) <= round - 32) {
             break;
@@ -555,19 +560,19 @@ fn hash_r6(r: i64, pw: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
 }
 
 /// Algorithm 2.A: authenticate as owner (`owner = true`) or user; returns the file key.
-fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Vec<u8>>, CryptError> {
+fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Zeroizing<Vec<u8>>>, CryptError> {
     if d.u.len() < 48 || d.o.len() < 48 {
         return Err(CryptError::Malformed("/O and /U must be 48 bytes for R5/R6".into()));
     }
     let (hashed, encrypted, udata) = if owner { (&d.o[..48], &d.oe, &d.u[..48]) } else { (&d.u[..48], &d.ue, &[][..]) };
-    if hash_r6(d.r, pw, &hashed[32..40], udata) != hashed[..32] {
+    if *hash_r6(d.r, pw, &hashed[32..40], udata) != hashed[..32] {
         return Ok(None);
     }
     if encrypted.len() < 32 {
         return Err(CryptError::Malformed("/OE or /UE must be 32 bytes".into()));
     }
     let k = hash_r6(d.r, pw, &hashed[40..48], udata);
-    Ok(Some(aes_cbc_decrypt(&k, &[0; 16], &encrypted[..32], false)))
+    Ok(Some(Zeroizing::new(aes_cbc_decrypt(&k, &[0; 16], &encrypted[..32], false))))
 }
 
 // ── Creating encryption ────────────────────────────────────────────────────────────────────────
@@ -589,7 +594,7 @@ pub enum Algorithm {
 /// dropped), at most 32 bytes; for R6 its SASLprep (RFC 4013: soft hyphens and the like removed,
 /// other spaces made plain, then NFKC; the password as given if SASLprep refuses it), in UTF-8,
 /// at most 127 bytes.
-fn prepared_password(algorithm: Algorithm, password: &str) -> Vec<u8> {
+fn prepared_password(algorithm: Algorithm, password: &str) -> Zeroizing<Vec<u8>> {
     match algorithm {
         Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => legacy_password(password),
         Algorithm::Aes256 => sasl_password(password),
@@ -607,7 +612,7 @@ pub fn effective_password(algorithm: Algorithm, password: &str) -> Vec<u8> {
     let prepared = prepared_password(algorithm, password);
     match algorithm {
         Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => pad(&prepared).to_vec(),
-        Algorithm::Aes256 => prepared,
+        Algorithm::Aes256 => prepared.to_vec(),
     }
 }
 
@@ -664,10 +669,10 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             let owner = if params.owner_password.is_empty() { user.clone() } else { owner };
             // Algorithm 3: /O
             let rk = owner_rc4_key(&d, &owner);
-            let mut o = rc4(&rk, &pad(&user));
+            let mut o = rc4(&rk, &*pad(&user));
             if d.r >= 3 {
                 for i in 1..=19u8 {
-                    let k: Vec<u8> = rk.iter().map(|b| b ^ i).collect();
+                    let k = Zeroizing::new(rk.iter().map(|b| b ^ i).collect::<Vec<u8>>());
                     o = rc4(&k, &o);
                 }
             }
@@ -681,15 +686,15 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             d.crypt_filters = vec![(b"StdCF".to_vec(), Method::Aes256)];
             d.stm_f = b"StdCF".to_vec();
             d.str_f = b"StdCF".to_vec();
-            let key = expand(&params.seed, b"file key", 32);
+            let key = Zeroizing::new(expand(&params.seed, b"file key", 32));
             let salts = expand(&params.seed, b"salts", 32);
             // Algorithm 8: /U, /UE
-            let mut u = hash_r6(6, &user, &salts[0..8], &[]);
+            let mut u = hash_r6(6, &user, &salts[0..8], &[]).to_vec();
             u.extend_from_slice(&salts[0..16]);
             let uk = hash_r6(6, &user, &salts[8..16], &[]);
             d.ue = aes_cbc_encrypt(&uk, &[0; 16], &key, false);
             // Algorithm 9: /O, /OE
-            let mut o = hash_r6(6, &owner, &salts[16..24], &u);
+            let mut o = hash_r6(6, &owner, &salts[16..24], &u).to_vec();
             o.extend_from_slice(&salts[16..32]);
             let ok = hash_r6(6, &owner, &salts[24..32], &u);
             d.oe = aes_cbc_encrypt(&ok, &[0; 16], &key, false);

@@ -275,11 +275,13 @@ fn owner_authentication_recovers_the_user_password() {
     for alg in [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128] {
         let d = new(alg, "user pw", "owner pw", -1).dict().clone();
         let h = SecurityHandler::open(d.clone(), ID, Some("owner pw")).unwrap();
-        assert_eq!(h.recovered_user_password().as_deref(), Some(&b"user pw"[..]), "{alg:?}");
+        let _: &Zeroizing<Vec<u8>> = &h.key;
+        let _: &Option<Zeroizing<Vec<u8>>> = &h.recovered_user;
+        assert_eq!(h.recovered_user_password().as_deref().map(Vec::as_slice), Some(&b"user pw"[..]), "{alg:?}");
         assert_eq!(SecurityHandler::open(d, ID, Some("user pw")).unwrap().recovered_user_password(), None);
     }
     let d = new(Algorithm::Rc4_128, "", "owner", -1).dict().clone();
-    assert_eq!(SecurityHandler::open(d, ID, Some("owner")).unwrap().recovered_user_password().as_deref(), Some(&b""[..]));
+    assert_eq!(SecurityHandler::open(d, ID, Some("owner")).unwrap().recovered_user_password().as_deref().map(Vec::as_slice), Some(&b""[..]));
 }
 
 /// /O, /U and the first /ID of files qpdf 12.4.2 wrote (`--static-id`), with the file keys
@@ -320,7 +322,7 @@ fn legacy_passwords_are_pdfdoc_encoded_with_a_utf8_fallback() {
     assert_eq!((user.auth(), user.file_key().to_vec()), (Auth::User, hex("3564ffcea186122595ad55ee157da71f")));
     let owner = SecurityHandler::open(r3.clone(), &id, Some("Öğretmen")).unwrap();
     assert_eq!((owner.auth(), owner.file_key().to_vec()), (Auth::Owner, hex("3564ffcea186122595ad55ee157da71f")));
-    assert_eq!(owner.recovered_user_password(), Some(vec![0x9A, b'l', 0x9A, b'k', 0xA0]));
+    assert_eq!(owner.recovered_user_password(), Some(Zeroizing::new(vec![0x9A, b'l', 0x9A, b'k', 0xA0])));
     // Dropping ı and € (the old Latin-1 conversion) or a near miss doesn't open it.
     for wrong in ["lk", "ilik€", "ılık", "Ogretmen"] {
         assert_eq!(SecurityHandler::open(r3.clone(), &id, Some(wrong)).unwrap_err(), CryptError::WrongPassword, "{wrong}");
@@ -350,6 +352,6 @@ fn pdfdoc_encoding_round_trips() {
     for c in ['ğ', 'ş', 'İ', '\u{A0}', '\u{85}', 'Ж', '日'] {
         assert_eq!(pdfdoc_byte(c), None, "{c}");
     }
-    assert_eq!(legacy_candidates("Çok"), [vec![0xC7, b'o', b'k']]);
-    assert_eq!(legacy_candidates("şifre"), [b"ifre".to_vec(), "şifre".as_bytes().to_vec()]);
+    assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k'])]);
+    assert_eq!(legacy_candidates("şifre"), [Zeroizing::new(b"ifre".to_vec()), Zeroizing::new("şifre".as_bytes().to_vec())]);
 }
