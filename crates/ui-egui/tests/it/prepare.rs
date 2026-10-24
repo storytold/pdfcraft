@@ -297,17 +297,21 @@ fn position_tab_rotates_a_field() {
     assert!(h.state().field_props.as_ref().unwrap().props().is_none(), "an unchanged draft is not an edit");
     h.get_by_label("Position").click();
     h.run_steps(2);
-    h.get_by_label("Rotation:");
-    h.state_mut().field_props.as_mut().unwrap().rotation = 90;
-    assert!(h.state().field_props.as_ref().unwrap().props().is_some());
+    // Picked from the list, as a person does.
+    h.get_by_label("Rotation:").click();
+    h.run_steps(2);
+    h.get_by_label("90°").click();
+    h.run_steps(2);
+    let draft = h.state().field_props.as_ref().unwrap().clone();
+    assert_eq!(draft.rotation, 90);
+    let props = draft.props().expect("a new rotation is an edit");
+    assert!(props.rect.is_none(), "picking a rotation moved the field: {:?}", props.rect);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let turned = widget(&h);
     assert_eq!(turned.rotation, 90);
-    let [x0, y0, x1, y1] = before.rect;
-    let (cx, cy, w, ht) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0);
-    let expect = [cx - ht / 2.0, cy - w / 2.0, cx + ht / 2.0, cy + w / 2.0];
-    assert!(turned.rect.iter().zip(expect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} vs {expect:?}", turned.rect);
+    // The field stays where it was placed; only its content turns (#4296).
+    assert!(turned.rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} moved from {:?}", turned.rect, before.rect);
     h.state_mut().execute("edit.undo");
     h.run_steps(3);
     let back = widget(&h);

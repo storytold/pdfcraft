@@ -101,8 +101,9 @@ pub struct FieldProps {
     /// Options tab: the mark of a check box or radio button (every widget).
     pub check_style: Option<CheckStyle>,
     /// Position tab: rotate one widget (`/MK /R`) to 0, 90, 180 or 270 degrees counterclockwise.
-    /// Changing between horizontal and vertical swaps that widget's width and height around its
-    /// center, unless [`Self::rect`] is also set.
+    /// The widget keeps its rectangle: `/R` turns the appearance inside it (ISO 32000-2 Table 192
+    /// turns the annotation relative to the page, and its `/Rect` stays in default user space), so
+    /// a tall field turned 90 degrees holds text running up its long side.
     pub rotation: Option<(usize, i64)>,
 }
 
@@ -849,18 +850,6 @@ fn empty_box(doc: &Document, w: &Widget) -> Stream {
     form_stream(place, c.into_bytes(), Dict::new())
 }
 
-/// Swap width and height, keeping the center. `None` when that is not a usable widget.
-fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
-    if !r.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    let (nw, nh) = (y1 - y0, x1 - x0);
-    let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
-    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
-}
-
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
@@ -884,20 +873,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
     }
     // Validated before anything is written, so a refused rotation leaves the document unchanged.
-    // `Some(Some(rect))`: the widget's axis changes and it gets the swapped rectangle.
-    let mut rotated_rect: Option<Option<[f64; 4]>> = None;
     if let Some((wi, rot)) = props.rotation {
         if !matches!(rot, 0 | 90 | 180 | 270) {
             return invalid("rotation must be 0, 90, 180 or 270 degrees");
         }
-        let Some(w) = f.widgets.get(wi) else {
+        if f.widgets.get(wi).is_none() {
             return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
-        };
-        let axis_change = (w.rotation % 180 == 0) != (rot % 180 == 0);
-        rotated_rect = Some(None);
-        if axis_change && props.rect.is_none() {
-            let Some(rect) = swapped_around_center(w.rect) else { return invalid("the field is too small") };
-            rotated_rect = Some(Some(rect));
         }
     }
     // A locked field only takes unlocking (Acrobat greys its properties out).
@@ -1167,12 +1148,11 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             }
         }
     }
-    if let (Some((wi, rot)), Some(swapped)) = (props.rotation, rotated_rect)
+    // Only `/MK /R` changes: the widget stays where it is on the page, and the redraw below lays
+    // its content out along the turned direction inside the same rectangle.
+    if let Some((wi, rot)) = props.rotation
         && let Some(w) = f.widgets.get(wi)
     {
-        if let Some(rect) = swapped {
-            doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect())))?;
-        }
         let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
         if rot == 0 {
             mk.remove(b"R");
