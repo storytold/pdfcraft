@@ -61,6 +61,7 @@ impl PdfCraftApp {
                         self.views[i].go_to_page(p);
                     }
                 }
+                Request::OpenDoc(path) => self.request_script_document(id, path),
                 Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify_fmt(
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
@@ -625,4 +626,33 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         .small()
         .color(t.text_muted),
     );
+}
+
+impl PdfCraftApp {
+    /// Resolve a script's local path without I/O and queue the existing consent prompt.
+    /// Relative paths use the source document's path, with no working-directory fallback.
+    /// If another remote-link or link prompt is pending, ignore this request rather than
+    /// replacing it. Resolution failures are shown; accepting the prompt later schedules
+    /// normal file opening/validation. The web build reports this operation as unavailable.
+    fn request_script_document(&mut self, id: DocId, file: String) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.pending_remote_link.is_some() || self.pending_link.is_some() {
+                return;
+            }
+            let source_path = self.session.get(id).and_then(|d| d.path.as_deref()).map(std::path::Path::new);
+            match pdfcraft_engine::js::resolve_javascript_document_path(source_path, &file) {
+                Ok(path) => {
+                    self.pending_remote_link =
+                        Some(crate::PendingRemoteLink { source: id, path, destination: pdfcraft_render::RemoteDestination::Default })
+                }
+                Err(e) => self.notify_error(e),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (id, file);
+            self.notify("Opening local files from JavaScript is unavailable on the web");
+        }
+    }
 }

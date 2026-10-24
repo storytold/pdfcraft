@@ -235,3 +235,70 @@ fn dest_view_value(view: DestView) -> Value {
         DestView::FitR { rect } => json!({ "kind": "fit_r", "rect": rect }),
     }
 }
+
+impl Automation {
+    /// Run a link at the tool's one-based page/raw annotation index against a snapshot.
+    /// Native execution answers menus in order from `menu_choices` (up to 32 strings/nulls);
+    /// missing choices cancel that menu with null. A null reply resumes the script; a
+    /// successful continuation can still commit edits, unlike retiring an action in the UI.
+    /// Each event has a ten-second receive
+    /// timeout, not a deadline for the whole action. Malformed arguments, channel failures
+    /// and preparation/commit failures become tool errors. Script failures, including forged
+    /// menu values, are returned in `error` without committing script edits or requests.
+    /// Abandoning a receiver does not terminate its worker. WASM runs synchronously with
+    /// menus cancelled.
+    /// Finish revalidates the document and applies eligible edits through permissions/Undo.
+    /// Remaining viewer requests are returned as data, without opening files or dispatching I/O.
+    pub(crate) fn link_run_javascript(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let page = usize::try_from(a.int("page")?.checked_sub(1).filter(|n| *n >= 0).ok_or_else(|| bad("page must be positive"))?)
+            .map_err(|e| bad(e.to_string()))?;
+        let index = usize::try_from(a.int("index")?.checked_sub(1).filter(|n| *n >= 0).ok_or_else(|| bad("index must be positive"))?)
+            .map_err(|e| bad(e.to_string()))?;
+        let choices = match a.get("menu_choices") {
+            Some(value) => value.as_array().ok_or_else(|| bad("menu_choices must be an array"))?.clone(),
+            None => Vec::new(),
+        };
+        if choices.len() > 32 || choices.iter().any(|v| !v.is_string() && !v.is_null()) {
+            return Err(bad("invalid menu_choices"));
+        }
+        let input = self.session.prepare_link_javascript(id, page, index).map_err(failed)?;
+        #[allow(unused_mut)]
+        let mut menus: Vec<Value> = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let outcome = {
+            let events = input.start().map_err(failed)?;
+            loop {
+                match events.recv_timeout(std::time::Duration::from_secs(10)).map_err(failed)? {
+                    pdfcraft_engine::js::InteractiveEvent::Menu(items, reply) => {
+                        if menus.len() >= 32 {
+                            return Err(failed("too many popup menus"));
+                        }
+                        let choice = choices.get(menus.len()).and_then(Value::as_str).map(str::to_string);
+                        menus.push(menu_json(&items));
+                        reply.send(choice).map_err(failed)?;
+                    }
+                    pdfcraft_engine::js::InteractiveEvent::Complete(out) => break out,
+                }
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let outcome = {
+            let _ = choices;
+            input.run()
+        };
+        let out = self.session.finish_link_javascript(&input, outcome).map_err(failed)?;
+        let requests: Vec<_> = out.requests.iter().map(crate::a11y::request_json).collect();
+        Ok(json!({ "menus": menus, "alerts": out.alerts, "console": out.console, "requests": requests, "error": out.error }))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn menu_json(items: &[pdfcraft_engine::js::MenuItem]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|i| json!({ "name": i.name, "return": i.value, "enabled": i.enabled, "marked": i.marked, "children": menu_json(&i.children) }))
+            .collect(),
+    )
+}

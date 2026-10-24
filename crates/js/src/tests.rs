@@ -1805,3 +1805,182 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, ["old viewer"]);
 }
+
+#[test]
+fn popup_cancellation_and_link_document_target() {
+    let e = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let o = go("if (event.target !== this) throw Error('target'); app.popUpMenuEx({cName:'A',cReturn:''})", &e);
+    assert_eq!(o.error, None);
+    assert_eq!(o.result.as_deref(), Some(""));
+}
+
+#[test]
+fn document_initialization_uses_open_event() {
+    let o = run(
+        "console.println(event.type + ':' + event.name)",
+        &Event { kind: "Link".into(), ..Event::doc("Mouse Up") },
+        &doc(),
+        &[],
+        &["if (event.name !== 'Open' || event.target !== this) throw Error('initialization'); var ready=1;".into()],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.console, ["Link:Mouse Up"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn popup_resumes_same_execution_and_validates_choices() {
+    for choice in [Some("next"), None, Some("forged")] {
+        let rx = interactive("var count=1; var c=app.popUpMenuEx.apply(app,[{cName:'Group',oSubMenu:[{cName:'Next',cReturn:'next'},{cName:'Disabled',cReturn:'bad',bEnabled:false}]}]); count++; console.println(count); if(c==='next') this.pageNum=2;".into(),
+            Event { kind:"Link".into(), ..Event::doc("Mouse Up") }, doc(), vec![], vec![]).unwrap();
+        match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+            InteractiveEvent::Menu(items, reply) => {
+                assert_eq!(items[0].children[0].value, "next");
+                assert!(!items[0].children[1].enabled);
+                reply.send(choice.map(str::to_string)).unwrap();
+            }
+            _ => panic!("menu expected"),
+        }
+        let InteractiveEvent::Complete(o) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+        if choice == Some("forged") {
+            assert!(o.error.is_some());
+        } else {
+            assert_eq!(o.error, None);
+            assert_eq!(o.console, ["2"]);
+            assert_eq!(o.requests, if choice.is_some() { vec![Request::GoToPage(2)] } else { vec![] });
+        }
+    }
+}
+
+#[test]
+fn popup_limits_and_open_doc_are_fail_closed() {
+    let o = go("var a={cName:'cycle'}; a.oSubMenu=a; app.popUpMenuEx(a)", &Event::doc("Console"));
+    assert!(o.error.is_some());
+    let o = go("app.openDoc({cPath:'relative.pdf'})", &Event::doc("Console"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.requests, [Request::OpenDoc("relative.pdf".into())]);
+    let o = go("app.popUpMenuEx({cName:'blank',cReturn:''}) === null", &Event::doc("Console"));
+    assert_eq!(o.result.as_deref(), Some("true"));
+}
+
+#[test]
+fn initialization_aggregate_limit_preserves_field_value() {
+    let e = Event::field("Validate", "price", "17");
+    let scripts = vec![String::new(); 1025];
+    let o = run("", &e, &doc(), &fields(), &scripts, Limits::default());
+    assert!(o.error.is_some());
+    assert_eq!(o.value, "17");
+    assert!(o.rc);
+}
+
+#[test]
+fn remediation_finite_menu_depth_boundary() {
+    for (depth, rejected) in [(16, false), (17, true)] {
+        let script = format!("var a={{cName:'leaf'}};for(var i=0;i<{depth};i++)a={{cName:'parent',oSubMenu:a}};app.popUpMenuEx(a)");
+        let o = run(&script, &Event::doc("Console"), &DocInfo::default(), &[], &[], Limits::default());
+        println!("DEPTH {depth} error={:?}", o.error);
+        assert_eq!(o.error.is_some(), rejected, "finite tree below the node cap must test depth independently");
+    }
+}
+
+#[test]
+fn remediation_existing_events_keep_their_context_and_saved_fields() {
+    let fields = vec![FieldState::new("price", FieldType::Text, vec!["17".into()])];
+    for event in [
+        Event::doc("Console"),
+        Event::doc("WillSave"),
+        Event::field("Calculate", "price", "17"),
+        Event::field("Validate", "price", "17"),
+        Event::field("Mouse Up", "price", "17"),
+    ] {
+        let init = "if(event.name==='Open')getField('price').value='0';var count=1;var serialized=JSON.stringify(event);";
+        let out = run(
+            "if(!Object.prototype.propertyIsEnumerable.call(this,'event'))throw Error('legacy binding');count++;console.println(count);console.println(event.type+':'+event.name);event.value='done'",
+            &event,
+            &doc(),
+            &fields,
+            &[init.into()],
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{event:?}");
+        assert!(out.changed.is_empty(), "non-Open initializer changed saved fields: {event:?}");
+        assert_eq!(out.console, ["2".to_owned(), format!("{}:{}", event.kind, event.name)]);
+        assert_eq!(out.value, "done");
+    }
+    let open = run(
+        "console.println(count)",
+        &Event::doc("Open"),
+        &doc(),
+        &fields,
+        &["if(event.name==='Open')getField('price').value='0';var count=1;".into()],
+        Limits::default(),
+    );
+    assert_eq!(open.error, None);
+    assert_eq!(open.console, ["1"]);
+    assert_eq!(open.changed.len(), 1);
+    assert_eq!(open.changed[0].value, ["0"]);
+    for name in ["Console", "Open", "WillSave"] {
+        let out = run("JSON.stringify(event)", &Event::doc(name), &doc(), &[], &[], Limits::default());
+        assert_eq!(out.error, None, "{name}");
+        assert!(out.result.unwrap().contains(name));
+    }
+}
+
+#[test]
+fn remediation_link_initialization_and_target_are_serializable() {
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let init = "if(event.type!=='Doc'||event.name!=='Open'||event.target!==this)throw Error('init');JSON.stringify(event);var initialized=1;";
+    let out = run(
+        "JSON.stringify(event);if(event.target!==this)throw Error('target');initialized++;console.println(initialized);console.println(event.type+':'+event.name)",
+        &event,
+        &doc(),
+        &[],
+        &[init.into()],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.console, ["2", "Link:Mouse Up"]);
+}
+
+/// Synchronizing #3985 keeps ordinary field initialization tolerant while Link initialization
+/// remains fail-closed, in both the synchronous and interactive hosts.
+#[test]
+fn sync_document_script_errors_remain_fatal_for_links() {
+    let scripts = vec!["console.println('init'); throw Error('broken initializer');".to_owned(), "console.println('later');".to_owned()];
+    let action = "console.println('action'); event.value='ran';";
+    let field = run(action, &Event::field("Calculate", "qty", "keep"), &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(field.error, None);
+    assert_eq!(field.value, "ran");
+    assert_eq!(field.doc_errors.len(), 1);
+    assert_eq!(field.console, ["init", "later", "action"]);
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let link = run(action, &event, &doc(), &fields(), &scripts, Limits::default());
+    assert!(link.error.as_deref().is_some_and(|e| e.contains("broken initializer")));
+    assert_eq!(link.console, ["init"]);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let rx = interactive(action.into(), event, doc(), fields(), scripts).unwrap();
+        let InteractiveEvent::Complete(out) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("broken initializer")));
+        assert_eq!(out.console, ["init"]);
+    }
+}
+
+/// Refusing a document initializer at preflight skips it for a field, but never silently runs
+/// a Link action with incomplete initialization. The aggregate initialization bound also stays.
+#[test]
+fn sync_refused_initializers_do_not_run_link_actions() {
+    let scripts = vec![format!("var deep={}1{};", "(".repeat(10_000), ")".repeat(10_000))];
+    let action = "console.println('action');";
+    let field = run(action, &Event::field("Calculate", "qty", ""), &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(field.error, None);
+    assert_eq!(field.console, ["action"]);
+    assert_eq!(field.doc_errors.len(), 1);
+    let event = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let link = run(action, &event, &doc(), &fields(), &scripts, Limits::default());
+    assert!(link.error.is_some());
+    assert!(link.console.is_empty());
+    #[cfg(not(target_arch = "wasm32"))]
+    assert!(interactive(action.into(), event, doc(), fields(), scripts).is_err());
+}
