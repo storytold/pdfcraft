@@ -1132,16 +1132,24 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 
 /// The message bar for signed documents: (icon, colour, template, argument).
 /// The template renders through [`crate::i18n::tr_fmt`] at the call site, so the bar follows
-/// the UI language; names inside `argument` stay as they are.
-pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, &'static str, String)> {
+/// the UI language; names inside `argument` stay as they are. `incomplete`: a signed field is
+/// missing from `sigs` ([`pdfcraft_engine::Document::signatures_incomplete`]), so the bar never
+/// says that every signature is valid.
+pub(crate) fn banner(sigs: &[SignatureInfo], has_signatures: bool, incomplete: bool) -> Option<(&'static str, Color32, &'static str, String)> {
     let signed: Vec<&SignatureInfo> = sigs.iter().filter(|s| s.signed).collect();
     if signed.is_empty() {
-        return None;
+        return (has_signatures || incomplete).then_some((
+            "triangle-alert",
+            Color32::from_rgb(0xE6, 0x86, 0x19),
+            "At least one signature has problems.",
+            String::new(),
+        ));
     }
     // A valid certification heads the bar only when every signature is valid: it says nothing
     // about the signatures added after it, so their problems come first.
+    let all_valid = !incomplete && signed.iter().all(|s| s.status == SignatureStatus::Valid);
     if let Some(c) = signed.iter().find(|s| s.certify.is_some())
-        && signed.iter().all(|s| s.status == SignatureStatus::Valid)
+        && all_valid
     {
         let by = c.certificate.as_ref().map(|x| {
             let org = x.subject.organization().map(|o| format!(", {o}")).unwrap_or_default();
@@ -1156,7 +1164,7 @@ pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, &
     }
     Some(if signed.iter().any(|s| s.status == SignatureStatus::Invalid) {
         ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F), "At least one signature is invalid.", String::new())
-    } else if signed.iter().all(|s| s.status == SignatureStatus::Valid) {
+    } else if all_valid {
         ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78), "Signed and all signatures are valid.", String::new())
     } else {
         ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19), "At least one signature has problems.", String::new())
@@ -1197,7 +1205,7 @@ pub enum PanelAction {
 }
 
 /// The Signatures panel body.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expanded: &mut Vec<String>) -> Option<PanelAction> {
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], has_signatures: bool, expanded: &mut Vec<String>) -> Option<PanelAction> {
     let mut action = None;
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Validate all"), false).clicked() {
@@ -1210,7 +1218,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
         ui.vertical_centered(|ui| {
             ui.add(icons::image("signature", 32.0, t.text_faint));
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(tl!("This document has no signatures.")).color(t.text_muted));
+            let message = if has_signatures { tl!("At least one signature has problems.") } else { tl!("This document has no signatures.") };
+            ui.label(egui::RichText::new(message).color(t.text_muted));
         });
         return action;
     }
@@ -1708,7 +1717,7 @@ mod tests {
     #[test]
     fn the_message_bar_puts_a_signature_problem_before_the_certification() {
         use SignatureStatus::{Invalid, Unknown, Valid};
-        let bar = |sigs: &[SignatureInfo]| banner(sigs).map(|b| (b.0, b.2));
+        let bar = |sigs: &[SignatureInfo]| banner(sigs, sigs.iter().any(|s| s.signed), false).map(|b| (b.0, b.2));
         let certified = signature(Some(2), Valid);
         assert_eq!(bar(std::slice::from_ref(&certified)), Some(("badge-check", "Certified by {by}")));
         assert_eq!(bar(&[certified.clone(), signature(None, Valid)]), Some(("badge-check", "Certified by {by}")));
@@ -1717,5 +1726,11 @@ mod tests {
         assert_eq!(bar(&[signature(Some(2), Unknown), signature(None, Valid)]), Some(("triangle-alert", "At least one signature has problems.")));
         assert_eq!(bar(&[signature(None, Valid)]), Some(("circle-check", "Signed and all signatures are valid.")));
         assert_eq!(bar(&[SignatureInfo { signed: false, ..signature(None, Invalid) }]), None);
+        // A signed field missing from the list: never "all valid", and never certified only.
+        let partial = |sigs: &[SignatureInfo]| banner(sigs, true, true).map(|b| (b.0, b.2));
+        assert_eq!(partial(&[signature(None, Valid)]), Some(("triangle-alert", "At least one signature has problems.")));
+        assert_eq!(partial(&[signature(Some(2), Valid)]), Some(("triangle-alert", "At least one signature has problems.")));
+        assert_eq!(partial(&[signature(None, Invalid)]), Some(("circle-x", "At least one signature is invalid.")));
+        assert_eq!(partial(&[]), Some(("triangle-alert", "At least one signature has problems.")));
     }
 }

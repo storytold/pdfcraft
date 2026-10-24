@@ -133,9 +133,10 @@ impl Automation {
 
     pub(crate) fn sign_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
-        let list: Vec<Value> = doc.signatures.iter().map(|s| self.sig_json(a, s)).collect::<Result<_>>()?;
-        let signed = doc.signatures.iter().filter(|s| s.signed).count();
-        let all_valid = signed > 0 && doc.signatures.iter().filter(|s| s.signed).all(|s| s.status == SignatureStatus::Valid);
+        let signatures = doc.signatures();
+        let list: Vec<Value> = signatures.iter().map(|s| self.sig_json(a, s)).collect::<Result<_>>()?;
+        let signed = signatures.iter().filter(|s| s.signed).count();
+        let all_valid = signed > 0 && signatures.iter().filter(|s| s.signed).all(|s| s.status == SignatureStatus::Valid);
         Ok(json!({ "count": list.len(), "signed": signed, "all_valid": all_valid, "signatures": list }))
     }
 
@@ -267,7 +268,7 @@ impl Automation {
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
         let doc = self.doc(a)?;
-        let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
+        let newest = doc.signatures().iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
         Ok(json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? }))
     }
 

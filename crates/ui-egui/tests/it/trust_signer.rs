@@ -65,7 +65,7 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
     // is a different certificate from the displayed signer.
     let (signer, root) = {
         let s = h.state();
-        let sig = s.session.get(s.views[0].id).unwrap().signatures.iter().find(|x| x.signed).cloned().expect("a signed field");
+        let sig = s.session.get(s.views[0].id).unwrap().signatures().iter().find(|x| x.signed).cloned().expect("a signed field");
         assert_eq!(sig.status, SignatureStatus::Unknown, "untrusted before the click");
         assert_eq!(sig.chain.len(), 2, "the CMS embeds the signer and its root: {:?}", sig.chain.len());
         let signer = sig.certificate.clone().expect("a signer certificate");

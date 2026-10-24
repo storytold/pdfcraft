@@ -668,6 +668,13 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
     out
 }
 
+/// Whether the document contains a standalone RFC 3161 document timestamp.
+///
+/// This is a structural presence check only; it does not validate the timestamp token.
+pub fn has_document_timestamp(doc: &Document, cache: &DigestCache) -> bool {
+    !cache.timestamp_candidates(doc).is_empty()
+}
+
 fn page_index(doc: &Document, p: ObjRef) -> Option<usize> {
     pdfcraft_annot::page_refs(doc).ok()?.iter().position(|r| *r == p)
 }

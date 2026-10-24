@@ -17,6 +17,8 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
+const SIGNED_FIXTURE: &[u8] = include_bytes!("../../../sign/tests/data/openssl-signed.pdf");
+
 /// A fresh folder per call: tests run in parallel and must not remove each other's files.
 fn dir() -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -28,17 +30,107 @@ fn dir() -> std::path::PathBuf {
 }
 
 fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    let mut h = harness_with_bytes(dir, FIXTURE.to_vec());
+    h.run_steps(6);
+    h
+}
+
+fn harness_with_bytes(dir: std::path::PathBuf, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app.open_bytes("contract.pdf", None, bytes).expect("opens");
+        let id = app.views[0].id;
+        assert!(app.session.get(id).unwrap().validated_signatures().is_none(), "opening a file must defer signature validation");
         app.set_option("left", "closed").unwrap();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
         app.save_override = Some(dir.join("contract_signed.pdf").to_string_lossy().into_owned());
         app
-    });
+    })
+}
+
+fn has_signature_indicator_dot(h: &Harness<'static, PdfCraftApp>, button: egui::Rect) -> bool {
+    let expected = button.right_top() + egui::vec2(-8.0, 8.0);
+    h.output()
+        .shapes
+        .iter()
+        .any(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == 3.0 && circle.center.distance(expected) < 0.1))
+}
+
+fn malformed_signed_fixture() -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (adopted) /Rect [10 200 90 220] /P 3 0 R /V 6 0 R >>",
+        "<< /Type /Sig >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+#[test]
+fn a_fresh_signed_document_shows_its_banner_and_rail_indicator() {
+    let mut h = harness_with_bytes(dir(), SIGNED_FIXTURE.to_vec());
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).expect("opened document");
+    assert!(doc.is_signed());
+
     h.run_steps(6);
-    h
+    let signatures_button = h.get_by_label("Signatures").rect();
+    assert!(has_signature_indicator_dot(&h, signatures_button), "the Signatures rail button should show a presence dot");
+    h.get_by_label("At least one signature has problems.");
+    assert!(
+        h.state()
+            .session
+            .get(id)
+            .unwrap()
+            .validated_signatures()
+            .is_some_and(|sigs| { sigs.iter().any(|sig| sig.signed && sig.status == SignatureStatus::Unknown) })
+    );
+}
+
+#[test]
+fn a_fresh_unsigned_document_keeps_signature_validation_deferred() {
+    let mut h = harness(dir());
+    let id = h.state().views[0].id;
+    h.run_steps(6);
+    let signatures_button = h.get_by_label("Signatures").rect();
+    assert!(!has_signature_indicator_dot(&h, signatures_button));
+    assert!(h.state().session.get(id).unwrap().validated_signatures().is_none());
+}
+
+#[test]
+fn malformed_signed_document_remains_visible_without_validation_details() {
+    let mut h = harness_with_bytes(dir(), malformed_signed_fixture());
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.is_signed());
+
+    h.run_steps(6);
+    let signatures_button = h.get_by_label("Signatures").rect();
+    assert!(has_signature_indicator_dot(&h, signatures_button));
+    h.get_by_label("At least one signature has problems.");
+    assert!(h.state().session.get(id).unwrap().validated_signatures().is_some_and(|sigs| sigs.is_empty()));
+
+    h.get_by_label("Signatures").click();
+    h.run_steps(2);
+    assert!(
+        h.get_all_by_label("At least one signature has problems.").count() >= 2,
+        "the banner and panel both retain the malformed signature warning"
+    );
 }
 
 fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
@@ -143,7 +235,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     assert!(dir.join("contract_signed.pdf").exists());
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.name, "contract_signed.pdf");
-    let sig = doc.signatures.iter().find(|x| x.signed).expect("signed");
+    let sig = doc.signatures().iter().find(|x| x.signed).expect("signed");
     assert_eq!((sig.status, sig.reason.as_deref(), sig.page), (SignatureStatus::Unknown, Some("I approve"), Some(0)));
     assert_eq!(s.right, Some(RightPanel::Signatures));
     h.get_by_label("At least one signature has problems.");
@@ -159,7 +251,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.run_steps(3);
     h.get_by_label("Signed and all signatures are valid.");
     let s = h.state();
-    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures[0].status, SignatureStatus::Valid);
+    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures()[0].status, SignatureStatus::Valid);
     assert!(s.views[0].find.as_ref().is_some_and(|f| f.matches.is_empty()), "trust invalidates the view without zooming");
     assert!(!s.session.get(s.views[0].id).unwrap().dirty, "trust alone is not an edit");
     // Show certificate: the Certificate Viewer.
@@ -186,7 +278,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     let s = h.state();
     assert_eq!(s.views.len(), 2);
     let v = s.session.get(s.views[1].id).unwrap();
-    assert!(v.name.contains("signed version") && v.signatures.iter().any(|x| x.signed));
+    assert!(v.name.contains("signed version") && v.signatures().iter().any(|x| x.signed));
     assert!(s.views[0].snapshot.is_none());
     assert!(s.views[1].snapshot.as_ref().is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::SignedVersion));
     // A repeat click reuses the snapshot tab instead of opening another identical one.
@@ -280,7 +372,7 @@ fn certifying_without_a_visible_signature() {
     let s = h.state();
     assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
     let doc = s.session.get(s.views[0].id).unwrap();
-    let sig = doc.signatures.iter().find(|x| x.signed).unwrap();
+    let sig = doc.signatures().iter().find(|x| x.signed).unwrap();
     assert_eq!((sig.certify, sig.visible), (Some(2), false));
     h.get_by_label_contains("Certified by Test Signer EC");
 }
@@ -307,7 +399,7 @@ fn save_as_keeps_a_signed_document_incremental() {
     h.run_steps(4);
     let status = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
-        s.session.get(s.views[0].id).unwrap().signatures.iter().find(|x| x.signed).map(|x| x.status)
+        s.session.get(s.views[0].id).unwrap().signatures().iter().find(|x| x.signed).map(|x| x.status)
     };
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
@@ -364,7 +456,7 @@ fn clicking_an_empty_signature_field_signs_it() {
     h.get_by_label("Sign").click();
     h.run_steps(6);
     let s = h.state();
-    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+    let sig = s.session.get(s.views[1].id).unwrap().signatures().iter().find(|x| x.field == "Approver").cloned().unwrap();
     assert!(sig.signed && sig.visible);
 }
 
@@ -402,7 +494,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     h.run_steps(6);
     let s = h.state();
     assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
-    let sig = s.session.get(s.views[0].id).unwrap().signatures.iter().find(|x| x.signed).cloned().unwrap();
+    let sig = s.session.get(s.views[0].id).unwrap().signatures().iter().find(|x| x.signed).cloned().unwrap();
     assert!(sig.visible && sig.status == SignatureStatus::Unknown, "{:?}", sig.details);
     // Remembered for the next signature, and across a restart.
     assert_eq!(s.sign_graphic, SignGraphic::FillSign);
@@ -424,7 +516,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
     let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
     assert!(signed.windows(6).any(|w| w == b"/Image"), "the image is embedded");
-    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures.iter().filter(|x| x.signed).count(), 2);
+    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures().iter().filter(|x| x.signed).count(), 2);
     let mut fresh = PdfCraftApp::new();
     fresh.restore(&s.persist());
     assert_eq!(fresh.sign_graphic, SignGraphic::Image(image));
@@ -681,7 +773,7 @@ fn signing_preserves_destination_opening_attributes() {
     h.run_steps(2);
     h.get_by_label("Sign").click();
     h.run_steps(6);
-    assert!(h.state().session.get(h.state().views[0].id).unwrap().signatures.iter().any(|s| s.signed));
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().signatures().iter().any(|s| s.signed));
     assert_eq!(xattr::get(&dest, "com.apple.LaunchServices.OpenWith").unwrap(), Some(b"existing binding".to_vec()));
     assert_eq!(xattr::get(&dest, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     let _ = std::fs::remove_dir_all(dir);

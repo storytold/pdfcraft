@@ -693,7 +693,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Fields => ("Fields", Some(info.fields.len())),
                     RightPanel::Layers => ("Layers", Some(info.layers.len())),
                     RightPanel::Attachments => ("Attachments", Some(info.attachments.len())),
-                    RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
+                    RightPanel::Signatures => {
+                        let count = doc.signatures().iter().filter(|s| s.signed).count();
+                        ("Signatures", (count > 0 || !doc.is_signed()).then_some(count))
+                    }
                     RightPanel::Accessibility => ("Accessibility Checker", None),
                     RightPanel::Tags => ("Tags", None),
                     RightPanel::Search => ("Search", None),
@@ -867,7 +870,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     RightPanel::Signatures => {
-                        sig_action = crate::sign_ui::panel(ui, &t, &doc.signatures, sig_expanded);
+                        sig_action = crate::sign_ui::panel(ui, &t, doc.signatures(), doc.is_signed(), sig_expanded);
                     }
                     RightPanel::Accessibility => {
                         a11y_action = crate::a11y_ui::panel(ui, &t, a11y, id);
