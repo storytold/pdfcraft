@@ -2,6 +2,8 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (M12: XFA date pictures check Gregorian calendar validity; estimates unchanged)
+
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M8, #3205 follow-up: labelled Italian international phone numbers with a slash match whole; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
@@ -199,6 +201,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-24 (M12, XFA date pictures):** Date conversion checks Gregorian month lengths and century leap years with chrono, which also supplies weekdays. Impossible stored dates stay as written in layout and script values; supported valid dates still convert. Three synthetic regressions failed before the fix and pass with it. XFA remains partial; picture grammar and locale coverage are unchanged. Estimates unchanged.
 - **2026-10-23 (M7, #4280):** Edit text names each standard stand-in font after its face (`PCEdTimesBold`, ...) instead of one shared `PCEdHelv`. Rewriting a bold paragraph whose subset lacks an accent no longer repoints the paragraphs set earlier in a regular stand-in at Times-Bold, and the editor's frame stays on the paragraph being edited. Pages saved by older builds keep their shared name and are not repaired. Estimates unchanged.
 - **2026-10-23 (M8, #3205 follow-up):** Phone-pattern redaction matches complete labelled Italian geographic numbers such as `Tel. +39 0426/123456`, with synthetic matcher and mark/apply/save/reopen coverage; unlabelled international slash numbers remain unsupported.
 - **2026-10-23 (M7, #2636 partial):** A new `PasteContent` edit pastes an added text box or image copied in the same document or another, keeping its style, picture, turns, flips and crop, as one undo step; `content_copy` drives it headlessly. A paste lands beside earlier copies (18 pt steps) and stays on the page. A pasted image reuses its picture object in its own document and after the first paste into another; there a colour profile is dropped and CMYK colours stored losslessly are turned to RGB. The desktop keys and menus follow in separate PRs. Estimates unchanged.

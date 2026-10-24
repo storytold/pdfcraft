@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 roxmltree = "0.20"
