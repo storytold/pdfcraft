@@ -198,6 +198,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-24 (M12, #4159 branch refresh):** Merged current main while retaining complete-path artifact boundaries and both sides of the progress-log conflict. Upstream accessibility regressions and the save/reopen and atomic-rejection regressions are preserved; estimates unchanged.
+- **2026-10-23 (M12, #4159 review):** Auto-tag artifact boundaries enclose full painted paths, including clipping operators, rather than splitting path construction from painting. The save/reopen operator-order regression fails on the old implementation and passes on the fix; path/text interleaving rejects atomically. All 62 a11y tests, strict clippy, formatting, wasm, layering and asset gates pass. Estimates unchanged.
 
 - **2026-10-23 (M7, #4280):** Edit text names each standard stand-in font after its face (`PCEdTimesBold`, ...) instead of one shared `PCEdHelv`. Rewriting a bold paragraph whose subset lacks an accent no longer repoints the paragraphs set earlier in a regular stand-in at Times-Bold, and the editor's frame stays on the paragraph being edited. Pages saved by older builds keep their shared name and are not repaired. Estimates unchanged.
 - **2026-10-23 (M8, #3205 follow-up):** Phone-pattern redaction matches complete labelled Italian geographic numbers such as `Tel. +39 0426/123456`, with synthetic matcher and mark/apply/save/reopen coverage; unlabelled international slash numbers remain unsupported.
