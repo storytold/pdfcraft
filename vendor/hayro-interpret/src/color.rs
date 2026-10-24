@@ -1026,6 +1026,53 @@ impl Indexed {
     }
 }
 
+/// PdfCraft patch (60): whether `object` is an `/Indexed` colour space that ISO 32000-2
+/// §8.6.6.3 rules out: `hival` is not an integer in 0..=255, or the lookup table is missing or
+/// shorter than m × (hival + 1) bytes for a base space of m components. A longer table is fine
+/// (its first bytes are used). An Indexed space whose base cannot be read is not judged here,
+/// so its existing handling is unchanged.
+///
+/// Upstream treated such a space as unreadable, and an image that named it then fell back to
+/// DeviceGray: its indices were drawn as near-black grey levels, even indices whose entries
+/// were present. The image path uses this to skip the image with a warning instead.
+pub(crate) fn is_malformed_indexed(object: &Object<'_>, cache: &Cache) -> bool {
+    let Object::Array(array) = object else {
+        return false;
+    };
+    let mut iter = array.flex_iter();
+    let Some(family) = iter.next::<Name<'_>>() else {
+        return false;
+    };
+    if !matches!(family.deref(), INDEXED | I) {
+        return false;
+    }
+    let Some(base) = iter
+        .next::<Object<'_>>()
+        .and_then(|o| ColorSpace::new(o, cache))
+    else {
+        return false;
+    };
+    let Some(hival) = iter.next::<object::Number>().and_then(|n| {
+        let value = n.as_f64();
+        // A real with a fraction, a negative number or one past 255 is not a usable `hival`.
+        (value.fract() == 0.0 && (0.0..=255.0).contains(&value)).then(|| n.as_i64())
+    }) else {
+        return true;
+    };
+    let Some(needed) = usize::try_from(hival)
+        .ok()
+        .and_then(|h| h.checked_add(1))
+        .and_then(|entries| entries.checked_mul(usize::from(base.num_components())))
+    else {
+        return true;
+    };
+    let lookup_len = iter
+        .next::<Stream<'_>>()
+        .and_then(|s| s.decoded().ok().map(|d| d.len()))
+        .or_else(|| iter.next::<object::String<'_>>().map(|s| s.as_bytes().len()));
+    lookup_len.is_none_or(|len| len < needed)
+}
+
 impl ToRgb for Indexed {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
         let mut indexed = vec![0.0; input.len() * self.base.num_components() as usize];

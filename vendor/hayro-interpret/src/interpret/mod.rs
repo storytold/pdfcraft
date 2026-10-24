@@ -161,6 +161,10 @@ pub enum InterpreterWarning {
     /// read, or a Separation or DeviceN tint transform that cannot be evaluated) and was painted
     /// in a fallback colour. Reported at most once per content stream.
     ColorFallback,
+    /// PdfCraft patch (60): an image was not drawn because its `/Indexed` colour space is
+    /// malformed (ISO 32000-2 §8.6.6.3): `hival` not an integer in 0..=255, or a lookup table
+    /// shorter than its entries need.
+    MalformedIndexedImage,
 }
 
 /// interpret the contents of the page and render them into the device.
@@ -921,6 +925,22 @@ fn interpret_window<'a>(
                 let warning_sink = context.settings.warning_sink.clone();
                 let transfer_function = context.get().graphics_state.transfer_function.clone();
                 let cache = context.interpreter_cache.object_cache.clone();
+                // PdfCraft patch (60): an inline image naming a resource colour space that is a
+                // malformed Indexed space is skipped with a warning, as `ImageXObject::new` does
+                // for one given in place. A device space name (or its inline abbreviation) never
+                // refers to a resource (ISO 32000-2 §8.6.8), and `ImageXObject::new` takes it
+                // first, so a resource of that name is not consulted.
+                let inline_dict = i.0.dict();
+                if inline_dict
+                    .get::<hayro_syntax::object::Name<'_>>(hayro_syntax::object::dict::keys::CS)
+                    .or_else(|| inline_dict.get::<hayro_syntax::object::Name<'_>>(hayro_syntax::object::dict::keys::COLORSPACE))
+                    .filter(|name| ColorSpace::new_from_name(name).is_none())
+                    .and_then(|name| resources.get_color_space(&name))
+                    .is_some_and(|cs| crate::color::is_malformed_indexed(&cs, &cache))
+                {
+                    warning_sink(InterpreterWarning::MalformedIndexedImage);
+                    continue;
+                }
                 // PdfCraft patch: inline images are not cached (see `DecodedImageKey`).
                 // PdfCraft patch (38): an inline image in a device space, named directly or by a
                 // resource, draws in its default.

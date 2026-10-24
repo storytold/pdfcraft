@@ -223,6 +223,10 @@ pub enum RenderWarning {
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
     ColourFallback,
+    /// An image was not drawn because its `/Indexed` colour space is malformed (ISO 32000-2
+    /// §8.6.6.3): `hival` not an integer in 0..=255, or a lookup table shorter than
+    /// m × (hival + 1) bytes. Reported once per page however many images it affects.
+    MalformedIndexedImage,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -405,10 +409,12 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
     InterpreterSettings {
         warning_sink: Arc::new(move |warning| {
             // Nested forms, Type 3 glyphs and patterns are interpreted again and each reports the
-            // exhausted budget, or the colours that fell back: once per page is enough.
+            // exhausted budget, or the colours that fell back, and several images can share one
+            // malformed colour space: each warning is recorded once per page.
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
                 InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
+                InterpreterWarning::MalformedIndexedImage => RenderWarning::MalformedIndexedImage,
                 InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
             };
             let mut warnings = lock(&target);
