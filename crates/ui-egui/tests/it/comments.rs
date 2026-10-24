@@ -3031,7 +3031,7 @@ fn add_shape(h: &mut Harness<'static, PdfCraftApp>, shape: pdfcraft_engine::Shap
         contents: String::new(),
         author: "Tester".into(),
     }));
-    settle(h);
+    crate::support::settle(h);
 }
 
 /// The rotate handle above the selected comment's frame (see `comments::turn_handle`).
@@ -3055,7 +3055,7 @@ fn the_rotate_handle_turns_a_rectangle_and_tab_turns_it_by_quarters() {
     let centre = at(&h, 150.0, 100.0);
     // A quarter round counterclockwise: from above the middle to its left.
     drag(&mut h, knob, centre + egui::vec2(-(centre.y - knob.y), 0.0));
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let a = comments(&h)[0].clone();
     let (angle, own) = a.turn.expect("turned");
     assert!((angle - 90.0).abs() < 1.0, "{angle}");
@@ -3083,7 +3083,7 @@ fn the_rotate_handle_turns_a_rectangle_and_tab_turns_it_by_quarters() {
     }
     h.drop_at(knob + egui::vec2(30.0, 5.0));
     h.run_steps(3);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let (angle, _) = comments(&h)[0].turn.expect("still turned");
     assert!((angle + 90.0).abs() < 0.01, "90° and two quarters more: -90°, got {angle}");
 }
@@ -3113,7 +3113,7 @@ fn comments_turn_from_the_page_menu_and_turned_boxes_are_hit_inside_their_outlin
     h.run_steps(3);
     h.get_by_label("Rotate clockwise").click();
     h.run_steps(3);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let points = comments(&h).into_iter().find(|a| a.subtype == "Line").unwrap().points;
     let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01;
     assert!(near(points[0], [80.0, 140.0]) && near(points[1], [80.0, 60.0]), "a quarter clockwise about its middle: {points:?}");
@@ -3122,7 +3122,7 @@ fn comments_turn_from_the_page_menu_and_turned_boxes_are_hit_inside_their_outlin
     add_shape(&mut h, pdfcraft_engine::Shape::Rectangle { rect: [180.0, 60.0, 260.0, 140.0] });
     let square = comments(&h).into_iter().find(|a| a.subtype == "Square").unwrap();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::RotateAnnotation { page: 0, index: square.index, degrees: 45.0 });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let square = comments(&h).into_iter().find(|a| a.subtype == "Square").unwrap();
     assert!(square.rect[2] - square.rect[0] > 110.0, "the hull of a square turned 45°: {:?}", square.rect);
     h.state_mut().views[0].comments.selected = None;
