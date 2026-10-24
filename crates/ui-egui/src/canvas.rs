@@ -924,6 +924,8 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        // What the document asked to hide, and what is hidden now (F8), belong to the tab.
+        fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);

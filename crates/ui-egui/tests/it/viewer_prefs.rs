@@ -101,6 +101,28 @@ fn a_document_that_hides_the_interface_opens_without_it_and_f8_brings_it_back() 
     assert_eq!(shown(&h), (true, true, true));
 }
 
+/// Reloading a file changed on disk keeps the tab's interface: hidden stays hidden, and F8 still
+/// hides only what the document asked for.
+#[test]
+fn a_reloaded_document_keeps_its_interface() {
+    let mut h = harness(|_| {}, &["/ViewerPreferences << /HideToolbar true >>"]);
+    let reload = |h: &mut Harness<'static, PdfCraftApp>| {
+        let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
+        h.state_mut().views[0].document_replaced(&info);
+        h.run_steps(3);
+    };
+    reload(&mut h);
+    assert_eq!(shown(&h), (false, true, true), "still hidden after the reload");
+    h.key_press(egui::Key::F8);
+    h.run_steps(3);
+    assert_eq!(shown(&h), (true, true, true));
+    reload(&mut h);
+    assert_eq!(shown(&h), (true, true, true), "still shown after the reload");
+    h.key_press(egui::Key::F8);
+    h.run_steps(3);
+    assert_eq!(shown(&h), (false, true, true), "F8 hides only what the document asked for");
+}
+
 #[test]
 fn each_preference_hides_its_own_part() {
     let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].viewport_rect().top();
