@@ -2783,3 +2783,7 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Sivulla {page} on enemmän sisältöä kuin PdfCraft pystyy lukemaan: osaa siitä ei piirretä, eikä sen tekstiä voi etsiä tai kopioida.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} sivulla on enemmän sisältöä kuin PdfCraft pystyy lukemaan, ensimmäisenä sivu {page}: osia niistä ei piirretä, eikä niiden tekstiä voi etsiä tai kopioida.

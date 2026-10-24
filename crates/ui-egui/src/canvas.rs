@@ -436,6 +436,8 @@ pub struct DocView {
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
+    /// Pages whose content was cut at the renderer's limits (#623): drawn and searched in part.
+    cut_pages: std::collections::BTreeSet<usize>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -719,6 +721,12 @@ impl DocView {
         self.auto_scroll.panning()
     }
 
+    /// Pages whose content was cut at the renderer's limits, so part of each is not drawn and
+    /// its text is incomplete (#623; for automation; 0-based, in order).
+    pub fn cut_pages(&self) -> Vec<usize> {
+        self.cut_pages.iter().copied().collect()
+    }
+
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
         let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
@@ -759,6 +767,7 @@ impl DocView {
             presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
+            cut_pages: Default::default(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),
@@ -1016,6 +1025,7 @@ impl DocView {
         self.texts.clear();
         self.text_failed.clear();
         self.errors.clear();
+        self.cut_pages.clear();
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
@@ -1054,6 +1064,7 @@ impl DocView {
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
+        self.cut_pages.remove(&page);
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
@@ -2014,6 +2025,10 @@ impl DocView {
             return 0;
         }
         ctx.request_repaint();
+        // Whether drawn or read for its text, a page cut at the limits is named (#623).
+        if r.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated) {
+            self.cut_pages.insert(r.request.page);
+        }
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {
@@ -4863,6 +4878,25 @@ fn notices(
             tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
         ))
+    } else if let Some(&first) = view.cut_pages.iter().next() {
+        // Content cut at the renderer's limits (#623): what is missing is not visible, so the
+        // page is named rather than left looking complete.
+        let page = (first + 1).to_string();
+        let n = view.cut_pages.len();
+        let text = if n == 1 {
+            crate::i18n::fmt(
+                tl!("Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied."),
+                &[("page", &page)],
+            )
+        } else {
+            crate::i18n::fmt(
+                tl!(
+                    "{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied."
+                ),
+                &[("n", &n.to_string()), ("page", &page)],
+            )
+        };
+        Some(("triangle-alert", text, false))
     } else if info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton) {
         // Push buttons alone (LaTeX `animate` frames, navigation buttons) leave nothing to fill in.
         Some((
@@ -5945,6 +5979,7 @@ trailer << /Root 1 0 R >>
                 }],
                 line_of: vec![0],
                 space_before: vec![false],
+                truncated: false,
             }
             .into(),
         );
@@ -6031,6 +6066,7 @@ trailer << /Root 1 0 R >>
             glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
             line_of: vec![0],
             space_before: vec![false],
+            truncated: false,
         };
         for p in 0..100 {
             v.texts.insert(p, Arc::new(text.clone()));

@@ -2750,3 +2750,7 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	{page}페이지에는 PdfCraft가 읽을 수 있는 것보다 많은 내용이 있습니다. 일부가 그려지지 않으며, 텍스트를 찾거나 복사할 수 없습니다.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n}개 페이지(첫 번째는 {page}페이지)에 PdfCraft가 읽을 수 있는 것보다 많은 내용이 있습니다. 일부가 그려지지 않으며, 텍스트를 찾거나 복사할 수 없습니다.

@@ -1837,6 +1837,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	هذا النموذج يحتوي أيضًا على بيانات XFA، لا يقرؤها PdfCraft بعد. يمكنك تعبئة حقوله، لكن Acrobat قد يعرض قيم XFA بدلًا منها.
 	This document contains {n} interactive form fields.	هذا المستند يحتوي على {n} حقول نموذج تفاعلية.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	هذا الملف كان تالفًا وأُصلح. الحفظ يُبقي النسخة المُصلَحة.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	تحتوي الصفحة {page} على محتوى أكثر مما يستطيع PdfCraft قراءته: جزء منها لا يُرسم، ولا يمكن البحث في نصها أو نسخه.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	تحتوي {n} صفحات على محتوى أكثر مما يستطيع PdfCraft قراءته، أولها الصفحة {page}: أجزاء منها لا تُرسم، ولا يمكن البحث في نصها أو نسخه.
 	Dismiss	تجاهل
 	Hide field highlights	إخفاء تمييز الحقول
 	Highlight fields	تمييز الحقول

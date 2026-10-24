@@ -2694,3 +2694,7 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Side {page} inneholder mer innhold enn PdfCraft kan lese: en del av den tegnes ikke, og teksten kan ikke søkes i eller kopieres.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} sider inneholder mer innhold enn PdfCraft kan lese, først side {page}: deler av dem tegnes ikke, og teksten deres kan ikke søkes i eller kopieres.

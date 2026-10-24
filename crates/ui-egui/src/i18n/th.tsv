@@ -2681,3 +2681,7 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	หน้า {page} มีเนื้อหามากกว่าที่ PdfCraft อ่านได้: บางส่วนจะไม่ถูกวาด และไม่สามารถค้นหาหรือคัดลอกข้อความของหน้านี้ได้
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} หน้ามีเนื้อหามากกว่าที่ PdfCraft อ่านได้ เริ่มจากหน้า {page}: บางส่วนจะไม่ถูกวาด และไม่สามารถค้นหาหรือคัดลอกข้อความของหน้าเหล่านี้ได้

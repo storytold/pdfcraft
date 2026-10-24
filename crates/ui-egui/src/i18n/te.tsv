@@ -1757,6 +1757,8 @@ action wizard	Start	ప్రారంభించు
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	ఈ ఫారంలో XFA డేటా కూడా ఉంది, దాన్ని చదవడానికి PdfCraftలో ఇంకా మద్దతు లేదు. మీరు దీని ఫీల్డ్‌లను నింపవచ్చు, కానీ Acrobat బదులుగా XFA విలువలను చూపించవచ్చు.
 	This document contains {n} interactive form fields.	ఈ పత్రంలో {n} ఇంటరాక్టివ్ ఫారం ఫీల్డ్‌లు ఉన్నాయి.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	ఈ ఫైల్ పాడైంది, దాన్ని సరిచేయడం జరిగింది. సేవ్ చేస్తే సరిచేసిన వెర్షన్ ఉంచబడుతుంది.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	పేజీ {page}లో PdfCraft చదవగలిగే దానికంటే ఎక్కువ కంటెంట్ ఉంది: దానిలో కొంత భాగం గీయబడదు, దాని వచనాన్ని వెతకడం లేదా కాపీ చేయడం సాధ్యం కాదు.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} పేజీలలో PdfCraft చదవగలిగే దానికంటే ఎక్కువ కంటెంట్ ఉంది, మొదటిది పేజీ {page}: వాటిలో కొన్ని భాగాలు గీయబడవు, వాటి వచనాన్ని వెతకడం లేదా కాపీ చేయడం సాధ్యం కాదు.
 	Dismiss	మూసివేయి
 	Hide field highlights	ఫీల్డ్ హైలైట్‌లను దాచు
 	Highlight fields	ఫీల్డ్‌లను హైలైట్ చేయి

@@ -5053,6 +5053,28 @@ trailer << /Root 1 0 R >>
         assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the cut content is observable");
     }
 
+    /// The text of a cut page says so too (#623): what was extracted is incomplete, and a page
+    /// read whole is not marked.
+    #[test]
+    fn cut_content_marks_the_pages_text_incomplete() {
+        let text_of = |pdf: Vec<u8>| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }));
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(60)).expect("text extraction must not stall")
+        };
+        let bomb = zlib_zeros(hayro::hayro_syntax::MAX_DECODED_STREAM + (32 << 20));
+        let page = text_of(one_page_pdf(&bomb, "/Filter /FlateDecode"));
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert!(page.text.as_ref().is_some_and(|t| t.truncated), "the text says it is incomplete");
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "and the page says so");
+        let page = text_of(one_page_pdf(b"1 0 0 rg 0 0 4 4 re f", ""));
+        assert!(page.text.as_ref().is_some_and(|t| !t.truncated), "a page read whole is not marked");
+        assert!(page.warnings.is_empty());
+    }
+
     /// A stream read in pieces of any size gives the same bytes: stored and dynamic blocks, and in
     /// a `/Contents` array a stream that is not Flate-coded, between two that are.
     #[test]

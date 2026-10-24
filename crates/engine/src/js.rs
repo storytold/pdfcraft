@@ -440,7 +440,8 @@ mod review_tests {
         };
         let mut glyphs: Vec<_> = (0..n).map(|i| glyph(i, "_")).collect();
         glyphs.push(glyph(n, "x"));
-        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs };
+        // Built by hand, not read from a page the renderer cut short, so the text is complete.
+        let text = pdfcraft_render::PageText { line_of: vec![0; glyphs.len()], space_before: vec![false; glyphs.len()], glyphs, truncated: false };
         UNDERSCORE_CHARS_READ.with(|c| c.set(0));
         let words = words_with(&text, |x, y| [x, y]);
         assert_eq!(words.iter().map(|(w, _)| w.len()).collect::<Vec<_>>(), [n, 1]);

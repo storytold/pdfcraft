@@ -1850,8 +1850,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/perf.rs::scrolling_a_500_page_document_stays_within_the_frame_budget", "crates/ui-egui/tests/perf.rs::panels_with_hundreds_of_items_stay_within_the_frame_budget"]
-notes = "UI work per frame ~6 ms scrolling 500 pages (comments panel with 500 cards ~6 ms, thumbnails ~2 ms); rendering is off-thread and tiled"
+evidence = ["crates/ui-egui/tests/perf.rs::scrolling_a_500_page_document_stays_within_the_frame_budget", "crates/ui-egui/tests/perf.rs::panels_with_hundreds_of_items_stay_within_the_frame_budget", "crates/render/src/raster.rs::cut_content_marks_the_pages_text_incomplete", "crates/ui-egui/tests/it/view.rs::a_page_whose_content_was_cut_is_named_in_a_notice", "crates/automation/tests/it/automation.rs::text_extract_says_when_a_pages_content_was_cut"]
+notes = "UI work per frame ~6 ms scrolling 500 pages (comments panel with 500 cards ~6 ms, thumbnails ~2 ms); rendering is off-thread and tiled. A page cut at the renderer's limits is named in a notice, listed as cut_pages by ui.inspect, and its text_extract text carries truncated: true (#623)"
 
 # ==================================================================================================
 # C. Content editing

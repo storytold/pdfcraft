@@ -1227,6 +1227,8 @@
 	This field is locked. Unlock it to change its properties.	Šis laukas užrakintas. Atrakinkite jį, kad galėtumėte keisti savybes.
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Šis failas diske pasikeitė. „Įkelti iš naujo“ parodo naują versiją ir atmeta neįrašytus pakeitimus; „Įrašyti“ pakeičia ją šia versija.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Failas buvo pažeistas ir pataisytas. Įrašius bus išsaugota pataisyta versija.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	{page} puslapyje yra daugiau turinio, nei PdfCraft gali perskaityti: dalis nepiešiama, o jo teksto negalima rasti ar nukopijuoti.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} puslapiuose yra daugiau turinio, nei PdfCraft gali perskaityti, pirmasis – {page} puslapis: jų dalys nepiešiamos, o jų teksto negalima rasti ar nukopijuoti.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Aplankas šiuo metu nepasiekiamas. Jis galėjo būti perkeltas arba diskas ar sinchronizavimas su debesija neveikia.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Šios formos scenarijai išjungti, nes vienas jų veikė per ilgai. Atverkite dokumentą iš naujo, kad scenarijai būtų vykdomi vėl.
 	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Tai dinaminė XFA forma, kurios „PdfCraft“ dar negali rodyti. Matote faile esantį pakaitinį puslapį.

@@ -2751,3 +2751,7 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Halaman {page} berisi lebih banyak konten daripada yang dapat dibaca PdfCraft: sebagian tidak digambar, dan teksnya tidak dapat dicari atau disalin.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} halaman berisi lebih banyak konten daripada yang dapat dibaca PdfCraft, dimulai dari halaman {page}: sebagian tidak digambar, dan teksnya tidak dapat dicari atau disalin.

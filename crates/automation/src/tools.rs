@@ -178,7 +178,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "pages": pages("to count (default: all)"),
                 "exclude_tables": { "type": "boolean" }, "exclude_code": { "type": "boolean" }, "exclude_images": { "type": "boolean" }
             }), &["doc"])),
-        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab.")
+        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab. A page whose content was cut at the renderer's limits carries truncated: true; its text is incomplete.")
             .ro()
             .cmd("edit.column_select")
             .with(schema(

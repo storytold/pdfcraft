@@ -80,6 +80,8 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 
 [dev-dependencies]
 pdfcraft-xfa = { workspace = true }
+# A content stream that inflates past the renderer's limits, for the cut-content notice test.
+flate2 = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.

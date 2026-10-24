@@ -11,7 +11,8 @@
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::Pdf;
 use hayro::hayro_interpret::{
-    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
+    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode,
+    SoftMask, interpret_page,
 };
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::collections::{HashMap, HashSet};
@@ -97,6 +98,9 @@ pub struct PageText {
     pub line_of: Vec<u32>,
     /// `true` when a word break precedes the glyph on the same line.
     pub space_before: Vec<bool>,
+    /// The page's content was cut at the renderer's limits (#623), so this text is incomplete:
+    /// whatever the cut part drew is missing, and a search over it can miss.
+    pub truncated: bool,
 }
 
 impl PageText {
@@ -738,7 +742,22 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let cache = InterpreterCache::new();
     // Annotation appearances are included: form-field values and comment text are searchable,
     // as in Acrobat, and match what other extractors report.
-    let settings = settings.clone();
+    // The interpreter says when the content was cut at its limits (#623): the text is then
+    // marked incomplete, and the caller's own sink still hears it.
+    let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let settings = {
+        let flag = cut.clone();
+        let inner = settings.warning_sink.clone();
+        InterpreterSettings {
+            warning_sink: std::sync::Arc::new(move |warning| {
+                if matches!(warning, InterpreterWarning::ContentTruncated) {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                inner(warning);
+            }),
+            ..settings.clone()
+        }
+    };
     let initial = p.initial_transform(true).to_kurbo();
     let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
@@ -863,6 +882,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     for f in extra {
         emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
     }
+    text.truncated = cut.load(std::sync::atomic::Ordering::Relaxed);
     Ok(text)
 }
 
@@ -1484,7 +1504,7 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
     // Each glyph is emitted exactly once.
     let glyphs = order.iter().filter_map(|i| slots.get_mut(*i).and_then(Option::take)).collect();
-    PageText { glyphs, line_of, space_before }
+    PageText { glyphs, line_of, space_before, truncated: false }
 }
 
 /// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
@@ -2481,7 +2501,7 @@ mod tests {
             let mut space_before = vec![false; 10];
             space_before[5] = !line_break;
             let line_of = (0..10).map(|i| u32::from(line_break && i >= 5)).collect();
-            let page = PageText { glyphs: glyphs.clone(), line_of, space_before };
+            let page = PageText { glyphs: glyphs.clone(), line_of, space_before, truncated: false };
             let plain = if line_break { "quick\nbrown" } else { "quick brown" };
             assert_eq!(page.plain_text(), plain);
             assert_eq!(page.find("quick "), vec![0..5]);
@@ -2506,7 +2526,7 @@ mod tests {
         v.push(g(" ", 52.0, 10.0, 58.0));
         word(&mut v, "brown", 58.0, 10.0, 6.0);
         let n = v.len();
-        let t = PageText { glyphs: v, line_of: vec![0; n], space_before: vec![false; n] };
+        let t = PageText { glyphs: v, line_of: vec![0; n], space_before: vec![false; n], truncated: false };
         assert_eq!(t.plain_text(), "quick  brown");
         assert_eq!(t.find("quick brown"), vec![0..12]);
         assert_eq!(t.find("quick  brown"), vec![0..12], "the query's own run of spaces is collapsed too");
@@ -2958,6 +2978,7 @@ mod tests {
             })),
             line_of: vec![0, 0, 0, 0, 0, 1, 1, 1],
             space_before: vec![false, false, false, false, false, false, true, false],
+            truncated: false,
         };
         assert_eq!(t.word_at(1), Some((0, 1)));
         assert_eq!(t.word_at(3), Some((3, 4)));
@@ -3457,6 +3478,7 @@ mod tests {
             glyphs: vec![cell("日", 40.0, 10.0), cell("本", 40.0, 20.0), cell("語", 20.0, 10.0), cell("文", 20.0, 20.0)],
             line_of: vec![0, 0, 1, 1],
             space_before: vec![false; 4],
+            truncated: false,
         };
         let all = t.glyphs_in([0.0, 0.0, 60.0, 40.0]);
         assert_eq!(t.column_text(&all), "日本\n語文");

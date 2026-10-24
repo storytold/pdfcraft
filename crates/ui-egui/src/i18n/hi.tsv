@@ -2750,3 +2750,7 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	पृष्ठ {page} में उससे अधिक सामग्री है जितनी PdfCraft पढ़ सकता है: इसका कुछ भाग नहीं दिखाया जाता, और इसका पाठ खोजा या कॉपी नहीं किया जा सकता।
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} पृष्ठों में उससे अधिक सामग्री है जितनी PdfCraft पढ़ सकता है, पहला पृष्ठ {page}: उनके कुछ भाग नहीं दिखाए जाते, और उनका पाठ खोजा या कॉपी नहीं किया जा सकता।
