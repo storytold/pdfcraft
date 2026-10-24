@@ -148,6 +148,17 @@ pub fn displays_doc_title(doc: &Document) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the document asks to be printed with no page scaling (`/ViewerPreferences
+/// /PrintScaling /None`). ISO 32000-2 Table 147: honoured "if the print dialogue is suppressed and
+/// its parameters are provided from some other source" too. Any other value is `AppDefault`.
+pub fn prints_without_scaling(doc: &Document) -> bool {
+    let Ok((_, c)) = catalog(doc) else { return false };
+    c.get(b"ViewerPreferences")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_dict().map(|vp| vp.get(b"PrintScaling").map(|x| doc.resolve(x)).is_some_and(|x| x.as_name() == Some(b"None"))))
+        .unwrap_or(false)
+}
+
 /// Write the initial view. An opening action that isn't a plain destination (a script, say) is
 /// kept unless the page or magnification asks for a destination.
 pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), OrganizeError> {

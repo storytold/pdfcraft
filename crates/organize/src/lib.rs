@@ -37,7 +37,7 @@ pub use outline::{
     move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
-pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
+pub use view::{InitialView, displays_doc_title, initial_view, prints_without_scaling, set_initial_view};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum OrganizeError {

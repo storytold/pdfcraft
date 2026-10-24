@@ -238,6 +238,13 @@ if ($pdfCheckbox[2] -notmatch 'Edit with PdfCraft') { throw "Welcome PDF context
 $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
+# Print verb (#1695): Explorer's Print, while PdfCraft is the default, prints without a window.
+# Part of the PDF handler's ProgID, so it is there whenever "Open" is, and uninstall removes it.
+$printCommand = Read-Row 'SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''Software\Classes\PdfCraft.Document\shell\print\command'' AND `Name` IS NULL' 3
+Assert-Equal $printCommand[0] '"[#PdfcraftExe]" --print "%1"' 'PDF print verb command'
+Assert-Equal $printCommand[1] 'PdfcraftApp' 'PDF print verb component'
+Assert-Equal $printCommand[2] '2' 'PDF print verb HKLM root'
+
 
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.

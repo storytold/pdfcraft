@@ -47,6 +47,8 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+# Temporary files for the --print tests (src/print_verb.rs).
+tempfile = "3.27"
 # Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).
 pollster = "1.0"
 

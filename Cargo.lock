@@ -3950,6 +3950,7 @@ dependencies = [
  "raw-window-handle",
  "rustls-native-certs",
  "serde_json",
+ "tempfile",
  "uds_windows",
  "ureq",
  "wayland-client",

@@ -2232,6 +2232,28 @@ fn initial_view_round_trips_and_keeps_scripts() {
     assert!(crate::set_initial_view(&mut doc, &crate::InitialView { page: 9, ..Default::default() }).is_err());
 }
 
+#[test]
+fn print_scaling_none_is_read_from_the_viewer_preferences_and_kept() {
+    let mut doc = open(fixture());
+    assert!(!crate::prints_without_scaling(&doc), "no /ViewerPreferences: the app's default");
+    let root = doc.root().unwrap();
+    let set = |doc: &mut Document, value: Object| {
+        let mut vp = pdfcraft_cos::Dict::new();
+        vp.set(b"PrintScaling".to_vec(), value);
+        let vp = doc.add(Object::Dict(vp));
+        doc.update_dict(root, |c| c.set(b"ViewerPreferences".to_vec(), Object::Ref(vp))).unwrap();
+    };
+    set(&mut doc, Object::name("None"));
+    assert!(crate::prints_without_scaling(&doc), "an indirect dictionary holding /None");
+    // Changing the initial view keeps the entry it doesn't own.
+    crate::set_initial_view(&mut doc, &crate::InitialView { fit_window: true, ..Default::default() }).unwrap();
+    assert!(crate::prints_without_scaling(&save_and_reopen(&doc)));
+    for other in [Object::name("AppDefault"), Object::name("Fit"), Object::String(pdfcraft_cos::PdfString::text("None"))] {
+        set(&mut doc, other.clone());
+        assert!(!crate::prints_without_scaling(&doc), "{other:?} is AppDefault");
+    }
+}
+
 // ── Split / Extract keep only the resources the part draws (#204) ──────────────────────────────
 
 /// A content stream with no text operators (an image draw).

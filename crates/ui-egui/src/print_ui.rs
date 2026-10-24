@@ -354,6 +354,36 @@ impl Drop for WakeOnExit {
 }
 
 impl PdfCraftApp {
+    /// The next file asked for with `--print-file` gets its Print dialog, once nothing else is
+    /// being asked: one dialog at a time, in the order asked, each for its own document. A file
+    /// still opening holds back the ones after it (opens can finish in any order, and one that
+    /// needed a password is opened again after the others); one no longer opening (it couldn't
+    /// be opened, or its password was cancelled) is passed over.
+    pub(crate) fn open_queued_print(&mut self) {
+        if self.dialog.is_some() || self.password_prompt.is_some() || self.print_requests.is_empty() {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let opening = |app: &Self, path: &str| app.pending_opens.iter().any(|p| p.path.as_deref().is_some_and(|q| crate::same_file(q, path)));
+        #[cfg(target_arch = "wasm32")]
+        let opening = |_: &Self, _: &str| false;
+        while let Some((path, open)) = self.print_requests.first().cloned() {
+            match open {
+                None if opening(self, &path) => return,
+                None => {}
+                Some(id) => {
+                    if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                        self.print_requests.remove(0);
+                        self.active = Some(i);
+                        self.open_print();
+                        return;
+                    }
+                }
+            }
+            self.print_requests.remove(0);
+        }
+    }
+
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
         let (printers, printers_loading) = match self.printer_source.clone() {

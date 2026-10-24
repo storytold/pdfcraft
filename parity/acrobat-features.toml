@@ -7969,6 +7969,17 @@ evidence = ["crates/ui-egui/tests/it/print.rs::paper_choice_survives_cancel_and_
 notes = "⌘P; settings and live sheet preview; on the web the same dialog prints through the browser's print dialog; last paper selection, including cancelled Print dialogs, persists by canonical name; this change does not alter persistence of other print preferences"
 
 [[feature]]
+id = "print.from-file-manager"
+title = "Print from the file manager without opening the document"
+area = "L"
+tier = "P1"
+milestone = "M14"
+status = "partial"
+tools = ["doc_print"]
+evidence = ["apps/pdfcraft/src/print_verb.rs::files_that_cannot_print_unattended_go_to_the_dialog", "apps/pdfcraft/src/print_verb.rs::every_page_prints_with_the_dialog_defaults_on_the_first_pages_paper", "apps/pdfcraft/src/print_verb.rs::a_printable_file_becomes_a_print_ready_job"]
+notes = "Windows: File Explorer's Print verb while PdfCraft is the default PDF app (#1695): `pdfcraft --print <files>` prints every page on the default printer without a window (the Print dialog's defaults, on the first page's standard paper or else shrunk onto the printer's paper; the driver's two-sided setting; at actual size with no shrinking when the file sets `/PrintScaling /None`, which ISO 32000-2 Table 147 says holds without a dialog); a file that needs a password, forbids printing, or that the spooler refuses opens with the Print dialog. Not yet: `printto` (drag onto a printer), a first-level Windows 11 menu entry (needs package identity), and a print action from Linux or macOS file managers"
+
+[[feature]]
 id = "print.printer-selection"
 title = "Choose printer and properties"
 area = "L"

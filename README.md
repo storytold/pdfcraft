@@ -464,8 +464,9 @@ logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so no
 The MSI installs for all users and requires administrator privileges. It adds "Edit with PdfCraft"
 to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
 images (.png .jpg .jpeg .tif .tiff .gif .bmp .jp2 .j2k .jpx) in File Explorer (on Windows 11, under
-"Show more options"), without changing which app opens them by default. For unattended deployment
-without a desktop shortcut, run from an elevated terminal:
+"Show more options"), without changing which app opens them by default. Once you make PdfCraft the default for PDFs,
+the menu's Print sends the file straight to the default printer. For unattended deployment without
+a desktop shortcut, run from an elevated terminal:
 
 ```powershell
 msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCUT=0

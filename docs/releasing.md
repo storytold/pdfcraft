@@ -140,6 +140,11 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   types, in its own component (`PdfcraftImageContextMenu`) since it became optional. Its rows moved
   out of `PdfcraftApp`; that's safe because `MajorUpgrade` removes the old version before installing
   the new one (`afterInstallValidate`), which `test-msi.ps1` checks.
+- The `PdfCraft.Document` ProgID also has a `print` verb (#1695), so Explorer offers Print (in the
+  system's language) while PdfCraft is the default for `.pdf`. It runs `pdfcraft.exe --print
+  "<file>"`, which prints on the default printer without a window and opens the file with the
+  Print dialog only when it can't (a password, printing not permitted, no default printer, a
+  refused job; the reason is in the log).
 - `test-msi.ps1 <file.msi>` checks the compiled shortcut, context-menu and dialog tables, and
   evaluates the first-install and update conditions of the desktop shortcut and both menus. Packaging
   runs it in a child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install

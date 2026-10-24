@@ -111,6 +111,148 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let _ = std::fs::remove_file(out);
 }
 
+/// `--dialog print` opens the same dialog as the menu; with no document there is nothing to
+/// print and no dialog.
+#[test]
+fn the_print_option_opens_the_print_dialog_for_the_open_document() {
+    let mut h = harness();
+    h.state_mut().set_option("dialog", "print").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    h.get_by_label("Sheet 1 of 1");
+    let mut empty = PdfCraftApp::new();
+    empty.set_option("dialog", "print").unwrap();
+    assert_eq!(empty.dialog, None);
+}
+
+/// Runs frames until `done`, for at most 30 s: an open on the background worker (and deriving an
+/// AES-256 key for a password) takes a while on a slow runner (review on #1723).
+fn run_until(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&Harness<'static, PdfCraftApp>) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !done(h) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// #1723 review: `--print-file`, one per file the Print verb couldn't print unattended, gives
+/// each file its own Print dialog once it is open: one that asks for a password gets its dialog
+/// after the password is entered, and the dialogs come one after another, each for its file.
+#[test]
+fn each_file_left_by_the_print_verb_gets_its_own_print_dialog() {
+    let dir = std::env::temp_dir();
+    let (a, b) = (
+        dir.join(format!("pdfcraft-print-a-{}.pdf", std::process::id())).to_string_lossy().into_owned(),
+        dir.join(format!("pdfcraft-print-b-{}.pdf", std::process::id())).to_string_lossy().into_owned(),
+    );
+    let form = include_bytes!("../data/form.pdf").to_vec();
+    let mut locked = pdfcraft_cos::Document::open(std::sync::Arc::new(form.clone())).unwrap();
+    locked
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "pw",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [4; 32],
+        })
+        .unwrap();
+    let locked = pdfcraft_cos::write_full(&locked, &Default::default()).unwrap();
+    let locked_copy = locked.clone();
+    let (pa, pb) = (a.clone(), b.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // As the launch does: the files first, then the options.
+        app.open_bytes("a.pdf", Some(pa.clone()), form.clone()).unwrap();
+        app.open_bytes("b.pdf", Some(pb.clone()), locked.clone()).unwrap();
+        app.set_option("print-file", &pa).unwrap();
+        app.set_option("print-file", &pb).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "b asks for its password first");
+    let field = h.get_by_role(Role::PasswordInput);
+    field.focus();
+    field.type_text("pw");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let printing = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        (s.dialog, s.active_ids().and_then(|(_, id)| s.session.get(id)).and_then(|d| d.path.clone()))
+    };
+    assert_eq!(printing(&h), (Some(Dialog::Print), Some(a.clone())), "a's dialog");
+    h.state_mut().dialog = None;
+    // b opens again on the background worker once its password is in, and an AES-256 key takes
+    // its time on a slow runner (review on #1723: three frames were not enough on CI).
+    run_until(&mut h, |h| h.state().dialog.is_some());
+    assert_eq!(printing(&h), (Some(Dialog::Print), Some(b.clone())), "then b's, after its password");
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None, "no more");
+
+    // The other way round (review on #1723): the file that asks for its password comes first, so
+    // its dialog does too, though it is opened again only after the password, behind the other.
+    // Opened from files after the first frame, as a launch does, so both go through the
+    // background worker.
+    std::fs::write(&a, include_bytes!("../data/form.pdf")).unwrap();
+    std::fs::write(&b, &locked_copy).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(2);
+    h.state_mut().open_path(&b);
+    h.state_mut().open_path(&a);
+    h.state_mut().set_option("print-file", &b).unwrap();
+    h.state_mut().set_option("print-file", &a).unwrap();
+    run_until(&mut h, |h| h.state().password_prompt.is_some());
+    h.run_steps(2);
+    assert!(h.state().password_prompt.is_some(), "b asks for its password");
+    let field = h.get_by_role(Role::PasswordInput);
+    field.focus();
+    field.type_text("pw");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    run_until(&mut h, |h| h.state().dialog.is_some() && h.state().views.len() == 2);
+    assert_eq!(printing(&h), (Some(Dialog::Print), Some(b.clone())), "b's dialog first, as asked");
+    h.state_mut().dialog = None;
+    run_until(&mut h, |h| h.state().dialog.is_some());
+    assert_eq!(printing(&h), (Some(Dialog::Print), Some(a.clone())), "then a's");
+    let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+}
+
+/// #1723 review: the same file asked for twice while it is still opening is opened once, and
+/// each request still gets its Print dialog, one after the other.
+#[test]
+fn a_file_asked_for_twice_while_opening_gets_two_print_dialogs() {
+    let a = std::env::temp_dir().join(format!("pdfcraft-print-twice-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    std::fs::write(&a, include_bytes!("../data/form.pdf")).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(2);
+    // After the first frame, so the open goes through the background worker.
+    h.state_mut().open_path(&a);
+    h.state_mut().set_option("print-file", &a).unwrap();
+    h.state_mut().open_path(&a);
+    h.state_mut().set_option("print-file", &a).unwrap();
+    run_until(&mut h, |h| h.state().dialog.is_some());
+    assert_eq!(h.state().views.len(), 1, "opened once");
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "the first request's dialog");
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "the second request's dialog");
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None, "no more");
+    let _ = std::fs::remove_file(&a);
+}
+
 /// Pages picked beforehand are what the dialog offers to print (Acrobat's "Selected pages").
 #[test]
 fn print_dialog_prints_the_selected_pages() {

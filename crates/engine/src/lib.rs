@@ -670,6 +670,11 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_organize::initial_view(&e.cos)).unwrap_or_default()
     }
 
+    /// The document asks to be printed at actual size (`/PrintScaling /None`).
+    pub fn prints_without_scaling(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| pdfcraft_organize::prints_without_scaling(&e.cos))
+    }
+
     /// Signed: at least one signature field holds a signature.
     pub fn is_signed(&self) -> bool {
         self.signatures.iter().any(|s| s.signed)
