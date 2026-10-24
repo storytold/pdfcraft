@@ -1250,3 +1250,286 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }
+
+/// A PNG of `w` × `h` samples `data` in `color` at `depth`, with a palette or an ICC profile.
+fn png_of(w: u32, h: u32, color: png::ColorType, depth: png::BitDepth, data: &[u8], palette: Option<Vec<u8>>, icc: Option<Vec<u8>>) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut info = png::Info::with_size(w, h);
+        info.color_type = color;
+        info.bit_depth = depth;
+        info.palette = palette.map(Into::into);
+        info.icc_profile = icc.map(Into::into);
+        let mut writer = png::Encoder::with_info(&mut out, info).unwrap().write_header().unwrap();
+        writer.write_image_data(data).unwrap();
+    }
+    out
+}
+
+/// Rows of `w` one-bit samples (1 white), each on a new byte: lines of glyphs drawn from a few
+/// shapes at uneven spacing, whose edges move a pixel now and then, as a scan of text has them.
+/// (Clean, evenly spaced strokes favour Flate over Group 4.)
+fn strokes(w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let (w, h) = (w as usize, h as usize);
+    for line in (4..h.saturating_sub(18)).step_by(24) {
+        let mut x = 8;
+        while x + 16 < w {
+            let wide = 5 + (next() % 4) as usize;
+            let shape = next() % 4;
+            let mut fill = |x0: usize, x1: usize, y0: usize, y1: usize| {
+                for y in line + y0..line + y1 {
+                    let ragged = |r: u64| match r % 8 {
+                        0 => 0,
+                        1 => 2,
+                        _ => 1,
+                    };
+                    let (left, right) = ((x + x0 + 1).saturating_sub(ragged(next())), x + x1 + ragged(next()));
+                    for xx in left..right.saturating_sub(1).min(w) {
+                        data[y * stride + xx / 8] &= !(0x80 >> (xx % 8));
+                    }
+                }
+            };
+            match shape {
+                0 => fill(0, 2, 0, 14),
+                1 => {
+                    fill(0, wide, 4, 6);
+                    fill(0, wide, 12, 14);
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 4, 14);
+                }
+                2 => {
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 6, 14);
+                    fill(0, wide - 1, 4, 6);
+                }
+                _ => {
+                    fill(0, 2, 7, 14);
+                    fill(0, 2, 2, 4);
+                }
+            }
+            x += wide + 2 + (next() % 2) as usize + if next() % 6 == 0 { 7 } else { 0 };
+        }
+    }
+    data
+}
+
+/// The one-bit samples (true for white) a Group 4 image stream decodes to, through an
+/// independent decoder.
+fn g4_rows(s: &Stream) -> Vec<Vec<bool>> {
+    struct Rows(Vec<Vec<bool>>, Vec<bool>, usize);
+    impl hayro_ccitt::Decoder for Rows {
+        fn push_pixel(&mut self, white: bool) {
+            self.1.push(white);
+        }
+        fn push_pixel_chunk(&mut self, white: bool, chunks: u32) {
+            self.1.extend(std::iter::repeat_n(white, chunks as usize * 8));
+        }
+        fn next_line(&mut self) {
+            let mut row = std::mem::take(&mut self.1);
+            row.truncate(self.2);
+            self.0.push(row);
+        }
+    }
+    let (w, h) = (s.dict.int(b"Width").unwrap() as u32, s.dict.int(b"Height").unwrap() as u32);
+    let settings = hayro_ccitt::DecodeSettings {
+        columns: w,
+        rows: h,
+        end_of_block: true,
+        end_of_line: false,
+        rows_are_byte_aligned: false,
+        encoding: hayro_ccitt::EncodingMode::Group4,
+        invert_black: false,
+    };
+    let mut out = Rows(Vec::new(), Vec::new(), w as usize);
+    hayro_ccitt::decode(&s.raw, &mut out, &mut hayro_ccitt::DecoderContext::new(settings)).unwrap();
+    out.0
+}
+
+fn image_stream(doc: &Document, page: usize) -> Stream {
+    let p = &pages(doc)[page];
+    let res = doc.resolve(p.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    match &*doc.resolve(xo.get(b"Im0").unwrap()) {
+        Object::Stream(s) => s.clone(),
+        _ => panic!("not an image"),
+    }
+}
+
+/// Black-and-white pictures are stored at one bit per pixel, as CCITT Group 4 when that is
+/// smaller, whichever way the file holds them: a 1-bit PNG (which decodes to eight bits), eight-bit
+/// grey of only black and white, a two-colour palette, black-and-white RGB. The bits are the
+/// picture's. A grey profile stays; a picture with any other shade, colour, or an RGB profile is
+/// stored as before.
+#[test]
+fn black_and_white_images_are_stored_at_one_bit() {
+    use png::{BitDepth, ColorType};
+    let (w, h) = (1200u32, 240u32);
+    let bits = strokes(w, h);
+    let stride = (w as usize).div_ceil(8);
+    let white = |x: usize, y: usize| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0;
+    let expected: Vec<Vec<bool>> = (0..h as usize).map(|y| (0..w as usize).map(|x| white(x, y)).collect()).collect();
+    let grey: Vec<u8> = expected.iter().flatten().map(|&wh| if wh { 255 } else { 0 }).collect();
+    let rgb: Vec<u8> = grey.iter().flat_map(|&v| [v, v, v]).collect();
+    let pictures = [
+        png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, None),
+        png_of(w, h, ColorType::Grayscale, BitDepth::Eight, &grey, None, None),
+        png_of(w, h, ColorType::Indexed, BitDepth::One, &bits.iter().map(|b| !b).collect::<Vec<_>>(), Some(vec![255, 255, 255, 0, 0, 0]), None),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, &rgb, None, None),
+        png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, Some(icc_profile(b"GRAY"))),
+    ];
+    let files: Vec<(String, Vec<u8>)> = pictures.into_iter().enumerate().map(|(i, p)| (format!("{i}.png"), p)).collect();
+    let doc = reopen(&from_images(&files).unwrap());
+    for page in 0..5 {
+        let s = image_stream(&doc, page);
+        assert_eq!((s.dict.int(b"BitsPerComponent"), s.dict.name(b"Filter")), (Some(1), Some(&b"CCITTFaxDecode"[..])), "page {page}");
+        assert_eq!(g4_rows(&s), expected, "page {page}");
+        assert!(s.raw.len() < bits.len(), "page {page}: {} bytes, smaller than its one-bit samples", s.raw.len());
+    }
+    assert_eq!(image_of(&doc, 3).name(b"ColorSpace"), Some(&b"DeviceGray"[..]), "black-and-white RGB becomes grey");
+    assert_eq!(icc_of(&doc, &image_of(&doc, 4)).map(|(n, ..)| n), Some(1), "the grey profile stays");
+
+    // Another shade, colour, an RGB profile: as before. A tiny picture: one bit, but Flate.
+    let mut shaded = grey.clone();
+    shaded[5] = 128;
+    let mut coloured = rgb.clone();
+    coloured[0] = 200;
+    let others = [
+        png_of(w, h, ColorType::Grayscale, BitDepth::Eight, &shaded, None, None),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, &coloured, None, None),
+        png_of(w, h, ColorType::Rgb, BitDepth::Eight, &rgb, None, Some(icc_profile(b"RGB "))),
+        png_of(2, 2, ColorType::Grayscale, BitDepth::Eight, &[0, 255, 255, 0], None, None),
+    ];
+    let files: Vec<(String, Vec<u8>)> = others.into_iter().enumerate().map(|(i, p)| (format!("o{i}.png"), p)).collect();
+    let doc = reopen(&from_images(&files).unwrap());
+    let kept: Vec<(Option<i64>, Option<Vec<u8>>)> =
+        (0..4).map(|p| (image_of(&doc, p).int(b"BitsPerComponent"), image_of(&doc, p).name(b"Filter").map(<[u8]>::to_vec))).collect();
+    assert_eq!(
+        kept[..3],
+        [(Some(8), Some(b"FlateDecode".to_vec())), (Some(8), Some(b"FlateDecode".to_vec())), (Some(8), Some(b"FlateDecode".to_vec()))]
+    );
+    assert_eq!(kept[3], (Some(1), Some(b"FlateDecode".to_vec())), "Group 4 isn't smaller for 2 × 2");
+}
+
+/// The pixels of an exported PNG (RGB), as true for white.
+fn exported_white(png_data: &[u8]) -> Vec<bool> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png_data.to_vec())).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(frame.color_type, png::ColorType::Rgb);
+    buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect()
+}
+
+/// Export ▸ Images reads CCITT fax images: a page created from a 1-bit PNG (Group 4 now) exports as
+/// the picture, as does the picture coded the other way round with /BlackIs1, the picture with its
+/// filter and parameters in arrays, with /K and /Columns given by reference, with a /Rows below its
+/// height, and behind another filter (its parameters by reference too). One whose /Columns aren't
+/// its width is skipped, not misread.
+#[test]
+fn ccitt_fax_images_export_as_their_picture() {
+    use png::{BitDepth, ColorType};
+    let (w, h) = (1200u32, 240u32);
+    let bits = strokes(w, h);
+    let stride = (w as usize).div_ceil(8);
+    let picture: Vec<bool> =
+        (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
+    let mut doc = from_images(&[("scan.png".into(), png_of(w, h, ColorType::Grayscale, BitDepth::One, &bits, None, None))]).unwrap();
+    assert_eq!(image_of(&doc, 0).name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture);
+
+    // The same picture coded with 1 for black, which /BlackIs1 says.
+    let r = {
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        xo.get(b"Im0").and_then(Object::as_ref).unwrap()
+    };
+    let base = image_of(&doc, 0);
+    let with = |black_is_1: bool, columns: i64, data: Vec<u8>| {
+        let mut d = base.clone();
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(columns));
+        parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+        parms.set(b"BlackIs1".to_vec(), Object::Bool(black_is_1));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        d.remove(b"Length");
+        Stream::from_raw(d, data)
+    };
+    let inverted: Vec<u8> = bits.iter().map(|b| !b).collect();
+    let stream = with(true, i64::from(w), pdfcraft_filters::encode_g4(&inverted, w, h).unwrap());
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_white(&out.images[0].data), picture, "BlackIs1");
+
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![parms]));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "in arrays");
+
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    let mut parms = stream.dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
+    parms.set(b"K".to_vec(), Object::Ref(doc.add(Object::Int(-1))));
+    parms.set(b"Columns".to_vec(), Object::Ref(doc.add(Object::Int(i64::from(w)))));
+    parms.set(b"Rows".to_vec(), Object::Int(1));
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "/K and /Columns by reference, /Rows 1");
+
+    // Behind another filter, with its parameters second in the array, as 7.4.1 pairs them.
+    let g4 = pdfcraft_filters::encode_g4(&bits, w, h).unwrap();
+    let hex = g4.iter().map(|b| format!("{b:02x}")).chain([">".to_string()]).collect::<String>().into_bytes();
+    for (outer, data) in [("ASCIIHexDecode", hex), ("FlateDecode", pdfcraft_filters::encode_flate(&g4))] {
+        let mut stream = with(false, i64::from(w), data);
+        let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+        stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, parms]));
+        stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name(outer), Object::name("CCITTFaxDecode")]));
+        doc.set(r, Object::Stream(stream));
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{outer}: {:?}", out.skipped);
+        assert_eq!(exported_white(&out.images[0].data), picture, "behind {outer}");
+    }
+    // Behind Flate with a PNG predictor, whose parameters are given by reference.
+    let padded: Vec<u8> = g4.iter().copied().chain(std::iter::repeat_n(0, 16 - g4.len() % 16)).collect();
+    let params = pdfcraft_filters::Params { predictor: 12, colors: 1, bits_per_component: 8, columns: 16, early_change: 1 };
+    let predicted = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &padded).unwrap();
+    let mut flate_parms = Dict::new();
+    flate_parms.set(b"Predictor".to_vec(), Object::Int(12));
+    flate_parms.set(b"Columns".to_vec(), Object::Int(16));
+    let flate_parms = doc.add(Object::Dict(flate_parms));
+    let mut stream = with(false, i64::from(w), predicted);
+    let parms = stream.dict.get(b"DecodeParms").cloned().unwrap();
+    stream.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Ref(flate_parms), parms]));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("CCITTFaxDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(exported_white(&out.images[0].data), picture, "behind Flate with a predictor given by reference");
+    // CCITT before another filter isn't a picture yet.
+    let mut stream = with(false, i64::from(w), pdfcraft_filters::encode_flate(&g4));
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("CCITTFaxDecode"), Object::name("FlateDecode")]));
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "CCITT, then Flate: skipped");
+
+    let stream = with(false, i64::from(w) + 8, pdfcraft_filters::encode_g4(&bits, w, h).unwrap());
+    doc.set(r, Object::Stream(stream));
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "columns other than the width: skipped");
+}

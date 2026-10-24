@@ -584,6 +584,8 @@
 	Clean Up	Limpieza
 	Color Images	Imágenes en color
 	Grayscale Images	Imágenes en escala de grises
+	Monochrome Images	Imágenes monocromas
+	CCITT Group 4	CCITT grupo 4
 	Bicubic downsampling to	Reducción de resolución bicúbica a
 	for images above	para imágenes por encima de
 	Compression	Compresión

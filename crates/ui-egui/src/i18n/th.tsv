@@ -545,6 +545,8 @@
 	Clean Up	ล้างข้อมูล
 	Color Images	รูปภาพสี
 	Grayscale Images	รูปภาพระดับสีเทา
+	Monochrome Images	รูปภาพขาวดำ
+	CCITT Group 4	CCITT กลุ่ม 4
 	Bicubic downsampling to	ลดความละเอียดแบบ Bicubic เป็น
 	for images above	สำหรับรูปภาพที่สูงกว่า
 	Compression	การบีบอัด

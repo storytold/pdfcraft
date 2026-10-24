@@ -583,6 +583,8 @@
 	Clean Up	Porządkowanie
 	Color Images	Obrazy kolorowe
 	Grayscale Images	Obrazy w skali szarości
+	Monochrome Images	Obrazy monochromatyczne
+	CCITT Group 4	CCITT grupa 4
 	Bicubic downsampling to	Zmniejsz rozdzielczość metodą dwusześcienną do
 	for images above	dla obrazów powyżej
 	Compression	Kompresja

@@ -26,7 +26,18 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
   An image is replaced only if the result is smaller. Left alone: CMYK and other colour spaces,
-  image masks, decode arrays, more than 8 bits, JPEG 2000, JBIG2 and CCITT.
+  image masks, decode arrays, more than 8 bits, JPEG 2000, JBIG2 and CCITT. Samples are read with
+  `/DecodeParms` given by reference too (`Document::with_direct_parms`), here and below: without
+  them a predictor's tag bytes would shift every row of an image written back.
+- **Monochrome images** (`Settings::mono`, CCITT Group 4 by default): a 1-bit image with one
+  colour component (grey, indexed, a separation) or an image mask, stored with no filter or with
+  general-purpose ones, is stored again as CCITT Group 4 (`pdfcraft_filters::encode_g4`) when
+  that is smaller as stored. An eight-bit grey image of only 0 and 255 is packed to one bit first
+  (not an indexed image, whose samples are palette indices, nor one with a colour-key `/Mask`). It is lossless: the samples decode to the same bits, so the colour
+  space, decode array and masks stay. Group 4 wins on scans, whose ragged edges defeat Flate;
+  on clean computer-drawn 1-bit art Flate can be smaller, and the image then stays. Not yet:
+  JBIG2, monochrome downsampling, inline images, soft masks and `/Mask` images, and rows wider
+  than 32,767 samples.
 - **Discard objects:** thumbnails, alternate images, document tags, print settings.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded

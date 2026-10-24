@@ -546,6 +546,8 @@
 	Clean Up	Temizle
 	Color Images	Renkli Resimler
 	Grayscale Images	Gri Tonlamalı Resimler
+	Monochrome Images	Tek Renkli Resimler
+	CCITT Group 4	CCITT Grup 4
 	Bicubic downsampling to	Şu değere bikübik alt örnekleme:
 	for images above	bundan büyük resimler için:
 	Compression	Sıkıştırma

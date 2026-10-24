@@ -6,7 +6,8 @@
 //! TIFF/PNG predictors, `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`).
 //! Image codecs (`DCTDecode`, `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`),
 //! `Crypt` and unknown filters are reported as [`FilterError::Unsupported`] so
-//! callers keep such data encoded.
+//! callers keep such data encoded. 1-bit samples can be encoded as CCITT Group 4
+//! ([`encode_g4`]).
 //!
 //! Every decoder is bounded by a caller-supplied `max_output` (decompression-bomb
 //! defence) and never panics on malformed input.
@@ -15,12 +16,15 @@
 
 mod ascii85;
 mod asciihex;
+mod ccitt;
 mod flate;
 mod lzw;
 mod predictor;
 mod runlength;
 
 use std::borrow::Cow;
+
+pub use ccitt::{MAX_G4_COLUMNS, encode_g4};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

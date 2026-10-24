@@ -1215,7 +1215,7 @@ impl Automation {
     }
 
     fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset};
+        use pdfcraft_engine::optimize::{Compression, ImageSettings, MonoCompression, Preset};
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
@@ -1249,6 +1249,21 @@ impl Automation {
         };
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
+        if let Some(mono) = a.get("mono") {
+            let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, retain)"));
+            let mono = mono.as_object().ok_or_else(|| ToolError::InvalidArgs("mono must be an object: { compression: ccitt_g4|retain }".into()))?;
+            // A misspelled key would otherwise leave the preset's setting in place unnoticed.
+            if let Some(key) = mono.keys().find(|k| *k != "compression") {
+                return Err(ToolError::InvalidArgs(format!("unknown mono key {key:?} (compression)")));
+            }
+            if let Some(c) = mono.get("compression") {
+                settings.mono = match c.as_str() {
+                    Some("ccitt_g4" | "ccitt" | "g4") => MonoCompression::CcittG4,
+                    Some("retain") => MonoCompression::Retain,
+                    _ => return Err(unknown(c)),
+                };
+            }
+        }
         for (key, flag) in [
             ("merge_fragments", &mut settings.merge_fragments),
             ("discard_thumbnails", &mut settings.discard_thumbnails),

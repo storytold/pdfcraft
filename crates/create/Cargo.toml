@@ -10,6 +10,9 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
+# Already in the graph through hayro: decodes CCITT fax images for Export ▸ Images.
+hayro-ccitt.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 png = "0.18"

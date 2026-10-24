@@ -9,7 +9,8 @@
 //!   threshold are resampled (bicubic) to a target resolution and recompressed as JPEG or Flate.
 //!   A new image replaces the old one only if it is smaller. Images PdfCraft can't decode
 //!   faithfully (CMYK and other colour spaces, masks, decode arrays other than the default,
-//!   JPEG 2000, JBIG2, CCITT, other than 8 bits) are left alone.
+//!   JPEG 2000, JBIG2, CCITT, other than 8 bits) are left alone. Black-and-white (1-bit) images
+//!   are stored again as CCITT Group 4, losslessly, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
@@ -66,6 +67,15 @@ pub enum Compression {
     Retain,
 }
 
+/// How black-and-white (1-bit) images are stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MonoCompression {
+    /// CCITT Group 4 (lossless), when smaller than the image as it is.
+    CcittG4,
+    /// Keep each image's own compression.
+    Retain,
+}
+
 /// Acrobat's JPEG quality steps.
 pub const QUALITIES: [(&str, u8); 5] = [("Minimum", 25), ("Low", 45), ("Medium", 60), ("High", 80), ("Maximum", 95)];
 
@@ -93,6 +103,8 @@ pub struct Settings {
     pub merge_fragments: bool,
     pub color: ImageSettings,
     pub gray: ImageSettings,
+    /// Black-and-white (1-bit) images, and image masks.
+    pub mono: MonoCompression,
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
@@ -113,6 +125,7 @@ impl Default for Settings {
             merge_fragments: true,
             color: ImageSettings::REDUCE,
             gray: ImageSettings::REDUCE,
+            mono: MonoCompression::CcittG4,
             discard_thumbnails: true,
             discard_alternate_images: true,
             discard_tags: false,
@@ -328,7 +341,7 @@ fn strip_ascii_wrapper(s: &Stream) -> Option<Stream> {
 
 /// Bytes the stream object takes in the file: its dictionary with `/Length` set as the writer
 /// sets it, then its data.
-fn stored_len(s: &Stream) -> Option<usize> {
+pub(crate) fn stored_len(s: &Stream) -> Option<usize> {
     let mut dict = s.dict.clone();
     dict.set(b"Length".to_vec(), Object::Int(i64::try_from(s.raw.len()).ok()?));
     let mut out = Vec::new();

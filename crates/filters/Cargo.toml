@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-filters"
-description = "PDF stream filters (ISO 32000-2 §7.4): Flate, LZW, predictors, ASCII85, ASCIIHex, RunLength"
+description = "PDF stream filters (ISO 32000-2 §7.4): Flate, LZW, predictors, ASCII85, ASCIIHex, RunLength, CCITT Group 4 encoding"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,11 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+fax.workspace = true
 flate2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+hayro-ccitt.workspace = true
 proptest.workspace = true
 weezl.workspace = true

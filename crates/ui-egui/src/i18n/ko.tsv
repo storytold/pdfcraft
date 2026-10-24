@@ -535,6 +535,8 @@
 	Clean Up	정리
 	Color Images	컬러 이미지
 	Grayscale Images	회색조 이미지
+	Monochrome Images	흑백 이미지
+	CCITT Group 4	CCITT 그룹 4
 	Bicubic downsampling to	다음 값으로 바이큐빅 다운샘플링
 	for images above	다음 값을 초과하는 이미지에 적용
 	Compression	압축

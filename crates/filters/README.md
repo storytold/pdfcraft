@@ -3,7 +3,7 @@
 PDF stream filters: the decoders and encoders behind `/Filter` and `/DecodeParms`.
 
 - **Layer:** L0, standalone. No dependency on any other PdfCraft crate. `cos` depends on it (architecture §3 rule 3).
-- **Licence:** MIT OR Apache-2.0. Clean-room: written from ISO 32000-2 §7.4, RFC 1950/1951 (through `flate2` with the pure-Rust `miniz_oxide` backend), TIFF 6.0 §14 (predictor 2) and RFC 2083 §6 (PNG filters).
+- **Licence:** MIT OR Apache-2.0. Clean-room: written from ISO 32000-2 §7.4, RFC 1950/1951 (through `flate2` with the pure-Rust `miniz_oxide` backend), TIFF 6.0 §14 (predictor 2) and RFC 2083 §6 (PNG filters). CCITT Group 4 encoding (ITU-T T.6) is the `fax` crate's (MIT, already in the tree through `tiff`), checked here by round trips through an independent decoder.
 - `#![forbid(unsafe_code)]`. Builds for `wasm32-unknown-unknown`.
 
 ## API
@@ -22,6 +22,7 @@ decode_tolerant(chain, data, max_output) -> Result<(Vec<u8>, bool /*partial*/), 
 decode_tolerant_counted(chain, data, max_output) -> Result<(Vec<u8>, bool /*partial*/, usize /*decoded*/), (FilterError, usize /*decoded*/)>
 encode(filter, params, data) -> Result<Vec<u8>, FilterError>
 encode_flate(data) -> Vec<u8>   // zlib, level 6
+encode_g4(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as CCITT Group 4; columns <= MAX_G4_COLUMNS
 ```
 
 - `chain` is applied first to last, as in a `/Filter` array.
@@ -40,14 +41,16 @@ encode_flate(data) -> Vec<u8>   // zlib, level 6
 | ASCIIHexDecode | white space ignored, odd digit padded with 0, `>` EOD (optional), other characters → Corrupt | upper case, newline every 64 digits, `>` |
 | ASCII85Decode | `<~` prefix, `z`, white space, `~>` (or bare `~`, or none) EOD, final partial group; `z` inside a group, a 1-char final group, overflow or bad characters → Corrupt | `z` for zero groups, newline every 75 characters, `~>` |
 | RunLengthDecode | 0–127 literal, 129–255 repeat, 128 EOD (optional); truncated run → Corrupt | runs of ≥2 repeat, literals up to 128, 128 |
+| CCITTFaxDecode | not here (`Unsupported`; renderers decode it) | `encode_g4`: Group 4 (`/K -1`) with an end-of-block mark, 0 bits coded black so `/BlackIs1 false` decodes the same bits; rows packed MSB first, each on a new byte, padding bits and trailing bytes ignored; up to 32,767 samples a row (the encoder counts positions in 16 bits); no rows or columns, or too wide → Unsupported, too few bytes → Corrupt |
 
 ## Tests
 
 - Unit tests per filter with hand-computed vectors (the ISO 32000-2 LZW example, RFC 1951 stored blocks, PNG/TIFF rows).
 - LZW is cross-checked against `weezl` (dev-dependency) in both directions for both early-change settings.
 - `tests/proptests.rs`: encode→decode round trips for every encodable filter × predictor × colors × bpc × columns, two-filter chains, output-limit checks, and fuzz-style no-panic tests (random bytes, random/nonsense params, bit-flipped valid streams).
+- `ccitt.rs`: Group 4 output decoded by `hayro-ccitt` (dev-dependency, an independent decoder) matches the input bits: a text-like page, padding bits, the widest row, and property tests over bitmaps of noise and of runs; any input returns rather than panics.
 - `fuzz/`: a detached cargo-fuzz crate (`cargo +nightly fuzz run decode`, run from `crates/filters/`).
 
 ## Status
 
-M1.1/M1.2 for the general-purpose filters are done. Not yet here: the image codecs (DCT via zune-jpeg, JPX via hayro-jpeg2000, JBIG2, CCITT G3/G4 decode and G4 encode, DCT encode) and Flate encode levels other than 6.
+M1.1/M1.2 for the general-purpose filters are done. Not yet here: the image codecs (DCT via zune-jpeg, JPX via hayro-jpeg2000, JBIG2, CCITT G3/G4 decode, DCT encode), CCITT Group 3 encoding and Flate encode levels other than 6.
