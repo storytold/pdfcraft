@@ -564,6 +564,13 @@ pub struct FallbackFontQuery {
 
 impl FallbackFontQuery {
     pub(crate) fn new(dict: &Dict<'_>) -> Self {
+        Self::with_descriptor(dict, dict.get::<Dict<'_>>(FONT_DESC))
+    }
+
+    /// PdfCraft patch: the query for the font `dict` names, with its style read from
+    /// `descriptor`. A Type 0 font has no font descriptor of its own; its descendant CIDFont
+    /// has it (ISO 32000-2 §9.7.4.1, §9.7.6.1).
+    pub(crate) fn with_descriptor(dict: &Dict<'_>, descriptor: Option<Dict<'_>>) -> Self {
         let post_script_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
@@ -573,7 +580,7 @@ impl FallbackFontQuery {
             ..Default::default()
         };
 
-        if let Some(descriptor) = dict.get::<Dict<'_>>(FONT_DESC) {
+        if let Some(descriptor) = descriptor {
             data.font_name = dict
                 .get::<Name<'_>>(FONT_NAME)
                 .map(|n| strip_subset_prefix(n.as_str()).to_string());

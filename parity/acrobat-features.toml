@@ -586,8 +586,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.close"]
 tools = ["doc_close"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_asks_and_cancel_keeps_it", "crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_can_save_first", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_asks_for_each_document", "crates/ui-egui/tests/it/editing.rs::save_prompt_stays_inside_the_screen_for_a_long_filename", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_moves_between_buttons_with_the_keyboard", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_escape_still_cancels_whatever_is_chosen", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_starts_on_save_every_time_it_opens"]
-notes = "Save is chosen when the prompt opens, so Enter saves. Left/Right (and Up/Down) and Tab/Shift+Tab move the choice between Don't save, Cancel and Save, shown with a focus ring; Enter or Space press the chosen button; Escape cancels. Alt+D, Alt+N and Ctrl/Cmd+D still answer Don't save. Not yet: the same keys on the other confirmations (Revert, reload, overwrite)."
+evidence = ["crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_asks_and_cancel_keeps_it", "crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_can_save_first", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_asks_for_each_document", "crates/ui-egui/tests/it/editing.rs::save_prompt_stays_inside_the_screen_for_a_long_filename", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_moves_between_buttons_with_the_keyboard", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_escape_still_cancels_whatever_is_chosen", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_starts_on_save_every_time_it_opens", "crates/ui-egui/tests/it/editing.rs::a_save_prompt_opened_in_the_background_asks_for_attention_until_the_user_returns", "crates/ui-egui/tests/it/control.rs::a_save_prompt_answered_in_the_background_withdraws_its_attention_request"]
+notes = "Save is chosen when the prompt opens, so Enter saves. Left/Right (and Up/Down) and Tab/Shift+Tab move the choice between Don't save, Cancel and Save, shown with a focus ring; Enter or Space press the chosen button; Escape cancels. Alt+D, Alt+N and Ctrl/Cmd+D still answer Don't save. A prompt that opens while PdfCraft is in the background (Quit in the Dock menu, logging out, an agent's ui.quit) asks once for the user's attention, as a critical request: the Dock icon bounces until PdfCraft is active, the Windows taskbar button flashes until the window is in front, and X11 sets the urgency hint; coming back or answering withdraws it. Not yet: the same keys on the other confirmations (Revert, reload, overwrite); the other confirmations don't ask for attention; on macOS a prompt answered without coming back (over the control channel) leaves the Dock icon bouncing until PdfCraft is activated, because winit can't withdraw the request there."
 
 [[feature]]
 id = "core.dirty-indicator"
@@ -695,7 +695,19 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/editing.rs::the_last_session_reopens_its_files_pages_and_active_tab", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_still_remembers_every_file", "crates/ui-egui/tests/it/editing.rs::the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files", "crates/ui-egui/src/last_session.rs::malformed_sessions_are_skipped_and_capped"]
-notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Not yet: zoom, layout and scroll position within the page (#418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
+notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Zoom and page display come back through core.restore-last-view (#1767); not yet the scroll position within the page (#418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
+
+[[feature]]
+id = "core.restore-last-view"
+title = "Restore last view settings when reopening documents"
+area = "A"
+tier = "P2"
+milestone = "M3"
+status = "shipped"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/tests/it/ui.rs::a_file_opened_again_shows_its_last_view"]
+notes = "Desktop, on by default (Preferences ▸ Documents and view, #1767): a file opened again shows the page, zoom and page display it was last shown with, remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. Not remembered: the view rotation (display only) and the scroll position within the page; Fit height comes back as Fit width (the settings name only two fits)."
 
 [[feature]]
 id = "core.usage-rights-preserve"
@@ -707,7 +719,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = "preserve only"
+notes = "preserve only. A dynamic XFA form PdfCraft lays out loses them: the layout voids them, so they are taken off with a note (form.xfa-dynamic)"
 
 # ==================================================================================================
 # B. Viewing and navigation
@@ -734,8 +746,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::self_referencing_tiling_pattern_terminates"]
-notes = "via hayro bootstrap"
+evidence = ["crates/render/src/raster.rs::self_referencing_tiling_pattern_terminates", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_of_a_fill_sit_at_whole_steps", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_sit_at_whole_steps_under_a_turned_scaled_matrix", "crates/render/tests/it/tiling_cell_placement.rs::far_cells_of_a_stroke_sit_at_whole_steps"]
+notes = "via hayro bootstrap. Tiling pattern cells sit at whole multiples of /XStep and /YStep at any zoom, filled or stroked, under any pattern matrix. Missing: a cell is cut at its step, so content reaching past the step into the next cell is lost; a cell pixmap is capped at 3000 pixels a side, so very large steps draw at reduced resolution"
 
 [[feature]]
 id = "view.render-transparency"
@@ -771,7 +783,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = []
-notes = "hayro bootstrap with vendored patches"
+notes = "hayro bootstrap with vendored patches. Text rendering modes follow ISO 32000-2 §9.3.6 for Type 3 fonts: 3 and 7 render nothing, the others render the glyph descriptions filled (never stroked), and 4 to 7 add nothing to the clipping path (hayro-interpret patches 42 and 64). Coverage is synthetic fixtures; no fidelity comparison across a Type 3 corpus yet"
 
 [[feature]]
 id = "view.render-cid-fonts"
@@ -783,7 +795,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face", "crates/render/src/raster.rs::mincho_substitute_covers_half_width_katakana", "crates/render/src/text.rs::identity_to_unicode_names_give_text", "crates/fonts/src/pdf.rs::identity_to_unicode_names_read_codes_as_unicode"]
-notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name; BIZ UDMincho for Mincho, which covers half-width katakana) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face); a `/ToUnicode` given as the name `/Identity-H` or `/Identity-V` (WSCAD) reads codes as Unicode for selection, search and editing, without control characters"
+notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name, else by the descendant font descriptor's Serif flag; bold Gothic for a Bold name or a `/FontWeight` of 600 or more; BIZ UDMincho for Mincho, which covers half-width katakana) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face); a `/ToUnicode` given as the name `/Identity-H` or `/Identity-V` (WSCAD) reads codes as Unicode for selection, search and editing, without control characters"
 
 [[feature]]
 id = "view.render-image-codecs"
@@ -806,8 +818,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/render/src/raster.rs::highlights_without_an_appearance_are_drawn", "crates/engine/src/tests.rs::comments_without_appearances_are_drawn_but_not_saved", "crates/engine/src/tests.rs::cli_display_adds_missing_appearances_without_changing_the_source", "crates/engine/src/tests.rs::fields_left_to_the_viewer_are_displayed_from_their_values", "crates/forms/src/tests.rs::need_appearances_draws_every_text_and_choice_field_in_the_display_copy", "crates/forms/src/tests.rs::the_field_appearance_cache_sees_every_input"]
-notes = "comments without /AP (FreeText, Ink, notes, stamps, shapes, markup) are drawn from their dictionaries in the page view, page_render and page images, including the CLI render command, never saved; text and choice fields are drawn from their values when the form sets /NeedAppearances (every one) or a widget has no /N (#3470), also display-only and cached per widget (a field edit on a 1000-field /NeedAppearances form takes ~13 ms against ~7 ms on a form that needs none) (a read-only document still gets the renderer's Highlight fallback only); Link borders without /AP and printing are not covered yet"
+evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/render/src/raster.rs::highlights_without_an_appearance_are_drawn", "crates/engine/src/tests.rs::comments_without_appearances_are_drawn_but_not_saved", "crates/engine/src/tests.rs::cli_display_adds_missing_appearances_without_changing_the_source", "crates/engine/src/tests.rs::fields_left_to_the_viewer_are_displayed_from_their_values", "crates/forms/src/tests.rs::need_appearances_draws_every_text_and_choice_field_in_the_display_copy", "crates/forms/src/tests.rs::the_field_appearance_cache_sees_every_input", "crates/engine/src/tests.rs::buttons_and_combs_left_to_the_viewer_are_displayed", "crates/forms/src/tests.rs::check_boxes_without_an_appearance_show_their_caption_symbol", "crates/forms/src/tests.rs::push_buttons_without_an_appearance_show_their_caption_and_frame", "crates/render/src/raster.rs::invisible_unknown_annotations_and_popups_paint_nothing", "crates/print/src/tests.rs::invisible_annotations_of_unknown_types_do_not_print", "crates/engine/src/tests.rs::stamps_without_appearances_draw_the_stamp_they_name", "crates/automation/tests/it/automation.rs::page_render_draws_stamps_without_an_appearance"]
+notes = "comments without /AP (FreeText, Ink, notes, stamps, shapes, markup) are drawn from their dictionaries in the page view, page_render and page images, including the CLI render command, never saved; a stamp from another program draws the stamp its /Name names (the fourteen standard names of ISO 32000-2 Table 184, Draft when there is none) or, for any other name, a grey frame with both diagonals; text and choice fields are drawn from their values when the form sets /NeedAppearances (every one) or a widget has no /N (#3470), also display-only and cached per widget (a field edit on a 1000-field /NeedAppearances form takes ~13 ms against ~7 ms on a form that needs none) (a read-only document still gets the renderer's Highlight fallback only); check boxes and radio buttons with no appearance for their /AS are drawn display-only from /MK (background, border, and when on the /MK /CA ZapfDingbats symbol in the /DA colour, a check or a dot by default), and push buttons with none from /MK and /BS with their caption; Link borders without /AP and printing are not covered yet; an annotation of a non-standard type with the Invisible flag (ISO 32000-2 Table 167) is neither drawn nor printed, and a popup's own /AP is never painted on the page (its parent's text shows in the popup window, §12.5.6.14)"
 
 [[feature]]
 id = "view.render-error-isolation"
@@ -1178,8 +1190,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["link_open"]
-evidence = ["crates/ui-egui/tests/it/view.rs::clicking_a_link_goes_to_its_destination", "crates/ui-egui/tests/it/view.rs::link_destinations_scroll_to_their_position", "crates/render/src/inspect.rs::bookmarks_and_links_keep_their_destination_view", "crates/render/src/inspect.rs::links_read_bounded_local_remote_go_to_actions", "crates/automation/tests/it/automation.rs::local_gotor_link_open_applies_destinations_and_honors_root", "crates/ui-egui/tests/it/document_links.rs::a_local_gotor_link_opens_in_a_tab_and_applies_its_destination", "crates/ui-egui/tests/it/document_links.rs::an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs", "crates/ui-egui/tests/it/document_links.rs::cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing", "crates/automation/tests/it/automation.rs::absolute_gotor_consent_does_not_bypass_validation_or_passwords", "crates/render/src/inspect.rs::launch_actions_that_name_a_pdf_open_it_like_a_remote_link", "crates/automation/tests/it/automation.rs::a_launch_link_to_a_pdf_opens_it_like_a_remote_link"]
-notes = "GoTo and URI links plus local-PDF GoToR links: source-relative or local absolute /F paths, /UF preferred in file-spec dictionaries, explicit numeric page/view destinations, and internal tabs. Absolute local GoToR targets require desktop Allow/Cancel confirmation or an explicit allow_absolute opt-in in link_open; relative links open normally. link_open honors --root. Named remote destinations open at default view with a warning; /NewWindow is a tab hint. A Launch action whose /F names a .pdf file (and has no /Win launch parameters) opens that PDF the same way, backslash separators read as / (#4168); URL/network file systems, GoToE, other Launch actions and other actions are not executed. Same-document destinations retain their supported /XYZ, /Fit, /FitH, /FitV and /FitR views; /FitB* is read as whole-page fit."
+evidence = ["crates/ui-egui/tests/it/view.rs::clicking_a_link_goes_to_its_destination", "crates/ui-egui/tests/it/view.rs::link_destinations_scroll_to_their_position", "crates/ui-egui/tests/it/view.rs::a_link_without_a_position_keeps_the_place_on_the_next_page", "crates/ui-egui/src/canvas.rs::a_null_xyz_coordinate_keeps_the_readers_place_on_the_new_page", "crates/render/src/inspect.rs::bookmarks_and_links_keep_their_destination_view", "crates/render/src/inspect.rs::links_read_bounded_local_remote_go_to_actions", "crates/automation/tests/it/automation.rs::local_gotor_link_open_applies_destinations_and_honors_root", "crates/ui-egui/tests/it/document_links.rs::a_local_gotor_link_opens_in_a_tab_and_applies_its_destination", "crates/ui-egui/tests/it/document_links.rs::an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs", "crates/ui-egui/tests/it/document_links.rs::cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing", "crates/automation/tests/it/automation.rs::absolute_gotor_consent_does_not_bypass_validation_or_passwords", "crates/render/src/inspect.rs::launch_actions_that_name_a_pdf_open_it_like_a_remote_link", "crates/automation/tests/it/automation.rs::a_launch_link_to_a_pdf_opens_it_like_a_remote_link"]
+notes = "GoTo and URI links plus local-PDF GoToR links: source-relative or local absolute /F paths, /UF preferred in file-spec dictionaries, explicit numeric page/view destinations, and internal tabs. Absolute local GoToR targets require desktop Allow/Cancel confirmation or an explicit allow_absolute opt-in in link_open; relative links open normally. link_open honors --root. Named remote destinations open at default view with a warning; /NewWindow is a tab hint. A Launch action whose /F names a .pdf file (and has no /Win launch parameters) opens that PDF the same way, backslash separators read as / (#4168); URL/network file systems, GoToE, other Launch actions and other actions are not executed. Same-document destinations retain their supported /XYZ, /Fit, /FitH, /FitV and /FitR views; /FitB* is read as whole-page fit. A null /XYZ left or top keeps the reader's place, as ISO 32000-2 §12.3.2.2 says and Acrobat Reader was observed to do (synthetic fixture): the user-space point at the window's top-left stays there on the target page at the same zoom, along each axis the page overflows; CAD exports (WSCAD) write every cross-reference this way. Null /FitH top and /FitV left still go to the page edge."
 
 [[feature]]
 id = "view.annotation-hover"
@@ -1274,8 +1286,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/it/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/it/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page"]
-notes = "Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
+evidence = ["crates/ui-egui/tests/it/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/it/editing.rs::split_from_pages_panel_context_menu", "crates/ui-egui/tests/it/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/it/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page"]
+notes = "Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -1543,15 +1555,15 @@ notes = "Keyboard, Edit-menu, page-context-menu and floating-selection Copy hono
 
 [[feature]]
 id = "view.select-all"
-title = "Select all text on a page"
+title = "Select all text"
 area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find_options"]
-notes = "⌘A on the current page"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find_options", "crates/ui-egui/src/canvas.rs::select_all_copies_the_whole_document_while_scrolling_continuously", "crates/ui-egui/src/canvas.rs::select_all_of_the_document_only_while_scrolling_through_several_pages"]
+notes = "⌘A: the current page one page at a time; the whole document scrolling continuously (#2639), copied whole"
 
 [[feature]]
 id = "view.copy-with-layout"
@@ -1670,8 +1682,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.theme.system"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/tests/it/theme.rs::saved_preferences_restore_with_legacy_light_dark_settings", "crates/ui-egui/tests/it/control.rs::theme_commands_and_options_report_preference_and_effective_colours"]
-notes = "Toolbar, Display theme and --theme system share a persisted System preference that follows OS changes without losing the selected mode; ui.state reports preference and resolved colours separately."
+evidence = ["crates/ui-egui/tests/it/theme.rs::a_fresh_install_follows_the_system_theme", "crates/ui-egui/tests/it/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/tests/it/theme.rs::saved_preferences_restore_with_legacy_light_dark_settings", "crates/ui-egui/tests/it/control.rs::theme_commands_and_options_report_preference_and_effective_colours"]
+notes = "Toolbar, Display theme and --theme system share a persisted System preference that follows OS changes without losing the selected mode; ui.state reports preference and resolved colours separately. System is the default on a fresh install (#1248), Light where the desktop says nothing; a saved choice wins."
 
 [[feature]]
 id = "view.home-view"
@@ -1802,8 +1814,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/editing.rs::restricted_documents_show_a_notice_and_block_page_changes", "crates/ui-egui/tests/it/editing.rs::a_secured_form_shows_its_form_notice_and_its_security", "crates/ui-egui/tests/it/xfa.rs::a_secured_dynamic_xfa_form_shows_its_layout_and_its_security"]
-notes = "On a secured form (fields or XFA), the security sentence follows the form's notice, which keeps Highlight fields and the XFA layout notes."
+evidence = ["crates/ui-egui/tests/it/editing.rs::restricted_documents_show_a_notice_and_block_page_changes", "crates/ui-egui/tests/it/editing.rs::a_secured_form_shows_its_form_notice_and_its_security", "crates/ui-egui/tests/it/xfa.rs::a_secured_dynamic_xfa_form_shows_its_layout_and_its_security", "crates/ui-egui/tests/it/editing.rs::the_security_notice_can_be_turned_off_for_good"]
+notes = "On a secured form (fields or XFA), the security sentence follows the form's notice, which keeps Highlight fields and the XFA layout notes. The notice's Don't show again turns it off in every document (#4035), kept in the settings and turned back on in Preferences (--secured-notice); the restrictions and Document Properties > Security are unchanged."
 
 [[feature]]
 id = "view.pdfa-view-mode"
@@ -1866,8 +1878,8 @@ milestone = "M7"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_lines", "text_paragraphs", "text_edit", "text_edit_layout", "text_font_files", "text_font_import", "text_fonts"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/it/editing.rs::editing_existing_text_in_place", "crates/automation/tests/it/automation.rs::editing_existing_text_through_tools", "crates/edit/src/tests.rs::a_line_whose_operator_starts_the_next_stream_can_be_edited", "crates/automation/tests/it/automation.rs::a_line_split_across_content_streams_is_listed_and_edited", "crates/ui-egui/tests/it/editing.rs::selected_text_formatting_keeps_the_rest_of_the_paragraph_and_reopens", "crates/edit/src/tests.rs::marked_paragraph_boundaries_and_cross_stream_transforms_survive_rewrite", "crates/automation/tests/it/automation.rs::explicit_font_and_disjoint_ranges_save_reopen_through_tools", "crates/edit/src/tests.rs::disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically", "crates/engine/tests/it/document_fonts.rs::opentype_cff_document_font_preserves_program_codes_and_rendering_after_reopen", "crates/ui-egui/tests/it/editing.rs::cropped_images_do_not_intercept_text_and_stay_inside_each_page", "crates/automation/tests/it/automation.rs::clipped_image_bounds_and_text_edit_save_reopen_through_tools", "crates/edit/src/tests.rs::mixed_styles_and_matrix_sizes_form_visual_regions_without_merging_columns", "crates/edit/src/tests.rs::rich_region_edits_preserve_styles_positions_and_delete_all_runs_after_reopen", "crates/ui-egui/tests/it/editing.rs::one_editor_contains_mixed_styles_and_visual_rows", "crates/ui-egui/tests/it/editing.rs::inline_editor_preserves_source_font_and_previews_live_bounds", "crates/fonts/src/pdf.rs::mac_subset_cmap_uses_pdf_unicode_without_changing_source_program", "crates/automation/tests/it/automation.rs::mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools", "crates/ui-egui/tests/it/ui.rs::the_edit_tab_turns_on_edit_text_and_images", "crates/ui-egui/tests/it/editing.rs::the_caret_on_a_small_row_is_as_tall_as_that_row", "crates/edit/src/tests.rs::uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face", "crates/automation/tests/it/automation.rs::editing_uzbek_and_kazakh_cyrillic_through_tools"]
-notes = "The Edit tab turns Edit text & images on at once, as in Acrobat (leaving the tab puts the tool down and applies an edit in progress); click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); a page's /Contents pieces are parsed joined, so a line whose operands and operator sit in different pieces is listed and edited (lines and paragraphs still don't join across pieces; Edit image still parses each piece alone); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next Since #1116: mixed-style visual regions retain source rows, subset encodings, colour and baseline anchors in one textless-background editor. Explicit paragraph/heading scopes constrain grouping; compatible graphics planes permit cross-stream regions. Full matching document fonts complete absent subset glyphs; installed/file selection, TrueType/OpenType-CFF embedding and disjoint UTF-8 range styles have save/reopen coverage. Single-face OpenType shaping/bidi retains logical text through ToUnicode/ActualText. Replacement text the paragraph's font can't show takes the craft-fonts Japanese faces when they draw all of it (Uzbek қ, Kazakh ә are in none of them), else the bundled Inter face, so those letters write in every build (#2593). Legacy non-SFNT preview, mixed-font/style contextual runs, full structure-tree preservation and author intent in untagged PDFs remain limited; see docs/editing-existing-text.md"
+evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/it/editing.rs::editing_existing_text_in_place", "crates/automation/tests/it/automation.rs::editing_existing_text_through_tools", "crates/edit/src/tests.rs::a_line_whose_operator_starts_the_next_stream_can_be_edited", "crates/automation/tests/it/automation.rs::a_line_split_across_content_streams_is_listed_and_edited", "crates/ui-egui/tests/it/editing.rs::selected_text_formatting_keeps_the_rest_of_the_paragraph_and_reopens", "crates/edit/src/tests.rs::marked_paragraph_boundaries_and_cross_stream_transforms_survive_rewrite", "crates/automation/tests/it/automation.rs::explicit_font_and_disjoint_ranges_save_reopen_through_tools", "crates/edit/src/tests.rs::disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically", "crates/engine/tests/it/document_fonts.rs::opentype_cff_document_font_preserves_program_codes_and_rendering_after_reopen", "crates/ui-egui/tests/it/editing.rs::cropped_images_do_not_intercept_text_and_stay_inside_each_page", "crates/automation/tests/it/automation.rs::clipped_image_bounds_and_text_edit_save_reopen_through_tools", "crates/edit/src/tests.rs::mixed_styles_and_matrix_sizes_form_visual_regions_without_merging_columns", "crates/edit/src/tests.rs::rich_region_edits_preserve_styles_positions_and_delete_all_runs_after_reopen", "crates/ui-egui/tests/it/editing.rs::one_editor_contains_mixed_styles_and_visual_rows", "crates/ui-egui/tests/it/editing.rs::inline_editor_preserves_source_font_and_previews_live_bounds", "crates/fonts/src/pdf.rs::mac_subset_cmap_uses_pdf_unicode_without_changing_source_program", "crates/automation/tests/it/automation.rs::mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools", "crates/ui-egui/tests/it/ui.rs::the_edit_tab_turns_on_edit_text_and_images", "crates/ui-egui/tests/it/editing.rs::the_caret_on_a_small_row_is_as_tall_as_that_row", "crates/edit/src/tests.rs::uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face", "crates/automation/tests/it/automation.rs::editing_uzbek_and_kazakh_cyrillic_through_tools", "crates/edit/src/tests.rs::styled_paragraph_batches_cyrillic_without_changing_source_fonts", "crates/edit/src/tests.rs::styled_paragraph_over_240_fallback_glyphs_splits_and_refuses_atomically", "crates/edit/src/tests.rs::styled_fallback_batches_keep_face_choices_and_range_styles", "crates/edit/src/tests.rs::styled_fallback_shards_keep_text_advances_and_alignment", "crates/edit/src/tests.rs::styled_fallback_budget_is_enforced_before_objects_are_written", "crates/edit/src/tests.rs::styled_fallback_same_base_font_and_character_keep_both_weights", "crates/automation/tests/it/automation.rs::styled_cyrillic_fallback_is_batched_through_tools_and_reopen"]
+notes = "The Edit tab turns Edit text & images on at once, as in Acrobat (leaving the tab puts the tool down and applies an edit in progress); click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); a page's /Contents pieces are parsed joined, so a line whose operands and operator sit in different pieces is listed and edited (lines and paragraphs still don't join across pieces; Edit image still parses each piece alone); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next Since #1116: mixed-style visual regions retain source rows, subset encodings, colour and baseline anchors in one textless-background editor. Explicit paragraph/heading scopes constrain grouping; compatible graphics planes permit cross-stream regions. Full matching document fonts complete absent subset glyphs; installed/file selection, TrueType/OpenType-CFF embedding and disjoint UTF-8 range styles have save/reopen coverage. Single-face OpenType shaping/bidi retains logical text through ToUnicode/ActualText. Replacement text the paragraph's font can't show takes the craft-fonts Japanese faces when they draw all of it (Uzbek қ, Kazakh ә are in none of them), else the bundled Inter face, so those letters write in every build (#2593). Legacy non-SFNT preview, mixed-font/style contextual runs, full structure-tree preservation and author intent in untagged PDFs remain limited; Styled-path outline fallback batches by actual face with 240 glyphs per font and preserves source styles; adjacent equal-font/style characters form runs. At most 15360 distinct fallback glyphs per styled paragraph; missing glyphs are refused before fallback objects are written. Glyph coverage, mixed contextual shaping, single-style fallback and stale-font cleanup are unchanged; see docs/editing-existing-text.md"
 
 [[feature]]
 id = "edit.text-reflow"
@@ -1914,8 +1926,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::missing_glyphs_substitute_helvetica_and_impossible_text_is_refused", "crates/fonts/src/pdf.rs::subset_fonts_only_encode_the_glyphs_they_have", "crates/fonts/src/pdf.rs::composite_fonts_use_to_unicode"]
-notes = "the line's font is reused when every character has a code and a glyph (ToUnicode, encodings, Differences; subset glyph checks); otherwise Helvetica (WinAnsi) is used and reported; text no font can show is refused"
+evidence = ["crates/edit/src/tests.rs::missing_glyphs_substitute_helvetica_and_impossible_text_is_refused", "crates/edit/src/tests.rs::a_bold_stand_in_font_leaves_an_earlier_regular_one_alone", "crates/fonts/src/pdf.rs::subset_fonts_only_encode_the_glyphs_they_have", "crates/fonts/src/pdf.rs::composite_fonts_use_to_unicode"]
+notes = "the line's font is reused when every character has a code and a glyph (ToUnicode, encodings, Differences; subset glyph checks); otherwise a standard face of the source font's family (Helvetica, Times or Courier, in its weight and slant; WinAnsi) is used and reported; text no font can show is refused. Each standard stand-in has a resource of its own face (PCEdTimesBold, ...), so a bold paragraph's stand-in no longer turns paragraphs set earlier in a regular one bold (#4280); pages already saved with the shared PCEdHelv name by older builds are not repaired"
 
 [[feature]]
 id = "edit.text-format-font"
@@ -1984,10 +1996,10 @@ area = "C"
 tier = "P1"
 milestone = "M7"
 status = "shipped"
-commands = ["edit.edit_text"]
-tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/ui-egui/tests/it/editing.rs::the_format_panel_takes_any_scale_and_character_spacing"]
-notes = "character spacing in points (-5 to 50) and horizontal scaling in percent (10 to 400) for a paragraph (Tc, Tz), rewrapped; Format text takes any value in those ranges typed, or a common one from its list"
+commands = ["edit.edit_text", "edit.text"]
+tools = ["text_edit", "page_add_text", "content_update"]
+evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/ui-egui/tests/it/editing.rs::the_format_panel_takes_any_scale_and_character_spacing", "crates/edit/src/tests.rs::added_text_character_spacing_is_drawn_and_reopens", "crates/edit/src/tests.rs::added_text_character_spacing_widens_its_layout", "crates/automation/tests/it/automation.rs::added_text_takes_character_spacing"]
+notes = "character spacing in points (-5 to 50) and horizontal scaling in percent (10 to 400) for a paragraph (Tc, Tz), rewrapped; Format text takes any value in those ranges typed, or a common one from its list. Added text takes character spacing too (Tc, kept in /PCAdded and rewrapped); horizontal scaling for added text is not there yet"
 
 [[feature]]
 id = "edit.lists"
@@ -2074,6 +2086,17 @@ evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_delet
 notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only)"
 
 [[feature]]
+id = "edit.cut-copy-paste-objects"
+title = "Cut, copy and paste text boxes and images"
+area = "C"
+tier = "P1"
+milestone = "M7"
+status = "partial"
+tools = ["content_copy"]
+evidence = ["crates/automation/tests/it/automation.rs::copying_added_content_through_tools", "crates/engine/src/tests.rs::pasted_added_content_keeps_its_style_and_picture", "crates/engine/src/tests.rs::an_added_jpeg_2000_image_is_copied_as_its_file", "crates/edit/src/tests.rs::a_paste_lands_where_the_copy_was_offset_per_paste_and_stays_on_the_page", "crates/edit/src/tests.rs::a_paste_steps_past_copies_of_itself_only"]
+notes = "Issue #2636, engine and automation part. Edit::PasteContent pastes an added text box or image copied in the same document or another, as one undo step, and `content_copy` drives it headlessly. A copy keeps a text box's text, font, size, colour, alignment and box, and an image's picture, box, turns, flips and crop. It lands where the item was, stepped 18 pt down and to the right past each copy already on the page, or at a given point, and stays on the page. Within a document a pasted image draws the same image object; into another document its picture goes as its JPEG or JPEG 2000 file, or else a PNG, so a colour profile is dropped and CMYK colours in a PNG are turned to RGB, and later pastes there reuse the first one's picture. The copy permission is honoured. Missing: the desktop app's ⌘X / ⌘C / ⌘V, Edit ▸ Cut and Paste and the right-click menu (follow-up PRs), the original document's paragraphs and images (open PRs #1625 and #2251), several items at once, and a check of Acrobat's own clipboard format (not observed)."
+
+[[feature]]
 id = "edit.image-replace"
 title = "Replace an image (keep position and size)"
 area = "C"
@@ -2142,8 +2165,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["image_save"]
-evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/it/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps"]
-notes = "right-click an image ▸ Save Image As: JPEG unchanged, others PNG. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Still limited: 16-bit samples use high bytes; general JPEG and mask Decode, ICC transforms, and calibrated colors remain unsupported."
+evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/it/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps", "crates/create/src/tests.rs::soft_mask_decode_ranges_become_exported_alpha"]
+notes = "right-click an image ▸ Save Image As: JPEG unchanged, others PNG. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Soft-mask Decode intervals preserve opacity before resizing, including indirect arrays and endpoints. Still limited: 16-bit samples use high bytes; general JPEG image Decode, ICC transforms, and calibrated colors remain unsupported."
 
 [[feature]]
 id = "edit.image-external-editor"
@@ -2202,8 +2225,8 @@ milestone = "M11"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["object_list", "object_move"]
-evidence = ["crates/ui-egui/tests/it/object_selection.rs::marquee_and_mixed_group_drag_move_once_and_undo_together", "crates/automation/tests/it/automation.rs::mixed_objects_move_through_tools_with_generation_and_one_undo", "crates/edit/src/tests.rs::group_moves_preserve_glyph_bytes_and_unselected_text_state", "crates/engine/src/tests.rs::mixed_object_moves_are_one_undo_step_and_survive_save_reopen"]
-notes = "Same-page mixed selection (#844): Shift/Ctrl/Command-click toggles, empty-space marquee (additive with modifiers), drag previews and one atomic undo step for existing paragraphs, Image/Form XObjects and added text/images. Source glyph bytes, fonts and kerning retained; unselected text and shared Form resources stay put. Generation-scoped references with optional automation guard; count and geometry bounded; unsupported vertical/clipping text refused without partial changes. Still missing: arbitrary paths, inline images, cross-page movement, group resizing, arrange/align and a general object editor. See docs/editing-multiple-objects.md."
+evidence = ["crates/ui-egui/tests/it/object_selection.rs::marquee_and_mixed_group_drag_move_once_and_undo_together", "crates/automation/tests/it/automation.rs::mixed_objects_move_through_tools_with_generation_and_one_undo", "crates/edit/src/tests.rs::group_moves_preserve_glyph_bytes_and_unselected_text_state", "crates/engine/src/tests.rs::mixed_object_moves_are_one_undo_step_and_survive_save_reopen", "crates/ui-egui/tests/it/editing.rs::a_paragraph_selected_by_its_frame_deletes_with_one_key"]
+notes = "Same-page mixed selection (#844): Shift/Ctrl/Command-click toggles, empty-space marquee (additive with modifiers), drag previews and one atomic undo step for existing paragraphs, Image/Form XObjects and added text/images. Source glyph bytes, fonts and kerning retained; unselected text and shared Form resources stay put. Delete or Backspace removes the selection (a paragraph selected by its frame, or a group) as one undo step. Generation-scoped references with optional automation guard; count and geometry bounded; unsupported vertical/clipping text refused without partial changes. Still missing: arbitrary paths, inline images, cross-page movement, group resizing, arrange/align and a general object editor. See docs/editing-multiple-objects.md."
 
 [[feature]]
 id = "edit.object-properties"
@@ -2400,8 +2423,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.header_footer"]
 tools = ["doc_header_footer"]
-evidence = ["crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/tests.rs::header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove"]
-notes = "Standard faces only: Helvetica, Times or Courier (#3754; no bold, italic or embedded fonts yet); drawn in display space on rotated pages; artifact-tagged"
+evidence = ["crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/tests.rs::header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks"]
+notes = "Standard faces only: Helvetica, Times or Courier (#3754; no bold, italic or embedded fonts yet); drawn in display space on rotated pages; artifact-tagged; the dialog previews the text over the page's own thumbnail (the current page, or the first one the range selects), in the interface font and with tokens unexpanded"
 
 [[feature]]
 id = "edit.header-footer-update-remove"
@@ -2460,8 +2483,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.watermark"]
 tools = ["doc_watermark"]
-evidence = ["crates/edit/src/tests.rs::watermarks_rotate_fade_and_can_go_behind", "crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/automation/tests/it/automation.rs::headers_watermarks_and_backgrounds_through_tools"]
-notes = "Helvetica; fit-to-page or a size"
+evidence = ["crates/edit/src/tests.rs::watermarks_rotate_fade_and_can_go_behind", "crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/automation/tests/it/automation.rs::headers_watermarks_and_backgrounds_through_tools", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks"]
+notes = "Helvetica; fit-to-page or a size; the dialog previews it over the page's own thumbnail, always on top (a watermark behind the page is not drawn under its content there)"
 
 [[feature]]
 id = "edit.watermark-add-file"
@@ -2473,7 +2496,7 @@ status = "shipped"
 commands = ["edit.watermark"]
 tools = ["doc_watermark"]
 evidence = ["crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files"]
-notes = "an image or a page of a PDF, scaled relative to the page, rotated, with opacity, behind or on top"
+notes = "an image or a page of a PDF, scaled relative to the page, rotated, with opacity, behind or on top; the dialog's preview shows its frame and file name over the page, not the picture itself"
 
 [[feature]]
 id = "edit.watermark-update-remove"
@@ -2508,8 +2531,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.background"]
 tools = ["doc_background"]
-evidence = ["crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/it/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright"]
-notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page"
+evidence = ["crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/it/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks"]
+notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page; the dialog previews a colour as a tint of the page's own thumbnail (opaque pictures on the page are tinted there too, not in the result), a file as its frame and name"
 
 [[feature]]
 id = "edit.background-update-remove"
@@ -2605,7 +2628,7 @@ status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
 evidence = ["crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/automation/tests/it/automation.rs::editing_existing_text_through_tools", "crates/ui-egui/tests/it/content.rs::format_text_panel_sets_alignment_and_lists_planned_controls_disabled", "crates/ui-egui/tests/it/content.rs::format_text_rows_line_up_and_fit_the_panel"]
-notes = "Edit a PDF ▸ Format text, laid out as Acrobat's panel, for the paragraph being edited and for added text: font (the source font kept, the document's fonts, families, installed or loaded font files), size, colour, alignment, bold and italic, line spacing, horizontal scale and character spacing; each change applies at once as one undo step, keeping the paragraph open. Shown disabled with a Planned tooltip until they exist: bulleted and numbered lists (edit.lists), superscript and subscript (edit.text-super-subscript), paragraph spacing, and underline on added text."
+notes = "Edit a PDF ▸ Format text, laid out as Acrobat's panel, for the paragraph being edited and for added text: font (the source font kept, the document's fonts, families, installed or loaded font files), size, colour, alignment, bold and italic, line spacing, horizontal scale and character spacing; each change applies at once as one undo step, keeping the paragraph open. Shown disabled with a Planned tooltip until they exist: bulleted and numbered lists (edit.lists), superscript and subscript (edit.text-super-subscript), paragraph spacing, and underline, line spacing and horizontal scale on added text."
 
 [[feature]]
 id = "edit.adobe-express-edits"
@@ -2788,8 +2811,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification"]
-notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied."
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog"]
+notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied. The dialog's Pages field takes page ranges (\"1-5, 8, 11-13\", in the order typed, each page once) instead of the selection (#3593); page labels are not accepted there yet."
 
 [[feature]]
 id = "organize.extract-separate-files"
@@ -2920,7 +2943,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.split"]
 tools = ["doc_split"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::split_before_selected_pages"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::split_before_selected_pages", "crates/ui-egui/tests/it/editing.rs::split_from_organize_grid_context_menu"]
 notes = ""
 
 [[feature]]
@@ -3340,8 +3363,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::expanding_and_collapsing_all_bookmarks"]
-notes = "Bookmarks panel options: expand all, expand top-level, collapse all"
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::expanding_and_collapsing_all_bookmarks", "crates/ui-egui/tests/it/bookmarks.rs::a_closed_top_level_bookmark_opens_closed", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete"]
+notes = "Bookmarks panel options: expand all, expand top-level, collapse all. Each bookmark, top level included, opens as its /Count says (positive open; negative or missing closed, ISO 32000-2 Table 151); the triangle toggles it for the session and a search shows matches inside closed ones. Adding or moving a bookmark into another opens that one. Missing: the open/closed state the reader sets is not written back to /Count on save"
 
 [[feature]]
 id = "organize.bookmarks-from-structure"
@@ -3361,11 +3384,11 @@ title = "Add file attachments"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.attach"]
+tools = ["attachment_add"]
+evidence = ["crates/organize/src/tests.rs::attachments_are_added_listed_and_deleted", "crates/organize/src/tests.rs::attachments_added_in_the_app_survive_combine_and_more_can_be_attached", "crates/automation/tests/it/automation.rs::attaching_and_deleting_files_through_the_tools"]
+notes = "Edit ▸ Attach a file… (also the Attach a file… button in the Attachments panel and the Edit a PDF list): the file goes into /Names /EmbeddedFiles as a Filespec with a Flate-compressed EmbeddedFile stream (/Size, /ModDate, /Subtype from the extension); a name already taken gets \" (2)\"…; the panel opens on it. Undoable. Acrobat's Comment ▸ Attach File (a paper-clip comment on the page) is comment.attach-file-comment."
 
 [[feature]]
 id = "organize.attachments-delete"
@@ -3373,11 +3396,11 @@ title = "Delete attachments"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["attachment_delete"]
+evidence = ["crates/organize/src/tests.rs::attachments_are_added_listed_and_deleted", "crates/organize/src/tests.rs::attachments_added_in_the_app_survive_combine_and_more_can_be_attached", "crates/automation/tests/it/automation.rs::attaching_and_deleting_files_through_the_tools"]
+notes = "The trash button on a document-level row of the Attachments panel; the last one removed takes the /EmbeddedFiles tree with it. Undoable. A paper-clip comment is deleted as a comment."
 
 [[feature]]
 id = "organize.attachments-description"
@@ -3448,8 +3471,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown"]
+notes = "Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Missing: a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
 
 [[feature]]
 id = "organize.edit-metadata"
@@ -3484,8 +3507,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_initial_view"]
-evidence = ["crates/organize/src/view.rs::initial_view_resolves_indirect_boolean_preferences", "crates/ui-egui/tests/it/ui.rs::a_document_asking_for_full_screen_is_asked_about_first", "crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/ui-egui/tests/it/viewer.rs::initial_view_is_edited_and_honoured_on_open", "crates/automation/tests/it/automation.rs::initial_view_through_tools"]
-notes = "navigation panel, layout, magnification, page, window and interface options; honoured on open; script open actions kept. Open in Full Screen mode (/PageMode /FullScreen) asks first (Full Screen / Not now), as Acrobat does, instead of taking the screen. Window and interface options also read indirect boolean ViewerPreferences values. Missing: Acrobat's Full Screen preference to turn that alert off and its \"remember my choice for this document\" (misc.prefs-full-screen)"
+evidence = ["crates/organize/src/view.rs::initial_view_resolves_indirect_boolean_preferences", "crates/ui-egui/tests/it/ui.rs::a_document_asking_for_full_screen_is_asked_about_first", "crates/organize/src/tests.rs::initial_view_round_trips_and_keeps_scripts", "crates/ui-egui/tests/it/viewer.rs::initial_view_is_edited_and_honoured_on_open", "crates/automation/tests/it/automation.rs::initial_view_through_tools", "crates/render/src/inspect.rs::a_go_to_action_opens_at_its_destination_explicit_or_named", "crates/ui-egui/tests/it/open_action.rs::an_xyz_open_action_puts_its_point_at_the_window_top_left", "crates/ui-egui/tests/it/open_action.rs::a_fith_open_action_puts_its_top_at_the_window_top", "crates/ui-egui/tests/it/open_action.rs::a_named_open_destination_opens_its_page", "crates/ui-egui/tests/it/open_action.rs::a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen", "crates/organize/src/tests.rs::an_unchanged_opening_destination_keeps_its_position_and_name", "crates/automation/tests/it/automation.rs::doc_info_reports_the_open_destination"]
+notes = "navigation panel, layout, magnification, page, window and interface options; honoured on open; script open actions kept. Open in Full Screen mode (/PageMode /FullScreen) asks first (Full Screen / Not now), as Acrobat does, instead of taking the screen. Window and interface options also read indirect boolean ViewerPreferences values. Missing: Acrobat's Full Screen preference to turn that alert off and its \"remember my choice for this document\" (misc.prefs-full-screen). On open the /OpenAction destination places the view as ISO 32000-2 Table 149 says (the /XYZ point at the window's top-left, /FitH and /FitV top or left at the edge), and a named destination (name or string, /Names /Dests tree or catalog /Dests, §12.3.2.4) resolves; Always use my default zoom keeps only the page. A full-screen document shows its /NonFullScreenPageMode panel outside full screen (Table 147). doc_info reports the opening destination. Document Properties keeps an opening action whose page and magnification are left alone, but still edits only those two, and shows page 1 for a named destination"
 
 [[feature]]
 id = "organize.custom-properties"
@@ -3494,10 +3517,10 @@ area = "D"
 tier = "P2"
 milestone = "M4"
 status = "partial"
-commands = []
+commands = ["file.properties"]
 tools = ["doc_info", "doc_set_info"]
-evidence = ["crates/organize/src/tests.rs::custom_document_properties_are_listed_set_removed_and_their_names_checked", "crates/render/src/inspect.rs::custom_document_properties_are_listed_apart_from_the_standard_ones", "crates/automation/tests/it/automation.rs::custom_document_properties_are_set_listed_and_cleared_through_the_tools"]
-notes = "Through the tools: doc_set_info sets or clears an /Info entry under any name the spec does not use (names checked as Acrobat does: no standard name, no empty name, no spaces or delimiters, at most 127 bytes), and doc_info lists them under custom, apart from the standard entries. Not yet: the Custom tab in Document Properties, and mirroring them into XMP (pdfx:) as Acrobat does"
+evidence = ["crates/organize/src/tests.rs::custom_document_properties_are_listed_set_removed_and_their_names_checked", "crates/render/src/inspect.rs::custom_document_properties_are_listed_apart_from_the_standard_ones", "crates/automation/tests/it/automation.rs::custom_document_properties_are_set_listed_and_cleared_through_the_tools", "crates/ui-egui/tests/it/editing.rs::custom_properties_are_added_in_the_custom_tab_as_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::custom_properties_are_changed_and_deleted_in_the_custom_tab", "crates/ui-egui/tests/it/editing.rs::the_custom_tab_refuses_names_a_custom_property_cannot_have", "crates/ui-egui/tests/it/editing.rs::a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone", "crates/ui-egui/tests/it/editing.rs::a_custom_property_is_deleted_from_an_info_dictionary_in_the_trailer", "crates/ui-egui/tests/it/editing.rs::add_stops_at_the_256_custom_properties_the_tab_lists", "crates/organize/src/tests.rs::document_info_entries_are_cleared_from_an_info_dictionary_in_the_trailer"]
+notes = "Document Properties ▸ Custom lists them, with Name and Value fields and Add, Update (the value of the listed property the Name field names) and Delete; OK writes the changes as one undo step with the other tabs' changes. A property already in the file under a name the tools refuse (a space, a delimiter) or a name that is not UTF-8 is listed and cannot be changed or deleted there, and Add is off for a name the file already uses for an entry that is not listed (not text, only padding, or past the 256 listed), and once the tab or the file lists 256 properties. Through the tools: doc_set_info sets or clears an /Info entry under any name the spec does not use (names checked as Acrobat does: no standard name, no empty name, no spaces or delimiters, at most 127 bytes), and doc_info lists them under custom, apart from the standard entries. Not yet: mirroring them into XMP (pdfx:) as Acrobat does"
 
 [[feature]]
 id = "organize.xmp-editor"
@@ -3572,8 +3595,8 @@ milestone = "M5"
 status = "partial"
 commands = []
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn"]
-notes = "appearances for every type PdfCraft creates (highlight multiplies; clouds, callouts, stamps, polygons, carets); rich text not yet"
+evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::legacy_border_width_and_dash_are_drawn", "crates/annot/src/tests.rs::ink_draws_its_border_style_dashes", "crates/annot/src/tests.rs::a_caret_with_a_paragraph_symbol_draws_the_pilcrow", "crates/engine/src/tests.rs::legacy_border_dashes_and_the_caret_paragraph_symbol_are_drawn"]
+notes = "appearances for every type PdfCraft creates (highlight multiplies; clouds, callouts, stamps, polygons, carets). Comments other files carry without an appearance are drawn from their dictionaries the same way, including a legacy /Border width and dash array (ISO 32000-2 Table 166), dashed ink (/BS, Table 182) and a caret's ¶ for /Sy /P (Table 183). Not yet: rich text, beveled, inset and underline border styles, sound icons"
 
 [[feature]]
 id = "comment.sticky-note"
@@ -3584,8 +3607,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.note"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/ui-egui/tests/it/comments.rs::the_comment_composer_shortcut_only_posts_the_focused_editor", "crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/annot/src/tests.rs::every_note_icon_draws_its_own_shape", "crates/annot/src/tests.rs::a_star_note_keeps_its_star_when_recoloured"]
-notes = "our own icon drawings for the seven standard /Name values of ISO 32000-2 Table 175 (Comment, Note, Help, Insert, Key, NewParagraph, Paragraph) and seven further names (Check, Circle, Cross, CrossHairs, Star, RightArrow, UpArrow), each its own shape, chosen in Properties or comment_add, and kept when the colour changes; another name draws as Note. With a pop-up; Ctrl+Enter (also Command+Enter) posts from the focused editor, Shift+Enter adds a newline. Not yet: opening the pop-ups a file saves open (/Open)."
+evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/ui-egui/tests/it/comments.rs::the_comment_composer_shortcut_only_posts_the_focused_editor", "crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/annot/src/tests.rs::every_note_icon_draws_its_own_shape", "crates/annot/src/tests.rs::a_star_note_keeps_its_star_when_recoloured", "crates/engine/src/tests.rs::sticky_notes_stay_upright_where_they_are_placed_on_rotated_pages", "crates/render/src/raster.rs::no_rotate_notes_stay_upright_at_their_corner_on_rotated_pages", "crates/ui-egui/tests/it/comments.rs::a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn"]
+notes = "our own icon drawings for the seven standard /Name values of ISO 32000-2 Table 175 (Comment, Note, Help, Insert, Key, NewParagraph, Paragraph) and seven further names (Check, Circle, Cross, CrossHairs, Star, RightArrow, UpArrow), each its own shape, chosen in Properties or comment_add, and kept when the colour changes; another name draws as Note. With a pop-up; Ctrl+Enter (also Command+Enter) posts from the focused editor, Shift+Enter adds a newline. Notes are saved with the NoRotate flag, and it is honoured: on a page with /Rotate the icon stays upright with its top-left where it was placed, and is selected and hovered there (#2583). Not yet: opening the pop-ups a file saves open (/Open); NoZoom (the icon scales with the zoom); printing and flattening still place the icon in its /Rect, turned with the page."
 
 [[feature]]
 id = "comment.highlight"
@@ -3728,8 +3751,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.line"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment"]
-notes = ""
+evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/annot/src/tests.rs::a_positive_leader_length_puts_the_line_above_a_left_to_right_line_and_a_negative_one_below", "crates/annot/src/tests.rs::an_inline_caption_breaks_the_line_around_its_text"]
+notes = "A line without an appearance is drawn with its leader lines (/LL, /LLE, /LLO: the line sits |LL| + LLO from /L, on the left of travel for a positive /LL) and its caption (/Cap, /CP Inline or Top, /CO), endings at the line itself (ISO 32000-2 Table 178). Not yet: the tool can't add leader lines or a caption, the caption is always black Helvetica 10 (no /DS or rich-text styling), and drawing past /Rect is clipped (/Rect isn't grown)."
 
 [[feature]]
 id = "comment.arrow"
@@ -3912,6 +3935,18 @@ evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_defaul
 notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340)"
 
 [[feature]]
+id = "comment.keep-tool-selected"
+title = "Keep annotation tools selected between uses and restarts"
+area = "E"
+tier = "P2"
+milestone = "M14"
+status = "shipped"
+commands = ["comment.line"]
+tools = []
+evidence = ["crates/ui-egui/tests/it/comment_pin.rs::pin_from_quick_bar_survives_restart_and_unpinning", "crates/ui-egui/tests/it/comment_pin.rs::legacy_settings_keep_the_default_and_other_preferences", "crates/ui-egui/tests/it/comment_pin.rs::malformed_pin_values_preserve_the_current_choice", "crates/ui-egui/tests/it/control.rs::comment_pin_is_reported_and_persistent"]
+notes = "The annotation quick bar's shared pin survives restarts as a boolean setting (#4253); unpinning is remembered too. Old settings default to one-shot use, and malformed values keep the current choice. UI-only preference, reachable through opt-in ui.set key=comment-tool-pinned and reported by ui.state.comment_tool_pinned. Startup uses Select; the shared pin applies when an annotation tool is picked. Independent per-tool pins and restoring the active tool are outside this preference."
+
+[[feature]]
 id = "comment.author-identity"
 title = "Author name from identity preferences"
 area = "E"
@@ -3970,6 +4005,18 @@ commands = ["comment.list"]
 tools = ["comment_delete"]
 evidence = ["crates/ui-egui/tests/it/comments.rs::comments_are_selected_moved_and_deleted_with_the_select_tool", "crates/annot/src/tests.rs::delete_takes_popup_and_reply_chain"]
 notes = "deletes the pop-up and the reply thread"
+
+[[feature]]
+id = "comment.keyboard-nudge"
+title = "Move the selected comment with the arrow keys"
+area = "E"
+tier = "P2"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_edit"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::arrow_keys_nudge_the_selected_comment"]
+notes = "With a comment selected (Select tool, or a Fill & Sign mark picked up), an arrow key moves it a screen pixel and ⌘/Ctrl or Shift and an arrow ten, up being up on screen whatever the zoom and rotation; each press is one undo step, and the arrows scroll and turn pages again once nothing is selected. Text markup stays with its text and a locked comment where it is. Headless, comment_edit's `move` takes the offset in points."
 
 [[feature]]
 id = "comment.reshape"
@@ -4232,8 +4279,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.flatten"]
 tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_an_undrawn_reply_to_a_flattened_comment", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/it/automation.rs::flattening_through_tools", "crates/edit/src/tests.rs::flattening_comments_keeps_annotations_that_are_not_comments"]
-notes = "appearances become page content; pop-ups and replies removed; a comment or reply whose appearance cannot be drawn (a cloudy border, an unsupported subtype) stays as it is instead of being deleted; annotations that are not comments (links, 3D, Screen, Movie, RichMedia, PrinterMark, TrapNet, Watermark) are left in place (#3087)"
+evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_an_undrawn_reply_to_a_flattened_comment", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/it/automation.rs::flattening_through_tools", "crates/edit/src/tests.rs::flattening_comments_keeps_annotations_that_are_not_comments", "crates/ui-egui/tests/it/comments.rs::flatten_comments_from_the_page_menu_and_the_panel_menu"]
+notes = "also in the page's right-click menu and the Comments panel's More options menu; appearances become page content; pop-ups and replies removed; a comment or reply whose appearance cannot be drawn (a cloudy border, an unsupported subtype) stays as it is instead of being deleted; annotations that are not comments (links, 3D, Screen, Movie, RichMedia, PrinterMark, TrapNet, Watermark) are left in place (#3087)"
 
 [[feature]]
 id = "comment.migrate"
@@ -4256,7 +4303,7 @@ milestone = "M12"
 status = "partial"
 commands = ["measure.distance"]
 tools = ["measure_distance"]
-evidence = ["crates/automation/tests/it/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/measure/src/tests.rs::calibrated_lengths_concave_areas_and_axis_scales", "crates/ui-egui/tests/it/control.rs::measurement_tools_draw_live_calibrate_save_and_export"]
+evidence = ["crates/automation/tests/it/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/measure/src/tests.rs::calibrated_lengths_concave_areas_and_axis_scales", "crates/ui-egui/tests/it/control.rs::measurement_tools_draw_live_calibrate_save_and_export", "crates/ui-egui/tests/it/control.rs::a_plan_scale_picked_or_typed_applies_at_once", "crates/ui-egui/src/measure_ui.rs::typed_ratios_are_read_leniently"]
 notes = "Two-point distance annotations with saved numeric captions and rectilinear scales. Partial: only single-unit decimal formats; compound (ft-in) and fractional formats are not supported (listed as unsupported, data kept), no leader lines or caption placement options, geospatial scales unsupported, and interop with Acrobat-authored measurements (reading theirs, Acrobat reading ours) is untested."
 
 [[feature]]
@@ -4428,8 +4475,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/engine/src/tests.rs::validated_signatures_without_layers_keep_their_appearance", "crates/engine/src/tests.rs::real_layered_signatures_keep_their_original_appearance", "crates/engine/src/tests.rs::real_layered_signatures_round_trip_behind_a_user_password", "crates/engine/src/tests.rs::a_metadata_edit_keeps_the_original_signature_appearance", "crates/engine/src/tests.rs::saving_after_an_edit_keeps_the_baked_appearance", "crates/engine/src/tests.rs::chamfered_signature_borders_survive_trust_exports_printing_and_save", "crates/engine/src/tests.rs::mixed_signature_caption_details_survive_trust_exports_printing_and_save"]
-notes = "widgets retain their original artwork. Signature validation is a separate viewer page overlay; it is never written into document streams or included in image/text exports, vector printing or Print as Image. Saves retain signed appearance bytes. Generic in-place appearance rewriting is deferred: no supported producer template is positively identified, and caption text plus drawing uniqueness does not establish an icon role. Baked Not Verified captions remain unchanged; issue #79 is not fully resolved."
+evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/engine/src/tests.rs::validated_signatures_without_layers_keep_their_appearance", "crates/engine/src/tests.rs::real_layered_signatures_keep_their_original_appearance", "crates/engine/src/tests.rs::real_layered_signatures_round_trip_behind_a_user_password", "crates/engine/src/tests.rs::a_metadata_edit_keeps_the_original_signature_appearance", "crates/engine/src/tests.rs::saving_after_an_edit_keeps_the_baked_appearance", "crates/engine/src/tests.rs::chamfered_signature_borders_survive_trust_exports_printing_and_save", "crates/engine/src/tests.rs::mixed_signature_caption_details_survive_trust_exports_printing_and_save", "crates/engine/src/tests.rs::buttons_and_combs_left_to_the_viewer_are_displayed", "crates/forms/src/tests.rs::button_states_without_an_appearance"]
+notes = "widgets retain their original artwork. Signature validation is a separate viewer page overlay; it is never written into document streams or included in image/text exports, vector printing or Print as Image. Saves retain signed appearance bytes. Generic in-place appearance rewriting is deferred: no supported producer template is positively identified, and caption text plus drawing uniqueness does not establish an icon role. Baked Not Verified captions remain unchanged; issue #79 is not fully resolved. Check boxes and radio buttons with no appearance for their state are shown (display-only) with their /MK border and background and, when on, the /MK /CA ZapfDingbats symbol in the /DA colour (a check or a dot by default); push buttons with none show their /MK frame and caption; files that carry their own appearances are not redrawn."
 
 [[feature]]
 id = "form.fill-text"
@@ -4440,8 +4487,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["form_fill", "form_fields"]
-evidence = ["crates/ui-egui/tests/it/forms.rs::typing_into_a_text_field_and_tabbing_on", "crates/ui-egui/tests/it/forms.rs::auto_size_fields_shrink_and_wrap_typed_text_to_fit_their_box", "crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/engine/src/tests.rs::filling_a_form_shows_saves_and_undoes", "crates/automation/tests/it/automation.rs::orphan_form_fields_through_tools", "crates/forms/src/tests.rs::fields_sharing_a_name_take_the_same_value", "crates/ui-egui/tests/it/forms.rs::hovering_a_field_shows_its_tooltip", "crates/forms/src/tests.rs::zero_max_len_is_unlimited_and_overrides_inherited_limit"]
-notes = "in-place editor; Enter or clicking away commits, Escape cancels; auto-size (0 Tf) fields shrink, and multiline ones wrap, the text being typed to fit the box, on screen as on the page (the screen measures in the interface font, so its size can be a little smaller than the page's Helvetica fit); fixed sizes are kept and clip, as in Acrobat; no format/keystroke JavaScript yet (M6.4); resting the pointer on any field shows its tooltip (/TU), as Acrobat does (#3854); imported MaxLen 0 permits text input and overrides inherited limits; positive limits remain enforced."
+evidence = ["crates/ui-egui/tests/it/forms.rs::typing_into_a_text_field_and_tabbing_on", "crates/ui-egui/tests/it/forms.rs::auto_size_fields_shrink_and_wrap_typed_text_to_fit_their_box", "crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/engine/src/tests.rs::filling_a_form_shows_saves_and_undoes", "crates/automation/tests/it/automation.rs::orphan_form_fields_through_tools", "crates/forms/src/tests.rs::fields_sharing_a_name_take_the_same_value", "crates/ui-egui/tests/it/forms.rs::hovering_a_field_shows_its_tooltip", "crates/forms/src/tests.rs::zero_max_len_is_unlimited_and_overrides_inherited_limit", "crates/engine/src/tests.rs::password_field_values_are_kept_in_memory_but_written_to_no_file", "crates/forms/src/tests.rs::a_cleared_password_field_returns_to_its_default_value", "crates/forms/src/tests.rs::a_text_field_says_what_fits_it_as_its_appearance_draws_it", "crates/forms/src/tests.rs::an_edit_to_a_full_field_keeps_what_fits", "crates/ui-egui/tests/it/forms.rs::a_field_that_doesnt_scroll_stops_taking_text_when_full", "crates/ui-egui/tests/it/forms.rs::a_multi_line_auto_sized_field_that_doesnt_scroll_stops_when_full", "crates/engine/src/tests.rs::an_xfa_field_that_doesnt_scroll_opens_with_do_not_scroll_and_a_text_box", "crates/xfa/src/tests.rs::fields_that_dont_scroll_are_written_with_do_not_scroll", "crates/forms/src/tests.rs::comb_fields_show_their_cells"]
+notes = "in-place editor; Enter or clicking away commits, Escape cancels; auto-size (0 Tf) fields shrink, and multiline ones wrap, the text being typed to fit the box, on screen as on the page (the screen measures in the interface font, so its size can be a little smaller than the page's Helvetica fit); fixed sizes are kept and clip, as in Acrobat; a field that doesn't scroll (DoNotScroll, ISO 32000-2 Table 228, and XFA's hScrollPolicy/vScrollPolicy=\"off\", written as it) takes no more text than its appearance shows, measured in the field's own font, padding and size (the smallest automatic size, 4 pt, for 0 Tf): typing into a full field adds nothing, and a paste or a replaced selection keeps what fits (form_fill isn't interactive and still takes any value); no format/keystroke JavaScript yet (M6.4); resting the pointer on any field shows its tooltip (/TU), as Acrobat does (#3854); imported MaxLen 0 permits text input and overrides inherited limits; positive limits remain enforced. A text field with the Password flag is saved as Acrobat saves it (#3926, black-box test): the typed value is written to no file (Save, Save As, Reduce File Size, recovery, Extract/Split/Combine, signing); the field gets back its default value (/DV) or is left empty, and its asterisks are redrawn from that value. /DV and the field's scripts stay. Known limits, which Acrobat shares: a script that copies the password into an ordinary field saves it there (Acrobat recalculates a Calculate copy on save, PdfCraft does not), and an incremental save leaves a password stored by an earlier revision in that revision. A comb field with a border colour shows its MaxLen cells as lines in that colour, in the appearances PdfCraft saves and in display-only ones (up to 500 cells)."
 
 [[feature]]
 id = "form.fill-checkbox-radio"
@@ -4452,8 +4499,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["form_fill"]
-evidence = ["crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::check_boxes_and_radios_switch_states", "crates/ui-egui/tests/it/forms.rs::tab_and_space_fill_in_a_check_box_between_text_fields", "crates/ui-egui/tests/it/forms.rs::clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box", "crates/ui-egui/tests/it/forms.rs::radio_buttons_take_tab_space_and_arrows"]
-notes = "NoToggleToOff honoured; widgets without appearances get our own. Tab and Shift+Tab stop on check boxes and on each radio button, Space toggles the focused one, and the arrows move within a radio group (#2223); a click focuses the box too"
+evidence = ["crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::check_boxes_and_radios_switch_states", "crates/ui-egui/tests/it/forms.rs::tab_and_space_fill_in_a_check_box_between_text_fields", "crates/ui-egui/tests/it/forms.rs::clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box", "crates/ui-egui/tests/it/forms.rs::radio_buttons_take_tab_space_and_arrows", "crates/forms/src/tests.rs::a_round_xfa_check_button_draws_a_round_background_and_border", "crates/xfa/src/tests.rs::round_check_buttons_are_marked_for_a_round_appearance", "crates/engine/src/tests.rs::round_xfa_check_buttons_open_drawn_round"]
+notes = "NoToggleToOff honoured; widgets without appearances get our own, drawn round for an XFA check button with shape=\"round\" (its background and border a circle inside the widget, as another viewer draws them on a synthetic form). Tab and Shift+Tab stop on check boxes and on each radio button, Space toggles the focused one, and the arrows move within a radio group (#2223); a click focuses the box too"
 
 [[feature]]
 id = "form.fill-choice"
@@ -4464,8 +4511,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["form_fill"]
-evidence = ["crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text"]
-notes = "combo and list boxes, multi-select lists; editable combo boxes accept free text"
+evidence = ["crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/ui-egui/tests/it/forms.rs::an_editable_combo_box_takes_a_typed_value", "crates/ui-egui/tests/it/forms.rs::a_combo_box_without_edit_takes_no_typing", "crates/automation/tests/it/automation.rs::form_fill_takes_free_text_only_in_an_editable_combo_box"]
+notes = "combo and list boxes, multi-select lists; an editable combo box (Edit flag) has a text box over the field as well as its list, and takes typed text on the page and through form_fill; a combo box without Edit takes only its options. No type-ahead or spell check in the typed box"
 
 [[feature]]
 id = "form.push-buttons"
@@ -4644,8 +4691,8 @@ milestone = "M6"
 status = "shipped"
 commands = []
 tools = ["form_fill"]
-evidence = ["crates/ui-egui/tests/it/forms.rs::date_fields_offer_a_calendar", "crates/ui-egui/tests/it/forms.rs::the_calendar_follows_a_complete_date_typed_while_it_is_open"]
-notes = "a month calendar under date fields; the pick is written in the field's own date format; it opens on the field's date and moves to a whole date typed while it is open, staying on the month its arrows turned to otherwise"
+evidence = ["crates/ui-egui/tests/it/forms.rs::date_fields_offer_a_calendar", "crates/ui-egui/tests/it/forms.rs::the_calendar_follows_a_complete_date_typed_while_it_is_open", "crates/ui-egui/tests/it/forms.rs::the_calendar_picks_today_in_the_fields_format_from_any_month"]
+notes = "a month calendar under date fields; the pick is written in the field's own date format; it opens on the field's date and moves to a whole date typed while it is open, staying on the month its arrows turned to otherwise; a Today button under the days picks today from whichever month it shows, as a click on its day would (#4274)"
 
 [[feature]]
 id = "form.auto-complete"
@@ -4956,8 +5003,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_actions", "form_set_actions"]
-evidence = ["crates/forms/src/tests.rs::field_actions_round_trip_on_every_trigger", "crates/automation/tests/it/automation.rs::field_actions_through_tools", "crates/ui-egui/tests/it/prepare.rs::actions_tab_adds_and_removes_actions"]
-notes = "Six triggers; Run a JavaScript, Open a web link, Reset a form, Execute a menu item, Go to a page view, Show/hide a field, Submit a form. Other action types are kept."
+evidence = ["crates/forms/src/tests.rs::field_actions_round_trip_on_every_trigger", "crates/automation/tests/it/automation.rs::field_actions_through_tools", "crates/ui-egui/tests/it/prepare.rs::actions_tab_adds_and_removes_actions", "crates/ui-egui/tests/it/prepare.rs::actions_tab_edits_the_script_of_an_existing_action", "crates/forms/src/tests.rs::editing_one_script_keeps_the_other_actions_and_the_chain", "crates/forms/src/tests.rs::replacing_a_chained_action_with_another_type_keeps_the_chain", "crates/ui-egui/tests/it/prepare.rs::actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced"]
+notes = "Six triggers; Run a JavaScript, Open a web link, Reset a form, Execute a menu item, Go to a page view, Show/hide a field, Submit a form. Other action types are kept. Edit opens the script of an existing Run a JavaScript action; unchanged actions are kept as they are, and replacing a trigger's first action keeps the actions chained after it, which the row counts. Edit for the other action types, and editing the chained actions, are missing."
 
 [[feature]]
 id = "form.props-format"
@@ -5069,8 +5116,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::locked_fields_only_take_unlocking", "crates/ui-egui/tests/it/prepare.rs::preview_fills_the_form_and_locked_fields_keep_their_properties", "crates/forms/src/tests.rs::renaming_a_kid_is_checked_against_the_full_name_it_takes", "crates/forms/src/tests.rs::renaming_a_top_level_field_is_still_checked_against_top_level_names"]
-notes = "rename in Field Properties ▸ General; Locked sets the widgets' annotation Locked flag (/F bit 8) and greys out the properties until unlocked; values can still be filled in"
+evidence = ["crates/forms/src/tests.rs::locked_fields_only_take_unlocking", "crates/ui-egui/tests/it/prepare.rs::preview_fills_the_form_and_locked_fields_keep_their_properties", "crates/forms/src/tests.rs::renaming_a_kid_is_checked_against_the_full_name_it_takes", "crates/forms/src/tests.rs::renaming_a_top_level_field_is_still_checked_against_top_level_names", "crates/forms/src/tests.rs::dotted_field_names_are_made_with_parent_fields"]
+notes = "rename in Field Properties ▸ General, which shows the full name; a dotted name (MASTER.first) is a full name and makes or joins parent fields, as Acrobat does, moving a renamed field with what it inherited (#2696); Prepare a form's table tool still refuses a period in the cell names it makes; a plain name renames the field within its parent, so the GUI cannot yet move a nested field to the top level; Locked sets the widgets' annotation Locked flag (/F bit 8) and greys out the properties until unlocked; values can still be filled in"
 
 [[feature]]
 id = "form.tab-order"
@@ -5141,8 +5188,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["tools.document_js"]
 tools = ["js_document_scripts", "js_set_document_script"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::document_scripts_and_preferences", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats"]
-notes = "Names /JavaScript tree: list, add, edit, delete; functions are available to field scripts."
+evidence = ["crates/ui-egui/tests/it/javascript.rs::document_scripts_and_preferences", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/engine/src/tests.rs::a_document_script_that_throws_still_lets_the_form_calculate"]
+notes = "Names /JavaScript tree: list, add, edit, delete; functions are available to field scripts. A script that throws (calling an Acrobat method PdfCraft lacks, say) stops where it failed, but the others and the field scripts still run and the error is reported once (js_run's document_errors, the console) (#3940). Not like Acrobat: the scripts run again before every field script instead of once when the document opens, so what they do at top level repeats."
 
 [[feature]]
 id = "form.document-actions"
@@ -5165,8 +5212,8 @@ milestone = "M6"
 status = "partial"
 commands = ["tools.js_console"]
 tools = ["js_run"]
-evidence = ["crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/js/src/tests.rs::an_xfa_form_sees_the_xfa_plugin_installed", "crates/js/src/tests.rs::a_plain_form_sees_the_xfa_version_but_not_installed", "crates/engine/src/tests.rs::scripts_in_an_xfa_form_see_the_xfa_plugin_installed"]
-notes = "boa (pure Rust) with the forms object model: event, getField/Field (value, readonly, display, colours, items, check boxes), app, util.printf/printd/printx, console, display, color; xfa_version (3.5) in every document and xfa_installed in XFA forms, so their version check passes; no annotations, layers or dialogs (app.response returns null) yet, and no app.findComponent."
+evidence = ["crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/js/src/tests.rs::an_xfa_form_sees_the_xfa_plugin_installed", "crates/js/src/tests.rs::a_plain_form_sees_the_xfa_version_but_not_installed", "crates/engine/src/tests.rs::scripts_in_an_xfa_form_see_the_xfa_plugin_installed", "crates/js/src/tests.rs::scand_allows_separators_between_fields_but_nothing_before_or_after_them"]
+notes = "boa (pure Rust) with the forms object model: event, getField/Field (value, readonly, display, colours, items, check boxes), app (with execMenuItem for the side panels and Save As, from a button only, and Print where this.print() works), util.printf/printd/printx/scand (scand reads dates as another viewer was observed to, in AcroForm and XFA scripts), console, display, color; xfa_version (3.5) in every document and xfa_installed in XFA forms, so their version check passes; no annotations, layers or dialogs (app.response returns null) yet, and no app.findComponent."
 
 [[feature]]
 id = "form.js-console"
@@ -5249,8 +5296,8 @@ milestone = "M12"
 status = "partial"
 commands = ["file.open"]
 tools = ["doc_open", "doc_info", "form_fields", "form_fill", "js_run"]
-evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/it/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/it/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/engine/src/tests.rs::xfa_date_arithmetic_reads_the_date_as_its_display_picture_shows_it", "crates/automation/tests/it/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/it/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/ui-egui/tests/it/xfa.rs::a_form_whose_scripts_were_turned_off_at_open_says_so", "crates/ui-egui/tests/it/xfa.rs::scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back", "crates/automation/tests/it/automation.rs::doc_info_says_when_a_runaway_script_turned_the_forms_scripts_off", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite", "crates/xfa/src/tests.rs::choice_lists_signatures_passwords_and_pictures_become_fields_and_images", "crates/xfa/src/tests.rs::choice_values_come_from_the_data_as_saved_values_and_several_for_lists", "crates/xfa/src/tests.rs::pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated", "crates/engine/src/tests.rs::xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save", "crates/xfa/src/tests.rs::repeating_subforms_inside_positioned_content_get_their_instances", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them", "crates/xfa/src/tests.rs::page_area_without_occur_serves_every_body_page", "apps/pdfcraft-cli/tests/it/xfa.rs::info_reports_the_laid_out_pages_and_fields", "apps/pdfcraft-cli/tests/it/xfa.rs::text_reads_the_layout_including_a_page_absent_from_the_placeholder", "apps/pdfcraft-cli/tests/it/xfa.rs::render_matches_the_engine_layout_on_the_second_page", "apps/pdfcraft-cli/tests/it/xfa.rs::a_laid_out_form_keeps_the_original_copy_permissions", "crates/engine/src/tests.rs::filling_growable_xfa_text_reflows_and_undo_restores_the_layout", "crates/engine/src/tests.rs::xfa_text_growth_refreshes_widget_geometry_but_fixed_height_fields_keep_their_widgets", "crates/automation/tests/it/automation.rs::growable_xfa_text_paginates_after_fill_save_and_print", "crates/engine/src/tests.rs::an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error", "crates/engine/src/tests.rs::repeated_xfa_print_buttons_run_their_click_script", "crates/automation/tests/it/automation.rs::repeated_xfa_print_buttons_work_through_tools_and_after_reopen", "crates/xfa/src/tests.rs::rich_text_max_length_reaches_the_field_and_layout", "crates/automation/tests/it/automation.rs::xfa_rich_text_max_length_is_reported_and_enforced_through_tools", "crates/xfa/src/tests.rs::bmp_and_tiff_pictures_are_decoded_and_drawn"]
-notes = "Changed growable multiline text (no fixed h) reflows from final datasets after edits, with or without scripts; pages/widgets refresh and undo/redo, save/reopen and print retain all text. Oversized text still uses the existing read-only page-text fallback with a warning; fixed-height fields do not reflow. Repeated page-master buttons resolve their own PDF field to the shared XFA click script; the numPages-based print script requests printing from every copy, including after save/reopen (#2572). Rich-text exData/maxLength is carried into AcroForm MaxLen, reported by form_fields and enforced by form_fill (Unicode characters); limits and accepted values survive save/reopen (#2570). laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters (a page area with no occur repeats without limit, one with occur max=1 is used once, one with occur min=1 the body never reached gets a page after the body, as Acrobat Pro does on a synthetic form), breaks, repeated header rows, captions, rich text, JPEG/PNG/GIF/BMP/TIFF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes, radio groups, drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. CLI info reports the laid-out page/field counts and dimensions while retaining the input file size and raw counts as pdf_pages/acroform_fields; text and render use those pages too, preserving copy permissions and leaving the source file unchanged (#1645). XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, formattedValue in a date display picture's pattern (number and text display pictures still give the raw value), presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. All the scripts of one event run on one thread, each in a fresh context on the form as the engine holds it then (nothing shared between scripts; the live form kept up to date in place for values, rebuilt only when the structure changed), so hundreds of calculations run within the open budget. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off, which the app says in a toast and on the notice bar, with a button to the JavaScript console, and doc_info reports as xfa_scripts_off) and what open-time scripts changed is noted. A script that fails partway keeps what it changed before the error, as JavaScript does (forms often trip over an object an earlier version had after their first lines did the work). Missing: a page area's relevant=\"-print\" (on a synthetic form Acrobat still prints the page but leaves it blank; PdfCraft prints its content, #2574); a page break before the first section (Acrobat opens an empty body page first when the first section has breakBefore targetType=pageArea, with or without startNew, as seen on synthetic forms; PdfCraft skips a break on an empty page and lays out one page fewer, #2574); loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; barcodes are drawn as their text, not bars; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
+evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/it/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/it/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/engine/src/tests.rs::xfa_date_arithmetic_reads_the_date_as_its_display_picture_shows_it", "crates/automation/tests/it/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/it/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/ui-egui/tests/it/xfa.rs::a_form_whose_scripts_were_turned_off_at_open_says_so", "crates/ui-egui/tests/it/xfa.rs::scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back", "crates/automation/tests/it/automation.rs::doc_info_says_when_a_runaway_script_turned_the_forms_scripts_off", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite", "crates/xfa/src/tests.rs::choice_lists_signatures_passwords_and_pictures_become_fields_and_images", "crates/xfa/src/tests.rs::choice_values_come_from_the_data_as_saved_values_and_several_for_lists", "crates/xfa/src/tests.rs::pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated", "crates/engine/src/tests.rs::xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save", "crates/xfa/src/tests.rs::repeating_subforms_inside_positioned_content_get_their_instances", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them", "crates/xfa/src/tests.rs::page_area_without_occur_serves_every_body_page", "apps/pdfcraft-cli/tests/it/xfa.rs::info_reports_the_laid_out_pages_and_fields", "apps/pdfcraft-cli/tests/it/xfa.rs::text_reads_the_layout_including_a_page_absent_from_the_placeholder", "apps/pdfcraft-cli/tests/it/xfa.rs::render_matches_the_engine_layout_on_the_second_page", "apps/pdfcraft-cli/tests/it/xfa.rs::a_laid_out_form_keeps_the_original_copy_permissions", "crates/engine/src/tests.rs::filling_growable_xfa_text_reflows_and_undo_restores_the_layout", "crates/engine/src/tests.rs::xfa_text_growth_refreshes_widget_geometry_but_fixed_height_fields_keep_their_widgets", "crates/automation/tests/it/automation.rs::growable_xfa_text_paginates_after_fill_save_and_print", "crates/engine/src/tests.rs::an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error", "crates/engine/src/tests.rs::repeated_xfa_print_buttons_run_their_click_script", "crates/automation/tests/it/automation.rs::repeated_xfa_print_buttons_work_through_tools_and_after_reopen", "crates/xfa/src/tests.rs::rich_text_max_length_reaches_the_field_and_layout", "crates/automation/tests/it/automation.rs::xfa_rich_text_max_length_is_reported_and_enforced_through_tools", "crates/xfa/src/tests.rs::bmp_and_tiff_pictures_are_decoded_and_drawn", "crates/engine/src/tests.rs::active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts", "crates/engine/src/tests.rs::active_xfa_without_template_scripts_does_not_initialize_pdf_fallback_scripts", "crates/engine/src/tests.rs::inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts", "crates/automation/tests/it/automation.rs::active_xfa_skips_container_fallback_scripts_after_save_and_reopen", "crates/xfa/src/tests.rs::laying_a_form_out_takes_off_the_usage_rights_it_voids", "crates/engine/src/tests.rs::a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided", "crates/xfa/src/tests.rs::faces_measure_text_at_their_standard_14_widths", "crates/xfa/src/tests.rs::rich_text_links_keep_their_address", "crates/xfa/src/tests.rs::links_in_rich_text_become_link_annotations_one_per_line", "crates/xfa/src/tests.rs::a_links_pieces_share_one_address", "crates/xfa/src/tests.rs::a_rule_between_two_pieces_of_a_link_keeps_them_apart", "crates/xfa/src/tests.rs::links_to_anything_but_web_and_email_addresses_stay_plain_text", "crates/automation/tests/it/automation.rs::links_in_xfa_rich_text_are_listed_through_tools", "crates/xfa/src/tests.rs::rounded_corners_make_a_border_one_rounded_shape", "crates/xfa/src/tests.rs::a_rounded_box_cut_by_a_page_break_keeps_its_corners_on_each_page", "crates/xfa/src/tests.rs::rounded_boxes_are_written_as_curved_paths", "crates/xfa/src/tests.rs::a_flowed_subform_is_drawn_with_its_border_under_its_content", "crates/xfa/src/tests.rs::a_check_box_sits_where_its_margins_caption_and_alignment_put_it", "crates/xfa/src/tests.rs::a_check_box_caption_without_a_reserve_takes_the_rest_of_the_field", "crates/xfa/src/tests.rs::a_radio_button_sits_where_a_check_box_would", "crates/xfa/src/tests.rs::a_check_box_caption_without_a_reserve_is_measured_as_it_is_drawn"]
+notes = "Active XFA layout skips PDF-container document-script initialization for the Acrobat console/field context, so fallback-viewer scripts do not run there. Scripts remain in the file/listing; explicit console/field and XFA alerts still run. Ordinary PDF, static XFA and unlaid-out shells keep document scripts; static-conversion undo restores the XFA policy. Changed growable multiline text (no fixed h) reflows from final datasets after edits, with or without scripts; pages/widgets refresh and undo/redo, save/reopen and print retain all text. Oversized text still uses the existing read-only page-text fallback with a warning; fixed-height fields do not reflow. Repeated page-master buttons resolve their own PDF field to the shared XFA click script; the numPages-based print script requests printing from every copy, including after save/reopen (#2572). Rich-text exData/maxLength is carried into AcroForm MaxLen, reported by form_fields and enforced by form_fill (Unicode characters); limits and accepted values survive save/reopen (#2570). laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters (a page area with no occur repeats without limit, one with occur max=1 is used once, one with occur min=1 the body never reached gets a page after the body, as Acrobat Pro does on a synthetic form), breaks, repeated header rows, borders and fills of flowed subforms (a page break between their children gives each page's part a closed border, the margins repeated at the cut, as measured on a synthetic form in another viewer, and a child's own page break breaks them the same way; one holding an item that doesn't fit on its page, cut across pages or placed past the content area's bottom, is drawn without its border, with a layout warning), captions, rounded and inverted border corners, rich text (its http, https and mailto links clickable), JPEG/PNG/GIF/BMP/TIFF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes and radio groups (each box placed by its field's margins, caption and paragraph alignment as measured on two synthetic forms in another viewer: with no caption at the right of the content area, beside a reserved caption where the alignment puts it, and a caption without a reserve taking the rest of the field; a check box's own margin larger than the box draws a bigger box there, which isn't copied), drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; usage rights the form carried (/Perms /UR3) are taken off with a note, as the layout voids them and a form with void usage rights opens with every field locked; doc_info reports xfa_layout. CLI info reports the laid-out page/field counts and dimensions while retaining the input file size and raw counts as pdf_pages/acroform_fields; text and render use those pages too, preserving copy permissions and leaving the source file unchanged (#1645). XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, formattedValue in a date display picture's pattern (number and text display pictures still give the raw value), presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. All the scripts of one event run on one thread, each in a fresh context on the form as the engine holds it then (nothing shared between scripts; the live form kept up to date in place for values, rebuilt only when the structure changed), so hundreds of calculations run within the open budget. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off, which the app says in a toast and on the notice bar, with a button to the JavaScript console, and doc_info reports as xfa_scripts_off) and what open-time scripts changed is noted. A script that fails partway keeps what it changed before the error, as JavaScript does (forms often trip over an object an earlier version had after their first lines did the work). Missing: a page area's relevant=\"-print\" (on a synthetic form Acrobat still prints the page but leaves it blank; PdfCraft prints its content, #2574); a page break before the first section (Acrobat opens an empty body page first when the first section has breakBefore targetType=pageArea, with or without startNew, as seen on synthetic forms; PdfCraft skips a break on an empty page and lays out one page fewer, #2574); loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; barcodes are drawn as their text, not bars; keep rules; text is measured at the exact standard-14 widths of the face it is drawn in (bold, italic and Times included), not in the template's own typefaces, and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
 
 [[feature]]
 id = "form.xfa-formcalc"
@@ -5637,8 +5684,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.search"]
 tools = ["redact_mark"]
-evidence = ["crates/redact/src/patterns.rs::phone_numbers", "crates/redact/src/patterns.rs::slashed_and_labelled_unseparated_phone_numbers", "crates/redact/src/patterns.rs::credit_cards_need_a_valid_checksum", "crates/automation/tests/it/automation.rs::redacting_through_tools"]
-notes = "phone (North American, E.164 with + country code, national with trunk 0, a slash after a trunk-0 area code; numbers without separators only after a phone label such as Tel. or cell.), e-mail, credit card (Luhn), SSN, dates (English US forms); text drawn in a font whose built-in encoding we hold no table for (Symbol, ZapfDingbats, MacExpert) has no Unicode mapping, so a pattern search cannot see it -- it is skipped rather than mis-decoded"
+evidence = ["crates/redact/src/patterns.rs::labelled_italian_international_slash_numbers_match_whole", "crates/automation/tests/it/automation.rs::redacting_italian_international_slash_numbers_through_tools", "crates/redact/src/patterns.rs::phone_numbers", "crates/redact/src/patterns.rs::slashed_and_labelled_unseparated_phone_numbers", "crates/redact/src/patterns.rs::credit_cards_need_a_valid_checksum", "crates/automation/tests/it/automation.rs::redacting_through_tools"]
+notes = "phone (North American, E.164 with + country code, national with trunk 0, a slash after a trunk-0 area code; labelled Italian +39 geographic numbers with one slash after the area code match with their complete country code (#3205 follow-up), with or without one space after +39; international slash numbers without a phone label, or with country codes other than +39, remain unsupported; numbers without separators only after a phone label such as Tel. or cell.), e-mail, credit card (Luhn), SSN, dates (English US forms); text drawn in a font whose built-in encoding we hold no table for (Symbol, ZapfDingbats, MacExpert) has no Unicode mapping, so a pattern search cannot see it -- it is skipped rather than mis-decoded"
 
 [[feature]]
 id = "protect.redact-pattern-locales"
@@ -5842,7 +5889,7 @@ status = "partial"
 commands = []
 tools = ["doc_audit_redactions"]
 evidence = ["crates/audit/src/tests.rs::faux_redaction_is_found", "crates/audit/src/tests.rs::background_before_text_is_not_flagged", "crates/audit/src/tests.rs::light_shading_after_text_is_not_flagged", "crates/audit/src/tests.rs::graphics_state_carries_across_streams", "crates/audit/src/tests.rs::audit_fails_closed_on_undecodable_stream", "crates/audit/src/tests.rs::unapplied_redact_mark_is_found", "crates/audit/src/tests.rs::applied_redaction_at_the_end_of_a_line_is_not_flagged", "crates/audit/src/tests.rs::faux_redaction_at_the_end_of_a_line_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_short_value_after_a_long_label_is_found", "crates/audit/src/tests.rs::faux_redaction_over_mirrored_text_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_partial_value_after_a_long_label_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_partial_value_after_a_long_label_on_a_rotated_page_is_found", "crates/audit/src/tests.rs::faux_redactions_with_multiple_covers_lines_and_spacing_are_found", "crates/audit/src/tests.rs::a_cover_over_one_word_of_a_long_line_is_found", "crates/audit/src/tests.rs::a_box_grazing_a_word_is_not_flagged", "crates/automation/tests/it/automation.rs::auditing_faux_redactions_through_tools", "crates/automation/tests/it/automation.rs::an_applied_redaction_at_the_end_of_a_line_audits_clean", "crates/audit/src/tests.rs::rectangle_drawn_as_a_path_covers_text_like_re", "crates/audit/src/tests.rs::non_rectangular_path_is_not_a_cover", "apps/pdfcraft-cli/tests/it/audit.rs::audit_rectangles_match_the_tool_in_top_left_points", "crates/audit/src/tests.rs::rectangle_filled_after_restore_is_a_cover", "crates/audit/src/tests.rs::later_text_on_the_line_does_not_clear_an_earlier_cover", "crates/audit/src/tests.rs::indirect_subtype_is_resolved", "crates/audit/src/tests.rs::copy_restricted_documents_withhold_covered_text", "crates/audit/src/tests.rs::cover_and_line_comparisons_are_bounded", "crates/audit/src/tests.rs::covered_text_across_findings_is_bounded"]
-notes = "New pdfcraft-audit crate. A filled rectangle (re + fill, or a single m/l subpath whose corners form an axis-aligned rectangle, #1510; opaque) counts as a cover only when painted after the start of the text line it overlaps and dark enough to hide it (WCAG contrast < 3.0); page backgrounds, table shading and highlights are not flagged. Coverage is measured on the words a line draws, not its box, so the gap an applied redaction leaves is not counted as hidden text; a cover over 40% of the line's box still counts when it has a positive-area intersection with one word, so a short value after a long label is found. A cover hiding half of any one word counts too (#2662), so a box over one number in a long line, or an unapplied mark over it, is found; a sliver under half of every word it touches and under 40% of the line is not flagged. Graphics state carries across a page's content streams. Fails closed: undecodable content, or more than 50 million cover-against-word comparisons on a page or 64 MiB of covered text in the report, is an error, never a clean bill. A document that withholds copying gets every finding with the covered text left out. Also flags /Redact annotations never applied. CLI: pdfcraft-cli audit (fails when findings exist). Tool and CLI report rectangles in points from the top-left of the displayed page, after /Rotate and rounded to 0.01 pt, like the other tools."
+notes = "New pdfcraft-audit crate. A filled rectangle (re + fill, or a single m/l subpath whose corners form an axis-aligned rectangle, #1510; opaque) counts as a cover only when painted after the start of the text line it overlaps and dark enough to hide it (WCAG contrast < 3.0); page backgrounds, table shading and highlights are not flagged. Coverage is measured on the words a line draws, not its box, so the gap an applied redaction leaves is not counted as hidden text; a cover over 40% of the line's box still counts when it has a positive-area intersection with one word, so a short value after a long label is found. A cover hiding half of any one word counts too (#2662), so a box over one number in a long line, or an unapplied mark over it, is found; a sliver under half of every word it touches and under 40% of the line is not flagged. Graphics state carries across a page's content streams. Fails closed: undecodable content, or more than 50 million cover-against-word comparisons on a page or 64 MiB of covered text in the report, is an error, never a clean bill. A finding's covered text is the runs of the line whose words the cover overlaps, not the words of the line painted beside it (#4164); a line of one run, a right-to-left or visual-order line, or a cover over none of its words reports the whole line. A document that withholds copying gets every finding with the covered text left out. Also flags /Redact annotations never applied. CLI: pdfcraft-cli audit (fails when findings exist). Tool and CLI report rectangles in points from the top-left of the displayed page, after /Rotate and rounded to 0.01 pt, like the other tools."
 
 [[feature]]
 id = "protect.remove-hidden-on-close"
@@ -6569,8 +6616,8 @@ milestone = "M10"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open"]
-notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Still missing: Acrobat's Recognize Text output that converts a whole page to editable text at once, matching the scanned typeface (the layer's Helvetica is used), and covering on a textured or patterned background (one flat colour is used)."
+evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
+notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), and covering on a textured or patterned background (one flat colour is used)."
 
 [[feature]]
 id = "ocr.ocr-downsample"
@@ -7005,8 +7052,8 @@ milestone = "M10"
 status = "partial"
 commands = ["export.docx"]
 tools = ["doc_export_office"]
-evidence = ["crates/edit/src/tests.rs::reading_keeps_dotted_leader_entries_whole_and_in_order", "crates/engine/src/tests.rs::exporting_office_keeps_dotted_leader_entries_as_paragraphs", "crates/export/src/lib.rs::word_does_not_invent_borders_for_aligned_invoice_fields", "crates/export/src/lib.rs::word_overlap_does_not_consume_invoice_body_space", "crates/export/src/lib.rs::word_keeps_a_page_with_a_clear_image_and_big_title_in_flow", "crates/export/src/lib.rs::word_rotated_pages_keep_separate_page_sizes_and_unique_shapes", "crates/engine/src/tests.rs::office_export_positions_follow_the_displayed_crop_rotation_and_units", "crates/automation/tests/it/automation.rs::exporting_an_invoice_to_word_keeps_the_watermark_out_of_flow", "crates/export/src/lib.rs::docx_is_a_word_package", "crates/export/src/lib.rs::text_colour_survives_every_format", "crates/engine/src/tests.rs::exporting_office_files_keeps_text_colour", "crates/export/src/lib.rs::grid_text_becomes_a_real_table_in_every_format", "crates/export/src/lib.rs::a_link_inside_a_sentence_is_not_a_table_column", "crates/export/src/lib.rs::sentences_that_run_on_into_links_are_not_a_table", "crates/export/src/lib.rs::a_superscript_beside_a_number_keeps_its_table", "crates/export/src/lib.rs::word_opens_text_with_control_characters_and_long_pages", "crates/engine/src/tests.rs::exporting_office_files_keeps_images", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf", "crates/export/src/lib.rs::docx_keeps_a_shared_page_background", "crates/edit/src/tests.rs::a_page_painted_first_with_a_full_page_fill_has_that_background", "crates/engine/src/tests.rs::exporting_to_word_keeps_the_page_background"]
-notes = "Flowing Word document: paragraphs, Heading 1/2 from larger text, bold/italic, text colour (fill as sRGB; gray/CMYK converted naively, colour spaces via cs/sc read as black), borderless detected tables with spans/empty cells (a row whose blocks run on into each other, such as a link or superscript inside a sentence, or overlap, as a paragraph's lines do, is text and not a table row, #2806), per-page sections/sizes, the page colour (a full-page opaque fill painted first, such as Edit a PDF ▸ Background) as the document background when every page shares one non-white colour (Word has no per-page background, so differing colours are dropped; #2992; checked in the XML only, not yet opened in Word), and positioned editable text/artwork only for pages with rotated text or text overlapped by an image or watermark-sized text, other pages flowing with inline images (#773); synthetic invoice regression; dotted-leader contents entries keep the title, dots and page number together in separate paragraphs (#1757); the emitted package validates with Open XML SDK 2.20 (Office 2010 schema). Word/LibreOffice rendering of the positioned output remains unverified. Pictures on positioned pages are DrawingML anchors behind the text (a VML rectangle with an image showed no picture, #1936; not yet opened in Word); a Word file embeds at most 1000 pictures and 512 MiB of them. The earlier flowing output was checked with macOS textutil and opened in Microsoft Word (Windows). Characters XML forbids are dropped; the page size stays within Word's 22 in. Not yet: exact font matching, vector rules, arbitrary paint-order/transparency, colour per run within a paragraph, general exact layout fidelity."
+evidence = ["crates/export/src/lib.rs::word_table_cell_widths_follow_the_columns_they_span", "crates/export/src/lib.rs::table_spans_do_not_consume_text_they_do_not_emit", "crates/edit/src/tests.rs::reading_keeps_dotted_leader_entries_whole_and_in_order", "crates/engine/src/tests.rs::exporting_office_keeps_dotted_leader_entries_as_paragraphs", "crates/export/src/lib.rs::word_does_not_invent_borders_for_aligned_invoice_fields", "crates/export/src/lib.rs::word_overlap_does_not_consume_invoice_body_space", "crates/export/src/lib.rs::word_keeps_a_page_with_a_clear_image_and_big_title_in_flow", "crates/export/src/lib.rs::word_rotated_pages_keep_separate_page_sizes_and_unique_shapes", "crates/engine/src/tests.rs::office_export_positions_follow_the_displayed_crop_rotation_and_units", "crates/automation/tests/it/automation.rs::exporting_an_invoice_to_word_keeps_the_watermark_out_of_flow", "crates/export/src/lib.rs::docx_is_a_word_package", "crates/export/src/lib.rs::text_colour_survives_every_format", "crates/engine/src/tests.rs::exporting_office_files_keeps_text_colour", "crates/export/src/lib.rs::grid_text_becomes_a_real_table_in_every_format", "crates/export/src/lib.rs::a_link_inside_a_sentence_is_not_a_table_column", "crates/export/src/lib.rs::sentences_that_run_on_into_links_are_not_a_table", "crates/export/src/lib.rs::a_superscript_beside_a_number_keeps_its_table", "crates/export/src/lib.rs::word_opens_text_with_control_characters_and_long_pages", "crates/engine/src/tests.rs::exporting_office_files_keeps_images", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf", "crates/export/src/lib.rs::docx_keeps_a_shared_page_background", "crates/edit/src/tests.rs::a_page_painted_first_with_a_full_page_fill_has_that_background", "crates/engine/src/tests.rs::exporting_to_word_keeps_the_page_background"]
+notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. Flowing Word document: paragraphs, Heading 1/2 from larger text, bold/italic, text colour (fill as sRGB; gray/CMYK converted naively, colour spaces via cs/sc read as black), borderless detected tables with spans/empty cells (cell widths sum the grid columns they occupy, including cells after spans, verified in the XML; a row whose blocks run on into each other, such as a link or superscript inside a sentence, or overlap, as a paragraph's lines do, is text and not a table row, #2806), per-page sections/sizes, the page colour (a full-page opaque fill painted first, such as Edit a PDF ▸ Background) as the document background when every page shares one non-white colour (Word has no per-page background, so differing colours are dropped; #2992; checked in the XML only, not yet opened in Word), and positioned editable text/artwork only for pages with rotated text or text overlapped by an image or watermark-sized text, other pages flowing with inline images (#773); synthetic invoice regression; dotted-leader contents entries keep the title, dots and page number together in separate paragraphs (#1757); the emitted package validates with Open XML SDK 2.20 (Office 2010 schema). Word/LibreOffice rendering of the positioned output remains unverified. Pictures on positioned pages are DrawingML anchors behind the text (a VML rectangle with an image showed no picture, #1936; not yet opened in Word); a Word file embeds at most 1000 pictures and 512 MiB of them. The earlier flowing output was checked with macOS textutil and opened in Microsoft Word (Windows). Characters XML forbids are dropped; the page size stays within Word's 22 in. Not yet: exact font matching, vector rules, arbitrary paint-order/transparency, colour per run within a paragraph, general exact layout fidelity."
 
 [[feature]]
 id = "create.export-rtf"
@@ -7017,8 +7064,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.rtf"]
 tools = ["doc_export_office"]
-evidence = ["crates/export/src/lib.rs::rtf_escapes_and_sizes", "crates/export/src/lib.rs::text_colour_survives_every_format", "crates/export/src/lib.rs::word_opens_text_with_control_characters_and_long_pages", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf"]
-notes = "Paragraphs with sizes, bold, italic, text colour (colortbl), Unicode; page breaks. Images are left out."
+evidence = ["crates/export/src/lib.rs::table_spans_do_not_consume_text_they_do_not_emit", "crates/export/src/lib.rs::rtf_escapes_and_sizes", "crates/export/src/lib.rs::text_colour_survives_every_format", "crates/export/src/lib.rs::word_opens_text_with_control_characters_and_long_pages", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf"]
+notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. Paragraphs with sizes, bold, italic, text colour (colortbl), Unicode; page breaks. Images are left out."
 
 [[feature]]
 id = "create.export-xlsx"
@@ -7041,7 +7088,7 @@ milestone = "M10"
 status = "partial"
 commands = ["export.pptx"]
 tools = ["doc_export_office"]
-evidence = [
+evidence = ["crates/export/src/lib.rs::table_spans_do_not_consume_text_they_do_not_emit",
     "crates/export/src/pptx.rs::pptx_is_a_presentationml_package",
     "crates/export/src/pptx.rs::pptx_slide_has_title_body_and_images_in_order",
     "crates/export/src/pptx.rs::pptx_text_colour_and_formatting",
@@ -7058,7 +7105,7 @@ evidence = [
     "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf",
     "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf",
 ]
-notes = "PowerPoint presentation: each page becomes a slide, with the largest non-table text as slide title, remaining paragraphs as body text, images and detected tables in reading order; DrawingML formatting (font size, bold, italic, text fill colour, cell borders); wired into engine command export.pptx, automation tool doc_export_office, and Export dialog. Missing: content past the slide bottom is not paginated or shrunk across multiple slides (no normAutofit), all slides use the first page's dimensions, title is determined by largest font size rather than semantic structure, and there is no layout-preserving mode (Acrobat keeps positions). Not yet verified in PowerPoint or Keynote: pptx_opens_in_libreoffice only converts the file when LibreOffice is installed and passes silently otherwise (CI has none), so the package structure is checked by pptx_package_parts_are_complete_and_consistent instead."
+notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. PowerPoint presentation: each page becomes a slide, with the largest non-table text as slide title, remaining paragraphs as body text, images and detected tables in reading order; DrawingML formatting (font size, bold, italic, text fill colour, cell borders); wired into engine command export.pptx, automation tool doc_export_office, and Export dialog. Missing: content past the slide bottom is not paginated or shrunk across multiple slides (no normAutofit), all slides use the first page's dimensions, title is determined by largest font size rather than semantic structure, and there is no layout-preserving mode (Acrobat keeps positions). Not yet verified in PowerPoint or Keynote: pptx_opens_in_libreoffice only converts the file when LibreOffice is installed and passes silently otherwise (CI has none), so the package structure is checked by pptx_package_parts_are_complete_and_consistent instead."
 
 [[feature]]
 id = "create.export-png"
@@ -7105,8 +7152,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.all_images"]
 tools = ["doc_export_all_images"]
-evidence = ["crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/automation/tests/it/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps"]
-notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2/CCITT masks are left out (image exported opaque); JPX/JBIG2/CCITT/separations reported as skipped; minimum size filter. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Still limited: 16-bit samples use high bytes; general JPEG and mask Decode, ICC transforms, and calibrated colors remain unsupported."
+evidence = ["crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/create/src/tests.rs::soft_mask_decode_ranges_become_exported_alpha", "crates/create/src/tests.rs::soft_mask_decode_maps_packed_and_jpeg_masks_before_resizing", "crates/automation/tests/it/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps"]
+notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2/CCITT masks are left out (image exported opaque); JPX/JBIG2/CCITT/separations reported as skipped; minimum size filter. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Soft-mask Decode intervals preserve opacity before resizing, including indirect arrays and endpoints. Still limited: 16-bit samples use high bytes; general JPEG image Decode, ICC transforms, and calibrated colors remain unsupported."
 
 [[feature]]
 id = "create.export-html"
@@ -7117,8 +7164,8 @@ milestone = "M10"
 status = "partial"
 commands = ["export.html"]
 tools = ["doc_export_office"]
-evidence = ["crates/export/src/lib.rs::html_has_headings_paragraphs_and_images_in_order", "crates/export/src/lib.rs::text_colour_survives_every_format", "crates/export/src/lib.rs::grid_text_becomes_a_real_table_in_every_format", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf", "crates/automation/tests/it/automation.rs::exporting_office_files_says_which_pages_left_form_text_out", "crates/edit/src/tests.rs::reading_follows_forms_as_far_as_the_renderer_and_says_where_it_stops"]
-notes = "Single HTML file with headings, paragraphs (with text colour), inline images, and detected tables with spans/empty cells. Text and images in form XObjects are read 50 levels deep, as the renderer does, and up to 50 000 forms a page; the tool lists pages past that in truncated_pages, with a warning (#3120). Not yet: multi-page folder output, CSS from fonts."
+evidence = ["crates/export/src/lib.rs::table_spans_do_not_consume_text_they_do_not_emit", "crates/export/src/lib.rs::html_has_headings_paragraphs_and_images_in_order", "crates/export/src/lib.rs::text_colour_survives_every_format", "crates/export/src/lib.rs::grid_text_becomes_a_real_table_in_every_format", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf", "crates/automation/tests/it/automation.rs::exporting_office_files_says_which_pages_left_form_text_out", "crates/edit/src/tests.rs::reading_follows_forms_as_far_as_the_renderer_and_says_where_it_stops"]
+notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. Single HTML file with headings, paragraphs (with text colour), inline images, and detected tables with spans/empty cells. Text and images in form XObjects are read 50 levels deep, as the renderer does, and up to 50 000 forms a page; the tool lists pages past that in truncated_pages, with a warning (#3120). Not yet: multi-page folder output, CSS from fonts."
 
 [[feature]]
 id = "create.export-text"
@@ -7274,11 +7321,11 @@ title = "Make compatible with a chosen PDF version"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::compatibility_level_sets_version_unpacks_for_1_4_and_checks_encryption", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_picks_a_preset"]
+notes = "Retain existing (default), PDF 1.4, 1.5, 1.6, 1.7 or 2.0 in PDF Optimizer and doc_optimize; writes the chosen %PDF- header, clears any overriding catalog /Version, disables and unpacks object streams and cross-reference streams for PDF 1.4, and refuses when the document's encryption requires a newer PDF version (#3090). Partial compatibility only: content newer than the target is neither detected nor converted (including optional content, JPX images, 16-bit images, OpenType fonts and PDF 2.0 features); the chosen header does not guarantee compatibility with older readers"
 
 [[feature]]
 id = "optimize.optimizer"
@@ -7301,8 +7348,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image", "crates/optimize/tests/optimize.rs::images_that_do_not_tile_a_picture_are_left_alone", "crates/optimize/tests/optimize.rs::a_deeply_nested_form_is_measured_at_its_largest_use", "crates/optimize/tests/optimize.rs::images_are_not_resampled_when_some_uses_could_not_be_measured"]
-notes = "colour and grayscale, bicubic, effective resolution measured where drawn (every use, through nested forms up to 12 deep; when a use can't be measured, nothing is resampled); image fragments stacked edge to edge are merged first (side-by-side tiles not yet); monochrome not yet"
+evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image", "crates/optimize/tests/optimize.rs::images_that_do_not_tile_a_picture_are_left_alone", "crates/optimize/tests/optimize.rs::a_deeply_nested_form_is_measured_at_its_largest_use", "crates/optimize/tests/optimize.rs::images_are_not_resampled_when_some_uses_could_not_be_measured", "crates/optimize/tests/optimize.rs::image_resolution_uses_the_pages_physical_unit", "crates/optimize/tests/optimize.rs::optimization_retains_an_image_below_threshold_on_a_scaled_page", "crates/optimize/tests/optimize.rs::shared_forms_are_measured_in_each_pages_physical_units"]
+notes = "colour and grayscale, bicubic, effective resolution measured where drawn (every use, with page-local UserUnit scaling, through nested forms up to 12 deep; when a use can't be measured, nothing is resampled); image fragments stacked edge to edge are merged first (side-by-side tiles not yet); monochrome not yet"
 
 [[feature]]
 id = "optimize.recompress-images"
@@ -7313,8 +7360,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens"]
-notes = "JPEG (quality steps) and ZIP; no JPEG 2000"
+evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/optimize/tests/jpeg_color_transform.rs::optimize_keeps_the_colours_of_an_rgb_jpeg_whatever_its_colour_transform"]
+notes = "JPEG (quality steps) and ZIP; a JPEG is decoded with its colour transform (Adobe marker, else /ColorTransform), and one whose marker and /ColorTransform disagree is left as it is; no JPEG 2000"
 
 [[feature]]
 id = "optimize.mono-compression"
@@ -7574,11 +7621,11 @@ title = "Compress document structure (object streams)"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "partial"
-commands = ["file.save_as"]
-tools = ["doc_save"]
-evidence = ["crates/cos/tests/it/writer.rs::full_save_packs_objects_into_object_streams"]
-notes = "on by default for full saves; no Optimizer option yet"
+status = "shipped"
+commands = ["file.save_as", "optimize.advanced"]
+tools = ["doc_save", "doc_optimize"]
+evidence = ["crates/cos/tests/it/writer.rs::full_save_packs_objects_into_object_streams", "crates/optimize/tests/optimize.rs::compatibility_level_sets_version_unpacks_for_1_4_and_checks_encryption", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_picks_a_preset"]
+notes = "on by default for full saves and in PDF Optimizer ▸ Clean Up (and doc_optimize object_streams); turning it off or targeting PDF 1.4 unpacks object streams into standalone objects with a classic cross-reference table"
 
 [[feature]]
 id = "optimize.flate-unencoded"
@@ -7589,8 +7636,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::discards_and_clean_up"]
-notes = "unencoded streams; LZW not yet re-encoded"
+evidence = ["crates/optimize/tests/optimize.rs::discards_and_clean_up", "crates/optimize/tests/optimize.rs::lzw_streams_become_flate_and_decode_to_the_same_bytes", "crates/optimize/tests/optimize.rs::a_page_drawn_from_lzw_streams_renders_the_same_after_conversion"]
+notes = "Two Clean Up options, as in Acrobat: unencoded streams are Flate-compressed, and LZW streams (content and image XObjects; EarlyChange 0 and 1, with or without a predictor, LZW anywhere in a filter chain) are decoded and stored with Flate instead, keeping the predictor and the filters after the LZW one; LZW data that doesn't decode cleanly is left as it is. Not yet: LZW inline images inside content streams."
 
 [[feature]]
 id = "optimize.remove-invalid-links"
@@ -7965,8 +8012,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print", "printers"]
-evidence = ["crates/ui-egui/tests/it/print.rs::paper_choice_survives_cancel_and_settings_restore", "crates/ui-egui/tests/it/print.rs::restored_paper_keeps_preview_and_saved_sheet_dimensions", "crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render", "crates/ui-egui/src/web_print.rs::a_job_draws_every_sheet_at_its_planned_resolution_then_builds_the_page", "crates/ui-egui/src/web_print.rs::the_print_page_turns_sideways_sheets_names_other_sizes_and_ends_without_a_blank_page"]
-notes = "⌘P; settings and live sheet preview; on the web the same dialog prints through the browser's print dialog; last paper selection, including cancelled Print dialogs, persists by canonical name; this change does not alter persistence of other print preferences"
+evidence = ["crates/ui-egui/tests/it/print.rs::paper_choice_survives_cancel_and_settings_restore", "crates/ui-egui/tests/it/print.rs::restored_paper_keeps_preview_and_saved_sheet_dimensions", "crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render", "crates/ui-egui/src/web_print.rs::a_job_draws_every_sheet_at_its_planned_resolution_then_builds_the_page", "crates/ui-egui/src/web_print.rs::the_print_page_turns_sideways_sheets_names_other_sizes_and_ends_without_a_blank_page", "crates/print/src/tests.rs::every_paper_reaches_the_spooler_by_a_name_of_its_size", "crates/automation/src/printing.rs::printing_to_a_printer_feeds_the_laid_out_paper"]
+notes = "⌘P; settings and live sheet preview; on the web the same dialog prints through the browser's print dialog; last paper selection, including cancelled Print dialogs, persists by canonical name; this change does not alter persistence of other print preferences. CUPS jobs from the dialog and doc_print ask for the chosen paper (media) in every size: PPD keywords for the common ones, PWG 5101.1 names for A6, A0–A2, ARCH and ANSI C–E, checked against a synthetic PPD with cupsfilter, not on a physical large-format printer (#3752). On macOS jobs still take the PPD's default paper tray until craft-print sends Auto Select (#3752)"
 
 [[feature]]
 id = "print.printer-selection"
@@ -8073,8 +8120,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::booklets_pair_pages_for_folding"]
-notes = "both/front/back, left/right binding"
+evidence = ["crates/print/src/tests.rs::booklets_pair_pages_for_folding", "crates/ui-egui/tests/it/print.rs::a_booklet_decides_two_sided_itself", "crates/automation/src/printing.rs::a_booklet_decides_two_sided_itself", "crates/print/src/tests.rs::a_booklet_prints_both_sides_on_the_short_edge"]
+notes = "both/front/back, left/right binding; a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided while Booklet is chosen; Using Acrobat X Pro: Acrobat automatically enables duplex printing for booklet printing): both sides flip on the short edge, front or back only prints one-sided, and the Two-sided choice is kept for the other layouts (#2707)"
 
 [[feature]]
 id = "print.poster"
@@ -8109,8 +8156,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms"]
-notes = "Print flag honoured"
+evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects"]
+notes = "Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources"
 
 [[feature]]
 id = "print.print-with-comment-summary"

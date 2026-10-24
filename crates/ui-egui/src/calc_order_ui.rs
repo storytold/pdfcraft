@@ -752,7 +752,7 @@ pub(crate) fn paint_page(
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let hovered = pointer.and_then(|p| on_page.iter().rev().find(|(_, r)| r.contains(p))).map(|(n, _)| (*n).to_owned());
     let at: HashMap<&str, Rect> = on_page.iter().copied().collect();
-    let zoom = (xf.rect.width() / xf.pw.max(1.0)).clamp(0.5, 3.0);
+    let zoom = xf.zoom().clamp(0.5, 3.0);
     let focus = if view.hide_links { None } else { view.focus(selected) };
     // The focus's links, and the fields at either end of them (with the focus itself).
     let shown: Vec<&Link> = focus.as_deref().map(|f| listed.links.iter().filter(|l| l.from == f || l.to == f).collect()).unwrap_or_default();

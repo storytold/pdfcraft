@@ -645,6 +645,10 @@
 	Draw your {what} below.	Vizato {what} më poshtë.
 	Drawing	Vizatim
 	Drawing scale	Shkalla e vizatimit
+	Scale	Shkalla
+	Common scales	Shkalla të zakonshme
+	Enter a scale such as 1:50.	Shkruani një shkallë si 1:50.
+	Applying a scale switches units to m / mm.	Zbatimi i një shkalle i kalon njësitë në m / mm.
 	Drop PDFs or folders here, or choose them.	Hidh PDF ose dosje këtu, ose zgjidh ato.
 	Drop-down list	Listë rënëse
 	Dropdown Properties	Vetitë e listës rënëse
@@ -1910,6 +1914,7 @@
 	Update watermark…	Përditëso filigranin…
 	Use 72 DPI (one point per pixel)	Përdor 72 DPI (një pikë për piksel)
 	Use Flate to encode streams that are not encoded	Përdor Flate për të koduar rrjedhat që nuk janë të koduara
+	In streams that use LZW encoding, use Flate instead	Në rrjedhat që përdorin kodimin LZW, përdor Flate në vend të tij
 	Use JavaScript	Përdor JavaScript
 	Use a Digital ID from a file	Përdor një ID dixhitale nga një skedar
 	Use a certificate	Përdor një certifikatë
@@ -2263,6 +2268,8 @@ key	Space	Hapësirë
 	Printer paper and scaling may differ. Check driver settings.	Letra dhe shkallëzimi i printerit mund të ndryshojnë. Kontrolloni cilësimet e drajverit.
 	Drawing scale changes. Use Actual size for full-scale plans.	Shkalla e vizatimit ndryshon. Përdorni Madhësinë aktuale për planet në shkallë të plotë.
 	Reload documents when their files change on disk	Ringarko dokumentet kur skedarët e tyre ndryshojnë në disk
+	Don't show again	Mos e shfaq më
+	Show a notice when a document is secured	Shfaq një njoftim kur një dokument është i siguruar
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ky skedar ndryshoi në disk. Ringarkojeni për të parë versionin e ri; ndryshimet tuaja të paruajtura do të humbasin.
 	Reload	Ringarko
 	Couldn't reload {name}: {e}	Nuk u ringarkua {name}: {e}
@@ -2500,3 +2507,14 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Sot
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Rikthe pamjen e fundit (faqen, zmadhimin dhe shfaqjen e faqeve) kur një dokument hapet përsëri
+	Attach a file…	Bashkëngjit një skedar…
+	Attach {name}	Bashkëngjit {name}
+	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
+	Delete attachment	Fshi bashkëngjitjen
+	Delete attachment {key}	Fshi bashkëngjitjen {key}

@@ -77,6 +77,7 @@ fn new_rename_reorder_indent_delete_and_undo() {
 
     menu(&mut h, "Results", "Indent");
     assert_eq!(outline(&h), [("Intro".into(), Some(0), 0), ("Results".into(), Some(2), 1)]);
+    h.get_by_label("Results"); // its new parent opened, so it still shows
     menu(&mut h, "Results", "Outdent");
     menu(&mut h, "Results", "Move up");
     assert_eq!(outline(&h)[0].0, "Results");
@@ -309,4 +310,61 @@ fn style_and_colour_from_the_bookmark_menu() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
     assert!(look(&h).0, "undoable");
+}
+
+/// Top-level bookmarks open as the file says, like every other level: a positive /Count shows
+/// the children, a negative one hides them until the reader opens it (ISO 32000-2 §12.3.3,
+/// Table 151). They used to open regardless.
+#[test]
+fn a_closed_top_level_bookmark_opens_closed() {
+    const OUTLINED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 13 0 R /Count 5 >> endobj
+11 0 obj << /Title (Closed parent) /Parent 10 0 R /Next 12 0 R /First 21 0 R /Last 22 0 R /Count -2 /Dest [3 0 R /Fit] >> endobj
+12 0 obj << /Title (Open parent) /Parent 10 0 R /Prev 11 0 R /Next 13 0 R /First 23 0 R /Last 24 0 R /Count 2 /Dest [3 0 R /Fit] >> endobj
+13 0 obj << /Title (Uncounted parent) /Parent 10 0 R /Prev 12 0 R /First 25 0 R /Last 25 0 R /Dest [3 0 R /Fit] >> endobj
+21 0 obj << /Title (Closed child A) /Parent 11 0 R /Next 22 0 R /Dest [3 0 R /Fit] >> endobj
+22 0 obj << /Title (Closed child B) /Parent 11 0 R /Prev 21 0 R /Dest [3 0 R /Fit] >> endobj
+23 0 obj << /Title (Open child A) /Parent 12 0 R /Next 24 0 R /Dest [3 0 R /Fit] >> endobj
+24 0 obj << /Title (Open child B) /Parent 12 0 R /Prev 23 0 R /Dest [3 0 R /Fit] >> endobj
+25 0 obj << /Title (Uncounted child) /Parent 13 0 R /Dest [3 0 R /Fit] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("outlined.pdf", None, OUTLINED.to_vec()).unwrap();
+    h.run_steps(4);
+    let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
+    assert!(shown(&h, "Closed parent") && shown(&h, "Open parent") && shown(&h, "Uncounted parent"));
+    assert!(!shown(&h, "Closed child A") && !shown(&h, "Closed child B"), "a negative /Count opens closed");
+    assert!(shown(&h, "Open child A") && shown(&h, "Open child B"), "a positive /Count opens open");
+    assert!(!shown(&h, "Uncounted child"), "only a positive /Count opens a bookmark");
+
+    // The disclosure triangle at the row's left still opens and closes it.
+    let toggle = |h: &mut Harness<'static, PdfCraftApp>, title: &str| {
+        let row = h.get_by_label(title).rect();
+        let at = egui::pos2(row.left() + 8.0, row.top() + 14.0);
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    toggle(&mut h, "Closed parent");
+    assert!(shown(&h, "Closed child A") && shown(&h, "Closed child B"), "opened by the reader");
+    toggle(&mut h, "Closed parent");
+    assert!(!shown(&h, "Closed child A"), "closed again");
+    toggle(&mut h, "Open parent");
+    assert!(!shown(&h, "Open child A"), "an open bookmark closes");
+
+    // A search still shows the matches inside a closed bookmark, and clearing it restores it.
+    h.get_by_label("Search").click();
+    h.run_steps(1);
+    h.get_by_label("Search").type_text("child B");
+    h.run_steps(3);
+    assert!(shown(&h, "Closed child B") && shown(&h, "Open child B"));
+    h.get_by_label("Clear").click();
+    h.run_steps(3);
+    assert!(!shown(&h, "Closed child B") && !shown(&h, "Open child B"), "search leaves the open state alone");
 }

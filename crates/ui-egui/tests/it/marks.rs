@@ -15,10 +15,14 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    harness_with(FIXTURE.to_vec())
+}
+
+fn harness_with(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc.pdf", None, pdf.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -137,6 +141,157 @@ fn backgrounds_and_watermarks_from_a_file() {
     assert_eq!(marks(&h), vec![MarkKind::Background]);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add background"));
+}
+
+/// Two 300 × 400 pages with content (a dark bar), the second turned a quarter (/Rotate 90), so it
+/// is shown landscape, 400 × 300.
+fn content_fixture() -> Vec<u8> {
+    let bar = "0 0 0 rg 40 300 220 60 re f";
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 5 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Rotate 90 /Contents 5 0 R >> endobj
+5 0 obj << /Length {} >>
+stream
+{bar}
+endstream
+endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        bar.len()
+    )
+    .into_bytes()
+}
+
+/// The pictures of page `page` (its thumbnail) painted last frame: paint order, bounds, tint.
+fn page_pictures(h: &Harness<'static, PdfCraftApp>, page: usize) -> Vec<(usize, egui::Rect, egui::Color32)> {
+    let Some(tex) = h.state().views[0].thumb(page).map(|t| t.id()) else { return Vec::new() };
+    h.output()
+        .shapes
+        .iter()
+        .enumerate()
+        .filter_map(|(k, s)| match &s.shape {
+            egui::Shape::Mesh(m) if m.texture_id == tex => Some((k, m.calc_bounds(), m.vertices.first()?.color)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The preview's picture of `page`, once its thumbnail has arrived (it renders off the UI thread).
+fn wait_for_picture(h: &mut Harness<'static, PdfCraftApp>, page: usize) -> (usize, egui::Rect, egui::Color32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        h.step();
+        if let [one] = page_pictures(h, page)[..] {
+            return one;
+        }
+        assert!(std::time::Instant::now() < deadline, "the preview never showed page {}'s picture", page + 1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// A text painted on the page last frame (the dialog's text boxes show it too): its paint order
+/// and its laid-out rectangle.
+fn painted(h: &Harness<'static, PdfCraftApp>, text: &str, page: egui::Rect) -> (usize, egui::Rect) {
+    h.output()
+        .shapes
+        .iter()
+        .enumerate()
+        .find_map(|(k, s)| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => {
+                Some((k, t.galley.rect.translate(t.pos.to_vec2()))).filter(|(_, r)| page.contains(r.center()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{text:?} is painted on the page"))
+}
+
+fn near(a: f32, b: f32, what: &str) {
+    assert!((a - b).abs() < 1.0, "{what}: {a} against {b}");
+}
+
+#[test]
+fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
+    use pdfcraft_ui_egui::marks::{PageRange, Subset};
+    let mut h = harness_with(content_fixture());
+    assert!(h.state_mut().execute("edit.header_footer"));
+    h.run_steps(2);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.hf.text[1] = "TOP".into();
+        d.hf.text[5] = "END".into();
+        // Page 2 alone, not the current page: the preview follows the range (#2837).
+        d.range = PageRange { all: false, from: 2, to: 2, subset: Subset::All };
+    }
+    let (at, page, tint) = wait_for_picture(&mut h, 1);
+    h.get_by_label("Preview: page 2 of 2");
+    assert_eq!(tint, egui::Color32::WHITE);
+    assert!((page.width() / page.height() - 4.0 / 3.0).abs() < 0.01, "page 2 is shown turned, as displayed: {page:?}");
+    // The marks are drawn over the page, where the engine puts them on its displayed box
+    // (default margins: 36 pt top and bottom, 72 pt left and right).
+    let s = page.width() / 400.0;
+    let (top_at, top) = painted(&h, "TOP", page);
+    let (end_at, end) = painted(&h, "END", page);
+    assert!(at < top_at && at < end_at, "the page is under the marks");
+    near(top.center().x, page.center().x, "centre header, across");
+    near(top.center().y, page.top() + 36.0 * s, "centre header, down");
+    near(end.right(), page.right() - 72.0 * s, "right footer, across");
+    near(end.center().y, page.bottom() - 36.0 * s, "right footer, down");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // The watermark sits on the page's centre.
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.wm.text = "DRAFT".into();
+        d.wm.rotation = 0.0;
+    }
+    let (at, page, _) = wait_for_picture(&mut h, 1);
+    let (mark_at, mark) = painted(&h, "DRAFT", page);
+    assert!(at < mark_at, "the page is under the watermark");
+    near(mark.center().x, page.center().x, "watermark, across");
+    near(mark.center().y, page.center().y, "watermark, down");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // A background colour shows where the page is white: it tints the page's picture.
+    assert!(h.state_mut().execute("edit.background"));
+    h.run_steps(2);
+    let (_, _, tint) = wait_for_picture(&mut h, 1);
+    assert_eq!(tint, egui::Color32::from_rgb(255, 255, 217), "the default pale yellow, opaque");
+}
+
+/// The preview's page stepper, beside its "page N of M" label: the dialog's own button, not the
+/// page navigation's of the same name.
+fn preview_step(h: &mut Harness<'static, PdfCraftApp>, label: &str, now: &str) {
+    let row = h.get_by_label(now).rect().center().y;
+    h.query_all_by_label(label).find(|n| (n.rect().center().y - row).abs() < 15.0).unwrap_or_else(|| panic!("{label} beside {now:?}")).click();
+    h.run_steps(2);
+}
+
+#[test]
+fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
+    let mut h = harness();
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    h.get_by_label("Preview: page 2 of 3");
+    preview_step(&mut h, "Next page", "Preview: page 2 of 3");
+    h.get_by_label("Preview: page 3 of 3");
+    preview_step(&mut h, "Previous page", "Preview: page 3 of 3");
+    preview_step(&mut h, "Previous page", "Preview: page 2 of 3");
+    h.get_by_label("Preview: page 1 of 3");
+    // Opened again, the preview is back at the current page.
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    h.get_by_label("Preview: page 2 of 3");
 }
 
 /// Pages from 1 to 1 stays one page: the dialog used to turn "to" back into the last page on

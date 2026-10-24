@@ -40,18 +40,8 @@ fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'st
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
-}
-
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
 }
 
 /// A point on page 1 in PDF user space → screen (no rotation; MediaBox 300×200).
@@ -146,7 +136,7 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
             && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
         {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/comment-centred.png")).unwrap();
         }
     }
@@ -675,6 +665,115 @@ fn sticky_note_composer_posts_and_returns_to_select() {
     assert_eq!(comments(&h).len(), 1);
 }
 
+/// #2583: a sticky note is saved NoRotate, so on a turned page its icon is drawn upright from
+/// where it was placed (right and down), not where its `/Rect` lies as displayed. The Select tool
+/// picks it where it is drawn.
+#[test]
+fn a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn() {
+    let mut h = harness(|app| {
+        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.set_option("quick", "note").unwrap();
+    });
+    crate::support::settle(&mut h);
+    let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    // Screen pixels per point of the displayed page (300 × 200 pt turned to 200 × 300).
+    let k = page.width() / 200.0;
+    let placed = page.left_top() + egui::vec2(100.0 * k, 60.0 * k);
+    click(&mut h, placed);
+    field(&h, "Add a comment").type_text("Turned");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!((c[0].subtype.as_str(), c[0].no_rotate), ("Text", true));
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    // Where the note's /Rect lies as displayed, left of where it was placed: nothing.
+    click(&mut h, placed + egui::vec2(-10.0 * k, 10.0 * k));
+    assert_eq!(h.state().views[0].comments.selected, None);
+    // On the icon, drawn right and down from where it was placed.
+    click(&mut h, placed + egui::vec2(10.0 * k, 10.0 * k));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+}
+
+/// The composer leaves with its comment when the page scrolls it out of the document, and comes
+/// back with the draft (#4021). It used to be pushed back into the window, over the mode bar and
+/// the toolbar, while its comment was out of sight.
+#[test]
+fn the_composer_hides_while_its_comment_is_scrolled_away() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").type_text("Draft");
+    h.run_steps(2);
+    let editors = |h: &Harness<'static, PdfCraftApp>| -> Vec<egui::Rect> {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).map(|n| n.rect()).collect()
+    };
+    let viewport = h.state().views[0].viewport_rect();
+    assert!(editors(&h).iter().any(|r| viewport.contains(r.center())), "the composer opens in the document");
+    // The page scrolled up: it still shows, the comment near its top doesn't.
+    h.state_mut().views[0].goto = Some((0, 0.4));
+    h.run_steps(4);
+    assert!(h.state().views[0].page_screen_rect(0).is_some_and(|r| r.bottom() > viewport.top()), "page 1 still shows");
+    assert!(at(&h, 250.0, 180.0).y < viewport.top(), "the comment is scrolled away");
+    let shown = editors(&h);
+    assert!(shown.is_empty(), "the composer stays with its comment, not over the toolbar: {shown:?} (document {viewport:?})");
+    // Back again, the draft is still there.
+    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.run_steps(4);
+    assert!(editors(&h).iter().any(|r| viewport.contains(r.center())), "the composer is back");
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Draft"));
+}
+
+/// Editing a large comment whose top-right corner is scrolled away still shows the composer
+/// while the rest of the comment is on screen, so it can be posted or cancelled (#4095).
+#[test]
+fn the_edit_composer_shows_while_part_of_its_comment_is_on_screen() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (20.0, 190.0), (280.0, 10.0));
+    // What "Edit text…" opens: the composer anchored at the comment's top-right corner.
+    h.state_mut().views[0].comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+        page: 0,
+        at: [280.0, 190.0],
+        kind: pdfcraft_ui_egui::comments::ComposerKind::Edit(0),
+        text: String::new(),
+        focus: true,
+    });
+    h.run_steps(2);
+    let viewport = h.state().views[0].viewport_rect();
+    h.state_mut().views[0].goto = Some((0, 0.4));
+    h.run_steps(4);
+    assert!(at(&h, 280.0, 190.0).y < viewport.top(), "the comment's top-right corner is scrolled away");
+    assert!(at(&h, 280.0, 10.0).y > viewport.top(), "part of the comment is still on screen");
+    let editors: Vec<_> = h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).map(|n| n.rect()).collect();
+    assert!(editors.iter().any(|r| viewport.contains(r.center())), "the editor is drawn: {editors:?} (document {viewport:?})");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.composer.is_none(), "Cancel closes it");
+}
+
+/// With its whole page scrolled off the screen the composer keeps its draft, and the editor takes
+/// the keyboard again when the page comes back (#4021).
+#[test]
+fn the_composer_takes_the_keyboard_back_after_its_page_was_off_screen() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").type_text("Draft");
+    h.run_steps(2);
+    let editor_focused =
+        |h: &Harness<'static, PdfCraftApp>| h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).any(|n| n.is_focused());
+    assert!(editor_focused(&h), "the new note's editor has the keyboard");
+    let viewport = h.state().views[0].viewport_rect();
+    h.state_mut().views[0].goto = Some((1, 0.6));
+    h.run_steps(4);
+    assert!(h.state().views[0].page_screen_rect(0).is_none_or(|r| r.bottom() < viewport.top()), "page 1 is off the screen");
+    assert!(!editor_focused(&h), "nothing to type into while the page is away");
+    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Draft"));
+    assert!(editor_focused(&h), "the editor has the keyboard again");
+}
+
 /// The rectangle of the comment whose text starts with `text`.
 fn rect_of(h: &Harness<'static, PdfCraftApp>, text: &str) -> [f32; 4] {
     let c = comments(h);
@@ -754,7 +853,7 @@ fn a_dragged_text_box_follows_a_rotated_view() {
         }
         h.state_mut().set_option("zoom", "150").unwrap();
         h.run_steps(3);
-        settle(&mut h);
+        crate::support::settle(&mut h);
         let screen = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
             let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
             let (u, v) = (x / 300.0, (200.0 - y) / 200.0);
@@ -858,6 +957,50 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     h.run_steps(2);
     let p = ends(&h);
     assert!((p[1][0] - 200.0).abs() < 1.0 && (p[1][1] - 160.0).abs() < 1.0, "{p:?}");
+}
+
+/// The arrow keys move the selected comment a screen pixel, ⌘/Ctrl or Shift and an arrow ten,
+/// instead of scrolling or turning the page; each press is one undo step. Without a selection
+/// the arrows scroll and turn pages as before.
+#[test]
+fn arrow_keys_nudge_the_selected_comment() {
+    use egui::{Key, Modifiers};
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    // One screen pixel in user space, at this zoom.
+    let pixel = 300.0 / h.state().views[0].page_screen_rect(0).unwrap().width();
+    let before = comments(&h)[0].rect;
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    let r = comments(&h)[0].rect;
+    assert!((r[0] - before[0] - pixel).abs() < 0.01 && (r[1] - before[1]).abs() < 0.01, "one pixel right: {r:?} from {before:?}");
+    assert_eq!(h.state().views[0].current, 0, "the page didn't turn");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comment"));
+    // ⌘/Ctrl and Shift: ten pixels (down on screen is down in user space here).
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowDown);
+    h.run_steps(3);
+    let r2 = comments(&h)[0].rect;
+    assert!((r[1] - r2[1] - 10.0 * pixel).abs() < 0.01 && (r2[0] - r[0]).abs() < 0.01, "ten pixels down: {r2:?} from {r:?}");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
+    h.run_steps(3);
+    let r3 = comments(&h)[0].rect;
+    assert!((r2[0] - r3[0] - 10.0 * pixel).abs() < 0.01, "ten pixels left: {r3:?} from {r2:?}");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!((comments(&h)[0].rect[0] - r2[0]).abs() < 0.01, "each press is one undo step");
+    // Nothing selected: → turns the page again.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, None);
+    let rect = comments(&h)[0].rect;
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].rect, rect, "the comment stays");
+    assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
 }
 
 #[test]
@@ -1263,6 +1406,47 @@ fn page_groups_collapse_and_expand() {
     h.get_by_label("Expand all pages").click();
     h.run_steps(3);
     assert!(shown(&h, "First page note") && shown(&h, "Second page note"), "every page is open again");
+}
+
+/// Flatten comments is in the page's right-click menu and in the Comments panel's "…" menu: the
+/// comments go into the page, one undo step brings them back.
+#[test]
+fn flatten_comments_from_the_page_menu_and_the_panel_menu() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 80.0, 60.0] };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: "Reviewed".into(),
+        author: "Tester".into(),
+    }));
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    assert_eq!(comments(&h).len(), 1);
+
+    // Right-click on the page, away from the comment.
+    let p = at(&h, 200.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Flatten comments").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "the comment went into the page");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "one undo step brings it back");
+
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Flatten comments").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "the panel's menu flattens too");
 }
 
 #[test]
@@ -1726,7 +1910,7 @@ fn attachment_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
 }
 
@@ -1915,7 +2099,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     assert!(h.query_by_label_contains("Check this figure").is_none(), "no popup before hovering");
     let p = at(&h, 100.0, 85.0);
     h.hover_at(p);
@@ -1945,7 +2129,7 @@ fn preference_hides_author_only_highlight_hover_previews() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
 
     let p = at(&h, 100.0, 85.0);
     // By default, author-only hover is shown.
@@ -1992,7 +2176,7 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
 }
 

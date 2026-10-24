@@ -37,12 +37,11 @@ use crate::content::ops::TypedInstruction;
 use crate::object;
 use crate::object::dict::{Dict, InlineImageDict};
 use crate::object::name::{Name, skip_name_like};
-use crate::object::{Array, Null, Number, Object, Stream};
+use crate::object::{Array, Number, Object, Stream};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
 use crate::trivia::{Comment, is_regular_character, is_white_space_character};
 use crate::util::find_needle;
-use core::array;
 use core::fmt::{Debug, Formatter};
 use core::ops::Deref;
 use core::marker::PhantomData;
@@ -51,7 +50,17 @@ use smallvec::SmallVec;
 // 6 operands are used for example for ctm or cubic curves,
 // but anything above should be pretty rare (only for example for
 // DeviceN color spaces, or invalid PDF files). So we settle on 10.
+// PdfCraft patch (28): this is now only how many operands are held inline; see `MAX_OPERANDS`.
 const OPERANDS_THRESHOLD: usize = 10;
+
+/// PdfCraft patch (28): the most operands one instruction keeps. The stack held ten, and the
+/// eleventh operand of an instruction ended the whole content stream, so a DeviceN colour of
+/// eleven or more inks (ISO 32000-2 §8.6.6.5 allows "an arbitrary number of colour
+/// components") blanked the rest of the page (#4260). An `SCN`/`scn` for the largest DeviceN
+/// space the interpreter reads (255 inks) takes 255 numbers and a pattern name. Past this, the
+/// oldest operands are dropped: operators read the operands nearest to them (see `shift` in the
+/// operator macros), so this is how stray operands below an instruction are already treated.
+const MAX_OPERANDS: usize = 256;
 
 impl Debug for Operator<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
@@ -436,6 +445,8 @@ impl<'a> UntypedIter<'a> {
 
                 self.operator = Some(operator);
                 self.committed = self.reader.offset();
+                // PdfCraft patch (28): operands in reading order, if some were dropped.
+                self.stack.settle();
                 return Some(Instruction {
                     operands: &self.stack,
                     operator: self.operator.as_ref().unwrap(),
@@ -594,8 +605,13 @@ impl<'b, 'a> Instruction<'b, 'a> {
 pub struct Stack<'a> {
     // TODO: Explore using an object pool to avoid repeatedly
     // allocating/deallocating objects.
-    data: [Object<'a>; OPERANDS_THRESHOLD],
-    len: usize,
+    // PdfCraft patch (28): up to `MAX_OPERANDS` operands, the first `OPERANDS_THRESHOLD` inline.
+    data: SmallVec<[Object<'a>; OPERANDS_THRESHOLD]>,
+    /// PdfCraft patch (28): once `data` is full, the slot of its oldest operand, which the next
+    /// operand replaces. Always 0 while the stack is not full, and after `settle`.
+    oldest: usize,
+    /// PdfCraft patch (28): whether operands were dropped since the stack was last settled.
+    dropped: bool,
 }
 
 impl<'a> Default for Stack<'a> {
@@ -608,31 +624,53 @@ impl<'a> Stack<'a> {
     /// Create a new, empty stack.
     pub fn new() -> Self {
         Self {
-            data: array::from_fn(|_| Object::Null(Null)),
-            len: 0,
+            data: SmallVec::new(),
+            oldest: 0,
+            dropped: false,
         }
     }
 
+    /// PdfCraft patch (28): push an operand, dropping the oldest once `MAX_OPERANDS` are held
+    /// (see `MAX_OPERANDS`). Never fails: it used to, and the failure ended the content stream.
     fn push(&mut self, operand: Object<'a>) -> Option<()> {
-        if self.len >= OPERANDS_THRESHOLD {
-            return None;
+        if self.data.len() < MAX_OPERANDS {
+            self.data.push(operand);
+            return Some(());
         }
 
-        self.data[self.len] = operand;
-        self.len += 1;
+        self.dropped = true;
+        if let Some(slot) = self.data.get_mut(self.oldest) {
+            *slot = operand;
+        }
+        self.oldest = (self.oldest + 1) % MAX_OPERANDS;
         Some(())
     }
 
+    /// PdfCraft patch (28): put the operands back in the order they were read, oldest first,
+    /// after `push` dropped some. Called before the instruction is handed out.
+    fn settle(&mut self) {
+        if self.dropped {
+            warn!("more than {MAX_OPERANDS} operands before an operator; the oldest were dropped");
+            // Cannot panic: operands are dropped only once `data` holds `MAX_OPERANDS`, and
+            // `oldest` stays below that.
+            self.data.rotate_left(self.oldest);
+            self.oldest = 0;
+            self.dropped = false;
+        }
+    }
+
     fn clear(&mut self) {
-        self.len = 0;
+        self.data.clear();
+        self.oldest = 0;
+        self.dropped = false;
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.data.len()
     }
 
     fn as_slice(&self) -> &[Object<'a>] {
-        &self.data[..self.len]
+        &self.data
     }
 
     fn get<'b, T>(&'b self, index: usize) -> Option<T>
@@ -665,11 +703,12 @@ impl Debug for Stack<'_> {
 
 impl Clone for Stack<'_> {
     fn clone(&self) -> Self {
-        let mut stack = Self::new();
-        for item in self.as_slice() {
-            stack.push(item.clone()).unwrap();
+        // PdfCraft patch (28): a plain copy (pushing each operand again could no longer fail).
+        Self {
+            data: self.data.clone(),
+            oldest: self.oldest,
+            dropped: self.dropped,
         }
-        stack
     }
 }
 

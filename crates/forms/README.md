@@ -39,8 +39,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
 
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
-- Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb,
-  multiline wrapping, password masking, quadding, `/MK` background and border, list-box selection.
+- Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb
+  (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
+  background and border, list-box selection.
   The `/DA` font is used when `/DR` has it as a simple font or a composite font with a predefined
   Unicode CMap; otherwise Helvetica (WinAnsi). A value or button caption the font can't hold
   (Chinese in a Helvetica field, a character beyond U+FFFF in a UCS-2 CMap) is kept, as Acrobat
@@ -55,7 +56,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   drawn from their values, as typing them would draw them; the engine shows and prints that copy
   and saves the file as it was (#3470). `with_field_appearances_cached` keeps each widget's
   drawing while the objects it was drawn from are the same (`FieldAppearanceCache`), so typing in
-  one field redraws that field, not the form.
+  one field redraws that field, not the form. Check boxes and radio buttons with no appearance for
+  their state are drawn from `/MK` (border, background, and when on the `/MK /CA` ZapfDingbats
+  symbol in the `/DA` colour), and push buttons with none from `/MK`, `/BS` and their caption.
 - Check boxes and radio buttons switch `/V` and each widget's `/AS`. Widgets with no appearances
   get PdfCraft's own (a drawn check mark or dot; no symbol font needed).
 - Imported `/MaxLen 0` is treated as unlimited (also clearing an inherited limit), while the

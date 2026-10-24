@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset, QUALITIES, Settings};
+use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, Preset, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -172,6 +172,17 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
                 }
             }
         });
+        ui.add_space(8.0);
+        ui.label(tl!("Compatibility"));
+        let compat_label = |c: Compatibility| match c {
+            Compatibility::Retain => tl!("Retain existing").to_string(),
+            _ => format!("PDF {}", c.name()),
+        };
+        egui::ComboBox::from_id_salt("optimize-compatibility").selected_text(compat_label(d.settings.compatibility)).show_ui(ui, |ui| {
+            for c in Compatibility::ALL {
+                ui.selectable_value(&mut d.settings.compatibility, c, compat_label(c));
+            }
+        });
     });
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
@@ -219,9 +230,19 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
         }
         OptimizeTab::CleanUp => {
             ui.add(widgets::checkbox(&mut s.flate_unencoded, tl!("Use Flate to encode streams that are not encoded")));
+            ui.add(widgets::checkbox(&mut s.lzw_to_flate, tl!("In streams that use LZW encoding, use Flate instead")));
             ui.add(widgets::checkbox(&mut s.remove_invalid_links, tl!("Remove invalid links and bookmarks")));
             ui.add(widgets::checkbox(&mut s.remove_unreferenced_dests, tl!("Remove unreferenced named destinations")));
-            ui.add_enabled(false, widgets::checkbox(&mut true, tl!("Compress document structure (object streams)")));
+            let mut object_streams = s.effective_object_streams();
+            if ui
+                .add_enabled(
+                    s.compatibility != Compatibility::Pdf1_4,
+                    widgets::checkbox(&mut object_streams, tl!("Compress document structure (object streams)")),
+                )
+                .changed()
+            {
+                s.object_streams = object_streams;
+            }
             ui.add_enabled(false, widgets::checkbox(&mut true, tl!("Remove unused objects and merge identical ones")));
         }
     }

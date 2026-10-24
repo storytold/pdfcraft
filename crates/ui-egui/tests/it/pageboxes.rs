@@ -90,3 +90,32 @@ fn duplicate_pages_copies_the_current_page() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 3);
 }
+
+#[test]
+fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
+    let mut h = harness();
+    // The Organize panel's thumbnail grid is on screen for this view: choosing
+    // "Crop pages" from it must leave the grid so the canvas handles a drag on
+    // a page instead of returning early to organize_grid.
+    h.state_mut().views[0].organize = true;
+    assert!(h.state_mut().execute("page.crop"));
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    assert!(!h.state().views[0].organize, "\"page.crop\" must clear view.organize");
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    // The middle half of the page in both directions.
+    let (a, b) = (r.min + r.size() * 0.25, r.min + r.size() * 0.75);
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(b);
+    h.run_steps(4);
+    let (w, hh) = size(&h, 0);
+    assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");
+    assert_eq!(size(&h, 1), (300.0, 400.0));
+}

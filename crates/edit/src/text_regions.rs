@@ -2,6 +2,18 @@
 
 use super::*;
 
+// The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
+// A glyph budget worth 64 full batches (15,360 glyphs with the production batch size).
+// Lowering the internal batch size for tests lowers the budget by the same ratio.
+const MAX_STYLED_FALLBACK_BATCHES: usize = 64;
+
+struct FallbackGroup {
+    face: &'static CraftFont,
+    seen: std::collections::HashSet<char>,
+    glyphs: Vec<Type3Glyph>,
+    positions: Vec<usize>,
+}
+
 fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
@@ -166,8 +178,8 @@ fn opens_with_marker(text: &str) -> bool {
     if !first.is_ascii_digit() && !first.is_ascii_alphabetic() {
         return false;
     }
-    let digits = text.chars().take_while(|c| c.is_ascii_digit()).count();
-    let letters = text.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    let letters = text.chars().take_while(char::is_ascii_alphabetic).count();
     // Both runs are ASCII characters, so their length in characters is their length in bytes:
     // the slice below starts on a character boundary.
     let rest = if digits > 0 {
@@ -178,7 +190,7 @@ fn opens_with_marker(text: &str) -> bool {
         return false;
     };
     let mut after = rest.chars();
-    matches!(after.next(), Some('.' | ')')) && after.next().is_none_or(|c| c.is_whitespace())
+    matches!(after.next(), Some('.' | ')')) && after.next().is_none_or(char::is_whitespace)
 }
 
 /// A row that opens with a list marker opens its own item: joining it to the row above is what
@@ -400,6 +412,7 @@ pub(super) fn rewrite_styled_block(
     lines: &[TextLine],
     text: Option<&str>,
     style: &BlockStyle,
+    max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = match text {
@@ -542,14 +555,27 @@ pub(super) fn rewrite_styled_block(
     // Each tuple is a character, its source style and an encodable resource name.
     let mut chars = Vec::new();
     let mut substituted = None;
-    let mut fallback_names: std::collections::BTreeMap<(String, char), String> = std::collections::BTreeMap::new();
+    let mut fallback_groups: Vec<FallbackGroup> = Vec::new();
+    let mut fallback_names: std::collections::BTreeMap<(String, bool, char), usize> = std::collections::BTreeMap::new();
+    let mut fallback_glyphs = 0_usize;
+    let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
+    let fallback_budget = per_font.saturating_mul(MAX_STYLED_FALLBACK_BATCHES);
     let mut full_faces: HashMap<String, String> = HashMap::new();
     let mut programs: HashMap<String, Option<std::sync::Arc<Vec<u8>>>> = HashMap::new();
     for (range, index) in styled_spans {
         let source = lines.get(index).unwrap_or(first);
-        for ch in draft.get(range).unwrap_or_default().chars() {
+        let start = range.start;
+        for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
             if ch == '\n' {
                 chars.push((ch, index, source.font.clone()));
+                continue;
+            }
+            // A carriage return breaks the row too. Before `\n` the pair is one break, so the
+            // CR stays a `\r` the rows skip. Either way it keeps its place among the draft's
+            // characters, which rows are counted in.
+            if ch == '\r' {
+                let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
                 continue;
             }
             let s = ch.to_string();
@@ -605,24 +631,40 @@ pub(super) fn rewrite_styled_block(
             } else {
                 let family = source_family(&source.base_font);
                 if needs_type3(&s) {
-                    let key = (source.base_font.rsplit('+').next().unwrap_or(&source.base_font).to_owned(), ch);
-                    if let Some(name) = fallback_names.get(&key) {
-                        chars.push((ch, index, name.clone()));
-                        continue;
+                    let key = (source.base_font.clone(), source.bold, ch);
+                    let group_index = if let Some(index) = fallback_names.get(&key) {
+                        *index
+                    } else {
+                        // Keep the old per-character face choice: a serif Japanese character
+                        // and a Cyrillic character may need different faces even in one style.
+                        // Hebrew uses the separate RTL path before reaching this writer.
+                        let (faces, _) = type3_faces(&s, family, source.bold)?;
+                        let face =
+                            fallback_face(&faces, &[ch], |face, ch| japanese_glyph_from(face, ch).is_ok()).ok_or_else(|| no_fallback_font(&s))?;
+                        let index = fallback_groups.iter().position(|group| std::ptr::eq(group.face, face)).unwrap_or_else(|| {
+                            let index = fallback_groups.len();
+                            fallback_groups.push(FallbackGroup { face, seen: Default::default(), glyphs: Vec::new(), positions: Vec::new() });
+                            index
+                        });
+                        fallback_names.insert(key, index);
+                        index
+                    };
+                    let group = fallback_groups.get_mut(group_index).ok_or_else(|| EditError::Invalid("the fallback face is missing".into()))?;
+                    if group.seen.insert(ch) {
+                        if fallback_glyphs >= fallback_budget {
+                            return Err(EditError::Invalid(format!(
+                                "the replacement needs more than {fallback_budget} fallback glyphs; edit a smaller paragraph or load a complete font"
+                            )));
+                        }
+                        let (path, width) = type3_glyph(group.face, ch)?.ok_or_else(|| no_glyph_for(group.face, ch))?;
+                        let code = u8::try_from((group.glyphs.len() % per_font).saturating_add(1))
+                            .map_err(|_| EditError::Invalid("replacement text has too many unique characters".into()))?;
+                        group.glyphs.push(Type3Glyph { code, ch, path, width });
+                        fallback_glyphs = fallback_glyphs.saturating_add(1);
                     }
-                    if fallback_names.len() >= MAX_TYPE3_GLYPHS {
-                        return Err(EditError::Invalid("the replacement has too many fallback glyphs".into()));
-                    }
-                    let fallback = type3_font(doc, &mut fonts, &s, family, source.bold, MAX_TYPE3_GLYPHS)?;
-                    let name = fallback.names.first().cloned().ok_or_else(no_japanese_font)?;
-                    let dict = fonts
-                        .get(name.as_bytes())
-                        .and_then(|f| doc.resolve(f).as_dict().cloned())
-                        .ok_or_else(|| EditError::Invalid("the fallback font could not be loaded".into()))?;
-                    metrics.insert(name.clone(), Metrics::from_dict(doc, &dict));
-                    substituted = Some(fallback.family.to_string());
-                    fallback_names.insert(key, name.clone());
-                    name
+                    group.positions.push(chars.len());
+                    // Filled from the prepared font/code map before measuring or drawing.
+                    String::new()
                 } else {
                     let base = family.base_font(source.bold, source.italic);
                     let name = format!("PCEd{}", base.replace('-', ""));
@@ -639,6 +681,24 @@ pub(super) fn rewrite_styled_block(
             };
             chars.push((ch, index, name));
         }
+    }
+    // All fallback outlines have now succeeded. Batch by actual face, preserving source
+    // style indices; the existing writer then coalesces adjacent equal-font/style characters.
+    for group in fallback_groups {
+        let fallback = write_type3_glyphs(doc, &mut fonts, group.face, false, group.glyphs, per_font);
+        for name in &fallback.names {
+            let font = fonts
+                .get(name.as_bytes())
+                .and_then(|f| doc.dict(f))
+                .ok_or_else(|| EditError::Invalid("the fallback font could not be loaded".into()))?;
+            metrics.insert(name.clone(), Metrics::from_dict(doc, &font));
+        }
+        for position in group.positions {
+            let item = chars.get_mut(position).ok_or_else(|| EditError::Invalid("the fallback character is missing".into()))?;
+            let (font, _) = fallback.codes.get(&item.0).ok_or_else(|| EditError::Invalid("the fallback glyph is missing".into()))?;
+            item.2 = fallback.names.get(*font).cloned().ok_or_else(|| EditError::Invalid("the fallback font is missing".into()))?;
+        }
+        substituted = Some(fallback.family.to_owned());
     }
     let size_of = |source: &TextLine, index: usize| {
         overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
@@ -735,6 +795,11 @@ pub(super) fn rewrite_styled_block(
     let mut at = 0;
     while at < chars.len() {
         let Some(item) = chars.get(at) else { break };
+        // The CR of a CRLF: the `\n` after it breaks the row.
+        if item.0 == '\r' {
+            at += 1;
+            continue;
+        }
         if item.0 == '\n' {
             row_ranges.push(row_start..row_start + row.len());
             rows.push(std::mem::take(&mut row));
@@ -800,6 +865,17 @@ pub(super) fn rewrite_styled_block(
         }
     };
     let o = &lead.origin;
+    let mut drop = coincident_ops(lines, &members);
+    drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
+    let start = lead.ops.first().copied().unwrap_or(o.bt_op);
+    let split = ops
+        .get(o.bt_op..start)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
+    // What is in force where the rewrite is drawn, and what the text after it expects.
+    let after = if split { &o.state } else { &o.bt_state };
     for (row, _) in rows.iter().zip(&kept).filter(|(_, k)| !**k) {
         let text: String = row.iter().map(|v| v.0).collect();
         if pdfcraft_fonts::source_shaping::required(&text) && row.first().is_some_and(|first| row.iter().any(|v| v.1 != first.1 || v.2 != first.2)) {
@@ -910,6 +986,11 @@ pub(super) fn rewrite_styled_block(
             tm[4] += ax;
             tm[5] += ay;
             let mut segment_width = segment_advances.get(&(row_index, pos)).copied().unwrap_or(0.0);
+            // Each run in its own graphics state, restating what its source set inside its text
+            // object (`gs`, stroke, line width, `Tr`; #3508/#3509) from the state the rewrite is
+            // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
+            block_ops.push(Op::new("q", vec![]));
+            block_ops.extend(state.paint_ops(after));
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();
@@ -996,6 +1077,7 @@ pub(super) fn rewrite_styled_block(
                 block_ops.push(Op::new("l", vec![n(x1), n(y1)]));
                 block_ops.push(Op::new("S", vec![]));
             }
+            block_ops.push(Op::new("Q", vec![]));
             x += segment_width;
             pos = end;
         }
@@ -1006,16 +1088,6 @@ pub(super) fn rewrite_styled_block(
         };
     }
     block_ops.push(Op::new("Q", vec![]));
-    let mut drop = coincident_ops(lines, &members);
-    drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    let start = lead.ops.first().copied().unwrap_or(o.bt_op);
-    let split = ops
-        .get(o.bt_op..start)
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
-    let after = if split { &o.state } else { &o.bt_state };
     block_ops.extend(after.ops());
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));

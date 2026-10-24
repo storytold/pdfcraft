@@ -14,7 +14,10 @@ use base64::Engine;
 
 use crate::XfaError;
 use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
-use crate::model::*;
+use crate::model::{
+    Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
+    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+};
 use crate::text::{self, Block, Face, Span};
 
 /// Most pages a form may lay out to.
@@ -37,13 +40,50 @@ const MAX_IMAGE_BYTES: usize = 256 << 20;
 /// Placeholder for the page count in text laid out before the count is known.
 const PAGE_COUNT_MARK: char = '\u{E000}';
 
+/// How far below its baseline an underline is drawn, in the text's size: an underline is the
+/// level line pushed just before its span, this far below it (the PDF writer tells it apart from
+/// a rule by this).
+pub(crate) const UNDERLINE_DROP: f64 = 0.1;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
-    Fill { rect: Rect, color: [f64; 3] },
-    Line { from: (f64, f64), to: (f64, f64), width: f64, color: [f64; 3], dashed: bool },
+    Fill {
+        rect: Rect,
+        color: [f64; 3],
+    },
+    Line {
+        from: (f64, f64),
+        to: (f64, f64),
+        width: f64,
+        color: [f64; 3],
+        dashed: bool,
+    },
+    /// A box with rounded (or inverted) corners: its fill, and its edge drawn inside it.
+    Rounded(Box<Rounded>),
     Text(Span),
-    Image { rect: Rect, data: Arc<Vec<u8>>, content_type: String },
+    Image {
+        rect: Rect,
+        data: Arc<Vec<u8>>,
+        content_type: String,
+    },
     Widget(Box<Widget>),
+}
+
+/// A box with rounded corners ([`Item::Rounded`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rounded {
+    pub rect: Rect,
+    /// Top-left, top-right, bottom-right and bottom-left radii, each at most half the box's
+    /// shorter side.
+    pub radii: [f64; 4],
+    /// Corners whose curve goes into the box rather than around it, in the same order.
+    pub inverted: [bool; 4],
+    pub fill: Option<[f64; 3]>,
+    /// The edge: its width, colour and whether it is dashed.
+    pub edge: Option<(f64, [f64; 3], bool)>,
+    /// A page break cut the box here: that side has no edge, and its corners are square.
+    pub open_top: bool,
+    pub open_bottom: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +166,8 @@ pub struct Widget {
     pub action: Option<Action>,
     /// Check boxes: the on and off values of the data; radio buttons: the on value.
     pub items: Vec<String>,
+    /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
+    pub no_scroll: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -155,6 +197,8 @@ impl Ctx {
         Ctx { font: self.font.apply(&c.font), para: self.para.apply(&c.para), som: self.som.clone() }
     }
 
+    /// [`Self::child`] for object `c`, its SOM path extended by its name and `index` among the
+    /// siblings of that name (an unnamed object adds nothing).
     fn with_som(&self, c: &Common, index: usize) -> Ctx {
         let mut out = self.child(c);
         if let Some(n) = &c.name {
@@ -175,6 +219,33 @@ struct Measured {
     font: Font,
     para: Para,
     size: (f64, f64),
+}
+
+/// A point in the flow ([`Layouter::flow_mark`]): the page and content area, the height
+/// reached there, and how many items the page had then.
+#[derive(Clone, Copy, Debug)]
+struct FlowMark {
+    page: usize,
+    area: usize,
+    content: usize,
+    y: f64,
+    items: usize,
+}
+
+/// A flowed subform being laid out ([`Layouter::frames`]): where it sits across, its margins and
+/// border, its part on the content area the flow is in, and its parts on earlier ones (page
+/// index, the page's first item of the part, the part's box).
+struct Frame {
+    x: f64,
+    w: f64,
+    margin: Margin,
+    border: Option<Border>,
+    part: FlowMark,
+    parts: Vec<(usize, usize, Rect)>,
+    /// Something inside didn't fit its content area: an item cut across areas, or one placed past
+    /// the area's bottom (a table row taller than an area, an overflow leader and the row after it
+    /// that don't fit together). The border is left out ([`Layouter::finish_frame`]).
+    lost: bool,
 }
 
 struct Cursor {
@@ -211,6 +282,9 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// The flowed subforms being laid out, outermost first: a break between their children
+    /// closes their parts on one content area and opens new ones on the next.
+    frames: Vec<Frame>,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -256,6 +330,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         leaves: Vec::new(),
+        frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
@@ -334,7 +409,7 @@ fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
-        Item::Fill { .. } | Item::Line { .. } => None,
+        Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
     }
 }
 
@@ -369,6 +444,23 @@ fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
                 (Some(Item::Line { from: lo, to: mid, width, color, dashed }), Some(Item::Line { from: mid, to: hi, width, color, dashed }))
             }
         }
+        Item::Rounded(r) => {
+            if r.rect.bottom() <= cut + 0.01 {
+                (Some(Item::Rounded(r)), None)
+            } else if r.rect.y >= cut - 0.01 {
+                (None, Some(Item::Rounded(r)))
+            } else {
+                // Each part keeps the corners on its side, rounded no more than its own height
+                // allows, and is open where it was cut.
+                let [tl, tr, br, bl] = r.radii;
+                let above = Rect::new(r.rect.x, r.rect.y, r.rect.w, cut - r.rect.y);
+                let below = Rect::new(r.rect.x, cut, r.rect.w, r.rect.bottom() - cut);
+                let fit = |v: f64, h: f64| v.min(h.max(0.0));
+                let upper = Rounded { rect: above, radii: [fit(tl, above.h), fit(tr, above.h), 0.0, 0.0], open_bottom: true, ..(*r).clone() };
+                let lower = Rounded { rect: below, radii: [0.0, 0.0, fit(br, below.h), fit(bl, below.h)], open_top: true, ..*r };
+                (Some(Item::Rounded(Box::new(upper))), Some(Item::Rounded(Box::new(lower))))
+            }
+        }
         other => (Some(other), None),
     }
 }
@@ -379,6 +471,10 @@ fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
         Item::Fill { rect, .. } | Item::Image { rect, .. } => {
             rect.x += dx;
             rect.y += dy;
+        }
+        Item::Rounded(r) => {
+            r.rect.x += dx;
+            r.rect.y += dy;
         }
         Item::Line { from, to, .. } => {
             *from = (from.0 + dx, from.1 + dy);
@@ -401,7 +497,7 @@ fn is_row(node: &Node) -> bool {
 }
 
 /// The Acrobat date pattern for an XFA picture clause such as `date{YYYY-MM-DD}`.
-fn date_pattern(picture: Option<&str>) -> String {
+pub(crate) fn date_pattern(picture: Option<&str>) -> String {
     picture.and_then(date_letters).unwrap_or_else(|| "yyyy-mm-dd".into())
 }
 
@@ -521,7 +617,7 @@ impl Layouter<'_> {
         for s in b.spans {
             if s.face.underline {
                 let w = s.face.width(&s.text);
-                let y = s.baseline + s.face.size * 0.1;
+                let y = s.baseline + s.face.size * UNDERLINE_DROP;
                 self.push(Item::Line { from: (s.x, y), to: (s.x + w, y), width: (s.face.size * 0.06).max(0.3), color: s.face.color, dashed: false })?;
             }
             if !s.text.trim().is_empty() {
@@ -589,11 +685,118 @@ impl Layouter<'_> {
         self.new_page()
     }
 
+    /// The current content area, how far down it the flow is, and whether anything has been
+    /// placed in it; before the first page, an empty letter-size page from its top.
     fn cursor(&self) -> (Rect, f64, bool) {
         match &self.cur {
             Some(c) => (c.rect, c.y, c.placed),
             None => (Rect::new(0.0, 0.0, 612.0, 792.0), 0.0, false),
         }
+    }
+
+    /// Where the flow is now ([`FlowMark`]); `None` before the first page.
+    fn flow_mark(&self) -> Option<FlowMark> {
+        let c = self.cur.as_ref()?;
+        Some(FlowMark { page: self.pages.len(), area: c.area, content: c.content, y: c.y, items: self.pages.last().map_or(0, |p| p.items.len()) })
+    }
+
+    /// Whether the flow is still in the content area `m` was taken in.
+    fn on_area(&self, m: &FlowMark) -> bool {
+        self.pages.len() == m.page && self.cur.as_ref().is_some_and(|c| c.area == m.area && c.content == m.content)
+    }
+
+    /// Whether page `page` (an index) got anything from item `at` on.
+    fn has_items_from(&self, page: usize, at: usize) -> bool {
+        self.pages.get(page).is_some_and(|p| p.items.len() > at)
+    }
+
+    /// Break the flowed subforms being laid out ([`Self::frames`]) across content areas, as
+    /// another viewer breaks such a section on a synthetic form: each one's part here ends after
+    /// its content and its bottom margin (the innermost first, each inside the next), the flow
+    /// moves to the next content area, and each starts a new part there after its top margin
+    /// (the outermost first). The top margins take only what the `need` points of what comes next
+    /// leave of the new area: a child that fits a fresh area but not after the margins would
+    /// otherwise run past its bottom, out of its border. `to_page` moves to a new page instead (a
+    /// child's own page break), which breaks the subforms around it the same way.
+    fn break_frames(&mut self, need: f64, to_page: bool) -> Result<(), XfaError> {
+        let (rect, mut y, _) = self.cursor();
+        let page = self.pages.len().saturating_sub(1);
+        let here: Vec<bool> = self.frames.iter().map(|f| self.on_area(&f.part)).collect();
+        let filled: Vec<bool> = self.frames.iter().map(|f| self.has_items_from(page, f.part.items)).collect();
+        for ((f, here), filled) in self.frames.iter_mut().zip(here).zip(filled).rev() {
+            y = (y + f.margin.bottom).min(rect.bottom());
+            if !here {
+                f.lost = true;
+            } else if filled && y - f.part.y >= 0.01 {
+                f.parts.push((page, f.part.items, Rect::new(f.x, f.part.y, f.w, y - f.part.y)));
+            }
+        }
+        if to_page {
+            self.new_page()?;
+        } else {
+            self.next_area()?;
+        }
+        let (rect, y, _) = self.cursor();
+        let mut room = (rect.bottom() - y - need).max(0.0);
+        for i in 0..self.frames.len() {
+            let Some(mark) = self.flow_mark() else { break };
+            let Some(f) = self.frames.get_mut(i) else { break };
+            f.part = mark;
+            // `max` before `min`: a NaN margin counts as none and leaves `room` a number.
+            let top = f.margin.top.max(0.0).min(room);
+            room = (room - top).max(0.0);
+            self.advance(top);
+        }
+        Ok(())
+    }
+
+    /// Close flowed subform `f` once its content is placed: its last part ends where the flow
+    /// is, and its border (edges and fill) is drawn round each part, closed on every side, under
+    /// that part's content. One holding something that didn't fit its content area ([`Frame::lost`])
+    /// is drawn without its border, and the layout says so.
+    fn finish_frame(&mut self, mut f: Frame) -> Result<(), XfaError> {
+        let Some(b) = f.border.take() else { return Ok(()) };
+        if b.fill().is_none() && b.visible_edges() == [false; 4] {
+            return Ok(());
+        }
+        let (area, end, _) = self.cursor();
+        // The bottom margin stays in the content area, as at a break; content that itself ran
+        // past it has already cost the section its border ([`Self::overflowed`]).
+        let end = end.min(area.bottom()).max(end - f.margin.bottom);
+        let page = self.pages.len().saturating_sub(1);
+        if !self.on_area(&f.part) {
+            f.lost = true;
+        } else if self.has_items_from(page, f.part.items) && end - f.part.y >= 0.01 {
+            f.parts.push((page, f.part.items, Rect::new(f.x, f.part.y, f.w, end - f.part.y)));
+        }
+        if f.lost {
+            self.warn_once("a bordered section holding an item that doesn't fit on its page is drawn without its border");
+            return Ok(());
+        }
+        // The last part first: a part's place on its page stays where it was found.
+        for (page, at, rect) in f.parts.into_iter().rev() {
+            self.insert_border(&b, rect, page, at)?;
+        }
+        Ok(())
+    }
+
+    /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
+    /// `at` on.
+    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+        let before = self.pages.last().map_or(0, |p| p.items.len());
+        self.draw_border(b, rect)?;
+        let drawn: Vec<Item> = match self.pages.last_mut() {
+            Some(p) => {
+                let from = before.min(p.items.len());
+                p.items.drain(from..).collect()
+            }
+            None => return Ok(()),
+        };
+        if let Some(target) = self.pages.get_mut(page) {
+            let at = at.min(target.items.len());
+            target.items.splice(at..at, drawn);
+        }
+        Ok(())
     }
 
     /// Move the cursor down (margins and spacing: the area still counts as empty).
@@ -609,16 +812,36 @@ impl Layouter<'_> {
             c.y += dy.max(0.0);
             c.placed = true;
         }
+        let (_, y, _) = self.cursor();
+        self.overflowed(y);
     }
 
-    /// Make room for `h`: stay, or move to the next content area / page. Returns whether a
-    /// break happened.
-    fn make_room(&mut self, h: f64) -> Result<bool, XfaError> {
+    /// Something was placed down to `bottom`: past the content area's bottom, the flowed subforms
+    /// it is inside can't hold it in a part, and are drawn without their border.
+    fn overflowed(&mut self, bottom: f64) {
+        let (rect, _, _) = self.cursor();
+        if bottom > rect.bottom() + 0.01 {
+            for f in &mut self.frames {
+                f.lost = true;
+            }
+        }
+    }
+
+    /// Make room for `h`, with `after` more drawn before it should it move (a table's overflow
+    /// leader): stay, or move to the next content area / page. Returns whether a break happened.
+    /// Something that fits a fresh area breaks the flowed subforms it is in with it
+    /// ([`Self::break_frames`]), a table's rows included; one taller than an area just moves on,
+    /// and those subforms are drawn without their border ([`Self::finish_frame`]).
+    fn make_room(&mut self, h: f64, after: f64) -> Result<bool, XfaError> {
         let (rect, y, placed) = self.cursor();
         if y + h <= rect.bottom() + 0.01 || !placed {
             return Ok(false);
         }
-        self.next_area()?;
+        if h <= rect.h + 0.01 {
+            self.break_frames(h + after, false)?;
+        } else {
+            self.next_area()?;
+        }
         Ok(true)
     }
 
@@ -628,7 +851,7 @@ impl Layouter<'_> {
     fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         let (rect, y, _) = self.cursor();
         if y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
-            self.make_room(h)?;
+            self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
         let first = self.pages.last().map_or(0, |p| p.items.len());
@@ -747,6 +970,7 @@ impl Layouter<'_> {
                     c.y = (end - shift).min(c.rect.bottom()).max(c.y);
                     c.placed = true;
                 }
+                self.overflowed(end - shift);
                 return Ok(());
             }
             rest = below;
@@ -773,7 +997,7 @@ impl Layouter<'_> {
         let Node::Subform(sf) = node else { return Ok(()) };
         self.check_measures()?;
         if sf.break_before_page && self.page_has_flow() {
-            self.new_page()?;
+            self.break_frames(0.0, true)?;
         }
         // Data adds instances of a repeating subform (rows added in another viewer).
         let instances = self.instances(node, &ctx.som);
@@ -794,6 +1018,14 @@ impl Layouter<'_> {
                 continue;
             }
             let m = sf.common.margin;
+            // Its border and fill go round what it takes from here, a part on each content area.
+            let framed = match self.flow_mark() {
+                Some(part) => {
+                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false });
+                    true
+                }
+                None => false,
+            };
             self.advance(m.top);
             let inner_x = x + m.left;
             let inner_w = (w - m.horizontal()).max(1.0);
@@ -818,9 +1050,12 @@ impl Layouter<'_> {
                 }
             }
             self.advance(m.bottom);
+            if framed && let Some(frame) = self.frames.pop() {
+                self.finish_frame(frame)?;
+            }
         }
         if sf.break_after_page {
-            self.new_page()?;
+            self.break_frames(0.0, true)?;
         }
         Ok(())
     }
@@ -837,6 +1072,12 @@ impl Layouter<'_> {
         let cols = self.columns(sf, inner_w);
         let leader =
             sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().position(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
+        // The overflow leader starts each part after the first, before the row that moved.
+        let lead = leader.and_then(|li| match sf.children.get(li) {
+            Some(Node::Subform(l)) => Some((li, l.as_ref())),
+            _ => None,
+        });
+        let lead_h = lead.map_or(0.0, |(_, l)| self.row_height(l, &cols, inner_w, ctx, depth + 1));
         let sibs = SomIndices::of(&sf.children);
         for (ci, child) in sf.children.iter().enumerate() {
             if !child.common().presence.occupies() {
@@ -851,15 +1092,13 @@ impl Layouter<'_> {
                 self.warn_truncated(child, &ctx.som, instances);
                 for inst in 0..instances {
                     let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
-                    if self.make_room(h)?
-                        && let Some(li) = leader
-                        && li != ci
-                        && let Some(Node::Subform(l)) = sf.children.get(li)
+                    let led = lead.filter(|(li, _)| *li != ci);
+                    if self.make_room(h, led.map_or(0.0, |_| lead_h))?
+                        && let Some((li, l)) = led
                     {
-                        let lh = self.row_height(l, &cols, inner_w, ctx, depth + 1);
                         let (_, y, _) = self.cursor();
-                        self.draw_row(l, &cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1, sibs.at(li))?;
-                        self.place(lh);
+                        self.draw_row(l, &cols, Rect::new(x, y, inner_w, lead_h), ctx, depth + 1, sibs.at(li))?;
+                        self.place(lead_h);
                     }
                     let (_, y, _) = self.cursor();
                     self.draw_row(row, &cols, Rect::new(x, y, inner_w, h), ctx, depth + 1, csib + inst)?;
@@ -1089,6 +1328,10 @@ impl Layouter<'_> {
         if cap.value.is_empty() && cap.reserve.is_none() {
             return None;
         }
+        // A check box has no text for an inline caption to run with: it is not shown.
+        if f.ui == Ui::CheckButton && cap.placement == Placement::Inline {
+            return None;
+        }
         let placement = if cap.placement == Placement::Inline { Placement::Left } else { cap.placement };
         let font = ctx.font.apply(&cap.font);
         let para = ctx.para.apply(&cap.para);
@@ -1129,13 +1372,18 @@ impl Layouter<'_> {
         };
         match self.caption_reserve(f, inner_w, ctx) {
             Some((Placement::Top | Placement::Bottom, r)) => ui + r,
-            Some((_, r)) => {
+            Some((placement, r)) => {
+                // A check box's caption without a reserve is drawn in all the box leaves.
+                let w = match auto_check_reserve(f, placement, inner_w, None) {
+                    Some(auto) => auto,
+                    None => inner_w - r,
+                };
                 let cap = f.caption.as_ref().map(|c| {
                     let rich = match &c.value {
                         Value::Rich(r) => r.clone(),
                         other => text::plain(&other.plain().unwrap_or_default()),
                     };
-                    text::measure_height(&rich, (inner_w - r).max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
+                    text::measure_height(&rich, w.max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
                         self.embed(id, max)
                     })
                 });
@@ -1403,11 +1651,35 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box, or
+    /// the whole box as one rounded shape when its corners are rounded.
     fn draw_border(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
+        let vis = b.visible_edges();
+        // Rounded corners: the box is one shape, filled and edged along its curves, when its
+        // edges are all alike (all shown and the same, or all hidden). Edges that differ keep
+        // square corners.
+        let radii = b.radii(rect.w, rect.h);
+        let alike = b.edges.iter().all(|e| *e == b.edges[0]);
+        if radii.iter().any(|r| *r > 0.0) && (vis == [true; 4] && alike || vis == [false; 4]) {
+            let e = b.edges[0];
+            let edge = vis[0].then(|| {
+                let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
+                (e.thickness.clamp(0.1, 20.0), color, matches!(e.stroke, Stroke::Dashed | Stroke::Dotted))
+            });
+            let shape = Rounded {
+                rect,
+                radii,
+                inverted: b.corners.map(|c| c.inverted),
+                fill: b.fill().map(|f| f.0),
+                edge,
+                open_top: false,
+                open_bottom: false,
+            };
+            return self.push(Item::Rounded(Box::new(shape)));
+        }
         if let Some(fill) = b.fill() {
             self.push(Item::Fill { rect, color: fill.0 })?;
         }
-        let vis = b.visible_edges();
         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
         // Top, right, bottom, left; lines sit inside the box.
         let segs = [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x0, y1), (x1, y1)), ((x0, y0), (x0, y1))];
@@ -1578,6 +1850,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&f.common.margin);
         let (mut ui, mut cap_rect) = (inner, None);
         if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, ctx) {
+            let reserve = auto_check_reserve(f, placement, inner.w, Some(inner.h)).unwrap_or(reserve);
             let r = reserve.max(0.0);
             match placement {
                 Placement::Top => {
@@ -1715,12 +1988,21 @@ impl Layouter<'_> {
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
                 let s = f.check_size.unwrap_or(10.0).min(ui.w.max(1.0)).min(ui.h.max(1.0));
-                let y = match fctx.para.v_align {
-                    VAlign::Top => ui.y + f.ui_margin.top,
-                    VAlign::Middle => ui.y + (ui.h - s) / 2.0,
-                    VAlign::Bottom => ui.bottom() - s - f.ui_margin.bottom,
+                // Without a caption the box sits at the right of the content area, as if a
+                // caption on its left took the rest, so the paragraph's alignment has no room to
+                // act on; beside a caption that alignment places it. The box's own margin doesn't
+                // move it.
+                let x = match (cap_rect, fctx.para.h_align) {
+                    (None, _) | (Some(_), HAlign::Right) => ui.right() - s,
+                    (Some(_), HAlign::Center) => ui.x + (ui.w - s) / 2.0,
+                    (Some(_), HAlign::Left | HAlign::Justify) => ui.x,
                 };
-                let r = Rect::new(ui.x + f.ui_margin.left, y, s, s);
+                let y = match fctx.para.v_align {
+                    VAlign::Top => ui.y,
+                    VAlign::Middle => ui.y + (ui.h - s) / 2.0,
+                    VAlign::Bottom => ui.bottom() - s,
+                };
+                let r = Rect::new(x, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
                     Some((group, on_value, tip, chosen)) => (
@@ -1804,8 +2086,25 @@ impl Layouter<'_> {
             default: template_default,
             action,
             items,
+            no_scroll: f.no_scroll,
         })))
     }
+}
+
+/// The room a caption without a reserve takes beside a check box: all the box leaves of a
+/// content area `w` wide (and `h` tall, when known), the box at the size it can be drawn there.
+/// `None` for any other field, or a caption with a reserve of its own.
+fn auto_check_reserve(f: &Field, placement: Placement, w: f64, h: Option<f64>) -> Option<f64> {
+    if f.ui != Ui::CheckButton || f.caption.as_ref().is_none_or(|c| c.reserve.is_some()) {
+        return None;
+    }
+    let s = f.check_size.unwrap_or(10.0).min(w.max(1.0)).min(h.map_or(f64::INFINITY, |h| h.max(1.0)));
+    let rest = match (placement, h) {
+        (Placement::Top | Placement::Bottom, Some(h)) => h - s,
+        (Placement::Top | Placement::Bottom, None) => return None,
+        _ => w - s,
+    };
+    Some(rest.max(0.0))
 }
 
 /// The widget's own border from the `<ui>` border element. Without one, a check box gets a

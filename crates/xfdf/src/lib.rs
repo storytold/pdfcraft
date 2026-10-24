@@ -271,8 +271,10 @@ fn text_of(doc: &Document, d: &Dict, k: &[u8]) -> Option<String> {
     })
 }
 
+/// The numbers of a list; empty when any entry is non-finite (`nan`, `inf`), so the list is unusable as a whole.
 fn csv(list: &str) -> Vec<f64> {
-    list.split([',', ';', ' ']).filter(|t| !t.is_empty()).filter_map(|t| t.trim().parse().ok()).collect()
+    let v: Vec<f64> = list.split([',', ';', ' ']).filter(|t| !t.is_empty()).filter_map(|t| t.trim().parse().ok()).collect();
+    if v.iter().all(|x| x.is_finite()) { v } else { Vec::new() }
 }
 
 fn arr(v: &[f64]) -> Object {

@@ -123,7 +123,7 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 }
                 out.push(Token { tok: Tok::Str(s), line });
             }
-            c if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
+            c if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit)) => {
                 let start = i;
                 while i < chars.len() && (chars[i].is_ascii_digit() || (chars[i] == '.' && chars.get(i + 1) != Some(&'.'))) {
                     i += 1;
@@ -760,7 +760,7 @@ fn parse_num(s: &str) -> Option<f64> {
 }
 
 fn is_numeric_text(s: &str) -> bool {
-    s.trim().parse::<f64>().is_ok_and(|v| v.is_finite())
+    s.trim().parse::<f64>().is_ok_and(f64::is_finite)
 }
 
 // ── the evaluator ───────────────────────────────────────────────────────────────────────────
@@ -1948,7 +1948,7 @@ fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
 }
 
 /// Number of days in month `m` (1-12) of year `y`, leap years included.
-fn days_in(y: i64, m: u32) -> u32 {
+pub(crate) fn days_in(y: i64, m: u32) -> u32 {
     // The length of the month from chrono (the first of the next month, less the first of this
     // one). An invalid month keeps the old 31-day default.
     // Month lengths repeat every 400 years, so the year within its cycle is enough (and always
@@ -2325,10 +2325,11 @@ impl Interp<'_> {
                     }
                     text = if frac.is_empty() { g } else { format!("{g}.{frac}") };
                 }
+                let nonzero = text.chars().any(|c| ('1'..='9').contains(&c));
                 if pic.contains('$') {
                     text = format!("${text}");
                 }
-                if num < 0.0 {
+                if num < 0.0 && nonzero {
                     text = format!("-{text}");
                 }
                 Val::Str(text)

@@ -14,13 +14,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         app.set_option("zoom", "150").unwrap();
         app
     });
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h
 }
 
@@ -103,6 +97,75 @@ fn a_blank_tooltip_shows_nothing() {
     assert_eq!(doc.form.iter().find(|f| f.name == "city").unwrap().tooltip.as_deref(), Some("   "), "the blank /TU is in the file");
     rest_on_field(&mut h, "city");
     assert!(egui::Tooltip::seconds_since_last_tooltip(&h.ctx).is_infinite(), "no tooltip was shown");
+}
+
+/// A text field that doesn't scroll (`DoNotScroll`) takes no more than it shows, measured as its
+/// appearance draws it: a long paste keeps what fits, typing into a full field adds nothing, and
+/// a field without the flag takes it all.
+#[test]
+fn a_field_that_doesnt_scroll_stops_taking_text_when_full() {
+    let mut h = harness();
+    set_city(
+        &mut h,
+        pdfcraft_engine::FieldProps { flags: vec![(pdfcraft_engine::field_flags::DO_NOT_SCROLL, true)], font_size: Some(12.0), ..Default::default() },
+    );
+    let text_box = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().field_text_box("city", 0).expect("the city field's text box")
+    };
+    let typing = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    click_field(&mut h, "city", 0);
+    h.event(egui::Event::Text("W".repeat(80)));
+    h.run_steps(2);
+    let kept = typing(&h);
+    let tb = text_box(&h);
+    assert!(!kept.is_empty() && kept.len() < 80, "{} of 80 kept", kept.len());
+    assert!(tb.fits(&kept) && !tb.fits(&format!("{kept}W")), "as much as fits: {}", kept.len());
+    h.event(egui::Event::Text("WWW".into()));
+    h.run_steps(2);
+    assert_eq!(typing(&h), kept, "a full field takes no more");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "city"), [kept]);
+    // A field without the flag takes the whole paste.
+    click_field(&mut h, "name", 0);
+    h.event(egui::Event::Text("W".repeat(80)));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "name"), ["W".repeat(80)]);
+}
+
+/// A multi-line field that doesn't scroll, with an automatic size, takes lines until even the
+/// smallest size it shrinks to can't show them all.
+#[test]
+fn a_multi_line_auto_sized_field_that_doesnt_scroll_stops_when_full() {
+    let mut h = harness();
+    set_city(
+        &mut h,
+        pdfcraft_engine::FieldProps {
+            flags: vec![(pdfcraft_engine::field_flags::DO_NOT_SCROLL, true)],
+            multiline: Some(true),
+            font_size: Some(0.0),
+            ..Default::default()
+        },
+    );
+    let da = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().da.clone()
+    };
+    assert!(da.contains(" 0 Tf"), "an automatic size: {da}");
+    click_field(&mut h, "city", 0);
+    h.event(egui::Event::Text("line\n".repeat(60)));
+    h.run_steps(2);
+    let kept = h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    let tb = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().field_text_box("city", 0).expect("the city field's text box")
+    };
+    let lines = kept.lines().count();
+    assert!(lines > 1 && lines < 60, "{lines} of 60 lines kept");
+    assert!(tb.fits(&kept) && !tb.fits(&format!("{kept}\nline")), "as many lines as fit at 4 pt: {lines}");
 }
 
 #[test]
@@ -451,6 +514,53 @@ fn an_undelimited_date_field_takes_a_typed_date_and_its_calendar_opens_on_it() {
     h.get_by_label("March 2025");
 }
 
+/// #4274: the calendar had no way to pick today; from another month the only way back was the
+/// arrows. Today is picked in each field's own format, whichever month the calendar shows, and
+/// is one edit as a clicked day is.
+#[test]
+fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    // 2023-11-14 on the injected clock.
+    let s = h.state_mut();
+    s.session = std::mem::take(&mut s.session).with_clock(|| 1_700_000_000);
+    assert_eq!(h.state().session.today(), (2023, 11, 14));
+    for (name, rect) in [("due", [50.0, 40.0, 200.0, 60.0]), ("start", [50.0, 80.0, 200.0, 100.0])] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField { page: 0, rect, kind: pdfcraft_engine::NewField::Date, name: Some(name.into()) });
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "start".into(),
+        props: Box::new(pdfcraft_engine::FieldProps {
+            format: Some(pdfcraft_engine::form_scripts::Format::Date("yyyy-mm-dd".into())),
+            ..Default::default()
+        }),
+    }));
+    h.run_steps(4);
+    // Two months on, and two months back: Today still picks the 14th of November.
+    for (name, arrow, shown, want) in [("due", "›", "January 2024", "11/14/2023"), ("start", "‹", "September 2023", "2023-11-14")] {
+        click_field(&mut h, name, 0);
+        h.get_by_label("November 2023");
+        for _ in 0..2 {
+            h.get_by_label(arrow).click();
+            h.run_steps(2);
+        }
+        h.get_by_label(shown);
+        if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+            h.render().unwrap().save(format!("{dir}/calendar-today-{name}.png")).unwrap();
+        }
+        h.get_by_label("Today").click();
+        h.run_steps(4);
+        assert_eq!(value(&h, name), [want], "today in {name}'s format");
+        assert!(h.state().views[0].forms.focus.is_none(), "picking closes the field, as a clicked day does");
+        assert!(h.query_by_label("Today").is_none(), "and its calendar");
+    }
+    // One edit each, as a clicked day is.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(value(&h, "start"), Vec::<String>::new());
+    assert_eq!(value(&h, "due"), ["11/14/2023"]);
+}
+
 #[test]
 fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values() {
     use egui_kittest::kittest::Queryable;
@@ -500,8 +610,13 @@ fn wait_for_file(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) 
     h.run_steps(1);
 }
 
+/// A fresh folder of its own for one test. The tests of this binary share one process id and run
+/// in parallel, and two of them name their folder "same-frame": a number taken per call keeps one
+/// test from clearing the folder another is saving into.
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-forms-{name}-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-forms-{name}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -1029,13 +1144,7 @@ fn calculated_field_and_script_side_effect_on_another_page_re_render() {
         event: "calculate".into(),
         script: Some("event.value = 'from_' + getField('name').value;".into()),
     }));
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("hello".into()));
     h.run_steps(2);
@@ -1043,13 +1152,7 @@ fn calculated_field_and_script_side_effect_on_another_page_re_render() {
     h.run_steps(2);
     assert_eq!(value(&h, "page2_field"), ["from_hello"]);
     // Wait for all re-renders to complete.
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert_eq!(value(&h, "name"), ["hello"]);
     assert_eq!(value(&h, "page2_field"), ["from_hello"]);
 }
@@ -1065,13 +1168,7 @@ fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
     h.key_press(egui::Key::Tab);
     h.run_steps(2);
     assert_eq!(value(&h, "name"), ["GoodVal"]);
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert!(!h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
 
     // 2. Rejected edit: typing rejected by validate script leaves unbaked clean.
@@ -1091,13 +1188,7 @@ fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
 
     // 3. Zoom then edit: zoom to another scale, let tiles settle, then edit.
     h.state_mut().views[0].zoom_step(true);
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     click_field(&mut h, "name", 0);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("ZoomedVal".into()));
@@ -1105,13 +1196,7 @@ fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
     h.key_press(egui::Key::Tab);
     h.run_steps(2);
     assert_eq!(value(&h, "name"), ["ZoomedVal"]);
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert!(!h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
 }
 
@@ -1252,6 +1337,9 @@ fn on_screen_fit(h: &Harness<'static, PdfCraftApp>, name: &str, text: &str) -> (
     }
 }
 
+/// Text typed into an auto-size field shrinks to fit the box's width, while short text keeps a
+/// larger size; a multiline auto-size field wraps and shrinks only as far as the box's height
+/// needs, and a fixed 10 pt field keeps its size.
 #[test]
 fn auto_size_fields_shrink_and_wrap_typed_text_to_fit_their_box() {
     let mut h = auto_size_harness();
@@ -1333,4 +1421,110 @@ fn mode_tabs_keep_the_hand_over_a_text_field_scrolled_under_them() {
     let convert = mode_tab(&h, "Convert").center();
     click_at(&mut h, convert);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the field's editor");
+}
+
+/// Two combo boxes of Apple and Banana: `fruit` editable (Combo and Edit, ISO 32000-2 Table 233),
+/// `veg` a drop-down list only.
+fn combo_form() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (fruit) /Ff 393216 /Opt [(Apple) (Banana)] /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (veg) /Ff 131072 /Opt [(Apple) (Banana)] /Rect [20 300 280 322] /P 3 0 R /F 4 >>",
+    ])
+}
+
+fn combo_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("combo.pdf", None, combo_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// An editable combo box takes a typed value that isn't among its options, and still takes a
+/// pick from its list; the typed value is what Save writes.
+#[test]
+fn an_editable_combo_box_takes_a_typed_value() {
+    let dir = scratch("editable-combo");
+    let out = dir.join("saved.pdf");
+    let mut h = combo_harness();
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(focused(&h), Some(("fruit".into(), 0)));
+    h.event(egui::Event::Text("Cherry".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["Cherry"], "Enter commits the typed value");
+    assert!(h.state().views[0].forms.focus.is_none(), "and closes the field");
+    // Reopened, it shows the typed value, and the list still picks an option.
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some("Cherry"));
+    h.get_by_label("Banana").click();
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["Banana"], "a pick from the list");
+    // Typed again, Tab commits it, and Save writes it.
+    click_field(&mut h, "fruit", 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Damson".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["Damson"], "Tab commits the typed value");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+    wait_for_file(&mut h, &out);
+    assert_eq!(saved_value(&out, "fruit"), ["Damson"]);
+    // Undo takes the typing back as one step.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(value(&h, "fruit"), ["Banana"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A combo box without the Edit flag is a drop-down list only: typing changes nothing.
+#[test]
+fn a_combo_box_without_edit_takes_no_typing() {
+    let mut h = combo_harness();
+    click_field(&mut h, "veg", 0);
+    assert_eq!(focused(&h), Some(("veg".into(), 0)));
+    h.event(egui::Event::Text("Cherry".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(""), "no text box took the typing");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert!(value(&h, "veg").is_empty(), "nothing typed reaches the field");
+    // Tab went on to `fruit`, whose open list covers `veg`: close it first.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    click_field(&mut h, "veg", 0);
+    h.get_by_label("Apple").click();
+    h.run_steps(4);
+    assert_eq!(value(&h, "veg"), ["Apple"], "its list still picks");
+}
+
+/// A button script's `ShowHideFileAttachment` opens the attachments panel, and running it again
+/// closes it.
+#[test]
+fn a_form_button_shows_and_hides_the_attachments_panel() {
+    let mut h = harness();
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Attachments));
+    // Show/Hide, as its name says: asked again, it closes.
+    h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
+    h.run_steps(2);
+    assert_eq!(h.state().right, None);
 }
