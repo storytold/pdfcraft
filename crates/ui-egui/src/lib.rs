@@ -1793,20 +1793,39 @@ impl PdfCraftApp {
         }
     }
 
-    /// Save an attachment to disk, or open a PDF attachment in a new tab.
+    /// Save an attachment to disk, or open a PDF attachment in a new tab (or go to the tab it is
+    /// already open in). Only bytes that are a PDF open, whatever the file's name says; anything
+    /// else asked to open is offered to save.
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
-            (Ok(bytes), true) => {
+            (Ok(bytes), true) if looks_like_pdf(&bytes) => {
                 // The tab name later names files written from the tab (Split, Extract pages).
-                if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
-                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+                let name = crate::files::attachment_file_name(&att.name);
+                // Already open: the tab opened from this attachment of this document (its bytes
+                // may have grown since, as a form laid out on open appends its layout).
+                let origin = (doc, att.name.clone());
+                let open_in = self.views.iter().position(|v| v.from_attachment.as_ref() == Some(&origin) && self.session.get(v.id).is_some());
+                if let Some(i) = open_in {
+                    self.active = Some(i);
+                    return;
+                }
+                let before = self.views.len();
+                match self.open_bytes(&name, None, bytes) {
+                    // Opening bytes adds their tab at once (unless a password is asked for first).
+                    Ok(()) if self.views.len() > before => {
+                        if let Some(v) = self.views.last_mut() {
+                            v.from_attachment = Some(origin);
+                        }
+                    }
+                    Ok(()) => {}
+                    Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
                 }
             }
-            (Ok(bytes), false) => {
+            (Ok(bytes), _) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.ask_one(
                     pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
@@ -3702,4 +3721,9 @@ impl PdfCraftApp {
             }
         }
     }
+}
+
+/// Whether `bytes` are a PDF: a `%PDF-` header within the first 1024 bytes, as readers accept.
+fn looks_like_pdf(bytes: &[u8]) -> bool {
+    bytes.get(..1024).unwrap_or(bytes).windows(5).any(|w| w == b"%PDF-")
 }

@@ -384,6 +384,9 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 
 pub struct DocView {
     pub id: DocId,
+    /// The document and attached file this tab was opened from, when a form or the Attachments
+    /// panel opened it: asking for that attachment again comes back to this tab.
+    pub from_attachment: Option<(DocId, String)>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -741,6 +744,7 @@ impl DocView {
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
             id,
+            from_attachment: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,

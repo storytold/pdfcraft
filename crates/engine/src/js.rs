@@ -32,18 +32,21 @@ impl JsOutput {
     }
 
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
-    /// except a request to show a side panel or open Save As, which is noted on the console
-    /// and dropped.
+    /// except a request to show a side panel, open Save As, or open or save an attached file,
+    /// which is noted on the console and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
-        // button's may show or hide a side panel, or open Save As.
+        // button's may show or hide a side panel, open Save As, or open or save an attached file.
         for r in &o.requests {
             match r {
                 Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
                 Request::SaveAs => {
                     self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())
+                }
+                Request::OpenAttachment { name, .. } => {
+                    self.console.push(format!("A field script asked to open the attached file {name}; only a button may open an attached file"))
                 }
                 r => self.requests.push(r.clone()),
             }
@@ -269,10 +272,12 @@ impl Session {
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        // A button PdfCraft generated from an XFA template runs its XFA click script.
+        // A button PdfCraft generated from an XFA template runs its XFA click script (the app runs
+        // click scripts for buttons only, so other fields' click events don't run here either).
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && field.kind == crate::FormFieldKind::PushButton
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
