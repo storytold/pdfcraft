@@ -213,6 +213,16 @@ kind = "translation"
 usage = "Central Kurdish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/fa.tsv"
+title = "Persian (Farsi) interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources; 2026-10-25 initial catalog covering the current 2,776-entry key union, AI-assisted translations from English, not separately native-reviewed"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Persian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/tr.tsv"
 title = "Turkish interface translation catalog"
 author = "PdfCraft contributors"
