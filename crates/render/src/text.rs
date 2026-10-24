@@ -786,6 +786,40 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             straight.push((*u, vec![i]));
         }
     }
+    // Upright glyphs stacked down a column are vertical text written without a vertical font. The
+    // writing direction is down even though each outline is upright, so they are marked as such
+    // and laid out in the quarter turn that reads down and right to left -- where a vertical
+    // font's text already goes -- rather than as the rows their baselines would otherwise make
+    // (#3712). Marking the direction is what makes Copy keep the columns apart as well: it reads
+    // the direction to tell a column of text from a row of cells.
+    let mut glyphs = glyphs;
+    if let Some(upright_ids) = quarters.first().filter(|ids| ids.len() >= MIN_STACK).cloned() {
+        let stacked = stacked_down(&glyphs, &upright_ids);
+        if stacked.iter().any(|s| *s) {
+            let mut down: Vec<usize> = Vec::new();
+            let mut across: Vec<usize> = Vec::new();
+            for (k, &i) in upright_ids.iter().enumerate() {
+                if stacked.get(k).copied().unwrap_or(false) {
+                    if let Some(g) = glyphs.get_mut(i) {
+                        g.0 = 1;
+                        g.1 = [0.0, 1.0];
+                        g.2.direction = [0.0, 1.0];
+                    }
+                    down.push(i);
+                } else {
+                    across.push(i);
+                }
+            }
+            if let Some(q) = quarters.get_mut(0) {
+                *q = across;
+            }
+            if let Some(q) = quarters.get_mut(1) {
+                down.extend(q.iter().copied());
+                down.sort_unstable();
+                *q = down;
+            }
+        }
+    }
     // A horizontal heading must not force a vertical body back into horizontal line grouping.
     // Group each writing direction independently, then join flows from their topmost position.
     let upright = |quarters: [Vec<usize>; 4]| {
@@ -875,6 +909,135 @@ struct Flow {
     ids: Vec<usize>,
     line_of: Vec<u32>,
     space_before: Vec<bool>,
+}
+
+/// At least this many glyphs stacked down a column before the stack is read as vertical text. Two
+/// below each other happen in horizontal text (a one-character line above another); three in a row,
+/// each touching the one above and on the same centre, do not.
+const MIN_STACK: usize = 3;
+
+/// Which upright glyphs are stacked down a column: vertical CJK text written **without** a vertical
+/// font, each character placed on its own, top to bottom (the way OCR text layers over scans of
+/// vertical books, and some converters, write it). Their writing direction is down although the
+/// glyph outlines are upright, so each such run is laid out in the quarter turn that reads down and
+/// right to left -- the frame a vertical font's text already uses. Without this the rows across the
+/// columns are the lines, and a drag down one column takes a character from every column (#3712).
+///
+/// Only CJK, which is written vertically; and only a run of touching glyphs on one centre, so a
+/// horizontal line is never one (its glyphs step sideways) and neither is a column of separate
+/// lines (they do not touch).
+fn stacked_down(glyphs: &[Drawn], ids: &[usize]) -> Vec<bool> {
+    let mut stacked = vec![false; ids.len()];
+    let box_of = |k: usize| ids.get(k).and_then(|&i| glyphs.get(i)).map(|g| g.2.rect);
+    let cjk = |k: usize| ids.get(k).and_then(|&i| glyphs.get(i)).is_some_and(|g| g.2.text.chars().any(is_cjk));
+    let follows = |a: usize, b: usize| {
+        let (Some(p), Some(g)) = (box_of(a), box_of(b)) else { return false };
+        let h = (p[3] - p[1]).max(g[3] - g[1]).max(0.1);
+        let w = (p[2] - p[0]).max(g[2] - g[0]).max(0.1);
+        let centre = |r: [f32; 4]| (r[0] + r[2]) / 2.0;
+        // The next glyph begins where this one ends. A gap of its own is a line gap, not a column:
+        // one-character lines centred under each other step down by 1.2 of their height and more,
+        // and they are lines (#3812 review). A column's characters touch -- an OCR layer places
+        // them at the pitch it measured, so a little overlap or a twelfth of a height between them
+        // still counts, and a wider gap than that is left to the lines it looks like.
+        let gap = g[1] - p[3];
+        (centre(g) - centre(p)).abs() <= w * 0.3 && gap > -h * 0.3 && gap <= h * 0.12 && cjk(a) && cjk(b)
+    };
+    // Maximal runs in content order; `ids` is ascending, so neighbours here were drawn in turn.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for end in 1..=ids.len() {
+        if end < ids.len() && follows(end - 1, end) {
+            continue;
+        }
+        runs.push((start, end));
+        if end - start >= MIN_STACK {
+            stacked[start..end].fill(true);
+        }
+        start = end;
+    }
+
+    // A paragraph's last column often holds a character or two, which is under the length a stack
+    // needs to be read as a column on its own. Such a run is read as a column when one that *was*
+    // detected lines up with it: its characters are the same size, its top is the column's top,
+    // and it stands beside the column with nothing of its own line next to it. Nothing fires here
+    // unless the page already has a column, which is what keeps a one-character line or a table
+    // cell out of it (#3812 report).
+    let found: Vec<[f32; 4]> = runs
+        .iter()
+        .filter(|(a, b)| b - a >= MIN_STACK)
+        .filter_map(|(a, b)| {
+            let mut bb = box_of(*a)?;
+            for k in *a..*b {
+                if let Some(r) = box_of(k) {
+                    union(&mut bb, &r);
+                }
+            }
+            Some(bb)
+        })
+        .collect();
+    if !found.is_empty() {
+        // A glyph of the same line beside this one: then it is a line, not a column. A glyph that
+        // is itself part of a column does not count -- the next column's top character sits beside
+        // a short column exactly as a line's neighbour would.
+        // Only a glyph at nearly the same height can be beside this one, so the search looks in
+        // bands of one glyph height instead of at the whole page: scanning every glyph for every
+        // glyph of every short run is quadratic, and a scanned book's text layer can hold tens of
+        // thousands of glyphs (#3812 review).
+        let band = |y: f32, h: f32| (y / h.max(0.1)).floor() as i64;
+        let height = |k: usize| box_of(k).map_or(10.0, |r| (r[3] - r[1]).max(0.1));
+        let unit = (0..ids.len()).map(height).fold(f32::INFINITY, f32::min).max(0.1);
+        let mut bands: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
+        for k in 0..ids.len() {
+            if let Some(r) = box_of(k) {
+                for t in band(r[1], unit)..=band(r[3], unit) {
+                    bands.entry(t).or_default().push(k);
+                }
+            }
+        }
+        let beside = |k: usize, known: &[bool]| {
+            let Some(r) = box_of(k) else { return false };
+            let (rh, rw) = ((r[3] - r[1]).max(0.1), (r[2] - r[0]).max(0.1));
+            // One band either side as well: a neighbour may sit up to 0.3 of a height away.
+            (band(r[1], unit) - 1..=band(r[3], unit) + 1).flat_map(|t| bands.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|&o| {
+                o != k
+                    && !known.get(o).copied().unwrap_or(false)
+                    && box_of(o).is_some_and(|b| {
+                        let apart = (b[0] - r[2]).max(r[0] - b[2]);
+                        (b[1] - r[1]).abs() <= rh * 0.3 && apart > -rw * 0.3 && apart <= rw * 1.5
+                    })
+            })
+        };
+        // The columns by the band their top falls in, for the same reason.
+        let mut tops: std::collections::HashMap<i64, Vec<[f32; 4]>> = std::collections::HashMap::new();
+        for c in &found {
+            tops.entry(band(c[1], unit)).or_default().push(*c);
+        }
+        // The columns the long runs found: a short run accepted here does not make the next one's
+        // neighbour disappear, and taking the snapshot once keeps this out of the inner loop.
+        let columns_so_far = stacked.clone();
+        for (a, b) in runs.iter().copied().filter(|(a, b)| b - a < MIN_STACK) {
+            let Some(mut bb) = box_of(a) else { continue };
+            for k in a..b {
+                if let Some(r) = box_of(k) {
+                    union(&mut bb, &r);
+                }
+            }
+            let (bw, bh) = ((bb[2] - bb[0]).max(0.1), (bb[3] - bb[1]).max(0.1));
+            let centre = (bb[0] + bb[2]) / 2.0;
+            // A column can only line up with a run at nearly its own top, so the columns are
+            // looked up by top in bands of one glyph height as well.
+            let lines_up = (band(bb[1], unit) - 1..=band(bb[1], unit) + 1).flat_map(|t| tops.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|c| {
+                let cw = (c[2] - c[0]).max(0.1);
+                let apart = ((c[0] + c[2]) / 2.0 - centre).abs();
+                (bb[1] - c[1]).abs() <= cw * 0.4 && (bw - cw).abs() <= cw * 0.2 && apart > cw * 0.6 && apart <= cw * 5.0
+            });
+            if lines_up && (a..b).all(&cjk) && !(a..b).any(|k| beside(k, &columns_so_far)) && bh <= bw * 2.2 * (b - a) as f32 {
+                stacked[a..b].fill(true);
+            }
+        }
+    }
+    stacked
 }
 
 /// Lay out the page's glyphs `ids`, giving each the box at the same position in `rects`.
@@ -2909,6 +3072,136 @@ mod tests {
         let mut v = Vec::new();
         word(&mut v, "每个字", 10.0, 10.0, 9.0);
         assert_eq!(layout(v).plain_text(), "每个字");
+    }
+
+    /// #3712: vertical CJK written without a vertical font -- each character upright and placed on
+    /// its own, top to bottom, columns right to left, as OCR text layers over scans of vertical
+    /// books write it. The rows across the columns share a baseline each, so they became the lines:
+    /// a drag down one column took a character from every column, and the page read across.
+    #[test]
+    fn upright_glyphs_stacked_down_a_column_read_as_vertical_text() {
+        use lopdf::{Document, Object, Stream, dictionary};
+
+        let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+        let chars: Vec<char> = {
+            let mut c: Vec<char> = columns.concat().chars().collect();
+            c.sort_unstable();
+            c.dedup();
+            c
+        };
+        let cid = |ch: char| chars.iter().position(|c| *c == ch).unwrap_or(0) + 1;
+
+        // One page holding `body`, with /CH a CID font whose `/ToUnicode` maps this page's
+        // characters and /F1 Helvetica.
+        let render = |body: String| {
+            let mut doc = Document::with_version("1.7");
+            let bfchar: String = chars
+                .iter()
+                .map(|ch| {
+                    let utf16: Vec<String> = ch.to_string().encode_utf16().map(|u| format!("{u:04X}")).collect();
+                    format!("<{:04X}> <{}>", cid(*ch), utf16.concat())
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let cmap = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestStacked def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {} beginbfchar {bfchar} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+                chars.len()
+            );
+            let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+            let descendant = doc.add_object(dictionary! {
+                "Type" => "Font", "Subtype" => "CIDFontType0", "BaseFont" => "TestStacked", "DW" => 1000,
+                "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+            });
+            let cjk_font = doc.add_object(dictionary! {
+                "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestStacked", "Encoding" => "Identity-H",
+                "DescendantFonts" => vec![Object::Reference(descendant)], "ToUnicode" => to_unicode,
+            });
+            let latin = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+            let content = doc.add_object(Stream::new(dictionary! {}, body.into_bytes()));
+            let pages = doc.new_object_id();
+            let page = doc.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages, "Contents" => content,
+                "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)],
+                "Resources" => dictionary! {"Font" => dictionary! {"CH" => cjk_font, "F1" => latin}},
+            });
+            doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+            let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+            doc.trailer.set("Root", catalog);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+            extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap()
+        };
+
+        // `columns` down the page, `gap` points apart, 12 pt characters touching; `across`: the
+        // same characters in rows instead, to show horizontal text is untouched.
+        let page = |gap: f64, across: bool| {
+            let mut body = String::from("BT /CH 12 Tf ");
+            for (i, col) in columns.iter().enumerate() {
+                for (j, ch) in col.chars().enumerate() {
+                    let (x, y) =
+                        if across { (40.0 + 12.0 * j as f64, 250.0 - 18.0 * i as f64) } else { (250.0 - gap * i as f64, 250.0 - 12.0 * j as f64) };
+                    body += &format!("1 0 0 1 {x} {y} Tm <{:04X}> Tj ", cid(ch));
+                }
+            }
+            body += "ET";
+            render(body)
+        };
+
+        // Right to left: the rightmost column is the first line, at every column spacing.
+        for gap in [18.0, 24.0, 36.0, 48.0] {
+            let text = page(gap, false);
+            assert_eq!(text.plain_text(), columns.join("\n"), "columns {gap} pt apart");
+            // A search inside one column stays in it, which is what the drag follows.
+            assert_eq!(text.find("天來得"), vec![1..4], "{gap} pt apart");
+            let rects = text.line_rects(1..4);
+            assert_eq!(rects.len(), 1, "one highlight, down the column: {rects:?}");
+            assert!(rects[0][3] - rects[0][1] > rects[0][2] - rects[0][0], "taller than wide: {rects:?}");
+        }
+
+        // The same characters in rows are read as rows: horizontal CJK is untouched.
+        assert_eq!(page(18.0, true).plain_text(), columns.join("\n"), "rows stay rows");
+
+        // What Copy puts on the clipboard for a drag over the whole page: the columns as lines,
+        // right to left, not the cells of a row joined by tabs (which is what it gave while the
+        // glyphs' writing direction said they ran across).
+        let text = page(18.0, false);
+        let all = text.glyphs_in([0.0, 0.0, 300.0, 300.0]);
+        assert_eq!(text.column_text(&all), columns.join("\n"));
+
+        // A paragraph's last column often holds one or two characters, which is under the length a
+        // stack needs on its own. Such a column is read as one when a detected column lines up
+        // with it, so it keeps its place rather than coming out before the rest (#3812 report).
+        let mixed = |cols: &[&str]| {
+            let mut body = String::from("BT /CH 12 Tf ");
+            for (i, col) in cols.iter().enumerate() {
+                for (j, ch) in col.chars().enumerate() {
+                    let (x, y) = (250.0 - 18.0 * i as f64, 250.0 - 12.0 * j as f64);
+                    body += &format!("1 0 0 1 {x} {y} Tm <{:04X}> Tj ", cid(ch));
+                }
+            }
+            body += "ET";
+            render(body).plain_text()
+        };
+        assert_eq!(mixed(&["春天來得很早，山", "上。"]), "春天來得很早，山\n上。");
+        assert_eq!(mixed(&["春天來得很早，山上", "。"]), "春天來得很早，山上\n。");
+        assert_eq!(mixed(&["春天來得很早，", "山。", "遊客慢慢上山。"]), "春天來得很早，\n山。\n遊客慢慢上山。");
+
+        // Centred one-character lines are lines, not a column: they step down by more than their
+        // own height, so there is a gap between them where a column has none. They keep their
+        // horizontal writing direction, and a word beside the first of them reads with it (#3812
+        // review).
+        for pitch in [1.2, 1.35, 1.5] {
+            let mut body = String::from("BT /F1 12 Tf 1 0 0 1 116 250 Tm (and) Tj ET BT /CH 12 Tf ");
+            for (j, ch) in "春天來".chars().enumerate() {
+                let y = 250.0 - 12.0 * pitch * j as f64;
+                body += &format!("1 0 0 1 100 {y} Tm <{:04X}> Tj ", cid(ch));
+            }
+            body += "ET";
+            let text = render(body);
+            assert!(text.glyphs.iter().all(|g| g.direction[1].abs() < 0.5), "lines, not a column, at pitch {pitch}");
+            assert_eq!(text.plain_text(), "春 and\n天\n來", "pitch {pitch}");
+        }
     }
 
     /// #1062: the word gap stays between the runs when the right-hand run is drawn first, and
