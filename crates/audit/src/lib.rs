@@ -7,16 +7,25 @@
 //! A rectangle counts as a cover only when it was painted strictly *after* the text it
 //! overlaps, and only when it is dark enough against the text's color to make the text
 //! unreadable (WCAG contrast below 3.0). Page backgrounds, table shading and highlight
-//! marks are therefore not flagged.
+//! marks are therefore not flagged. A white (or nearly white) opaque rectangle painted after
+//! dark text hides it just as well, the way forms are "whited out"; that is reported as its
+//! own kind, [`FindingKind::HiddenUnderWhite`], so callers can decide (#2385).
 //!
-//! Detection limits (documented, not hidden): `re` rectangles and single closed `m`/`l`
-//! subpaths whose four corners form an axis-aligned rectangle in user space (#1510) are
-//! considered when closed by a fill operator — other filled paths, shadings and patterns are
-//! not; a rectangle drawn with a translucent ExtGState (`/ca < 1`) is not flagged; opaque
-//! filled `/Square` annotations count as covers, but annotation rectangles are compared in
-//! unrotated user space, so pages with `/Rotate` may misalign;
-//! covers inside form XObjects are found, but only text drawn directly in the page content
-//! is checked under them, so text inside a form XObject is not audited.
+//! Covers come from the page content — `re` rectangles and single closed `m`/`l` subpaths whose
+//! four corners form an axis-aligned rectangle in user space (#1510), filled opaquely, and a
+//! thick opaque stroke along one axis (a "marker" line, its round or square caps included) — and
+//! from the annotations: an opaque `/Highlight` dark enough to hide the text under it (#2385), and
+//! an opaque filled `/Square` likewise, or white (#2854). A `/Redact` mark is reported whatever its
+//! flags: Hidden or NoView hides the mark, not the text.
+//!
+//! Detection limits (documented, not hidden): other filled paths, slanted or bent strokes,
+//! shadings and patterns are not considered; a cover drawn with a translucent ExtGState
+//! (`/ca`, `/CA < 1`) or a highlight or square with `/CA < 1` is not flagged; annotation rectangles are
+//! compared in unrotated user space, so pages with `/Rotate` may misalign; covers inside form
+//! XObjects are found, but only text drawn directly in the page content is checked under them,
+//! so text inside a form XObject is not audited; a `/Highlight` is judged by its own
+//! `/QuadPoints`, `/C` and `/CA`, never by its appearance stream (`/AP`), so a finding can differ
+//! from what a viewer paints.
 //!
 //! The audit fails closed: any content that cannot be read (an undecodable content stream,
 //! malformed annotations, form XObjects nested deeper than 32 or in a cycle) is an error, never
@@ -35,10 +44,15 @@ mod tests;
 /// What the audit found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FindingKind {
-    /// An opaque filled rectangle covers text that is still extractable.
+    /// An opaque dark cover (a filled rectangle, a thick stroke, a highlight annotation) hides
+    /// text that is still extractable.
     CoveredText,
     /// A `/Redact` annotation was placed but never applied: the text is untouched.
     UnappliedMark,
+    /// A white (or nearly white) opaque rectangle painted after text, or a white filled square
+    /// annotation over it, hides it: the text is invisible on the page and still extractable (a
+    /// "whited out" form).
+    HiddenUnderWhite,
 }
 
 impl FindingKind {
@@ -51,6 +65,7 @@ impl FindingKind {
         match self {
             FindingKind::CoveredText => "covered-text",
             FindingKind::UnappliedMark => "unapplied-mark",
+            FindingKind::HiddenUnderWhite => "hidden-under-white",
         }
     }
 }
@@ -99,6 +114,9 @@ const COVER_FRACTION: f64 = 0.4;
 const WORD_FRACTION: f64 = 0.5;
 /// WCAG contrast ratio below which the text is unreadable against the cover.
 const COVER_CONTRAST: f64 = 3.0;
+/// Relative luminance from which an opaque cover counts as white (white is 1.0; `0.9 g`, the
+/// kind of shading a table has, is 0.79): dark text under it is gone, not shaded.
+const WHITE_LUMINANCE: f64 = 0.9;
 
 /// Audit every page for faux redactions and unapplied redaction marks. Fails closed: any
 /// content that cannot be decoded, or that needs more work or report than the audit's bounds, is
@@ -186,25 +204,27 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
         // or substitute one must not hide text a cover sits on.
         let lines = pdfcraft_edit::glyph_text_lines(doc, page).map_err(|e| AuditError::Text(n, e.to_string()))?;
         budget.start_page(&lines);
-        // 1. Opaque filled rectangles over extractable text.
+        // 1. Opaque rectangles (filled, or painted by a thick stroke) over extractable text.
         for r in cover::filled_rects(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, |line| is_cover(&r, line))? {
+            if let Some(covered) = budget.hidden_text(&lines, copying, |line| hides(&r, line))? {
                 let covered_text = budget.report_text(covered, copying)?;
-                out.push(AuditFinding { page: n, kind: FindingKind::CoveredText, rect: r.rect, covered_text });
+                out.push(AuditFinding { page: n, kind: rect_kind(&r), rect: r.rect, covered_text });
             }
         }
-        // 2. Annotation covers over extractable text.
-        for annot in annots(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, |line| match &annot {
-                AnnotationCover::Redact(rect) => covers(rect, line),
-                AnnotationCover::Square { rect, rgb } => covers(rect, line) && contrast(line.color, *rgb) < COVER_CONTRAST,
+        // 2. Redact annotations that were never applied, and highlights and filled squares that
+        // hide the text under them (annotations are drawn over the page's content): dark enough
+        // against it, or, for a square, white, like a white rectangle in the content.
+        for mark in annots(doc, &page.dict)? {
+            let (kind, hides) = match mark.kind {
+                Mark::Redact => (FindingKind::UnappliedMark, None),
+                Mark::Square(rgb) if luminance(rgb) >= WHITE_LUMINANCE => (FindingKind::HiddenUnderWhite, None),
+                Mark::Highlight(rgb) | Mark::Square(rgb) => (FindingKind::CoveredText, Some(rgb)),
+            };
+            if let Some(covered) = budget.hidden_text(&lines, copying, |line| {
+                mark.areas.iter().any(|a| covers(a, line)) && hides.is_none_or(|rgb| contrast(line.color, rgb) < COVER_CONTRAST)
             })? {
-                let (kind, rect) = match annot {
-                    AnnotationCover::Redact(rect) => (FindingKind::UnappliedMark, rect),
-                    AnnotationCover::Square { rect, .. } => (FindingKind::CoveredText, rect),
-                };
                 let covered_text = budget.report_text(covered, copying)?;
-                out.push(AuditFinding { page: n, kind, rect, covered_text });
+                out.push(AuditFinding { page: n, kind, rect: mark.rect, covered_text });
             }
         }
     }
@@ -219,6 +239,21 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
 /// too.
 fn is_cover(rect: &cover::FilledRect, line: &TextLine) -> bool {
     rect.pos > line.first_paint_pos() && covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST
+}
+
+/// What a painted rectangle does to the text under it: white or nearly so, it whites the text out
+/// whatever its color; otherwise it is a cover, and only hides text it is dark enough against.
+fn rect_kind(rect: &cover::FilledRect) -> FindingKind {
+    if luminance(rect.rgb) >= WHITE_LUMINANCE { FindingKind::HiddenUnderWhite } else { FindingKind::CoveredText }
+}
+
+/// Does `rect` hide `line`: painted after the start of the line and over it, and white or a cover
+/// ([`is_cover`]). Light covers in between (table shading) are not flagged.
+fn hides(rect: &cover::FilledRect, line: &TextLine) -> bool {
+    match rect_kind(rect) {
+        FindingKind::HiddenUnderWhite => rect.pos > line.first_paint_pos() && covers(&rect.rect, line),
+        _ => is_cover(rect, line),
+    }
 }
 
 /// Does `cover` hide a substantial part of what `line` draws? Three ways, any is enough:
@@ -271,14 +306,28 @@ fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-enum AnnotationCover {
-    Redact([f64; 4]),
-    Square { rect: [f64; 4], rgb: [f64; 3] },
+/// An annotation the audit looks at.
+enum Mark {
+    Redact,
+    /// An opaque highlight, with its color.
+    Highlight([f64; 3]),
+    /// An opaque filled square, with its interior color (`/IC`).
+    Square([f64; 3]),
 }
 
-/// Opaque annotation covers on a page (unrotated user space). A missing `/Annots` means no
-/// covers; a malformed one fails the audit rather than silently passing.
-fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditError> {
+struct Annot {
+    /// `/Rect`, normalized, in unrotated user space.
+    rect: [f64; 4],
+    /// What the annotation paints: a highlight's `/QuadPoints`, each as its bounding box, or else
+    /// the `/Rect`.
+    areas: Vec<[f64; 4]>,
+    kind: Mark,
+}
+
+/// The `/Redact` annotations on a page, and the `/Highlight` and filled `/Square` ones shown
+/// opaque with a color (unrotated user space). A missing `/Annots` means no marks; a malformed
+/// one fails the audit rather than silently passing.
+fn annots(doc: &Document, page: &Dict) -> Result<Vec<Annot>, AuditError> {
     let Some(a) = page.get(b"Annots") else { return Ok(Vec::new()) };
     let resolved = doc.resolve(a);
     let items: Vec<pdfcraft_cos::Object> = match &*resolved {
@@ -292,29 +341,62 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditErro
             pdfcraft_cos::Object::Dict(d) => d.clone(),
             _ => continue,
         };
-        let v: Vec<f64> = match dict.get(b"Rect") {
-            None => continue,
-            Some(r) => doc.resolve(r).as_array().map(|arr| arr.iter().filter_map(|o| doc.resolve(o).as_f64()).collect()).unwrap_or_default(),
+        let nums = |key: &[u8]| -> Vec<f64> {
+            dict.get(key)
+                .map(|r| doc.resolve(r))
+                .and_then(|r| r.as_array().map(|arr| arr.iter().filter_map(|o| doc.resolve(o).as_f64()).collect()))
+                .unwrap_or_default()
         };
-        if v.len() != 4 || !v.iter().all(|x| x.is_finite()) {
-            continue;
-        }
-        let rect = [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])];
-        match subtype(doc, &dict)?.as_deref() {
-            Some(b"Redact") => out.push(AnnotationCover::Redact(rect)),
-            Some(b"Square") => {
-                let flags = dict.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-                if flags & 2 != 0 || flags & 32 != 0 {
-                    continue;
-                }
-                let alpha = dict.get(b"CA").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
-                if alpha >= 1.0
-                    && let Some(rgb) = annotation_color(doc, &dict, b"IC")
-                {
-                    out.push(AnnotationCover::Square { rect, rgb });
-                }
+        // Hidden or NoView: not drawn, so a cover hides nothing. A `/Redact` mark is audited
+        // whatever its flags: hiding the mark does not apply the redaction.
+        let flags = dict.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        let drawn = flags & (2 | 32) == 0;
+        // The color the annotation paints opaquely: a highlight's `/C`, a square's interior `/IC`.
+        // `None`: no color (drawn transparent), or `/CA` below 1.
+        let opaque = |key: &[u8]| -> Option<[f64; 3]> {
+            let alpha = dict.get(b"CA").and_then(|a| doc.resolve(a).as_f64()).unwrap_or(1.0);
+            let rgb = match nums(key).as_slice() {
+                [g] => [*g, *g, *g],
+                [r, g, b] => [*r, *g, *b],
+                [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
+                _ => return None,
+            };
+            if alpha.is_nan() || alpha < 1.0 || rgb.iter().any(|v| !v.is_finite()) {
+                return None;
             }
-            _ => {}
+            Some(rgb.map(|v| v.clamp(0.0, 1.0)))
+        };
+        let kind = match subtype(doc, &dict)?.as_deref() {
+            Some(b"Redact") => Mark::Redact,
+            Some(b"Highlight") => match opaque(b"C") {
+                Some(rgb) if drawn => Mark::Highlight(rgb),
+                _ => continue,
+            },
+            Some(b"Square") => match opaque(b"IC") {
+                Some(rgb) if drawn => Mark::Square(rgb),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let v = nums(b"Rect");
+        if v.len() == 4 && v.iter().all(|x| x.is_finite()) {
+            let rect = [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])];
+            let q = nums(b"QuadPoints");
+            let areas = if matches!(kind, Mark::Highlight(_)) && !q.is_empty() && q.len() % 8 == 0 && q.iter().all(|x| x.is_finite()) {
+                q.chunks(8)
+                    .map(|c| {
+                        [
+                            c[0].min(c[2]).min(c[4]).min(c[6]),
+                            c[1].min(c[3]).min(c[5]).min(c[7]),
+                            c[0].max(c[2]).max(c[4]).max(c[6]),
+                            c[1].max(c[3]).max(c[5]).max(c[7]),
+                        ]
+                    })
+                    .collect()
+            } else {
+                vec![rect]
+            };
+            out.push(Annot { rect, areas, kind });
         }
     }
     Ok(out)
@@ -328,20 +410,4 @@ fn subtype(doc: &Document, dict: &Dict) -> Result<Option<Vec<u8>>, AuditError> {
         other => other.and_then(pdfcraft_cos::Object::as_name).map(<[u8]>::to_vec),
     };
     Ok(name)
-}
-
-fn annotation_color(doc: &Document, dict: &Dict, key: &[u8]) -> Option<[f64; 3]> {
-    let values: Vec<f64> = dict.get(key).map(|o| doc.resolve(o))?.as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect::<Option<_>>()?;
-    if !values.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    match values.as_slice() {
-        [g] => Some([g.clamp(0.0, 1.0); 3]),
-        [r, g, b] => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
-        [c, m, y, k] => {
-            let (c, m, y, k) = (c.clamp(0.0, 1.0), m.clamp(0.0, 1.0), y.clamp(0.0, 1.0), k.clamp(0.0, 1.0));
-            Some([(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)])
-        }
-        _ => None,
-    }
 }

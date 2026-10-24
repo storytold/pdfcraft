@@ -532,7 +532,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_audit_redactions",
             "Audit faux redactions",
-            "Find faux redactions: opaque filled rectangles painted over text that is still extractable, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a rectangle counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged). Each finding reports the 1-based page, the kind (covered-text or unapplied-mark), the rectangle (points from the top-left of the displayed page, like comment_list), and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
+            "Find faux redactions: opaque covers painted over text that is still extractable (filled rectangles, thick marker-style strokes, dark opaque Highlight annotations), text whited out under an opaque white rectangle, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a cover counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged); a white rectangle over dark text is reported apart. Each finding reports the 1-based page, the kind (covered-text, hidden-under-white or unapplied-mark), the rectangle, and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
         )
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
