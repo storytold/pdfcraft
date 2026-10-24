@@ -26,6 +26,7 @@ fn button_caption_can_be_changed_after_creation() {
                 rect: [40.0, 300.0, 200.0, 330.0],
                 kind: NewField::Button { caption: String::new() },
                 name: Some("clear_button".into()),
+                look: None,
             },
         )
         .unwrap();

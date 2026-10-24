@@ -7,7 +7,9 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIME_PRESETS, Validate, format_value};
-use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
+use pdfcraft_engine::{
+    BorderStyle, Document, Edit, FieldFont, FieldLook, FieldLookPatch, FieldProps, FormField, FormFieldKind, NewField, NewFieldLook,
+};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -120,6 +122,132 @@ impl FieldTool {
             FieldTool::Date => (108.0, 22.0),
             FieldTool::Text | FieldTool::Combo => (144.0, 22.0),
         }
+    }
+
+    /// The tool that makes fields like `f`: a date field is a text field with a date format,
+    /// an image field a button that asks for a picture.
+    pub fn of(f: &FormField) -> Self {
+        match f.kind {
+            FormFieldKind::Text if matches!(f.actions.format, Format::Date(_)) => FieldTool::Date,
+            FormFieldKind::Text => FieldTool::Text,
+            FormFieldKind::CheckBox => FieldTool::CheckBox,
+            FormFieldKind::Radio => FieldTool::Radio,
+            FormFieldKind::Combo => FieldTool::Combo,
+            FormFieldKind::List => FieldTool::List,
+            FormFieldKind::PushButton if f.button == Some(pdfcraft_engine::form_scripts::ButtonAction::ImportIcon) => FieldTool::Image,
+            FormFieldKind::PushButton => FieldTool::Button,
+            FormFieldKind::Signature => FieldTool::Signature,
+        }
+    }
+}
+
+/// Use Current Properties as New Defaults: per field tool, the look (and font size, 0 = auto)
+/// new fields start with. A tool without one keeps the built-in look.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FieldDefaults(Vec<(FieldTool, FieldLook, f64)>);
+
+impl FieldDefaults {
+    pub fn get(&self, tool: FieldTool) -> Option<(FieldLook, f64)> {
+        self.0.iter().find(|(t, ..)| *t == tool).map(|(_, l, s)| (*l, *s))
+    }
+
+    /// Kept within what an Appearance-tab edit accepts: a field read from a file can say
+    /// `/BS /W 15` or `/MK /BC [2 0 0]`, and a default out of range would make every new field
+    /// of that tool fail.
+    pub fn set(&mut self, tool: FieldTool, look: FieldLook, size: f64) {
+        let unit = |c: [f64; 3]| c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+        let look = FieldLook {
+            border: look.border.map(unit),
+            fill: look.fill.map(unit),
+            width: if look.width.is_finite() { look.width.clamp(0.0, 12.0) } else { 1.0 },
+            text: unit(look.text),
+            ..look
+        };
+        let size = if size.is_finite() { size.clamp(0.0, 300.0) } else { 0.0 };
+        self.0.retain(|(t, ..)| *t != tool);
+        self.0.push((tool, look, size));
+    }
+
+    /// What `Edit::AddField` gives a field made with `tool`: every property of the saved look.
+    pub fn new_look(&self, tool: FieldTool) -> Option<Box<NewFieldLook>> {
+        let (l, size) = self.get(tool)?;
+        let appearance = FieldLookPatch {
+            border: Some(l.border),
+            fill: Some(l.fill),
+            width: Some(l.width),
+            style: Some(l.style),
+            text: Some(l.text),
+            font: Some(l.font),
+        };
+        Some(Box::new(NewFieldLook { appearance, font_size: Some(size) }))
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        self.0
+            .iter()
+            .map(|(t, l, size)| {
+                serde_json::json!({
+                    "tool": t.command(),
+                    "border": l.border,
+                    "fill": l.fill,
+                    "width": l.width,
+                    "style": style_token(l.style),
+                    "text": l.text,
+                    "font": font_token(l.font),
+                    "size": size,
+                })
+            })
+            .collect()
+    }
+
+    /// Settings are untrusted: an entry with any value out of range or unknown is left out, and
+    /// that tool keeps the built-in look.
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let rgb = |x: &serde_json::Value| -> Option<[f64; 3]> {
+            let a = x.as_array().filter(|a| a.len() == 3)?;
+            let mut out = [0.0f64; 3];
+            for (slot, n) in out.iter_mut().zip(a) {
+                *slot = n.as_f64().filter(|n| (0.0..=1.0).contains(n))?;
+            }
+            Some(out)
+        };
+        // `null` is a saved "no colour"; anything else must be a colour.
+        let colour = |x: &serde_json::Value| -> Option<Option<[f64; 3]>> { if x.is_null() { Some(None) } else { rgb(x).map(Some) } };
+        let entry = |e: &serde_json::Value| -> Option<(FieldTool, FieldLook, f64)> {
+            let tool = e["tool"].as_str().and_then(FieldTool::from_command)?;
+            let look = FieldLook {
+                border: colour(&e["border"])?,
+                fill: colour(&e["fill"])?,
+                width: e["width"].as_f64().filter(|w| (0.0..=12.0).contains(w))?,
+                style: BorderStyle::ALL.into_iter().find(|s| Some(style_token(*s)) == e["style"].as_str())?,
+                text: rgb(&e["text"])?,
+                font: FieldFont::ALL.into_iter().find(|f| Some(font_token(*f)) == e["font"].as_str())?,
+            };
+            Some((tool, look, e["size"].as_f64().filter(|s| (0.0..=300.0).contains(s))?))
+        };
+        let mut d = FieldDefaults::default();
+        for (tool, look, size) in v.as_array().into_iter().flatten().filter_map(entry) {
+            d.set(tool, look, size);
+        }
+        d
+    }
+}
+
+fn style_token(s: BorderStyle) -> &'static str {
+    match s {
+        BorderStyle::Solid => "solid",
+        BorderStyle::Dashed => "dashed",
+        BorderStyle::Beveled => "beveled",
+        BorderStyle::Inset => "inset",
+        BorderStyle::Underline => "underline",
+    }
+}
+
+fn font_token(f: FieldFont) -> &'static str {
+    match f {
+        FieldFont::Helvetica => "helvetica",
+        FieldFont::Times => "times",
+        FieldFont::Courier => "courier",
     }
 }
 
@@ -246,6 +374,7 @@ pub(crate) fn page_input(
     info: &DocInfo,
     form: &[FormField],
     tool: Option<FieldTool>,
+    defaults: &FieldDefaults,
     allowed: bool,
     view: &mut DocView,
 ) -> Outcome {
@@ -310,7 +439,7 @@ pub(crate) fn page_input(
                     };
                     let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
                     prep.select_added = Some(form.len());
-                    view.pending_edit = Some(Edit::AddField { page, rect, kind: tool.new_field(join), name: None });
+                    view.pending_edit = Some(Edit::AddField { page, rect, kind: tool.new_field(join), name: None, look: defaults.new_look(tool) });
                     out.placed = true;
                 }
                 Grab::Move | Grab::Corner(..) => {
@@ -352,7 +481,13 @@ pub(crate) fn page_input(
                 let (w, h) = tool.default_size();
                 let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
                 prep.select_added = Some(form.len());
-                view.pending_edit = Some(Edit::AddField { page, rect: [at[0], at[1] - h, at[0] + w, at[1]], kind: tool.new_field(join), name: None });
+                view.pending_edit = Some(Edit::AddField {
+                    page,
+                    rect: [at[0], at[1] - h, at[0] + w, at[1]],
+                    kind: tool.new_field(join),
+                    name: None,
+                    look: defaults.new_look(tool),
+                });
                 out.placed = true;
             }
         }
@@ -712,6 +847,17 @@ pub(crate) fn after_refresh(view: &mut DocView, form: &[FormField]) {
 // ───────────────────────────────────────────────────────────────────────── Field Properties
 
 impl crate::PdfCraftApp {
+    /// Use Current Properties as New Defaults: new fields made with the tool that makes `name`
+    /// take the look of its widget `widget` and its font size.
+    pub fn make_field_default(&mut self, name: &str, widget: usize) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let Some(f) = doc.form.iter().find(|f| f.name == name) else { return };
+        let Some(look) = doc.field_widget_look(name, widget) else { return };
+        self.field_defaults.set(FieldTool::of(f), look, da_size(&f.da));
+        self.notify(tl!("New fields of this type will look like this one").to_string());
+    }
+
     /// Open Field Properties for a field of the active document.
     pub fn open_field_props(&mut self, name: &str, widget: usize) {
         let Some((index, id)) = self.active_ids() else { return };

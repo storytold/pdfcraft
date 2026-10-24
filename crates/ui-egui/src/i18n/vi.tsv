@@ -744,6 +744,8 @@ theme	Appearance	Giao diện
 	Low resolution	Độ phân giải thấp
 	Magnification	Độ phóng đại
 	Make Current Properties Default	Đặt thuộc tính hiện tại làm mặc định
+	Use Current Properties as New Defaults	Dùng thuộc tính hiện tại làm mặc định mới
+	New fields of this type will look like this one	Các trường mới thuộc loại này sẽ trông giống trường này
 	Make Properties Default	Đặt thuộc tính làm mặc định
 	Margins	Lề
 	Mark Page Range	Đánh dấu phạm vi trang

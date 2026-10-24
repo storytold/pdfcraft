@@ -344,7 +344,12 @@ impl Automation {
         }
         let before: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
         let name = a.opt_str("name")?.map(str::to_owned);
-        let mut out = self.apply(a, Edit::AddField { page, rect, kind, name })?;
+        // The look the GUI gives a field after Use Current Properties as New Defaults.
+        let appearance = a.get("appearance").map(look_arg).transpose()?.unwrap_or_default();
+        let font_size = a.opt_num("font_size")?;
+        let look = (appearance != pdfcraft_engine::FieldLookPatch::default() || font_size.is_some())
+            .then(|| Box::new(pdfcraft_engine::NewFieldLook { appearance, font_size }));
+        let mut out = self.apply(a, Edit::AddField { page, rect, kind, name, look })?;
         let doc = self.doc(a)?;
         let added = doc
             .form

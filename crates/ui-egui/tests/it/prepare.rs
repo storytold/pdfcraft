@@ -329,6 +329,7 @@ fn options_tab_sets_the_check_box_style() {
         rect: [40.0, 300.0, 56.0, 316.0],
         kind: pdfcraft_engine::NewField::CheckBox,
         name: Some("agree".into()),
+        look: None,
     });
     h.state_mut().open_field_props("agree", 0);
     h.run_steps(2);
@@ -355,6 +356,7 @@ fn button_label_is_editable_without_renaming_the_field() {
         rect: [40.0, 300.0, 190.0, 330.0],
         kind: NewField::Button { caption: String::new() },
         name: Some("clear_button".into()),
+        look: None,
     });
     h.state_mut().open_field_props("clear_button", 0);
     h.run_steps(2);
@@ -412,7 +414,7 @@ fn list_box_alignment_is_editable_and_preserved() {
 fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64) {
     use pdfcraft_engine::{Edit, FieldProps, FieldValue};
     let mut h = harness();
-    h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [40.0, 260.0, 240.0, 310.0], kind, name: Some("aligned_choice".into()) });
+    h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [40.0, 260.0, 240.0, 310.0], kind, name: Some("aligned_choice".into()), look: None });
     h.state_mut()
         .apply_edit(Edit::SetFieldProps { name: "aligned_choice".into(), props: Box::new(FieldProps { quadding: Some(2), ..Default::default() }) });
     h.state_mut().apply_edit(Edit::SetFieldValue { name: "aligned_choice".into(), value: FieldValue::Choice(vec!["Two".into()]) });
@@ -552,6 +554,7 @@ fn aligning_distributing_and_sizing_several_fields() {
             rect: [x, y, x + w, y + 20.0],
             kind: pdfcraft_engine::NewField::Text { multiline: false },
             name: Some(name.into()),
+            look: None,
         });
     }
     h.run_steps(2);
@@ -586,6 +589,7 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
             rect: [x, 300.0, x + 60.0, 320.0],
             kind: pdfcraft_engine::NewField::Text { multiline: false },
             name: Some(name.into()),
+            look: None,
         });
     }
     assert!(h.state_mut().execute("form.prepare"));
@@ -1116,7 +1120,7 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     for (i, name) in ["qty", "sub", "total", "other"].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
         let kind = NewField::Text { multiline: false };
-        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()), look: None });
     }
     let calculate = |name: &str, c: Calculate| Edit::SetFieldProps {
         name: name.into(),
@@ -1202,7 +1206,7 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     for (i, (name, formula)) in [("a", "b + 1"), ("b", "a + 1")].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
         let kind = NewField::Text { multiline: false };
-        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()), look: None });
         let props = Box::new(FieldProps { calculate: Some(Calculate::Notation(formula.into())), ..Default::default() });
         h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props });
     }
@@ -1217,4 +1221,163 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     h.run_steps(3);
     let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
     assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
+}
+
+fn right_click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+}
+
+fn look_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> pdfcraft_engine::FieldLook {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().field_look(name).unwrap()
+}
+
+/// Draw a field with `tool` between two points (top-left page coordinates); returns its name.
+fn place(h: &mut Harness<'static, PdfCraftApp>, tool: &str, from: (f32, f32), to: (f32, f32)) -> String {
+    assert!(h.state_mut().execute(tool));
+    h.run_steps(2);
+    let (a, b) = (at(h, from.0, from.1), at(h, to.0, to.1));
+    drag(h, a, b);
+    names(h).last().cloned().unwrap()
+}
+
+/// #2831, Acrobat's Use Current Properties as New Defaults: fields drawn afterwards with the
+/// same tool take the right-clicked field's look; other tools keep the built-in one. An image
+/// field and a button are both push buttons, but each tool keeps its own defaults.
+#[test]
+fn current_properties_become_the_new_defaults_of_that_tool() {
+    use pdfcraft_engine::{BorderStyle, Edit, FieldFont, FieldLook, FieldLookPatch, FieldProps, NewField};
+    let mut h = harness();
+    let styled = FieldLook {
+        border: Some([1.0, 0.0, 0.0]),
+        fill: None,
+        width: 2.0,
+        style: BorderStyle::Dashed,
+        text: [0.0, 0.0, 1.0],
+        font: FieldFont::Courier,
+    };
+    let green = Some([0.0, 0.6, 0.0]);
+    for (name, rect, kind) in
+        [("styled", [20.0, 40.0, 140.0, 60.0], NewField::Text { multiline: false }), ("pic", [200.0, 10.0, 290.0, 50.0], NewField::Image)]
+    {
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect, kind, name: Some(name.into()), look: None });
+    }
+    let props = FieldProps { look: Some(styled), font_size: Some(9.0), ..Default::default() };
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "styled".into(), props: Box::new(props) });
+    let props = FieldProps { appearance: Some(FieldLookPatch { border: Some(green), ..Default::default() }), ..Default::default() };
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "pic".into(), props: Box::new(props) });
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    let undo = h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+
+    for name in ["styled", "pic"] {
+        right_click_field(&mut h, name);
+        h.get_by_label("Use Current Properties as New Defaults").click();
+        h.run_steps(2);
+    }
+    assert!(h.state().toast.as_ref().is_some_and(|(m, _)| m == "New fields of this type will look like this one"));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned), undo, "the document is not changed");
+
+    let text = place(&mut h, "form.add.text", (40.0, 300.0), (200.0, 322.0));
+    assert_eq!(look_of(&h, &text), styled);
+    let da = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == text).unwrap().da.clone()
+    };
+    assert!(da.contains("/Cour 9 Tf"), "{da}");
+    let image = place(&mut h, "form.add.image", (40.0, 150.0), (140.0, 190.0));
+    assert_eq!(look_of(&h, &image).border, green);
+    let button = place(&mut h, "form.add.button", (40.0, 200.0), (140.0, 222.0));
+    assert_eq!(look_of(&h, &button).border, Some([0.55, 0.55, 0.55]), "the Button tool keeps the built-in look");
+    let check = place(&mut h, "form.add.checkbox", (40.0, 250.0), (54.0, 264.0));
+    let l = look_of(&h, &check);
+    assert_eq!((l.border, l.fill), (Some([0.55, 0.55, 0.55]), Some([1.0, 1.0, 1.0])), "so does the Checkbox tool");
+}
+
+/// The defaults survive a restart; a saved entry with a value out of range is left out.
+#[test]
+fn field_defaults_are_saved_with_the_settings() {
+    use pdfcraft_engine::{BorderStyle, FieldFont, FieldLook};
+    use pdfcraft_ui_egui::prepare::FieldTool;
+    let built_in = FieldLook {
+        border: Some([0.55; 3]),
+        fill: Some([1.0; 3]),
+        width: 1.0,
+        style: BorderStyle::Solid,
+        text: [0.0; 3],
+        font: FieldFont::Helvetica,
+    };
+    let mut app = PdfCraftApp::new();
+    app.field_defaults.set(FieldTool::Text, FieldLook { border: None, font: FieldFont::Times, ..built_in }, 9.0);
+    app.field_defaults.set(FieldTool::CheckBox, FieldLook { fill: Some([1.0, 0.0, 0.0]), style: BorderStyle::Inset, ..built_in }, 0.0);
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&app.persist());
+    assert_eq!(restarted.field_defaults.get(FieldTool::Text), Some((FieldLook { border: None, font: FieldFont::Times, ..built_in }, 9.0)));
+    assert_eq!(
+        restarted.field_defaults.get(FieldTool::CheckBox),
+        Some((FieldLook { fill: Some([1.0, 0.0, 0.0]), style: BorderStyle::Inset, ..built_in }, 0.0))
+    );
+    assert_eq!(restarted.field_defaults.get(FieldTool::Radio), None);
+
+    let mut saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    let entries = saved["field_defaults"].as_array_mut().unwrap();
+    let mut bad = entries[0].clone();
+    bad["tool"] = "form.add.combo".into();
+    bad["border"] = serde_json::json!([2.0, 0.0, 0.0]);
+    let mut wide = entries[0].clone();
+    wide["tool"] = "form.add.list".into();
+    wide["width"] = (-1.0).into();
+    let mut font = entries[0].clone();
+    font["tool"] = "form.add.date".into();
+    font["font"] = "comic".into();
+    entries.extend([bad, wide, font, serde_json::json!("nonsense")]);
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&saved.to_string());
+    assert!(restarted.field_defaults.get(FieldTool::Text).is_some(), "the good entries stay");
+    for tool in [FieldTool::Combo, FieldTool::List, FieldTool::Date] {
+        assert_eq!(restarted.field_defaults.get(tool), None, "{tool:?}");
+    }
+}
+
+/// A field read from a file can carry values the Appearance tab refuses (`/BS /W 15`, a colour
+/// component of 2): as a default they are kept in range, so new fields can still be made.
+#[test]
+fn out_of_range_properties_are_clamped_as_defaults() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (wide) /Rect [20 300 200 330] /P 3 0 R /DA (/Helv 0 Tf 0 g) /BS << /W 15 /S /S >> /MK << /BC [2 0 0] >> >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
+    for o in offsets {
+        pdf.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).bytes());
+    let mut h = harness_with("form.pdf", pdf);
+    assert_eq!(look_of(&h, "wide").width, 15.0, "the file's own value");
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    h.state_mut().make_field_default("wide", 0);
+    let text = place(&mut h, "form.add.text", (40.0, 200.0), (200.0, 222.0));
+    assert_ne!(text, "wide", "the new field is made");
+    let l = look_of(&h, &text);
+    assert_eq!((l.width, l.border), (12.0, Some([1.0, 0.0, 0.0])));
 }

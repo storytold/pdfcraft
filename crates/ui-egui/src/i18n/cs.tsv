@@ -1404,6 +1404,8 @@ key	Space	Mezerník
 	Copy text	Kopírovat text
 	Properties…	Vlastnosti…
 	Make Current Properties Default	Nastavit aktuální vlastnosti jako výchozí
+	Use Current Properties as New Defaults	Použít aktuální vlastnosti jako nové výchozí
+	New fields of this type will look like this one	Nová pole tohoto typu budou vypadat jako toto
 	Make Properties Default	Nastavit vlastnosti jako výchozí
 	More options	Další možnosti
 	Sort by	Seřadit podle

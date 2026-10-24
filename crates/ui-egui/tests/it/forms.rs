@@ -435,6 +435,7 @@ fn date_fields_offer_a_calendar() {
         rect: [50.0, 40.0, 200.0, 60.0],
         kind: pdfcraft_engine::NewField::Date,
         name: Some("due".into()),
+        look: None,
     });
     h.run_steps(4);
     click_field(&mut h, "due", 0);
@@ -461,6 +462,7 @@ fn the_calendar_follows_a_complete_date_typed_while_it_is_open() {
         rect: [50.0, 40.0, 200.0, 60.0],
         kind: pdfcraft_engine::NewField::Date,
         name: Some("due".into()),
+        look: None,
     });
     h.run_steps(4);
     click_field(&mut h, "due", 0);
@@ -494,6 +496,7 @@ fn an_undelimited_date_field_takes_a_typed_date_and_its_calendar_opens_on_it() {
         rect: [50.0, 40.0, 200.0, 60.0],
         kind: pdfcraft_engine::NewField::Date,
         name: Some("due".into()),
+        look: None,
     });
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
         name: "due".into(),
@@ -526,7 +529,13 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
     s.session = std::mem::take(&mut s.session).with_clock(|| 1_700_000_000);
     assert_eq!(h.state().session.today(), (2023, 11, 14));
     for (name, rect) in [("due", [50.0, 40.0, 200.0, 60.0]), ("start", [50.0, 80.0, 200.0, 100.0])] {
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField { page: 0, rect, kind: pdfcraft_engine::NewField::Date, name: Some(name.into()) });
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect,
+            kind: pdfcraft_engine::NewField::Date,
+            name: Some(name.into()),
+            look: None,
+        });
     }
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
         name: "start".into(),
@@ -571,6 +580,7 @@ fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_valu
         rect: [50.0, 40.0, 200.0, 60.0],
         kind: pdfcraft_engine::NewField::Date,
         name: Some("due".into()),
+        look: None,
     });
     h.run_steps(4);
     click_field(&mut h, "due", 0);
@@ -1138,6 +1148,7 @@ fn calculated_field_and_script_side_effect_on_another_page_re_render() {
         rect: [20.0, 20.0, 100.0, 40.0],
         kind: pdfcraft_engine::NewField::Text { multiline: false },
         name: Some("page2_field".into()),
+        look: None,
     }));
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldScript {
         name: "page2_field".into(),

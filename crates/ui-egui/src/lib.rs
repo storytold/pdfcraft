@@ -956,6 +956,8 @@ pub struct PdfCraftApp {
     /// properties default" ticked left), and the values before the dialog opened, for Cancel.
     pub redact_defaults: RedactPrefs,
     pub redact_before: Option<RedactPrefs>,
+    /// Prepare a form ▸ Use Current Properties as New Defaults, per field tool.
+    pub field_defaults: prepare::FieldDefaults,
     pub redact_pages_draft: RedactPagesDraft,
     pub redact_search: RedactSearchDraft,
     pub hidden_draft: HiddenDraft,
@@ -1263,6 +1265,7 @@ impl PdfCraftApp {
             redact_prefs: RedactPrefs::default(),
             redact_defaults: RedactPrefs::default(),
             redact_before: None,
+            field_defaults: prepare::FieldDefaults::default(),
             redact_pages_draft: RedactPagesDraft::default(),
             redact_search: RedactSearchDraft::default(),
             hidden_draft: HiddenDraft::default(),
@@ -2604,6 +2607,7 @@ impl PdfCraftApp {
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        v["field_defaults"] = self.field_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
@@ -2716,6 +2720,7 @@ impl PdfCraftApp {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
         }
+        self.field_defaults = prepare::FieldDefaults::from_json(&v["field_defaults"]);
         // Settings are untrusted: an unreadable value (a colour that isn't three bytes, say)
         // fails to deserialize and keeps Off.
         if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {

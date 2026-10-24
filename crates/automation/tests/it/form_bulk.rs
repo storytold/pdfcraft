@@ -25,8 +25,17 @@ fn setup(test: &str) -> (Automation, u64, std::path::PathBuf) {
     let bytes = s.create_blank(300.0, 400.0, 2).unwrap();
     let id = s.open("form.pdf", None, bytes, None).unwrap();
     for (name, page, x) in [("alpha", 0, 30.0), ("beta", 1, 40.0)] {
-        s.apply(id, Edit::AddField { page, rect: [x, 300.0, x + 180.0, 324.0], kind: NewField::Text { multiline: false }, name: Some(name.into()) })
-            .unwrap();
+        s.apply(
+            id,
+            Edit::AddField {
+                page,
+                rect: [x, 300.0, x + 180.0, 324.0],
+                kind: NewField::Text { multiline: false },
+                name: Some(name.into()),
+                look: None,
+            },
+        )
+        .unwrap();
         s.apply(id, Edit::SetFieldValue { name: name.into(), value: FieldValue::Text(name.into()) }).unwrap();
         let mut look = s.get(id).unwrap().field_look(name).unwrap();
         look.fill = Some(if name == "alpha" { [1.0, 0.9, 0.8] } else { [0.8, 0.9, 1.0] });
@@ -149,5 +158,36 @@ fn bulk_options_apply_per_field_and_refuse_an_invalid_comb_atomically() {
     assert_eq!(doc.form.iter().map(|f| f.value[0].as_str()).collect::<Vec<_>>(), ["alpha", "beta"]);
     tool(&mut a, "edit_undo", json!({"doc": id}));
     assert_eq!(bytes(&a, id), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #2831: form_add_field takes the look Prepare form's Use Current Properties as New Defaults
+/// gives a new field, in the same undo step as the field.
+#[test]
+fn a_field_added_with_a_look_starts_with_it() {
+    let (mut a, id, dir) = setup("new-look");
+    let add = |a: &mut Automation, args: Value| tool(a, "form_add_field", args)["field"].as_str().unwrap().to_owned();
+    let text = add(
+        &mut a,
+        json!({"doc": id, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "appearance": {"border": "#FF0000", "fill": "none", "font": "courier"}, "font_size": 9}),
+    );
+    let check = add(&mut a, json!({"doc": id, "page": 1, "type": "checkbox", "rect": [20, 60, 34, 74], "appearance": {"fill": "#00FF00"}}));
+    let doc = a.session().get(DocId(id)).unwrap();
+    let look = doc.field_look(&text).unwrap();
+    assert_eq!((look.border, look.fill, look.font), (Some([1.0, 0.0, 0.0]), None, FieldFont::Courier));
+    let da = |name: &str| a.session().get(DocId(id)).unwrap().form.iter().find(|f| f.name == name).unwrap().da.clone();
+    assert!(da(&text).contains("9 Tf"), "{}", da(&text));
+    assert_eq!(doc.field_look(&check).unwrap().fill, Some([0.0, 1.0, 0.0]));
+    assert!(da(&check).starts_with("/ZaDb"), "a check box keeps its mark font");
+    assert_eq!(doc.can_undo(), Some("Add field"));
+    tool(&mut a, "edit_undo", json!({"doc": id}));
+    assert!(a.session().get(DocId(id)).unwrap().form.iter().all(|f| f.name != check), "one step removes the field and its look");
+
+    let before = bytes(&a, id);
+    let wide = json!({"doc": id, "page": 1, "type": "text", "rect": [20, 100, 180, 122], "appearance": {"width": 20}});
+    assert!(matches!(a.call("form_add_field", &wide), Err(ToolError::InvalidArgs(_))));
+    let tiny = json!({"doc": id, "page": 1, "type": "text", "rect": [20, 100, 180, 122], "font_size": -1});
+    assert!(a.call("form_add_field", &tiny).is_err());
+    assert_eq!(bytes(&a, id), before, "a refused look adds nothing");
     std::fs::remove_dir_all(dir).unwrap();
 }

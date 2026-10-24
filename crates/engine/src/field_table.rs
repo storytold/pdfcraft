@@ -35,7 +35,7 @@ pub fn edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField]
         if across < MIN_FIELD_SIDE {
             return Err(TableError::ColumnTooNarrow);
         }
-        edits.push(Edit::AddField { page, rect, kind: NewField::Text { multiline: false }, name: Some(cell.name) });
+        edits.push(Edit::AddField { page, rect, kind: NewField::Text { multiline: false }, name: Some(cell.name), look: None });
     }
     Ok(Edit::Batch { label: LABEL.to_owned(), edits })
 }

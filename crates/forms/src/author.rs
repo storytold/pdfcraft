@@ -333,14 +333,14 @@ fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String {
     toks.join(" ")
 }
 
-fn patch_widget_look(doc: &mut Document, w: &Widget, patch: &LookPatch) -> Result<(), FormError> {
+fn patch_widget_look(doc: &mut Document, widget: ObjRef, patch: &LookPatch) -> Result<(), FormError> {
     let touches_mk = patch.border.is_some() || patch.fill.is_some();
     let touches_bs = patch.width.is_some() || patch.style.is_some();
     // A size- or font-only edit changes /DA, not the widget: leave it out of the save.
     if !touches_mk && !touches_bs {
         return Ok(());
     }
-    let wd = doc.get(w.obj).as_dict().cloned().ok_or_else(|| FormError::Invalid("the widget is not a dictionary".into()))?;
+    let wd = doc.get(widget).as_dict().cloned().ok_or_else(|| FormError::Invalid("the widget is not a dictionary".into()))?;
     if touches_mk {
         let indirect = wd.get(b"MK").and_then(Object::as_ref);
         let mut mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
@@ -357,7 +357,7 @@ fn patch_widget_look(doc: &mut Document, w: &Widget, patch: &LookPatch) -> Resul
         // A shared indirect /MK is updated where it lives, not copied into each widget.
         match indirect {
             Some(r) => doc.set(r, Object::Dict(mk)),
-            None => doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?,
+            None => doc.update_dict(widget, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?,
         }
     }
     if touches_bs {
@@ -374,7 +374,7 @@ fn patch_widget_look(doc: &mut Document, w: &Widget, patch: &LookPatch) -> Resul
         }
         match indirect {
             Some(r) => doc.set(r, Object::Dict(bs)),
-            None => doc.update_dict(w.obj, |d| d.set(b"BS".to_vec(), Object::Dict(bs)))?,
+            None => doc.update_dict(widget, |d| d.set(b"BS".to_vec(), Object::Dict(bs)))?,
         }
     }
     Ok(())
@@ -509,7 +509,12 @@ fn rgb_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 3]> {
 
 /// A field's current look (from its first widget and its default appearance).
 pub fn look(doc: &Document, f: &Field) -> Look {
-    let wd = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().cloned()).unwrap_or_default();
+    widget_look(doc, f, 0)
+}
+
+/// The look of one widget of a field (`widget` indexes [`Field::widgets`]).
+pub fn widget_look(doc: &Document, f: &Field, widget: usize) -> Look {
+    let wd = f.widgets.get(widget).and_then(|w| doc.get(w.obj).as_dict().cloned()).unwrap_or_default();
     let mk = wd.get(b"MK").and_then(|m| doc.resolve(m).as_dict().cloned()).unwrap_or_default();
     let bs = wd.get(b"BS").and_then(|b| doc.resolve(b).as_dict().cloned()).unwrap_or_default();
     let da = wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).unwrap_or_else(|| f.da.clone());
@@ -813,8 +818,36 @@ fn widget_dict(page: ObjRef, rect: [f64; 4]) -> Dict {
     d
 }
 
+/// Use Current Properties as New Defaults: the look a new field starts with instead of the
+/// built-in grey border and white fill.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NewFieldLook {
+    pub appearance: LookPatch,
+    /// 0 = auto.
+    pub font_size: Option<f64>,
+}
+
 /// Add a field on `page` (0-based) in `rect` (user space). Returns its full name.
 pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewField, name: Option<&str>) -> Result<String, FormError> {
+    add_field_with(doc, page, rect, kind, name, None)
+}
+
+/// [`add_field`], with `look` (when given) on the new widget only: a radio button joining a
+/// group leaves the group's other buttons as they are.
+pub fn add_field_with(
+    doc: &mut Document,
+    page: usize,
+    rect: [f64; 4],
+    kind: &NewField,
+    name: Option<&str>,
+    look: Option<&NewFieldLook>,
+) -> Result<String, FormError> {
+    if let Some(l) = look {
+        l.appearance.validate()?;
+        if l.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
+            return invalid("font size must be a finite, non-negative number");
+        }
+    }
     let pages = page_refs(doc);
     let page_ref = *pages.get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page + 1)))?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
@@ -928,6 +961,9 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
         }
     }
     let widget = doc.add(Object::Dict(w));
+    if let Some(l) = look {
+        apply_new_look(doc, widget, kind, l)?;
+    }
     match kind {
         NewField::Radio { export, .. } => {
             let group = match &radio_group {
@@ -972,6 +1008,22 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
     add_to_page(doc, page_ref, widget)?;
     redraw_field(doc, &field_name)?;
     Ok(field_name)
+}
+
+/// The saved look on a new widget. Check boxes and radio buttons draw a ZapfDingbats mark, and
+/// a radio widget has no /DA of its own, so for them and for signatures only borders and fill
+/// change.
+fn apply_new_look(doc: &mut Document, widget: ObjRef, kind: &NewField, l: &NewFieldLook) -> Result<(), FormError> {
+    patch_widget_look(doc, widget, &l.appearance)?;
+    if matches!(kind, NewField::CheckBox | NewField::Radio { .. } | NewField::Signature) {
+        return Ok(());
+    }
+    let da = doc.get(widget).as_dict().and_then(|d| d.get(b"DA")).and_then(|o| o.as_string()).map(|s| s.to_text());
+    if let Some(da) = da {
+        let da = patch_da(&da, l.font_size, &l.appearance);
+        doc.update_dict(widget, |d| d.set(b"DA".to_vec(), PdfString::literal(da.into_bytes())))?;
+    }
+    Ok(())
 }
 
 /// Regenerate every widget appearance of a field from its current value and settings. A value or
@@ -1373,7 +1425,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if props.appearance.is_some() || (props.font_size.is_some() && props.look.is_none()) {
         let patch = &props.appearance.unwrap_or_default();
         for w in &f.widgets {
-            patch_widget_look(doc, w, patch)?;
+            patch_widget_look(doc, w.obj, patch)?;
             // A widget's own /DA overrides its field's /DA. Patch that override separately
             // rather than replacing its font or colour with the first widget's defaults.
             if w.obj != f.obj && (props.font_size.is_some() || patch.font.is_some() || patch.text.is_some()) {

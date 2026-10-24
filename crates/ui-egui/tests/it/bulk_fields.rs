@@ -14,7 +14,7 @@ fn fixture() -> Vec<u8> {
         ("consent", 0, [40.0, 180.0, 54.0, 194.0], NewField::CheckBox),
         ("gamma", 1, [40.0, 290.0, 230.0, 314.0], NewField::Text { multiline: false }),
     ] {
-        s.apply(id, Edit::AddField { name: Some(name.into()), page, rect, kind }).unwrap();
+        s.apply(id, Edit::AddField { name: Some(name.into()), page, rect, kind, look: None }).unwrap();
     }
     for (name, value, fill, font, width, size, required) in [
         ("alpha", "Ada", [1.0, 0.9, 0.8], FieldFont::Courier, 1.0, 11.0, true),
@@ -294,6 +294,7 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
             rect: [x, 180.0, x + 14.0, 194.0],
             kind: NewField::Radio { group: Some("group".into()), export: export.into() },
             name: None,
+            look: None,
         });
     }
     let p = &mut h.state_mut().views[0].prepare;

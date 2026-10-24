@@ -4959,6 +4959,18 @@ evidence = ["crates/forms/src/tests.rs::appearance_properties_restyle_every_widg
 notes = "border/fill colour, line width, solid/dashed/beveled/inset/underline, text colour, Helvetica/Times/Courier, font size; shared GUI and partial tool edits preserve untouched custom fonts, widget styles and unknown keys. Appearance regeneration still uses approximate metrics"
 
 [[feature]]
+id = "form.default-properties"
+title = "Use current properties as new defaults"
+area = "F"
+tier = "P1"
+milestone = "M6"
+status = "shipped"
+commands = ["form.prepare"]
+tools = ["form_add_field"]
+evidence = ["crates/ui-egui/tests/it/prepare.rs::current_properties_become_the_new_defaults_of_that_tool", "crates/ui-egui/tests/it/prepare.rs::field_defaults_are_saved_with_the_settings", "crates/forms/src/tests.rs::a_new_field_starts_with_the_saved_look", "crates/automation/tests/it/form_bulk.rs::a_field_added_with_a_look_starts_with_it"]
+notes = "Prepare a form: right-click a field ▸ Use Current Properties as New Defaults; fields drawn afterwards with the same tool (image fields apart from buttons, date fields apart from text fields) take its Appearance tab (border, fill, line width and style, text colour, font) and font size; check boxes, radio buttons and signatures take only border and fill properties. Per tool, persisted with the settings; a radio button joining a group changes only its own widget. form_add_field takes the same appearance and font_size. Not yet: General and Options properties"
+
+[[feature]]
 id = "form.props-position"
 title = "Field properties: position and size"
 area = "F"

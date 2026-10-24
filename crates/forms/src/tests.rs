@@ -1402,6 +1402,72 @@ fn one_page() -> Document {
     doc
 }
 
+/// Use Current Properties as New Defaults (#2831): a new field starts with the saved look on its
+/// own widget. The saved look differs from the built-in one in every property.
+#[test]
+fn a_new_field_starts_with_the_saved_look() {
+    let mut doc = one_page();
+    let red = [1.0, 0.0, 0.0];
+    let saved = NewFieldLook {
+        appearance: LookPatch {
+            border: Some(Some(red)),
+            fill: Some(None),
+            width: Some(2.0),
+            style: Some(BorderStyle::Dashed),
+            text: Some([0.0, 0.0, 1.0]),
+            font: Some(FieldFont::Courier),
+        },
+        font_size: Some(9.0),
+    };
+    let text = add_field_with(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, None, Some(&saved)).unwrap();
+    let check = add_field_with(&mut doc, 0, [50.0, 600.0, 64.0, 614.0], &NewField::CheckBox, None, Some(&saved)).unwrap();
+    let image = add_field_with(&mut doc, 0, [50.0, 400.0, 194.0, 508.0], &NewField::Image, None, Some(&saved)).unwrap();
+    // A radio button joins a group drawn with the built-in look: only the new button changes.
+    let group = add_field(&mut doc, 0, [300.0, 600.0, 314.0, 614.0], &NewField::Radio { group: None, export: "Small".into() }, None).unwrap();
+    let radio = NewField::Radio { group: Some(group.clone()), export: "Large".into() };
+    add_field_with(&mut doc, 0, [330.0, 600.0, 344.0, 614.0], &radio, None, Some(&saved)).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+
+    let t = field(&all, &text);
+    let want = Look { border: Some(red), fill: None, width: 2.0, style: BorderStyle::Dashed, text: [0.0, 0.0, 1.0], font: FieldFont::Courier };
+    assert_eq!(look(&doc, t), want);
+    assert_eq!(appearance::parse_da(&t.da).size, 9.0);
+
+    // Check boxes and radio buttons keep their ZapfDingbats mark: only borders and fill change.
+    let c = field(&all, &check);
+    let l = look(&doc, c);
+    assert_eq!((l.border, l.fill, l.width, l.style), (Some(red), None, 2.0, BorderStyle::Dashed));
+    assert_eq!(c.da, "/ZaDb 0 Tf 0 g");
+
+    // An image field keeps its icon-only layout (/TP 1).
+    let i = field(&all, &image);
+    assert_eq!(look(&doc, i).border, Some(red));
+    let mk = doc.get(i.widgets[0].obj).as_dict().unwrap().get(b"MK").cloned().unwrap();
+    assert_eq!(mk.as_dict().unwrap().get(b"TP").and_then(Object::as_int), Some(1));
+
+    let g = field(&all, &group);
+    assert_eq!(g.widgets.len(), 2);
+    assert_eq!(widget_look(&doc, g, 0).border, Some([0.55, 0.55, 0.55]), "the group's first button is unchanged");
+    assert_eq!(widget_look(&doc, g, 0).fill, Some([1.0, 1.0, 1.0]));
+    assert_eq!(widget_look(&doc, g, 1).border, Some(red));
+    assert_eq!(widget_look(&doc, g, 1).fill, None);
+    let new_widget = doc.get(g.widgets[1].obj);
+    assert!(!new_widget.as_dict().unwrap().contains(b"DA"), "a radio widget gets no /DA of its own");
+}
+
+/// A saved look is checked like an Appearance-tab edit.
+#[test]
+fn a_bad_saved_look_is_refused() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    let wide = NewFieldLook { appearance: LookPatch { width: Some(20.0), ..Default::default() }, font_size: None };
+    assert!(add_field_with(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, None, Some(&wide)).is_err());
+    let nan = NewFieldLook { font_size: Some(f64::NAN), ..Default::default() };
+    assert!(add_field_with(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, None, Some(&nan)).is_err());
+    assert!(fields(&doc).is_empty(), "nothing was added");
+}
+
 #[test]
 fn formats_validation_and_calculations_run_like_acrobat() {
     use crate::af::{CalcOp, Calculate, Format, Validate};

@@ -1333,6 +1333,8 @@
 	Copy text	テキストをコピー
 	Properties…	プロパティ…
 	Make Current Properties Default	現在のプロパティを既定にする
+	Use Current Properties as New Defaults	現在のプロパティを新しい既定値として使用
+	New fields of this type will look like this one	この種類の新しいフィールドの外観はこのフィールドと同じになります
 	Make Properties Default	プロパティを既定にする
 	More options	詳細オプション
 	Sort by	並べ替え

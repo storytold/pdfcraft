@@ -1280,6 +1280,8 @@
 	Copy text	复制文本
 	Properties…	属性…
 	Make Current Properties Default	将当前属性设为默认
+	Use Current Properties as New Defaults	将当前属性用作新默认值
+	New fields of this type will look like this one	此类型的新字段将采用此外观
 	Make Properties Default	将属性设为默认
 	More options	更多选项
 	Sort by	排序方式

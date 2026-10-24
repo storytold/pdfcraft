@@ -1303,6 +1303,8 @@
 	Copy text	Szöveg másolása
 	Properties…	Tulajdonságok…
 	Make Current Properties Default	A jelenlegi tulajdonságok legyenek az alapértelmezettek
+	Use Current Properties as New Defaults	A jelenlegi tulajdonságok legyenek az új alapértelmezettek
+	New fields of this type will look like this one	Az ilyen típusú új mezők így fognak kinézni
 	Make Properties Default	A tulajdonságok legyenek az alapértelmezettek
 	More options	További beállítások
 	Sort by	Rendezés szempontja
