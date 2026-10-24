@@ -593,11 +593,16 @@ pub struct TextReplacement<'a> {
     pub caret: &'a Style,
     pub strike_meta: &'a Meta,
     pub caret_meta: &'a Meta,
+    /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
+    /// line's or border's); `None`: as `opacity`.
+    pub fill_opacity: Option<f64>,
+    /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
+    pub text_opacity: Option<f64>,
 }
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, fill_opacity: None, text_opacity: None }
     }
 }
 
@@ -615,7 +620,7 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
-            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None },
+            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, ..Self::default() },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),
@@ -624,9 +629,9 @@ impl Style {
             Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
-            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
+            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], fill: Some([0.0, 0.0, 0.0]), ..Self::default() },
         };
-        Self { color, opacity: 1.0, width, fill: None }
+        Self { color, width, ..Self::default() }
     }
 }
 

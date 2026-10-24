@@ -320,8 +320,10 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         ui.set_min_width(180.0);
         let mut percent = (style.opacity * 100.0).round();
         ui.label(egui::RichText::new(tl!("Opacity")).font(theme::semibold(12.0)));
+        // The whole comment's: its fill and text take it too.
         if ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %")).changed() {
             prefs.set_opacity(tool, percent / 100.0);
+            prefs.set_part_opacity(tool, None, None);
         }
     });
     if tool.has_width() {

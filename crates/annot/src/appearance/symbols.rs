@@ -51,7 +51,7 @@ pub(crate) fn display_stamp(d: &Dict) -> Option<Stream> {
     // A malformed `/C` falls back to the stamp's own colour rather than hiding the stamp.
     let stroke = color(d, b"C").flatten();
     let mut res = Dict::new();
-    if let Some(gs) = ext_gstate(opacity, false) {
+    if let Some(gs) = ext_gstate(PartOpacity { line: opacity, fill: opacity, text: opacity }, false) {
         res.set(b"ExtGState".to_vec(), Object::Dict(gs));
     }
     // A stamp whose intent (`/IT`, PDF 2.0) is an image or a snapshot has no `/Name` to default.
