@@ -159,7 +159,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 34] = [
+pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -215,6 +215,12 @@ pub static LANGUAGES: [LangInfo; 34] = [
     LangInfo {
         code: "ckb", name: "کوردیی ناوەندی", source: include_str!("ckb.tsv"), plural: plural_one_other, rtl: true, catalog: OnceLock::new()
     },
+    // Hebrew; every `he-*` locale (`he-IL`, `he_IL.UTF-8`) resolves here, and so does the legacy
+    // `iw` code (Java, older Android), which has no catalog of its own (see `candidates`). Right to
+    // left like Arabic: see `LangInfo::rtl`. CLDR `he` counts have one, two and other, but after a
+    // numeral the two and other forms read the same (`2 עמודים`, `5 עמודים`), so the catalog lists
+    // two forms (one, other).
+    LangInfo { code: "he", name: "עברית", source: include_str!("he.tsv"), plural: plural_one_other, rtl: true, catalog: OnceLock::new() },
     // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
     LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
@@ -373,6 +379,11 @@ fn candidates(tag: &str) -> Vec<String> {
         // The only Norwegian catalog is Bokmål. `no` (Norwegian in general) and Nynorsk readers use
         // it rather than English; last, so a catalog of their own would win.
         out.push("nb".to_string());
+    }
+    if primary == "iw" {
+        // `iw` was Hebrew's ISO 639-1 code until 1989 and Java and older Android still report it;
+        // the catalog is `he`. Last, like `nb` above.
+        out.push("he".to_string());
     }
     out
 }
@@ -1672,7 +1683,7 @@ mod tests {
         assert_eq!(ar.name(), "العربية");
         assert!(ar.rtl());
         let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-        assert_eq!(rtl, ["ar", "ckb"], "Arabic and Kurdish are the right-to-left languages");
+        assert_eq!(rtl, ["ar", "ckb", "he"], "Arabic, Kurdish and Hebrew are the right-to-left languages");
         assert_eq!(normalize_pref("AR"), Some("ar"));
         for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
             assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1747,6 +1758,103 @@ mod tests {
                 let missing: std::collections::BTreeSet<char> = labels.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
                 assert!(missing.is_empty(), "{build}: {id:?} lacks Arabic label glyphs {missing:?}");
             }
+        }
+    }
+
+    fn hebrew() -> Lang {
+        Lang::from_code("he").expect("he registered")
+    }
+
+    #[test]
+    fn hebrew_is_registered_and_persists() {
+        let he = hebrew();
+        assert_eq!(he.name(), "עברית");
+        assert!(he.rtl());
+        assert_eq!(normalize_pref("HE"), Some("he"));
+        for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "iw", "iw-IL", "iw_IL.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        }
+        assert_eq!(first_supported("he-IL\r\nen-US"), Some(he));
+        // Two plural forms: 1, then every other count (CLDR's `two` reads like `other` after a numeral).
+        assert_eq!((0..=3).map(|n| (he.0.plural)(n)).collect::<Vec<_>>(), [1, 0, 1, 1]);
+        // Unknown strings and user text are never reordered by a lookup.
+        assert_eq!(tr(he, "דוח סופי {n}.pdf"), "דוח סופי {n}.pdf");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "HE").unwrap();
+        assert_eq!(app.language, "he");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "he");
+        // The legacy code is a locale tag Auto understands, not a preference value.
+        assert!(restored.set_option("language", "iw").is_err());
+        assert_eq!(restored.language, "he");
+    }
+
+    /// Lookups return Hebrew in display order: egui draws the words left to right as given.
+    #[test]
+    fn hebrew_lookups_are_in_display_order() {
+        let he = hebrew();
+        // "שמירה בשם…" as typed; the ellipsis ends the phrase on the left.
+        assert_eq!(tr(he, "Save as…"), "…בשם שמירה");
+        // Latin names keep their own direction inside the phrase.
+        assert_eq!(tr(he, "About PdfCraft"), "PdfCraft אודות");
+        // A caption's colon stays beside the widget on its right.
+        assert_eq!(tr(he, "Name:"), "שם:");
+        assert_eq!(tr(he, "Issued by: "), "ידי על הונפק: ");
+        // Placeholders survive and are filled in place.
+        assert_eq!(tr(he, "Couldn't open {name}: {e}"), "{name}: {e} את לפתוח ניתן לא");
+        assert_eq!(fmt(tr(he, "Page {p} of {n}"), &[("p", "3"), ("n", "12")]), "12 מתוך 3 עמוד");
+        // Each plural form is in display order too: the count stays where it is read.
+        assert_eq!(trn(he, 1, "{n} page", "{n} pages"), "1 עמוד");
+        assert_eq!(trn(he, 5, "{n} page", "{n} pages"), "עמודים 5");
+        set_current(he);
+        assert_eq!(t("Save as…"), "…בשם שמירה");
+        set_current(Lang::EN);
+    }
+
+    /// Every character the Hebrew translations add to the English labels (the letters, maqaf,
+    /// geresh and gershayim) has a glyph. With a craft-fonts Hebrew face: with all interface faces
+    /// (desktop) and with that face as the only craft-fonts face (the web build keeps it).
+    /// craft-fonts has no `Hebr` face yet, so that part skips, and releases draw the Hebrew
+    /// interface with a face installed on the machine (#3196): on a desktop that has one (every
+    /// macOS and Windows machine), the installed definitions must draw every label too. The
+    /// characters the English sources already use (`▸`, `…`, digits) are the English interface's
+    /// to draw, with or without Hebrew, so they are not checked here.
+    #[test]
+    fn hebrew_labels_have_glyphs() {
+        use egui::epaint::text::{Fonts, TextOptions};
+        use std::collections::BTreeSet;
+        let he = hebrew();
+        let (entries, _) = parse_entries(he.0.source, he.0.plural_forms());
+        // Direction marks steer the reordering at load (`bidi::display_rtl`) and are not drawn.
+        let drawn = |c: &char| !c.is_control() && !matches!(c, '\u{200E}' | '\u{200F}');
+        let english: BTreeSet<char> = entries.iter().flat_map(|e| e.source.chars()).collect();
+        let added: BTreeSet<char> =
+            entries.iter().flat_map(|e| e.translation.chars()).chain(he.name().chars()).filter(drawn).filter(|c| !english.contains(c)).collect();
+        assert!(added.contains(&'א') && added.contains(&'׳'), "{added:?}");
+        let check = |build: &str, defs: egui::FontDefinitions| {
+            let mut fonts = Fonts::new(TextOptions::default(), defs);
+            for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+                let missing: Vec<char> = added.iter().copied().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
+                assert!(missing.is_empty(), "{build}: {id:?} lacks Hebrew label glyphs {missing:?}");
+            }
+        };
+        let faces: Vec<String> = pdfcraft_fonts::ui_hebrew_fonts().iter().map(|f| f.name()).collect();
+        if faces.is_empty() {
+            eprintln!("skipping the craft-fonts Hebrew glyph checks: build with CRAFT_FONTS_DIR and a Hebrew face to run them");
+        } else {
+            let mut hebrew_only = crate::theme::font_definitions();
+            for family in hebrew_only.families.values_mut() {
+                family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || faces.contains(name));
+            }
+            check("all faces", crate::theme::font_definitions());
+            check("Hebrew face only", hebrew_only);
+        }
+        let installed = crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default);
+        if installed.font_data.contains_key(crate::theme::SYSTEM_HEBREW_FALLBACK) {
+            check("installed Hebrew face", installed);
+        } else {
+            eprintln!("skipping the installed Hebrew glyph checks: no installed Hebrew face (or PDFCRAFT_SYSTEM_FONTS=0)");
         }
     }
 

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Brazilian Portuguese now covers the 2,674-key catalog union; twelve-language mean still rounds to ≈68%; Spanish 100% of the current key union) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (Hebrew `he` added: 2,762 entries, the whole current key union, right to left through the Arabic path; twelve-language mean unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -13,7 +13,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
   **That union is a moving target**: every change that adds a string widens it, so a count is only
   comparable with others measured on the same date, and a catalog that reached 100% falls behind
   without losing a single translation. Every figure here therefore carries its date. The current
-  union is **2,674** keys as of 2026-10-20, against the **2,143-key snapshot** of 2026-10-10; earlier
+  union is **2,762** keys as of 2026-10-24 (2,674 on 2026-10-20), against the **2,143-key snapshot** of 2026-10-10; earlier
   revisions quote the union of their own date (see the revision history), not this one. The
   twelve-language percentage table below still quotes the 2026-10-10 snapshot for every language
   except Spanish, Vietnamese, Lithuanian and Brazilian Portuguese, which are measured against the current union. English is
@@ -79,15 +79,17 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Catalan | `ca` | 2,592 entries | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
 | Romanian | `ro` | 2,673 entries (every bundled key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,674 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
+| Hebrew | `he` | 2,762 entries (every key of the 2,762-key union of 2026-10-24) | partial; right to left through the Arabic path (`localization.md` §Arabic: layout not mirrored, wrapped lines break at the wrong end); no embedded Hebrew face, so desktop builds use an installed one and the web build shows boxes (#3196); begun from the catalog of [#3743](https://github.com/storytold/pdfcraft/pull/3743), AI-assisted, not yet reviewed line by line by a native speaker | yes (Middle East edition) |
 
-**19 other languages** ship (33 catalogs plus English = **34** interface languages in Preferences).
+**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
 The entry counts without percentages were measured on 2026-10-12–14 (Norwegian Bokmål on 2026-10-18); they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish. Hebrew (Acrobat ships it in its Middle East edition) is here since 2026-10-24; Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Added Hebrew (`he`): 2,762 entries, every key of the current union (2,762 keys on 2026-10-24); right to left through the Arabic path, layout not mirrored; no embedded Hebrew face (installed face on desktop, boxes on the web); begun from the catalog of #3743, AI-assisted, not native-reviewed line by line. Not one of the twelve key languages, so the mean is unchanged |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
 | 2026-10-20 | minor | Spanish: the 143 keys the other catalogs had and `es.tsv` was missing; `es` now covers the whole 2,674-key union, like `lt` and `vi`. Restated Lithuanian against the current union (its 2,585 was measured on 2026-10-13) and said plainly in *How this was measured* that the union moves, so counts only compare within a date |
 | 2026-10-19 | minor | Removed the 2026-10-13 status line and the 14-language summary that concurrent merges left beside the current ones; the summary keeps the Italian and Norwegian Bokmål measurement dates |
