@@ -558,6 +558,7 @@ impl UnownedWindow {
 
         // Remove the startup notification if we have one.
         if let Some(startup) = window_attrs.platform_specific.activation_token.as_ref() {
+            super::super::startup_token::handing_back();
             leap!(xconn.remove_activation_token(xwindow, &startup.token));
         }
 
