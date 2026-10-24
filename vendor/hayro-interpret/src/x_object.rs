@@ -1135,7 +1135,10 @@ fn resolve_alpha(
             _ => decoded.data.as_ref(),
         };
 
-        let components = get_components(raw_data, width, height, color_space, bits_per_component)?;
+        let mut components = get_components(raw_data, width, height, color_space, bits_per_component)?;
+        // PdfCraft patch (67): the samples past the data are keyed as the zeros the image is
+        // padded with, not masked out.
+        fix_image_length(&mut components, width, height, 0, color_space)?;
 
         for pixel in components.chunks_exact(color_space.num_components() as usize) {
             let mut mask_val = 0;
