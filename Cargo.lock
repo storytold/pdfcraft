@@ -4721,6 +4721,7 @@ name = "pdfcraft-xfa"
 version = "0.17.0"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "image",
  "pdfcraft-cos",
  "pdfcraft-fonts",
