@@ -23,7 +23,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     (
         "ci",
-        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, assets, deny, parity (stops at first failure)",
+        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, assets, deny, parity (runs every step, then reports each failure)",
         gates::ci,
     ),
     ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
