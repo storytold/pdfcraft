@@ -2791,3 +2791,52 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# Remove Signature (sign.remove)
+	Remove signature…	إزالة التوقيع…
+	Remove signature	إزالة التوقيع
+	Remove Signature	إزالة التوقيع
+	Remove the signature {name}	إزالة التوقيع {name}
+	Certification signature (level {p})	توقيع تصديق (المستوى {p})
+	Document timestamp	ختم زمني للمستند
+	Visual signature (Fill & Sign, not digital)	توقيع مرئي (تعبئة وتوقيع، ليس رقميًا)
+	Visual initials (Fill & Sign, not digital)	أحرف أولى مرئية (تعبئة وتوقيع، ليست رقمية)
+	{name}_unsigned.pdf	{name}_بدون_توقيع.pdf
+	this signature can't be removed on its own	لا يمكن إزالة هذا التوقيع وحده
+	it was still in the document afterwards, so the change was undone	بقي في المستند بعد إزالته، لذا تم التراجع عن التغيير
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	اختر ملفًا آخر: يبقى الأصل كما هو، ويُحفظ الإصدار الذي لا يحتوي على التوقيع بجانبه.
+	The signature was not removed: {e}	لم تتم إزالة التوقيع: {e}
+	Removed the visual signature on page {p}	تمت إزالة التوقيع المرئي في الصفحة {p}
+	Removed the signature {field} and kept its empty field	تمت إزالة التوقيع {field} مع الإبقاء على حقله فارغًا
+	Removed the signature {field} with its field	تمت إزالة التوقيع {field} مع حقله
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	لا تزال هناك توقيعات أخرى، لذا يبقى التوقيع المُزال في المراجعة السابقة للملف؛ تحقق من التوقيعات المتبقية من جديد.
+	The new file has no signature left and no earlier revision holding it.	لم يعد في الملف الجديد أي توقيع ولا مراجعة سابقة تحتفظ به.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. تم حفظ {file} والتحقق من أنه يُفتح من جديد بكل صفحاته. {history}
+	This document has no signature that can be removed.	لا يحتوي هذا المستند على توقيع يمكن إزالته.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	التوقيع الذي يكون جزءًا من محتوى الصفحة، كما في صفحة ممسوحة ضوئيًا، ليس حقلًا ولا تعليقًا توضيحيًا، لذا لا يمكن إزالته وحده، ولا يمسح PdfCraft أجزاءً من الصفحة لإخفائه. لإزالته، احجب تلك المنطقة (حجب)، أو إذا كان التوقيع صورة مستقلة فاحذف الصورة باستخدام تحرير ملف PDF.
+	Choose the signature to remove:	اختر التوقيع المراد إزالته:
+	unknown signer	موقّع غير معروف
+	Field: {field}	الحقل: {field}
+	Page {p}	الصفحة {p}
+	validated: valid	التحقق: صالح
+	validated: validity unknown	التحقق: الصلاحية غير معروفة
+	validated: invalid	التحقق: غير صالح
+	None of these signatures can be removed.	لا يمكن إزالة أي من هذه التوقيعات.
+	Keep an empty signature field to sign again	الإبقاء على حقل توقيع فارغ للتوقيع من جديد
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	تؤدي إزالة هذا التوقيع إلى تغيير المستند وإبطال هذا التوقيع في الإصدار الناتج. وقد يؤثر ذلك في التوقيعات والتصديقات الأخرى. يبقى الملف الأصلي كما هو.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	تؤدي إزالة هذا التوقيع إلى تغيير المستند وإبطال هذا التوقيع في الإصدار الناتج. يبقى الملف الأصلي كما هو.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	هذه صورة توقيع وليست توقيعًا رقميًا: تُزال العلامة الموجودة على الصفحة فقط. يبقى الملف الأصلي كما هو.
+	Unsaved changes to this document are saved in the new file too.	تُحفظ التغييرات غير المحفوظة في هذا المستند في الملف الجديد أيضًا.
+	You choose where the new version is saved. Continue?	أنت تختار مكان حفظ الإصدار الجديد. هل تريد المتابعة؟
+	Remove and Save As…	إزالة وحفظ باسم…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	ستُبلغ التوقيعات الأخرى ({names}) بأن المستند تغيّر بعد توقيعها. تحقق منها من جديد: لا شيء يضمن بقاءها صالحة.
+	Signed after this signature, so what they signed includes it: {names}.	توقيعات أُضيفت بعد هذا التوقيع ويشمله محتواها الموقّع: {names}.
+	The document will no longer be certified.	لن يعود المستند مصدّقًا.
+	The fields this signature locked ({names}) can be changed again.	ستصبح الحقول التي كان هذا التوقيع يقفلها ({names}) قابلة للتغيير من جديد.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	لا تزال هناك توقيعات أخرى، لذا تُحفظ النسخة كتحديث للملف الموقّع: يبقى التوقيع المُزال في المراجعة السابقة ويمكن استعادته منها.
+	{names} certifies this document without allowing comments, and will report this change.	{names} يصدّق هذا المستند دون السماح بالتعليقات، وسيُبلغ بهذا التغيير.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	يشمل الختم الزمني للمستند الملف كله وليس توقيعًا لأحد، لذا لا يمكن إزالته وحده.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} يصدّق هذا المستند، وإزالة توقيع ليست تغييرًا يسمح به هذا التصديق.
+	The signature {names} locks this field.	التوقيع {names} يقفل هذا الحقل.
+	This document can't be changed: {names}	لا يمكن تغيير هذا المستند: {names}
+	Choose a signature that can be removed.	اختر توقيعًا يمكن إزالته.

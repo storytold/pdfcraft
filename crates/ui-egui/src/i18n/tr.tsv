@@ -2511,3 +2511,52 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Remove Signature (sign.remove)
+	Remove signature…	İmzayı kaldır…
+	Remove signature	İmzayı kaldır
+	Remove Signature	İmzayı Kaldır
+	Remove the signature {name}	{name} imzasını kaldır
+	Certification signature (level {p})	Sertifika imzası (düzey {p})
+	Document timestamp	Belge zaman damgası
+	Visual signature (Fill & Sign, not digital)	Görsel imza (Doldur ve İmzala, dijital değil)
+	Visual initials (Fill & Sign, not digital)	Görsel paraf (Doldur ve İmzala, dijital değil)
+	{name}_unsigned.pdf	{name}_imzasiz.pdf
+	this signature can't be removed on its own	bu imza tek başına kaldırılamaz
+	it was still in the document afterwards, so the change was undone	kaldırıldıktan sonra hâlâ belgedeydi, bu yüzden değişiklik geri alındı
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Başka bir dosya seçin: orijinal olduğu gibi kalır, imzasız sürüm onun yanına kaydedilir.
+	The signature was not removed: {e}	İmza kaldırılmadı: {e}
+	Removed the visual signature on page {p}	Sayfa {p} üzerindeki görsel imza kaldırıldı
+	Removed the signature {field} and kept its empty field	{field} imzası kaldırıldı, boş alanı korundu
+	Removed the signature {field} with its field	{field} imzası alanıyla birlikte kaldırıldı
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Başka imzalar kaldığı için kaldırılan imza dosyanın önceki revizyonunda hâlâ duruyor; kalan imzaları yeniden doğrulayın.
+	The new file has no signature left and no earlier revision holding it.	Yeni dosyada hiç imza kalmadı ve onu tutan önceki bir revizyon da yok.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file} kaydedildi ve tüm sayfalarıyla yeniden açıldığı denetlendi. {history}
+	This document has no signature that can be removed.	Bu belgede kaldırılabilecek bir imza yok.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Sayfa içeriğinin parçası olan bir imza, örneğin taranmış bir sayfada, bir alan ya da açıklama değildir; bu yüzden tek başına kaldırılamaz ve PdfCraft onu gizlemek için sayfanın bölümlerini silmez. Kaldırmak için o alanı karartın (Karart) ya da imza ayrı bir görüntüyse görüntüyü PDF'i düzenle ile silin.
+	Choose the signature to remove:	Kaldırılacak imzayı seçin:
+	unknown signer	bilinmeyen imzalayan
+	Field: {field}	Alan: {field}
+	Page {p}	Sayfa {p}
+	validated: valid	doğrulama: geçerli
+	validated: validity unknown	doğrulama: geçerliliği bilinmiyor
+	validated: invalid	doğrulama: geçersiz
+	None of these signatures can be removed.	Bu imzaların hiçbiri kaldırılamaz.
+	Keep an empty signature field to sign again	Yeniden imzalamak için boş bir imza alanı bırak
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Bu imzayı kaldırmak belgeyi değiştirir ve ortaya çıkan sürümde bu imzayı geçersiz kılar. Diğer imzaları ve sertifikaları etkileyebilir. Orijinal dosya olduğu gibi kalır.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Bu imzayı kaldırmak belgeyi değiştirir ve ortaya çıkan sürümde bu imzayı geçersiz kılar. Orijinal dosya olduğu gibi kalır.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Bu bir imzanın görüntüsüdür, dijital imza değildir: yalnızca sayfadaki işaret kaldırılır. Orijinal dosya olduğu gibi kalır.
+	Unsaved changes to this document are saved in the new file too.	Bu belgedeki kaydedilmemiş değişiklikler de yeni dosyaya kaydedilir.
+	You choose where the new version is saved. Continue?	Yeni sürümün nereye kaydedileceğini siz seçersiniz. Devam edilsin mi?
+	Remove and Save As…	Kaldır ve farklı kaydet…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Diğer imzalar ({names}) belgenin imzalandıktan sonra değiştiğini bildirecek. Onları yeniden doğrulayın: geçerli kalacaklarının hiçbir garantisi yok.
+	Signed after this signature, so what they signed includes it: {names}.	Bundan sonra eklenen ve imzalı içeriği bunu kapsayan imzalar: {names}.
+	The document will no longer be certified.	Belge artık sertifikalı olmayacak.
+	The fields this signature locked ({names}) can be changed again.	Bu imzanın kilitlediği alanlar ({names}) yeniden değiştirilebilecek.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Başka imzalar kaldığı için kopya, imzalı dosyanın bir güncellemesi olarak kaydedilir: kaldırılan imza önceki revizyonda kalır ve oradan kurtarılabilir.
+	{names} certifies this document without allowing comments, and will report this change.	{names} bu belgeyi yorumlara izin vermeden sertifikalıyor ve bu değişikliği bildirecek.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Belge zaman damgası tüm dosyayı kapsar ve kimsenin imzası değildir, bu yüzden tek başına kaldırılamaz.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} bu belgeyi sertifikalıyor ve bir imzayı kaldırmak, bu sertifikanın izin verdiği bir değişiklik değil.
+	The signature {names} locks this field.	{names} imzası bu alanı kilitliyor.
+	This document can't be changed: {names}	Bu belge değiştirilemez: {names}
+	Choose a signature that can be removed.	Kaldırılabilecek bir imza seçin.

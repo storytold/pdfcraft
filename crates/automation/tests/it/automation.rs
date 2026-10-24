@@ -1429,6 +1429,7 @@ fn command_list_reports_enablement_and_tools() {
     let find = |id: &str| list["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
     assert_eq!(find("page.rotate")["tool"], "page_rotate");
     assert_eq!(find("page.rotate")["enabled"], true);
+    assert_eq!(find("sign.remove")["tool"], "sign_clear");
     assert_eq!(find("edit.undo")["enabled"], false);
     ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 90 }));
     let list = ok(&mut a, "command_list", json!({ "doc": doc }));

@@ -532,6 +532,7 @@ impl PdfCraftApp {
                 self.choose_right_panel(Some(RightPanel::Signatures));
             }
             "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
+            "sign.remove" => self.start_remove_signature(None),
             "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
             "view.fit_visible" => {
                 if let Some(i) = self.active

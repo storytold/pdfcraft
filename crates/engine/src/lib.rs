@@ -19,6 +19,7 @@ pub mod camera;
 pub mod camera_clean;
 pub mod camera_edges;
 pub mod catalog;
+pub mod clear_signature;
 pub mod commands;
 pub mod compare;
 mod copy_image;
@@ -340,6 +341,8 @@ struct Editor {
     unsaved_file: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    /// See [`Document::edit_position`].
+    position: u64,
     keys: Keys,
     /// Display appearances built for annotations without any, reused while no annotation edit
     /// runs (content edits leave every annotation dictionary alone). Cleared on any refresh
@@ -696,6 +699,13 @@ impl Document {
     /// What Redo would redo, in parts.
     pub fn redo_label(&self) -> Option<&Label> {
         self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l)
+    }
+
+    /// How many edits are applied, net of undo and redo: an edit or a redo raises it by one, an
+    /// undo lowers it by one. Unlike the undo history it has no cap, so an interface can note it
+    /// and later undo back to exactly that point.
+    pub fn edit_position(&self) -> Option<u64> {
+        self.editor.as_ref().map(|e| e.position)
     }
 
     pub fn editable(&self) -> bool {
@@ -1608,6 +1618,13 @@ pub enum Edit {
     DeleteField {
         name: String,
     },
+    /// Remove the signature in a signature field (Acrobat: Clear Signature): the whole field
+    /// when `remove_field`, otherwise its value and appearance, leaving an empty field to sign
+    /// again ([`clear_signature::clear`]).
+    ClearSignature {
+        field: String,
+        remove_field: bool,
+    },
     /// Page properties ▸ Tab order, for pages (0-based).
     SetTabOrder {
         pages: Vec<usize>,
@@ -1998,6 +2015,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add field",
     "Change field properties",
     "Delete field",
+    "Remove the signature {name}",
     "Duplicate field",
     "Set tab order",
     "Set calculation order",
@@ -2131,6 +2149,7 @@ impl Edit {
             Edit::AddField { .. } => Label::of("Add field"),
             Edit::SetFieldProps { .. } => Label::of("Change field properties"),
             Edit::DeleteField { .. } => Label::of("Delete field"),
+            Edit::ClearSignature { field, .. } => Label::with("Remove the signature {name}", field.as_str()),
             Edit::DuplicateField { .. } => Label::of("Duplicate field"),
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
@@ -2341,6 +2360,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::XfaToStatic
         | Edit::SetFieldProps { .. }
         | Edit::DeleteField { .. }
+        | Edit::ClearSignature { .. }
         | Edit::DuplicateField { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
@@ -2640,6 +2660,9 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             }
         }
         Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
+        Edit::ClearSignature { field, remove_field } => {
+            clear_signature::clear(doc, field, *remove_field).map_err(|e| EditError::Sign(e.to_string()))?;
+        }
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
@@ -3730,6 +3753,7 @@ impl Session {
                         unsaved_file: false,
                         undo: Vec::new(),
                         redo: Vec::new(),
+                        position: 0,
                         keys,
                         appearances: AppearanceCache::default(),
                         field_appearances: pdfcraft_forms::FieldAppearanceCache::default(),
@@ -3981,6 +4005,9 @@ impl Session {
             }
             return Err(e);
         }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position += 1;
+        }
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
@@ -4028,6 +4055,9 @@ impl Session {
             }
             return Err(e);
         }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position -= 1;
+        }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         doc.generation += 1;
@@ -4056,6 +4086,9 @@ impl Session {
                 Self::show_released(doc);
             }
             return Err(e);
+        }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position += 1;
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
@@ -5096,6 +5129,29 @@ impl Session {
             doc.signatures = Arc::new(signatures);
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         }
+    }
+
+    /// The signatures of document `id` that Remove Signature lists, with what removing each would
+    /// do and why some can't be removed ([`clear_signature::removable`]).
+    pub fn removable_signatures(&self, id: DocId) -> Result<Vec<clear_signature::Removable>, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let mut list = guard(|| clear_signature::removable(&editor.cos, &doc.signatures)).map_err(EditError::Sign)?;
+        for r in list.iter_mut().filter(|r| r.blocked.is_none()) {
+            // What applying the edit would check (`check_permission`): a visual signature is a
+            // comment, a digital one changes the document.
+            let why = match (&doc.read_only_reason, &r.target) {
+                (Some(reason), _) => Some(reason.clone()),
+                (None, clear_signature::Target::Annotation { .. }) if !doc.allows_annotation() => {
+                    Some("its security doesn't allow changing comments".into())
+                }
+                (None, clear_signature::Target::Annotation { .. }) => None,
+                (None, _) if !doc.allows_modification() => Some("its security doesn't allow changing it".into()),
+                (None, _) => None,
+            };
+            r.blocked = why.map(clear_signature::Blocker::ReadOnly);
+        }
+        Ok(list)
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).

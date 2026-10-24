@@ -2751,3 +2751,52 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	Hapus tanda tangan…
+	Remove signature	Hapus tanda tangan
+	Remove Signature	Hapus Tanda Tangan
+	Remove the signature {name}	Hapus tanda tangan {name}
+	Certification signature (level {p})	Tanda tangan sertifikasi (tingkat {p})
+	Document timestamp	Stempel waktu dokumen
+	Visual signature (Fill & Sign, not digital)	Tanda tangan visual (Isi & Tanda Tangani, bukan digital)
+	Visual initials (Fill & Sign, not digital)	Inisial visual (Isi & Tanda Tangani, bukan digital)
+	{name}_unsigned.pdf	{name}_tanpa_tanda_tangan.pdf
+	this signature can't be removed on its own	tanda tangan ini tidak dapat dihapus sendiri
+	it was still in the document afterwards, so the change was undone	tanda tangan masih ada di dokumen setelahnya, jadi perubahan dibatalkan
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Pilih file lain: file asli tetap seperti adanya, dan versi tanpa tanda tangan disimpan di sebelahnya.
+	The signature was not removed: {e}	Tanda tangan tidak dihapus: {e}
+	Removed the visual signature on page {p}	Tanda tangan visual di halaman {p} dihapus
+	Removed the signature {field} and kept its empty field	Tanda tangan {field} dihapus dan kolomnya dipertahankan kosong
+	Removed the signature {field} with its field	Tanda tangan {field} dihapus beserta kolomnya
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Masih ada tanda tangan lain, jadi tanda tangan yang dihapus masih ada di revisi file sebelumnya; periksa kembali tanda tangan yang tersisa.
+	The new file has no signature left and no earlier revision holding it.	File baru tidak memiliki tanda tangan lagi dan tidak ada revisi sebelumnya yang menyimpannya.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file} disimpan dan diperiksa dapat dibuka kembali dengan semua halaman. {history}
+	This document has no signature that can be removed.	Dokumen ini tidak memiliki tanda tangan yang dapat dihapus.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Tanda tangan yang menjadi bagian dari isi halaman, seperti pada halaman hasil pindai, bukan kolom atau anotasi, jadi tidak dapat dihapus sendiri, dan PdfCraft tidak menghapus bagian halaman untuk menyembunyikannya. Untuk menghapusnya, sensor area tersebut (Sensor), atau hapus gambarnya dengan Edit PDF jika tanda tangan itu berupa gambar tersendiri.
+	Choose the signature to remove:	Pilih tanda tangan yang akan dihapus:
+	unknown signer	penanda tangan tidak dikenal
+	Field: {field}	Kolom: {field}
+	Page {p}	Halaman {p}
+	validated: valid	divalidasi: valid
+	validated: validity unknown	divalidasi: validitas tidak diketahui
+	validated: invalid	divalidasi: tidak valid
+	None of these signatures can be removed.	Tidak satu pun tanda tangan ini dapat dihapus.
+	Keep an empty signature field to sign again	Pertahankan kolom tanda tangan kosong untuk ditandatangani lagi
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Menghapus tanda tangan ini mengubah dokumen dan membuat tanda tangan ini tidak valid di versi yang dihasilkan. Hal ini dapat memengaruhi tanda tangan dan sertifikasi lainnya. File asli tetap seperti adanya.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Menghapus tanda tangan ini mengubah dokumen dan membuat tanda tangan ini tidak valid di versi yang dihasilkan. File asli tetap seperti adanya.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Ini adalah gambar tanda tangan, bukan tanda tangan digital: hanya tanda di halaman yang dihapus. File asli tetap seperti adanya.
+	Unsaved changes to this document are saved in the new file too.	Perubahan yang belum disimpan pada dokumen ini juga disimpan di file baru.
+	You choose where the new version is saved. Continue?	Anda memilih tempat versi baru disimpan. Lanjutkan?
+	Remove and Save As…	Hapus dan simpan sebagai…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Tanda tangan lainnya ({names}) akan melaporkan bahwa dokumen berubah setelah ditandatangani. Periksa kembali: tidak ada jaminan tanda tangan tersebut tetap valid.
+	Signed after this signature, so what they signed includes it: {names}.	Ditandatangani setelah tanda tangan ini, jadi yang mereka tandatangani mencakupnya: {names}.
+	The document will no longer be certified.	Dokumen tidak akan tersertifikasi lagi.
+	The fields this signature locked ({names}) can be changed again.	Kolom yang dikunci tanda tangan ini ({names}) dapat diubah lagi.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Masih ada tanda tangan lain, jadi salinan disimpan sebagai pembaruan file yang ditandatangani: tanda tangan yang dihapus tetap ada di revisi sebelumnya, tempat tanda tangan itu dapat dipulihkan.
+	{names} certifies this document without allowing comments, and will report this change.	{names} menyertifikasi dokumen ini tanpa mengizinkan komentar, dan akan melaporkan perubahan ini.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Stempel waktu dokumen mencakup seluruh file dan bukan tanda tangan siapa pun, jadi tidak dapat dihapus sendiri.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} menyertifikasi dokumen ini, dan menghapus tanda tangan bukan perubahan yang diizinkan sertifikasinya.
+	The signature {names} locks this field.	Tanda tangan {names} mengunci kolom ini.
+	This document can't be changed: {names}	Dokumen ini tidak dapat diubah: {names}
+	Choose a signature that can be removed.	Pilih tanda tangan yang dapat dihapus.

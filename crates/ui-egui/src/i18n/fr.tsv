@@ -2781,3 +2781,52 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Remove Signature (sign.remove)
+	Remove signature…	Supprimer la signature…
+	Remove signature	Supprimer la signature
+	Remove Signature	Supprimer la signature
+	Remove the signature {name}	Supprimer la signature {name}
+	Certification signature (level {p})	Signature de certification (niveau {p})
+	Document timestamp	Horodatage du document
+	Visual signature (Fill & Sign, not digital)	Signature visuelle (Remplir et signer, non numérique)
+	Visual initials (Fill & Sign, not digital)	Initiales visuelles (Remplir et signer, non numériques)
+	{name}_unsigned.pdf	{name}_sans_signature.pdf
+	this signature can't be removed on its own	cette signature ne peut pas être supprimée seule
+	it was still in the document afterwards, so the change was undone	elle était encore dans le document après la suppression, la modification a donc été annulée
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Choisissez un autre fichier : l'original reste tel quel et la version sans la signature est enregistrée à côté.
+	The signature was not removed: {e}	La signature n'a pas été supprimée : {e}
+	Removed the visual signature on page {p}	Signature visuelle de la page {p} supprimée
+	Removed the signature {field} and kept its empty field	Signature {field} supprimée, son champ est conservé vide
+	Removed the signature {field} with its field	Signature {field} supprimée avec son champ
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	D'autres signatures restent, la signature supprimée est donc toujours dans la révision précédente du fichier ; vérifiez à nouveau les signatures restantes.
+	The new file has no signature left and no earlier revision holding it.	Le nouveau fichier ne contient plus aucune signature, ni de révision précédente qui la conserve.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file} enregistré et vérifié : il se rouvre avec toutes ses pages. {history}
+	This document has no signature that can be removed.	Ce document ne contient aucune signature pouvant être supprimée.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Une signature qui fait partie du contenu d'une page, comme sur une page numérisée, n'est ni un champ ni une annotation : elle ne peut donc pas être supprimée seule, et PdfCraft n'efface pas des parties de page pour la masquer. Pour la retirer, biffez cette zone (Biffer) ou, si la signature est une image à part, supprimez l'image avec Modifier un PDF.
+	Choose the signature to remove:	Choisissez la signature à supprimer :
+	unknown signer	signataire inconnu
+	Field: {field}	Champ : {field}
+	Page {p}	Page {p}
+	validated: valid	validation : valide
+	validated: validity unknown	validation : validité inconnue
+	validated: invalid	validation : non valide
+	None of these signatures can be removed.	Aucune de ces signatures ne peut être supprimée.
+	Keep an empty signature field to sign again	Conserver un champ de signature vide pour signer à nouveau
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Supprimer cette signature modifie le document et invalide cette signature dans la version obtenue. Cela peut affecter les autres signatures et certifications. Le fichier original reste tel quel.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Supprimer cette signature modifie le document et invalide cette signature dans la version obtenue. Le fichier original reste tel quel.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Il s'agit de l'image d'une signature, pas d'une signature numérique : seule la marque sur la page est supprimée. Le fichier original reste tel quel.
+	Unsaved changes to this document are saved in the new file too.	Les modifications non enregistrées de ce document sont aussi enregistrées dans le nouveau fichier.
+	You choose where the new version is saved. Continue?	Vous choisissez où la nouvelle version est enregistrée. Continuer ?
+	Remove and Save As…	Supprimer et enregistrer sous…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Les autres signatures ({names}) indiqueront que le document a changé après leur signature. Vérifiez-les à nouveau : rien ne garantit qu'elles restent valides.
+	Signed after this signature, so what they signed includes it: {names}.	Signatures ajoutées après celle-ci, dont le contenu signé l'inclut : {names}.
+	The document will no longer be certified.	Le document ne sera plus certifié.
+	The fields this signature locked ({names}) can be changed again.	Les champs verrouillés par cette signature ({names}) pourront de nouveau être modifiés.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	D'autres signatures restent, la copie est donc enregistrée comme mise à jour du fichier signé : la signature supprimée reste dans sa révision précédente, d'où elle peut être récupérée.
+	{names} certifies this document without allowing comments, and will report this change.	{names} certifie ce document sans autoriser les commentaires et signalera cette modification.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Un horodatage du document couvre tout le fichier et n'est la signature de personne : il ne peut donc pas être supprimé seul.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} certifie ce document, et supprimer une signature n'est pas une modification autorisée par sa certification.
+	The signature {names} locks this field.	La signature {names} verrouille ce champ.
+	This document can't be changed: {names}	Ce document ne peut pas être modifié : {names}
+	Choose a signature that can be removed.	Choisissez une signature pouvant être supprimée.

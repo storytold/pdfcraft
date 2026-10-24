@@ -2478,3 +2478,52 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+
+# Remove Signature (sign.remove)
+	Remove signature…	Премахни подписа…
+	Remove signature	Премахни подписа
+	Remove Signature	Премахване на подпис
+	Remove the signature {name}	Премахни подписа {name}
+	Certification signature (level {p})	Сертифициращ подпис (ниво {p})
+	Document timestamp	Времеви печат на документа
+	Visual signature (Fill & Sign, not digital)	Визуален подпис (Попълни и подпиши, не е цифров)
+	Visual initials (Fill & Sign, not digital)	Визуални инициали (Попълни и подпиши, не са цифрови)
+	{name}_unsigned.pdf	{name}_без_подпис.pdf
+	this signature can't be removed on its own	този подпис не може да се премахне самостоятелно
+	it was still in the document afterwards, so the change was undone	след премахването той още беше в документа, затова промяната е отменена
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Изберете друг файл: оригиналът остава непроменен, а версията без подписа се записва до него.
+	The signature was not removed: {e}	Подписът не е премахнат: {e}
+	Removed the visual signature on page {p}	Премахнат е визуалният подпис на страница {p}
+	Removed the signature {field} and kept its empty field	Премахнат е подписът {field}, а полето му е запазено празно
+	Removed the signature {field} with its field	Премахнат е подписът {field} заедно с полето
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Има и други подписи, затова премахнатият все още е в предишната редакция на файла; проверете отново останалите подписи.
+	The new file has no signature left and no earlier revision holding it.	Новият файл вече няма подпис, нито предишна редакция, която да го съдържа.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Файлът {file} е записан и проверен: отваря се отново с всички страници. {history}
+	This document has no signature that can be removed.	Този документ няма подпис, който може да бъде премахнат.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Подпис, който е част от съдържанието на страница (например на сканирана страница), не е поле или анотация, затова не може да се премахне самостоятелно, а PdfCraft не изтрива части от страницата, за да го скрие. За да го махнете, заличете тази област (Заличаване) или, ако подписът е отделно изображение, изтрийте го с „Редактирай PDF“.
+	Choose the signature to remove:	Изберете подписа за премахване:
+	unknown signer	неизвестен подписал
+	Field: {field}	Поле: {field}
+	Page {p}	Страница {p}
+	validated: valid	проверка: валиден
+	validated: validity unknown	проверка: неизвестна валидност
+	validated: invalid	проверка: невалиден
+	None of these signatures can be removed.	Никой от тези подписи не може да бъде премахнат.
+	Keep an empty signature field to sign again	Запази празно поле за подпис, за да се подпише отново
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Премахването на този подпис променя документа и прави този подпис невалиден в получената версия. Може да засегне другите подписи и сертификати. Оригиналният файл остава непроменен.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Премахването на този подпис променя документа и прави този подпис невалиден в получената версия. Оригиналният файл остава непроменен.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Това е изображение на подпис, а не цифров подпис: премахва се само знакът на страницата. Оригиналният файл остава непроменен.
+	Unsaved changes to this document are saved in the new file too.	Незаписаните промени в този документ също се записват в новия файл.
+	You choose where the new version is saved. Continue?	Вие избирате къде да се запише новата версия. Продължаване?
+	Remove and Save As…	Премахни и запиши като…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Другите подписи ({names}) ще отчетат, че документът е променен след подписването им. Проверете ги отново: нищо не гарантира, че ще останат валидни.
+	Signed after this signature, so what they signed includes it: {names}.	Подписи, добавени след този, чието подписано съдържание го включва: {names}.
+	The document will no longer be certified.	Документът вече няма да е сертифициран.
+	The fields this signature locked ({names}) can be changed again.	Полетата, заключени от този подпис ({names}), отново ще могат да се променят.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Има и други подписи, затова копието се записва като обновяване на подписания файл: премахнатият подпис остава в предишната редакция, откъдето може да бъде възстановен.
+	{names} certifies this document without allowing comments, and will report this change.	{names} сертифицира този документ, без да позволява коментари, и ще отчете тази промяна.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Времевият печат на документа обхваща целия файл и не е ничий подпис, затова не може да се премахне самостоятелно.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} сертифицира този документ, а премахването на подпис не е промяна, позволена от сертификата.
+	The signature {names} locks this field.	Подписът {names} заключва това поле.
+	This document can't be changed: {names}	Този документ не може да бъде променян: {names}
+	Choose a signature that can be removed.	Изберете подпис, който може да бъде премахнат.

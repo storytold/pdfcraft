@@ -2520,3 +2520,52 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Remove Signature (sign.remove)
+	Remove signature…	Odstrani podpis…
+	Remove signature	Odstrani podpis
+	Remove Signature	Odstrani podpis
+	Remove the signature {name}	Odstrani podpis {name}
+	Certification signature (level {p})	Overitveni podpis (raven {p})
+	Document timestamp	Časovni žig dokumenta
+	Visual signature (Fill & Sign, not digital)	Vizualni podpis (Izpolni in podpiši, ni digitalni)
+	Visual initials (Fill & Sign, not digital)	Vizualne začetnice (Izpolni in podpiši, niso digitalne)
+	{name}_unsigned.pdf	{name}_brez_podpisa.pdf
+	this signature can't be removed on its own	tega podpisa ni mogoče odstraniti samostojno
+	it was still in the document afterwards, so the change was undone	po odstranitvi je bil še vedno v dokumentu, zato je bila sprememba razveljavljena
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Izberite drugo datoteko: izvirnik ostane nespremenjen, različica brez podpisa pa se shrani poleg njega.
+	The signature was not removed: {e}	Podpis ni bil odstranjen: {e}
+	Removed the visual signature on page {p}	Vizualni podpis na strani {p} je odstranjen
+	Removed the signature {field} and kept its empty field	Podpis {field} je odstranjen, prazno polje je ohranjeno
+	Removed the signature {field} with its field	Podpis {field} je odstranjen skupaj s poljem
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Drugi podpisi ostajajo, zato je odstranjeni podpis še vedno v prejšnji reviziji datoteke; preostale podpise znova preverite.
+	The new file has no signature left and no earlier revision holding it.	Nova datoteka nima več nobenega podpisa in nobene prejšnje revizije, ki bi ga hranila.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Datoteka {file} je shranjena in preverjena: znova se odpre z vsemi stranmi. {history}
+	This document has no signature that can be removed.	Ta dokument nima podpisa, ki bi ga bilo mogoče odstraniti.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Podpis, ki je del vsebine strani (na primer na skenirani strani), ni polje ali opomba, zato ga ni mogoče odstraniti samostojno, PdfCraft pa ne briše delov strani, da bi ga skril. Če ga želite odstraniti, počrnite to območje (Počrni) ali, če je podpis samostojna slika, sliko izbrišite z Uredi PDF.
+	Choose the signature to remove:	Izberite podpis, ki ga želite odstraniti:
+	unknown signer	neznan podpisnik
+	Field: {field}	Polje: {field}
+	Page {p}	Stran {p}
+	validated: valid	preverjanje: veljaven
+	validated: validity unknown	preverjanje: veljavnost neznana
+	validated: invalid	preverjanje: neveljaven
+	None of these signatures can be removed.	Nobenega od teh podpisov ni mogoče odstraniti.
+	Keep an empty signature field to sign again	Ohrani prazno polje za podpis za ponovno podpisovanje
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Odstranitev tega podpisa spremeni dokument in ta podpis v nastali različici razveljavi. Lahko vpliva na druge podpise in overitve. Izvirna datoteka ostane nespremenjena.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Odstranitev tega podpisa spremeni dokument in ta podpis v nastali različici razveljavi. Izvirna datoteka ostane nespremenjena.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	To je slika podpisa, ne digitalni podpis: odstrani se samo oznaka na strani. Izvirna datoteka ostane nespremenjena.
+	Unsaved changes to this document are saved in the new file too.	Neshranjene spremembe tega dokumenta se shranijo tudi v novo datoteko.
+	You choose where the new version is saved. Continue?	Vi izberete, kam se shrani nova različica. Želite nadaljevati?
+	Remove and Save As…	Odstrani in shrani kot…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Drugi podpisi ({names}) bodo poročali, da se je dokument po podpisu spremenil. Znova jih preverite: nič ne zagotavlja, da ostanejo veljavni.
+	Signed after this signature, so what they signed includes it: {names}.	Podpisi, dodani po tem podpisu, katerih podpisana vsebina ga vključuje: {names}.
+	The document will no longer be certified.	Dokument ne bo več overjen.
+	The fields this signature locked ({names}) can be changed again.	Polja, ki jih je ta podpis zaklepal ({names}), bo mogoče znova spreminjati.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Drugi podpisi ostajajo, zato se kopija shrani kot posodobitev podpisane datoteke: odstranjeni podpis ostane v prejšnji reviziji, od koder ga je mogoče obnoviti.
+	{names} certifies this document without allowing comments, and will report this change.	{names} overja ta dokument brez dovoljenja za komentarje in bo poročal o tej spremembi.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Časovni žig dokumenta zajema celotno datoteko in ni nikogaršnji podpis, zato ga ni mogoče odstraniti samostojno.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} overja ta dokument, odstranitev podpisa pa ni sprememba, ki jo ta overitev dovoljuje.
+	The signature {names} locks this field.	Podpis {names} zaklepa to polje.
+	This document can't be changed: {names}	Tega dokumenta ni mogoče spremeniti: {names}
+	Choose a signature that can be removed.	Izberite podpis, ki ga je mogoče odstraniti.

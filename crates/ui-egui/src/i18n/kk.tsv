@@ -2513,3 +2513,52 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+
+# Remove Signature (sign.remove)
+	Remove signature…	Қолтаңбаны алып тастау…
+	Remove signature	Қолтаңбаны алып тастау
+	Remove Signature	Қолтаңбаны алып тастау
+	Remove the signature {name}	{name} қолтаңбасын алып тастау
+	Certification signature (level {p})	Куәландыру қолтаңбасы ({p}-деңгей)
+	Document timestamp	Құжаттың уақыт белгісі
+	Visual signature (Fill & Sign, not digital)	Көрнекі қолтаңба (Толтыру және қол қою, цифрлық емес)
+	Visual initials (Fill & Sign, not digital)	Көрнекі инициалдар (Толтыру және қол қою, цифрлық емес)
+	{name}_unsigned.pdf	{name}_qoltanbasyz.pdf
+	this signature can't be removed on its own	бұл қолтаңбаны жеке алып тастау мүмкін емес
+	it was still in the document afterwards, so the change was undone	алып тастағаннан кейін ол құжатта қалды, сондықтан өзгеріс болдырылмады
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Басқа файлды таңдаңыз: түпнұсқа өзгеріссіз қалады, ал қолтаңбасыз нұсқа оның жанына сақталады.
+	The signature was not removed: {e}	Қолтаңба алып тасталмады: {e}
+	Removed the visual signature on page {p}	{p}-беттегі көрнекі қолтаңба алып тасталды
+	Removed the signature {field} and kept its empty field	{field} қолтаңбасы алып тасталды, бос өрісі сақталды
+	Removed the signature {field} with its field	{field} қолтаңбасы өрісімен бірге алып тасталды
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Басқа қолтаңбалар қалғандықтан, алып тасталған қолтаңба файлдың алдыңғы редакциясында әлі бар; қалған қолтаңбаларды қайта тексеріңіз.
+	The new file has no signature left and no earlier revision holding it.	Жаңа файлда бірде-бір қолтаңба жоқ және оны сақтайтын алдыңғы редакция да жоқ.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file} сақталып, барлық беттерімен қайта ашылатыны тексерілді. {history}
+	This document has no signature that can be removed.	Бұл құжатта алып тастауға болатын қолтаңба жоқ.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Бет мазмұнының бөлігі болып табылатын қолтаңба, мысалы сканерленген бетте, өріс те, аңдатпа да емес, сондықтан оны жеке алып тастау мүмкін емес, ал PdfCraft оны жасыру үшін беттің бөліктерін өшірмейді. Оны алып тастау үшін сол аймақты жасырыңыз (Жасыру) немесе қолтаңба бөлек сурет болса, суретті «PDF түзету» арқылы жойыңыз.
+	Choose the signature to remove:	Алып тасталатын қолтаңбаны таңдаңыз:
+	unknown signer	белгісіз қол қоюшы
+	Field: {field}	Өріс: {field}
+	Page {p}	{p}-бет
+	validated: valid	тексеру: жарамды
+	validated: validity unknown	тексеру: жарамдылығы белгісіз
+	validated: invalid	тексеру: жарамсыз
+	None of these signatures can be removed.	Бұл қолтаңбалардың ешқайсысын алып тастау мүмкін емес.
+	Keep an empty signature field to sign again	Қайта қол қою үшін бос қолтаңба өрісін қалдыру
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Бұл қолтаңбаны алып тастау құжатты өзгертеді және алынған нұсқада бұл қолтаңбаны жарамсыз етеді. Бұл басқа қолтаңбалар мен куәландыруларға әсер етуі мүмкін. Түпнұсқа файл өзгеріссіз қалады.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Бұл қолтаңбаны алып тастау құжатты өзгертеді және алынған нұсқада бұл қолтаңбаны жарамсыз етеді. Түпнұсқа файл өзгеріссіз қалады.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Бұл цифрлық қолтаңба емес, қолтаңбаның суреті: беттегі белгі ғана алып тасталады. Түпнұсқа файл өзгеріссіз қалады.
+	Unsaved changes to this document are saved in the new file too.	Осы құжаттағы сақталмаған өзгерістер де жаңа файлға сақталады.
+	You choose where the new version is saved. Continue?	Жаңа нұсқаның қайда сақталатынын сіз таңдайсыз. Жалғастыру керек пе?
+	Remove and Save As…	Алып тастау және басқаша сақтау…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Басқа қолтаңбалар ({names}) құжат қол қойылғаннан кейін өзгергенін хабарлайды. Оларды қайта тексеріңіз: жарамды болып қалатынына кепілдік жоқ.
+	Signed after this signature, so what they signed includes it: {names}.	Осыдан кейін қосылған және қол қойылған мазмұны мұны қамтитын қолтаңбалар: {names}.
+	The document will no longer be certified.	Құжат енді куәландырылмаған болады.
+	The fields this signature locked ({names}) can be changed again.	Бұл қолтаңба құлыптаған өрістерді ({names}) қайта өзгертуге болады.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Басқа қолтаңбалар қалғандықтан, көшірме қол қойылған файлдың жаңартуы ретінде сақталады: алып тасталған қолтаңба алдыңғы редакцияда қалады, оны сол жерден қалпына келтіруге болады.
+	{names} certifies this document without allowing comments, and will report this change.	{names} бұл құжатты түсініктемелерге рұқсат бермей куәландырады және бұл өзгерісті хабарлайды.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Құжаттың уақыт белгісі бүкіл файлды қамтиды және ешкімнің қолтаңбасы емес, сондықтан оны жеке алып тастау мүмкін емес.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} бұл құжатты куәландырады, ал қолтаңбаны алып тастау бұл куәландыру рұқсат ететін өзгеріс емес.
+	The signature {names} locks this field.	{names} қолтаңбасы бұл өрісті құлыптайды.
+	This document can't be changed: {names}	Бұл құжатты өзгерту мүмкін емес: {names}
+	Choose a signature that can be removed.	Алып тастауға болатын қолтаңбаны таңдаңыз.

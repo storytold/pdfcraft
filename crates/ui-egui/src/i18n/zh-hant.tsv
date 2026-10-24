@@ -2465,3 +2465,52 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Remove Signature (sign.remove)
+	Remove signature…	移除簽章…
+	Remove signature	移除簽章
+	Remove Signature	移除簽章
+	Remove the signature {name}	移除簽章 {name}
+	Certification signature (level {p})	認證簽章（等級 {p}）
+	Document timestamp	文件時間戳記
+	Visual signature (Fill & Sign, not digital)	視覺簽章（填寫與簽署，非數位簽章）
+	Visual initials (Fill & Sign, not digital)	視覺姓名縮寫（填寫與簽署，非數位簽章）
+	{name}_unsigned.pdf	{name}_無簽章.pdf
+	this signature can't be removed on its own	此簽章無法單獨移除
+	it was still in the document afterwards, so the change was undone	移除後它仍在文件中，因此已復原此變更
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	請選擇其他檔案：原始檔案維持不變，不含該簽章的版本會儲存在它旁邊。
+	The signature was not removed: {e}	未移除簽章：{e}
+	Removed the visual signature on page {p}	已移除第 {p} 頁上的視覺簽章
+	Removed the signature {field} and kept its empty field	已移除簽章 {field}，並保留其空白欄位
+	Removed the signature {field} with its field	已移除簽章 {field} 及其欄位
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	仍有其他簽章，因此已移除的簽章仍保留在檔案的較早修訂版中；請重新驗證其餘簽章。
+	The new file has no signature left and no earlier revision holding it.	新檔案中已沒有任何簽章，也沒有保存它的較早修訂版。
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}。已儲存 {file}，並確認它能帶著所有頁面重新開啟。{history}
+	This document has no signature that can be removed.	此文件中沒有可移除的簽章。
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	屬於頁面內容一部分的簽章（例如掃描頁面上的簽章）既不是欄位也不是註解，因此無法單獨移除，PdfCraft 也不會為了隱藏它而擦除頁面的某些部分。若要去除它，請遮蔽該區域（遮蔽），如果簽章是一張獨立的影像，也可以用「編輯 PDF」刪除該影像。
+	Choose the signature to remove:	選擇要移除的簽章：
+	unknown signer	未知簽署人
+	Field: {field}	欄位：{field}
+	Page {p}	第 {p} 頁
+	validated: valid	驗證結果：有效
+	validated: validity unknown	驗證結果：有效性不明
+	validated: invalid	驗證結果：無效
+	None of these signatures can be removed.	這些簽章都無法移除。
+	Keep an empty signature field to sign again	保留一個空白簽章欄位以便重新簽署
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	移除此簽章會變更文件，並使此簽章在產生的版本中失效。這可能會影響其他簽章和認證。原始檔案維持不變。
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	移除此簽章會變更文件，並使此簽章在產生的版本中失效。原始檔案維持不變。
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	這是簽章的影像，不是數位簽章：只會移除頁面上的標記。原始檔案維持不變。
+	Unsaved changes to this document are saved in the new file too.	此文件中尚未儲存的變更也會儲存到新檔案中。
+	You choose where the new version is saved. Continue?	由你選擇新版本的儲存位置。要繼續嗎？
+	Remove and Save As…	移除並另存新檔…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	其他簽章（{names}）將回報文件在簽署後已被變更。請重新驗證它們：無法保證它們仍然有效。
+	Signed after this signature, so what they signed includes it: {names}.	在此簽章之後加入、且簽署內容包含此簽章的簽章：{names}。
+	The document will no longer be certified.	文件將不再處於認證狀態。
+	The fields this signature locked ({names}) can be changed again.	此簽章鎖定的欄位（{names}）將可以再次變更。
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	仍有其他簽章，因此副本會作為已簽署檔案的增量更新儲存：已移除的簽章保留在較早的修訂版中，可以從那裡復原。
+	{names} certifies this document without allowing comments, and will report this change.	{names} 認證此文件且不允許註解，會回報此變更。
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	文件時間戳記涵蓋整個檔案，不屬於任何人的簽章，因此無法單獨移除。
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} 認證此文件，而移除簽章不是該認證允許的變更。
+	The signature {names} locks this field.	簽章 {names} 鎖定了此欄位。
+	This document can't be changed: {names}	無法變更此文件：{names}
+	Choose a signature that can be removed.	請選擇一個可以移除的簽章。

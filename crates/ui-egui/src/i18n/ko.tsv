@@ -2750,3 +2750,52 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	서명 제거…
+	Remove signature	서명 제거
+	Remove Signature	서명 제거
+	Remove the signature {name}	서명 {name} 제거
+	Certification signature (level {p})	인증 서명(수준 {p})
+	Document timestamp	문서 타임스탬프
+	Visual signature (Fill & Sign, not digital)	시각적 서명(채우기 및 서명, 디지털 아님)
+	Visual initials (Fill & Sign, not digital)	시각적 이니셜(채우기 및 서명, 디지털 아님)
+	{name}_unsigned.pdf	{name}_서명없음.pdf
+	this signature can't be removed on its own	이 서명은 단독으로 제거할 수 없습니다
+	it was still in the document afterwards, so the change was undone	제거 후에도 문서에 남아 있어 변경을 취소했습니다
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	다른 파일을 선택하세요. 원본은 그대로 유지되고, 서명이 없는 버전은 그 옆에 저장됩니다.
+	The signature was not removed: {e}	서명을 제거하지 못했습니다: {e}
+	Removed the visual signature on page {p}	{p}페이지의 시각적 서명을 제거했습니다
+	Removed the signature {field} and kept its empty field	서명 {field}을(를) 제거하고 빈 필드는 유지했습니다
+	Removed the signature {field} with its field	서명 {field}을(를) 필드와 함께 제거했습니다
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	다른 서명이 남아 있으므로 제거한 서명은 파일의 이전 개정판에 여전히 있습니다. 남은 서명을 다시 확인하세요.
+	The new file has no signature left and no earlier revision holding it.	새 파일에는 남은 서명도, 서명을 담은 이전 개정판도 없습니다.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file}을(를) 저장했고 모든 페이지와 함께 다시 열리는지 확인했습니다. {history}
+	This document has no signature that can be removed.	이 문서에는 제거할 수 있는 서명이 없습니다.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	스캔한 페이지처럼 페이지 내용의 일부인 서명은 필드나 주석이 아니므로 단독으로 제거할 수 없으며, PdfCraft는 이를 숨기려고 페이지의 일부를 지우지 않습니다. 제거하려면 해당 영역의 민감 정보를 제거하거나(민감 정보 제거), 서명이 별도의 이미지인 경우 PDF 편집으로 이미지를 삭제하세요.
+	Choose the signature to remove:	제거할 서명을 선택하세요:
+	unknown signer	알 수 없는 서명자
+	Field: {field}	필드: {field}
+	Page {p}	{p}페이지
+	validated: valid	검증 결과: 유효함
+	validated: validity unknown	검증 결과: 유효성 알 수 없음
+	validated: invalid	검증 결과: 유효하지 않음
+	None of these signatures can be removed.	이 서명 중 제거할 수 있는 것이 없습니다.
+	Keep an empty signature field to sign again	다시 서명할 수 있도록 빈 서명 필드 유지
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	이 서명을 제거하면 문서가 변경되고, 결과 버전에서 이 서명은 무효가 됩니다. 다른 서명과 인증에 영향을 줄 수 있습니다. 원본 파일은 그대로 유지됩니다.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	이 서명을 제거하면 문서가 변경되고, 결과 버전에서 이 서명은 무효가 됩니다. 원본 파일은 그대로 유지됩니다.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	이것은 디지털 서명이 아니라 서명 이미지입니다. 페이지의 표시만 제거됩니다. 원본 파일은 그대로 유지됩니다.
+	Unsaved changes to this document are saved in the new file too.	이 문서의 저장되지 않은 변경 사항도 새 파일에 저장됩니다.
+	You choose where the new version is saved. Continue?	새 버전을 저장할 위치를 직접 선택합니다. 계속하시겠습니까?
+	Remove and Save As…	제거 후 다른 이름으로 저장…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	다른 서명({names})은 서명 후 문서가 변경되었다고 보고합니다. 다시 확인하세요. 계속 유효하다는 보장은 없습니다.
+	Signed after this signature, so what they signed includes it: {names}.	이 서명 이후에 서명되어, 서명한 내용에 이 서명이 포함됩니다: {names}.
+	The document will no longer be certified.	문서가 더 이상 인증되지 않습니다.
+	The fields this signature locked ({names}) can be changed again.	이 서명이 잠근 필드({names})를 다시 변경할 수 있게 됩니다.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	다른 서명이 남아 있으므로 사본은 서명된 파일의 업데이트로 저장됩니다. 제거한 서명은 이전 개정판에 남아 있어 복구할 수 있습니다.
+	{names} certifies this document without allowing comments, and will report this change.	{names}이(가) 주석을 허용하지 않고 이 문서를 인증하므로 이 변경을 보고합니다.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	문서 타임스탬프는 파일 전체에 적용되며 누구의 서명도 아니므로 단독으로 제거할 수 없습니다.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names}이(가) 이 문서를 인증하며, 서명 제거는 해당 인증이 허용하는 변경이 아닙니다.
+	The signature {names} locks this field.	서명 {names}이(가) 이 필드를 잠급니다.
+	This document can't be changed: {names}	이 문서는 변경할 수 없습니다: {names}
+	Choose a signature that can be removed.	제거할 수 있는 서명을 선택하세요.

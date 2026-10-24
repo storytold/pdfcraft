@@ -2514,3 +2514,52 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+
+# Remove Signature (sign.remove)
+	Remove signature…	Aláírás eltávolítása…
+	Remove signature	Aláírás eltávolítása
+	Remove Signature	Aláírás eltávolítása
+	Remove the signature {name}	{name} aláírás eltávolítása
+	Certification signature (level {p})	Hitelesítő aláírás ({p}. szint)
+	Document timestamp	Dokumentum-időbélyeg
+	Visual signature (Fill & Sign, not digital)	Vizuális aláírás (Kitöltés és aláírás, nem digitális)
+	Visual initials (Fill & Sign, not digital)	Vizuális kezdőbetűk (Kitöltés és aláírás, nem digitális)
+	{name}_unsigned.pdf	{name}_alairas_nelkul.pdf
+	this signature can't be removed on its own	ez az aláírás nem távolítható el önmagában
+	it was still in the document afterwards, so the change was undone	az eltávolítás után is a dokumentumban maradt, ezért a módosítás visszavonva
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Válasszon másik fájlt: az eredeti változatlan marad, az aláírás nélküli változat pedig mellé kerül.
+	The signature was not removed: {e}	Az aláírás nem lett eltávolítva: {e}
+	Removed the visual signature on page {p}	A(z) {p}. oldal vizuális aláírása eltávolítva
+	Removed the signature {field} and kept its empty field	{field} aláírás eltávolítva, az üres mező megmaradt
+	Removed the signature {field} with its field	{field} aláírás eltávolítva a mezővel együtt
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Más aláírások megmaradnak, ezért az eltávolított aláírás továbbra is benne van a fájl korábbi változatában; ellenőrizze újra a megmaradt aláírásokat.
+	The new file has no signature left and no earlier revision holding it.	Az új fájlban már nincs aláírás, és olyan korábbi változat sincs, amely tartalmazná.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file} mentve és ellenőrizve: minden oldalával újra megnyílik. {history}
+	This document has no signature that can be removed.	Ebben a dokumentumban nincs eltávolítható aláírás.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Az oldal tartalmának részét képező aláírás – például egy beszkennelt oldalon – nem mező és nem megjegyzés, ezért nem távolítható el önmagában, és a PdfCraft nem töröl részeket az oldalból az elrejtéséhez. Az eltávolításhoz takarja ki az adott területet (Kitakarás), vagy ha az aláírás külön kép, törölje a képet a „PDF szerkesztése” eszközzel.
+	Choose the signature to remove:	Válassza ki az eltávolítandó aláírást:
+	unknown signer	ismeretlen aláíró
+	Field: {field}	Mező: {field}
+	Page {p}	{p}. oldal
+	validated: valid	ellenőrzés: érvényes
+	validated: validity unknown	ellenőrzés: érvényessége ismeretlen
+	validated: invalid	ellenőrzés: érvénytelen
+	None of these signatures can be removed.	Ezek közül egyik aláírás sem távolítható el.
+	Keep an empty signature field to sign again	Üres aláírásmező megtartása az újbóli aláíráshoz
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Az aláírás eltávolítása módosítja a dokumentumot, és a létrejövő változatban érvényteleníti ezt az aláírást. Hatással lehet a többi aláírásra és hitelesítésre. Az eredeti fájl változatlan marad.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Az aláírás eltávolítása módosítja a dokumentumot, és a létrejövő változatban érvényteleníti ezt az aláírást. Az eredeti fájl változatlan marad.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Ez egy aláírás képe, nem digitális aláírás: csak az oldalon lévő jel tűnik el. Az eredeti fájl változatlan marad.
+	Unsaved changes to this document are saved in the new file too.	A dokumentum nem mentett módosításai is az új fájlba kerülnek.
+	You choose where the new version is saved. Continue?	Ön választja ki, hová kerüljön az új változat. Folytatja?
+	Remove and Save As…	Eltávolítás és mentés másként…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	A többi aláírás ({names}) jelezni fogja, hogy a dokumentum az aláírása után megváltozott. Ellenőrizze újra őket: semmi sem garantálja, hogy érvényesek maradnak.
+	Signed after this signature, so what they signed includes it: {names}.	Ezután hozzáadott aláírások, amelyek aláírt tartalma magában foglalja: {names}.
+	The document will no longer be certified.	A dokumentum többé nem lesz hitelesítve.
+	The fields this signature locked ({names}) can be changed again.	Az aláírás által zárolt mezők ({names}) ismét módosíthatók lesznek.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Más aláírások megmaradnak, ezért a másolat az aláírt fájl frissítéseként mentődik: az eltávolított aláírás a korábbi változatban marad, ahonnan visszaállítható.
+	{names} certifies this document without allowing comments, and will report this change.	{names} megjegyzések engedélyezése nélkül hitelesíti ezt a dokumentumot, és jelezni fogja ezt a módosítást.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	A dokumentum-időbélyeg az egész fájlra vonatkozik, és senkinek sem az aláírása, ezért nem távolítható el önmagában.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} hitelesíti ezt a dokumentumot, és az aláírás eltávolítása nem olyan módosítás, amelyet a hitelesítés megenged.
+	The signature {names} locks this field.	A(z) {names} aláírás zárolja ezt a mezőt.
+	This document can't be changed: {names}	Ez a dokumentum nem módosítható: {names}
+	Choose a signature that can be removed.	Válasszon egy eltávolítható aláírást.

@@ -62,6 +62,7 @@ mod reading_colors;
 mod recovery;
 mod redact;
 mod reload;
+mod remove_signature;
 mod signing;
 mod stamps;
 mod text_select;

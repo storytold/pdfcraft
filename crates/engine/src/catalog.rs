@@ -392,6 +392,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Digitally sign", "signature", "sign.digital", Ready),
                 item("Timestamp", "clock-3", "sign.timestamp", Planned("M9")),
                 item("Validate all signatures", "badge-check", "sign.validate", Ready),
+                item("Remove signature", "eraser", "sign.remove", Ready),
                 item("Certify (visible signature)", "badge-check", "sign.certify", Ready),
                 item("Certify (invisible signature)", "badge-check", "sign.certify_invisible", Ready),
             ],

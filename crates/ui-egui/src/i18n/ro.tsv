@@ -2774,3 +2774,52 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	Eliminare semnătură…
+	Remove signature	Eliminare semnătură
+	Remove Signature	Eliminare semnătură
+	Remove the signature {name}	Eliminare semnătură {name}
+	Certification signature (level {p})	Semnătură de certificare (nivelul {p})
+	Document timestamp	Marcaj temporal al documentului
+	Visual signature (Fill & Sign, not digital)	Semnătură vizuală (Completare și semnare, nu digitală)
+	Visual initials (Fill & Sign, not digital)	Inițiale vizuale (Completare și semnare, nu digitale)
+	{name}_unsigned.pdf	{name}_nesemnat.pdf
+	this signature can't be removed on its own	această semnătură nu poate fi eliminată separat
+	it was still in the document afterwards, so the change was undone	era încă în document după aceea, așa că modificarea a fost anulată
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Alegeți alt fișier: originalul rămâne neschimbat, iar versiunea fără semnătură se salvează lângă el.
+	The signature was not removed: {e}	Semnătura nu a fost eliminată: {e}
+	Removed the visual signature on page {p}	S-a eliminat semnătura vizuală de pe pagina {p}
+	Removed the signature {field} and kept its empty field	S-a eliminat semnătura {field} și s-a păstrat câmpul gol
+	Removed the signature {field} with its field	S-a eliminat semnătura {field} împreună cu câmpul
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Rămân alte semnături, așa că cea eliminată se află încă în revizia anterioară a fișierului; verificați din nou semnăturile rămase.
+	The new file has no signature left and no earlier revision holding it.	Fișierul nou nu mai are nicio semnătură și nicio revizie anterioară care să o conțină.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. S-a salvat {file} și s-a verificat că se redeschide cu toate paginile. {history}
+	This document has no signature that can be removed.	Acest document nu are nicio semnătură care să poată fi eliminată.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	O semnătură care face parte din conținutul unei pagini, ca pe o pagină scanată, nu este un câmp sau o adnotare, așa că nu poate fi eliminată separat, iar PdfCraft nu șterge părți dintr-o pagină pentru a o ascunde. Pentru a o elimina, anonimizați zona respectivă (Anonimizare) sau, dacă semnătura este o imagine separată, ștergeți imaginea cu Editare PDF.
+	Choose the signature to remove:	Alegeți semnătura de eliminat:
+	unknown signer	semnatar necunoscut
+	Field: {field}	Câmp: {field}
+	Page {p}	Pagina {p}
+	validated: valid	validare: validă
+	validated: validity unknown	validare: validitate necunoscută
+	validated: invalid	validare: nevalidă
+	None of these signatures can be removed.	Niciuna dintre aceste semnături nu poate fi eliminată.
+	Keep an empty signature field to sign again	Păstrare câmp de semnătură gol pentru o nouă semnare
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Eliminarea acestei semnături modifică documentul și invalidează această semnătură în versiunea rezultată. Poate afecta celelalte semnături și certificări. Fișierul original rămâne neschimbat.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Eliminarea acestei semnături modifică documentul și invalidează această semnătură în versiunea rezultată. Fișierul original rămâne neschimbat.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Aceasta este imaginea unei semnături, nu o semnătură digitală: se elimină doar marcajul de pe pagină. Fișierul original rămâne neschimbat.
+	Unsaved changes to this document are saved in the new file too.	Modificările nesalvate ale acestui document se salvează și în fișierul nou.
+	You choose where the new version is saved. Continue?	Alegeți unde se salvează noua versiune. Continuați?
+	Remove and Save As…	Eliminare și salvare ca…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Celelalte semnături ({names}) vor raporta că documentul s-a modificat după semnare. Verificați-le din nou: nimic nu garantează că rămân valide.
+	Signed after this signature, so what they signed includes it: {names}.	Semnate după această semnătură, deci ceea ce au semnat o include: {names}.
+	The document will no longer be certified.	Documentul nu va mai fi certificat.
+	The fields this signature locked ({names}) can be changed again.	Câmpurile blocate de această semnătură ({names}) vor putea fi modificate din nou.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Rămân alte semnături, așa că copia se salvează ca actualizare a fișierului semnat: semnătura eliminată rămâne în revizia anterioară, de unde poate fi recuperată.
+	{names} certifies this document without allowing comments, and will report this change.	{names} certifică acest document fără a permite comentarii și va raporta această modificare.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Un marcaj temporal al documentului acoperă întregul fișier și nu este semnătura nimănui, așa că nu poate fi eliminat separat.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} certifică acest document, iar eliminarea unei semnături nu este o modificare permisă de certificare.
+	The signature {names} locks this field.	Semnătura {names} blochează acest câmp.
+	This document can't be changed: {names}	Acest document nu poate fi modificat: {names}
+	Choose a signature that can be removed.	Alegeți o semnătură care poate fi eliminată.

@@ -309,6 +309,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("sign.certify", "Certify (visible signature)", None, None, Document, "badge-check"),
     c("sign.certify_invisible", "Certify (invisible signature)", None, None, Document, "badge-check"),
     c("sign.validate", "Validate all signatures", None, None, Document, "badge-check"),
+    // Document, not Modification: a visual signature only needs annotation rights, and the dialog
+    // says, per signature, what the document's security doesn't allow.
+    c("sign.remove", "Remove signature…", None, None, Document, "eraser"),
     c("sign.panel", "Signatures panel", VIEW, None, Document, "signature"),
     c("sign.fill.text", "Fill & Sign: add text", None, None, Annotate, "type"),
     c("sign.fill.check", "Fill & Sign: checkmark", None, None, Annotate, "check"),

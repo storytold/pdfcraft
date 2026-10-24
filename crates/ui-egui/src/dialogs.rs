@@ -764,6 +764,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
                 return;
             }
+            Dialog::RemoveSignature => {
+                close = crate::sign_ui::remove_dialog(ui, app, &t);
+                return;
+            }
             Dialog::Sign => {
                 if crate::sign_ui::dialog(ui, app, &t) {
                     app.sign_draft = None;
