@@ -2156,6 +2156,17 @@ calendar date	December	Желтоқсан
 	Smaller pages	Кішірек беттер
 	Reset page size	Бет өлшемін қалпына келтіру
 	Flatten Fill & Sign when saving	Сақтау кезінде «Толтыру және қол қою» мазмұнын жазықтау
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Қолтаңбаңызды бетке бекіту керек пе?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Қойылған қолтаңба бекітілгенге дейін түсініктеме болып қалады: PDF өңдегіші бар кез келген адам оны жылжытып не жоя алады. Бекіту «Толтыру және қол қою» мәтінін, белгілерін және қолтаңбаларын беттің бөлігіне айналдырады.
+	Don't ask again	Қайта сұрамау
+	Lock and save	Бекіту және сақтау
+	Keep editable	Өңделетін күйде қалдыру
+	Lock into the page when saving	Сақтағанда бетке бекіту
+	Otherwise, ask on the first save after a signature is placed	Әйтпесе, қолтаңба қойылғаннан кейінгі алғашқы сақтауда сұрау
+	Signature added. Others can move it until it's locked.	Қолтаңба қосылды. Ол бекітілгенше басқалар оны жылжыта алады.
+	Lock now	Қазір бекіту
+	Signature locked into the page.	Қолтаңба бетке бекітілді.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Мәтін, белгілер мен қолтаңбалар беттің бөлігіне айналады. Басқа түсініктемелер өңделетін күйде қалады.
 	Date format	Күн пішімі
 	Fill & Sign dates	«Толтыру және қол қою» күндері

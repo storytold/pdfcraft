@@ -2694,3 +2694,13 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Lock your signature into the page?	Vil du låse signaturen inn i siden?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	En plassert signatur er en kommentar til den låses: alle med et PDF-redigeringsprogram kan flytte eller fjerne den. Låsing gjør teksten, merkene og signaturene fra Fyll ut og signer til en del av siden.
+	Lock and save	Lås og lagre
+	Keep editable	Behold redigerbar
+	Don't ask again	Ikke spør igjen
+	Lock into the page when saving	Lås inn i siden ved lagring
+	Otherwise, ask on the first save after a signature is placed	Ellers spør ved første lagring etter at en signatur er plassert
+	Signature added. Others can move it until it's locked.	Signatur lagt til. Andre kan flytte den til den er låst.
+	Lock now	Lås nå
+	Signature locked into the page.	Signaturen er låst inn i siden.

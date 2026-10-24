@@ -321,6 +321,9 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
+    /// first? (#2149)
+    LockSignatures,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.
@@ -564,6 +567,17 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
+    /// them into the page (#2149). Off once the user says not to ask again.
+    pub ask_to_lock_signatures: bool,
+    /// Documents with a signature or initials placed by Fill & Sign since they were last saved
+    /// (or asked about).
+    /// Documents with a Fill & Sign signature placed since their last save, asked about on
+    /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
+    pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
+    /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
+    pub(crate) pending_lock: Option<editing::PendingLock>,
+    pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub dialog: Option<Dialog>,
@@ -973,6 +987,10 @@ impl PdfCraftApp {
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
+            ask_to_lock_signatures: true,
+            placed_signatures: Default::default(),
+            pending_lock: None,
+            lock_remember: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             dialog: None,
             update_source: None,
@@ -2008,6 +2026,7 @@ impl PdfCraftApp {
             return;
         }
         let id = self.views.remove(index).id;
+        self.placed_signatures.remove(&id);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {
@@ -2389,6 +2408,7 @@ impl PdfCraftApp {
             // Null follows the system's text scaling.
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
+            "ask_to_lock_signatures": self.ask_to_lock_signatures,
             "fill_text_size": self.fill_text_size,
             "date_format": self.session.date_format(),
             // Null follows the interface language.
@@ -2524,6 +2544,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
+        }
+        if let Some(on) = v["ask_to_lock_signatures"].as_bool() {
+            self.ask_to_lock_signatures = on;
         }
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;

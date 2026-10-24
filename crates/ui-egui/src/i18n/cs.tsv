@@ -2266,6 +2266,17 @@ calendar date	December	prosince
 	Smaller pages	Menší stránky
 	Reset page size	Obnovit velikost stránek
 	Flatten Fill & Sign when saving	Při ukládání sloučit obsah Vyplnit a podepsat se stránkou
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Zamknout podpis do stránky?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Umístěný podpis je komentář, dokud není zamčen: kdokoli s editorem PDF ho může přesunout nebo odstranit. Zamčení udělá z textu, značek a podpisů Vyplnit a podepsat součást stránky.
+	Don't ask again	Už se neptat
+	Lock and save	Zamknout a uložit
+	Keep editable	Ponechat upravitelné
+	Lock into the page when saving	Při ukládání zamknout do stránky
+	Otherwise, ask on the first save after a signature is placed	Jinak se zeptat při prvním uložení po umístění podpisu
+	Signature added. Others can move it until it's locked.	Podpis byl přidán. Ostatní ho mohou přesouvat, dokud nebude zamčen.
+	Lock now	Zamknout nyní
+	Signature locked into the page.	Podpis byl zamčen do stránky.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Text, značky a podpisy se stanou součástí stránky. Ostatní komentáře zůstanou upravitelné.
 	Date format	Formát data
 	Fill & Sign dates	Datum pro Vyplnit a podepsat

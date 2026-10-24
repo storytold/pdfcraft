@@ -2424,3 +2424,15 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	మీ సంతకాన్ని పేజీలో లాక్ చేయాలా?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	ఉంచిన సంతకం లాక్ చేసే వరకు ఒక వ్యాఖ్య మాత్రమే: PDF ఎడిటర్ ఉన్న ఎవరైనా దాన్ని తరలించవచ్చు లేదా తొలగించవచ్చు. లాక్ చేయడం వల్ల నింపి సంతకం చేయి వచనం, గుర్తులు, సంతకాలు పేజీలో భాగమవుతాయి.
+	Don't ask again	మళ్లీ అడగవద్దు
+	Lock and save	లాక్ చేసి సేవ్ చేయి
+	Keep editable	సవరించగలిగేలా ఉంచు
+	Lock into the page when saving	సేవ్ చేసేటప్పుడు పేజీలో లాక్ చేయి
+	Otherwise, ask on the first save after a signature is placed	లేకపోతే, సంతకం ఉంచిన తర్వాత మొదటి సేవ్‌లో అడుగు
+	Signature added. Others can move it until it's locked.	సంతకం జోడించబడింది. లాక్ చేసే వరకు ఇతరులు దానిని తరలించగలరు.
+	Lock now	ఇప్పుడే లాక్ చేయి
+	Signature locked into the page.	సంతకం పేజీలో లాక్ చేయబడింది.

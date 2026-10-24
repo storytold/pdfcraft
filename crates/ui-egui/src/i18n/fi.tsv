@@ -2783,3 +2783,13 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Lock your signature into the page?	Lukitaanko allekirjoitus sivuun?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Sijoitettu allekirjoitus on kommentti, kunnes se lukitaan: kuka tahansa PDF-muokkaimen käyttäjä voi siirtää tai poistaa sen. Lukitseminen tekee Täytä ja allekirjoita -tekstistä, -merkinnöistä ja -allekirjoituksista osan sivua.
+	Lock and save	Lukitse ja tallenna
+	Keep editable	Pidä muokattavana
+	Don't ask again	Älä kysy uudelleen
+	Lock into the page when saving	Lukitse sivuun tallennettaessa
+	Otherwise, ask on the first save after a signature is placed	Muuten kysy ensimmäisellä tallennuskerralla allekirjoituksen sijoittamisen jälkeen
+	Signature added. Others can move it until it's locked.	Allekirjoitus lisätty. Muut voivat siirtää sitä, kunnes se lukitaan.
+	Lock now	Lukitse nyt
+	Signature locked into the page.	Allekirjoitus lukittu sivuun.

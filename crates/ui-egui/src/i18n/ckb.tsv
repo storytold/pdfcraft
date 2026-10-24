@@ -2713,3 +2713,13 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	Lock your signature into the page?	واژووەکەت لە لاپەڕەکەدا جێگیر بکرێت؟
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	واژوویەکی دانراو تا جێگیر نەکرێت لێدوانێکە: هەر کەسێک دەستکاریکەرێکی PDFی هەبێت دەتوانێت بیجووڵێنێت یان لایبەرێت. جێگیرکردن دەقەکان، نیشانەکان و واژووەکانی پڕکردنەوە و واژووکردن دەکاتە بەشێک لە لاپەڕەکە.
+	Lock and save	جێگیرکردن و پاشەکەوتکردن
+	Keep editable	با دەستکاریکراو بمێنێتەوە
+	Don't ask again	دووبارە مەپرسە
+	Lock into the page when saving	لە کاتی پاشەکەوتکردندا لە لاپەڕەکەدا جێگیر بکە
+	Otherwise, ask on the first save after a signature is placed	ئەگەر نا، لە یەکەم پاشەکەوتکردن دوای دانانی واژوویەک بپرسە
+	Signature added. Others can move it until it's locked.	واژوو زیادکرا. کەسانی تر دەتوانن بیجووڵێنن تا جێگیر دەکرێت.
+	Lock now	ئێستا جێگیر بکە
+	Signature locked into the page.	واژوو لە لاپەڕەکەدا جێگیرکرا.

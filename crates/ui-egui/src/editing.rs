@@ -29,6 +29,14 @@ pub struct PendingOverwrite {
     after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
 }
 
+/// A save held back by [`Dialog::LockSignatures`](crate::Dialog::LockSignatures) (#2149).
+pub struct PendingLock {
+    pub id: pdfcraft_engine::DocId,
+    target: SaveTarget,
+    /// What was to run once the document is written (close its tab, quit).
+    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+}
+
 /// Where Save writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveTarget {
@@ -281,6 +289,11 @@ impl PdfCraftApp {
                 }
             }
             Some(crate::canvas::ViewAction::CameraLevel) => self.camera_level(i),
+            Some(crate::canvas::ViewAction::LockSignatures) => {
+                if let Some(id) = self.views.get(i).map(|v| v.id) {
+                    self.lock_signatures_now(id);
+                }
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);
@@ -473,12 +486,22 @@ impl PdfCraftApp {
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
+        let doc_id = self.views.get(i).map(|v| v.id);
         let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
         let typed = match (&edit, &committed) {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
         if self.apply_edit(edit) {
+            if signature_page.is_some()
+                && let Some(id) = doc_id
+            {
+                self.placed_signatures.insert(id);
+                // A new signature shows the Lock now notice again, even if the last was dismissed.
+                if let Some(view) = self.views.get_mut(i) {
+                    view.lock_offer_dismissed = false;
+                }
+            }
             // Tab can wrap to the same field (including another widget of that field).
             // Its new editor was opened before this edit ran, so it still holds the old
             // value. Refresh from the accepted form before Save can commit that stale draft.
@@ -633,6 +656,17 @@ impl PdfCraftApp {
             return false;
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        // A signature just placed with Fill & Sign is a removable comment unless it is flattened:
+        // ask once whether to lock it into the page (#2149). Only while a Fill & Sign mark is still
+        // there (undo may have taken it away), and never on a digitally signed document: locking
+        // changes page content in an update, which validators report as a change after signing.
+        let still_marked = self.session.get(id).is_some_and(|d| d.info.annotations.iter().any(|a| a.fill_sign));
+        let signed = self.session.get(id).is_some_and(|d| d.is_signed());
+        if self.ask_to_lock_signatures && !self.flatten_fill_sign_on_save && self.placed_signatures.contains(&id) && still_marked && !signed {
+            self.pending_lock = Some(PendingLock { id, target, after: Box::new(after) });
+            self.dialog = Some(crate::Dialog::LockSignatures);
+            return false;
+        }
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -678,7 +712,10 @@ impl PdfCraftApp {
             };
             match delivered {
                 Ok(()) => {
-                    let _ = self.session.mark_saved(id, bytes, None);
+                    // As the native save does: what was saved isn't asked about again (#2149).
+                    if self.session.mark_saved(id, bytes, None).is_ok() {
+                        self.placed_signatures.remove(&id);
+                    }
                     if let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.get_mut(index)
                     {
@@ -741,6 +778,60 @@ impl PdfCraftApp {
         }
     }
 
+    /// The Lock signatures dialog answered (#2149): lock the document's Fill & Sign marks into
+    /// its pages first when `lock`, then save as was asked. With `remember`, the answer becomes
+    /// the preference (flatten on every save, or never ask again). Nothing changes when locking
+    /// fails: the document still counts as holding a placed signature, so the next save asks
+    /// again, and the answer isn't remembered.
+    pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
+        let Some(p) = self.pending_lock.take() else { return };
+        if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(p.id) {
+            return;
+        }
+        self.placed_signatures.remove(&p.id);
+        if remember {
+            if lock {
+                self.flatten_fill_sign_on_save = true;
+            } else {
+                self.ask_to_lock_signatures = false;
+            }
+        }
+        if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
+            self.save_then(index, p.target, p.after);
+        }
+    }
+
+    /// Lock now, on the notice shown after a signature is placed (#2149): lock document `id`'s
+    /// Fill & Sign marks into its pages, as the save-time question's Lock does but without
+    /// saving. Undoable. The next save doesn't ask, as no Fill & Sign mark is left to lock; the
+    /// placed-signature mark itself stays, so undoing the lock brings back both the notice and the
+    /// save-time question. Never on a digitally signed document.
+    pub(crate) fn lock_signatures_now(&mut self, id: pdfcraft_engine::DocId) {
+        if self.session.get(id).is_none_or(|d| d.is_signed()) {
+            return;
+        }
+        if self.flatten_fill_sign_in(id) {
+            self.notify_tr("Signature locked into the page.");
+        }
+    }
+
+    /// Lock document `id`'s Fill & Sign marks into its pages (an undoable edit). Returns false,
+    /// having told the user why, when that fails.
+    fn flatten_fill_sign_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        if let Err(e) = self.session.apply(id, Edit::FlattenFillSign) {
+            self.notify_error(e);
+            return false;
+        }
+        if before != self.session.get(id).map(|d| d.edit_generation())
+            && let Some(doc) = self.session.get(id)
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&doc.info);
+        }
+        true
+    }
+
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget) -> bool {
@@ -779,6 +870,7 @@ impl PdfCraftApp {
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
+                self.placed_signatures.remove(&id);
                 if let Some(doc) = self.session.get(id)
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
                 {

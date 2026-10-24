@@ -574,6 +574,9 @@ pub struct DocView {
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
+    /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
+    /// again (#2149).
+    pub(crate) lock_offer_dismissed: bool,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
@@ -683,6 +686,8 @@ pub enum ViewAction {
     CameraLevel,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
+    /// Lock now, on the notice shown after a signature is placed (#2149).
+    LockSignatures,
 }
 
 impl DocView {
@@ -851,6 +856,7 @@ impl DocView {
             marquee_done: None,
             fill_text: None,
             fill_signature_page: None,
+            lock_offer_dismissed: false,
             signature_drag: Default::default(),
         }
     }
@@ -2658,11 +2664,17 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
+    // Offer to lock a just-placed signature (#2149) on the same terms the save-time question
+    // asks: one is still there, saving doesn't lock it anyway, and the document isn't signed.
+    let lock_offer = !app.flatten_fill_sign_on_save
+        && app.placed_signatures.contains(&app.views[index].id)
+        && doc.info.annotations.iter().any(|a| a.fill_sign)
+        && !doc.is_signed();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
+    match notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui, &t) {
         #[cfg(not(target_arch = "wasm32"))]
         Some(Notice::Reload) => app.watch.reload_request = Some(view.id),
         #[cfg(target_arch = "wasm32")]
@@ -2680,6 +2692,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
+        // Handled by the app with the other view actions, where no document borrow is held.
+        Some(Notice::LockSignatures) => view.pending_action = Some(ViewAction::LockSignatures),
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
@@ -4755,16 +4769,20 @@ enum Notice {
     Unlock,
     /// Close this historical snapshot tab (View signed version / View revision).
     Close,
+    /// Lock the placed signatures into the page (#2149).
+    LockSignatures,
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
-/// snapshot is, then the signature status bar, a form's scripts having been turned
+/// snapshot is, then the offer to lock a signature just placed, then the signature status bar, a form's scripts having been turned
 /// off, security, forms and warnings.
+#[allow(clippy::too_many_arguments)]
 fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
+    lock_offer: bool,
     signed: Option<(&str, Color32, &str, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -4816,6 +4834,22 @@ fn notices(
         });
         if close {
             return Some(Notice::Close);
+        }
+    }
+    // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
+    // lock it into the page now. `lock_offer` is false for a digitally signed document.
+    if lock_offer && !view.lock_offer_dismissed {
+        let mut lock = false;
+        notice_bar(ui, t, "lock", t.accent_text, tl!("Signature added. Others can move it until it's locked.").to_string(), |ui| {
+            if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                view.lock_offer_dismissed = true;
+            }
+            if crate::widgets::pill_button(ui, tl!("Lock now"), true).clicked() {
+                lock = true;
+            }
+        });
+        if lock {
+            return Some(Notice::LockSignatures);
         }
     }
     if let Some((icon, color, template, arg)) = signed {

@@ -67,6 +67,17 @@
 	Side panels	Seitenleisten
 	Enable Acrobat JavaScript	Acrobat-JavaScript aktivieren
 	Flatten Fill & Sign when saving	Ausfüllen und unterschreiben beim Speichern reduzieren
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Unterschrift fest in die Seite übernehmen?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Eine platzierte Unterschrift ist ein Kommentar, bis sie fest übernommen wird: Jeder mit einem PDF-Editor kann sie verschieben oder entfernen. Beim Übernehmen werden Text, Markierungen und Unterschriften aus „Ausfüllen und unterschreiben“ Teil der Seite.
+	Don't ask again	Nicht mehr fragen
+	Lock and save	Übernehmen und speichern
+	Keep editable	Bearbeitbar lassen
+	Lock into the page when saving	Beim Speichern fest in die Seite übernehmen
+	Otherwise, ask on the first save after a signature is placed	Andernfalls beim ersten Speichern nach dem Platzieren einer Unterschrift fragen
+	Signature added. Others can move it until it's locked.	Unterschrift hinzugefügt. Andere können sie verschieben, bis sie fest übernommen ist.
+	Lock now	Jetzt übernehmen
+	Signature locked into the page.	Unterschrift fest in die Seite übernommen.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Text, Markierungen und Unterschriften werden Teil der Seite. Andere Kommentare bleiben bearbeitbar.
 	OK	OK
 	Join our Discord	Unserem Discord beitreten

@@ -2465,3 +2465,15 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	將簽名鎖定到頁面中？
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	放置的簽名在鎖定前只是註解：任何有 PDF 編輯器的人都能移動或移除它。鎖定後，「填寫與簽署」的文字、標記與簽名會成為頁面的一部分。
+	Don't ask again	不再詢問
+	Lock and save	鎖定並儲存
+	Keep editable	保持可編輯
+	Lock into the page when saving	儲存時鎖定到頁面
+	Otherwise, ask on the first save after a signature is placed	否則，在放置簽名後第一次儲存時詢問
+	Signature added. Others can move it until it's locked.	已加入簽名。鎖定之前，其他人可以移動它。
+	Lock now	立即鎖定
+	Signature locked into the page.	簽名已鎖定到頁面。

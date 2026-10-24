@@ -2780,3 +2780,16 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+
+
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Chữ ký đã đặt chỉ là một bình luận cho đến khi được khóa: bất kỳ ai có trình chỉnh sửa PDF đều có thể di chuyển hoặc xóa nó. Khóa sẽ biến văn bản, dấu và chữ ký Điền & Ký của bạn thành một phần của trang.
+	Don't ask again	Không hỏi lại
+	Keep editable	Giữ để chỉnh sửa được
+	Lock and save	Khóa và lưu
+	Lock into the page when saving	Khóa vào trang khi lưu
+	Lock your signature into the page?	Khóa chữ ký của bạn vào trang?
+	Otherwise, ask on the first save after a signature is placed	Nếu không, hỏi ở lần lưu đầu tiên sau khi đặt chữ ký
+	Signature added. Others can move it until it's locked.	Đã thêm chữ ký. Người khác có thể di chuyển nó cho đến khi được khóa.
+	Lock now	Khóa ngay
+	Signature locked into the page.	Đã khóa chữ ký vào trang.

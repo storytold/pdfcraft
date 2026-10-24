@@ -2239,6 +2239,17 @@
 @plural	{n} page|{n} pages	{n} ページ
 signature pad	Type	入力
 	Flatten Fill & Sign when saving	保存時に入力と署名を統合する
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	署名をページに固定しますか？
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	配置した署名は固定するまで注釈です。PDF エディターを持つ人なら誰でも移動や削除ができます。固定すると、入力と署名のテキスト、マーク、署名がページの一部になります。
+	Don't ask again	今後は確認しない
+	Lock and save	固定して保存
+	Keep editable	編集可能のままにする
+	Lock into the page when saving	保存時にページに固定
+	Otherwise, ask on the first save after a signature is placed	それ以外は、署名を配置した後の最初の保存時に確認する
+	Signature added. Others can move it until it's locked.	署名を追加しました。固定するまでは他の人が移動できます。
+	Lock now	今すぐ固定
+	Signature locked into the page.	署名をページに固定しました。
 	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。
 	Scroll tabs left	タブを左にスクロール
 	Scroll tabs right	タブを右にスクロール

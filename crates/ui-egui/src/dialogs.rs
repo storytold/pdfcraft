@@ -73,6 +73,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut revert_now = false;
     let mut overwrite_now = false;
     let mut overwrite_elsewhere = false;
+    let mut lock_answer: Option<bool> = None;
     let mut summarize_now = false;
     let mut optimize_now = false;
     let mut duplicate_now: Option<Edit> = None;
@@ -797,6 +798,28 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::LockSignatures => {
+                ui.label(egui::RichText::new(tl!("Lock your signature into the page?")).font(theme::semibold(18.0)));
+                ui.add_space(8.0);
+                ui.label(tl!("A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page."));
+                ui.add_space(8.0);
+                ui.add(widgets::checkbox(&mut app.lock_remember, tl!("Don't ask again")));
+                ui.add_space(12.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::pill_button(ui, tl!("Lock and save"), true).clicked() {
+                        lock_answer = Some(true);
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Keep editable"), false).clicked() {
+                        lock_answer = Some(false);
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                });
+                return;
+            }
             Dialog::Revert => {
                 let name = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.name.clone()).unwrap_or_default();
                 ui.label(egui::RichText::new(tl!("Revert")).font(theme::semibold(18.0)));
@@ -1291,6 +1314,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if dialog == Dialog::OverwriteChanged && (modal.should_close() || close) {
         app.pending_overwrite = None;
     }
+    if let Some(lock) = lock_answer {
+        let remember = std::mem::take(&mut app.lock_remember);
+        app.answer_lock_signatures(lock, remember);
+    } else if dialog == Dialog::LockSignatures && (modal.should_close() || close) {
+        // Cancelled or dismissed: nothing is saved.
+        app.pending_lock = None;
+        app.lock_remember = false;
+    }
     if summarize_now {
         app.summarize_comments();
     }
@@ -1422,7 +1453,11 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Protect / Remove security replace the Properties dialog.
     let replaces = link_command.is_some_and(|c| c.starts_with("protect.")) || open_revision.is_some();
     if modal.should_close() || close || replaces {
-        app.dialog = None;
+        // An answer may have opened another dialog this frame (saving a file that changed on
+        // disk asks about that): it stays.
+        if app.dialog == Some(dialog) {
+            app.dialog = None;
+        }
         app.props_draft = None;
         app.view_draft = None;
         app.bulk_field_props = None;

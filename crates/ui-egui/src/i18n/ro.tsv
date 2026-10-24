@@ -2774,3 +2774,13 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Lock your signature into the page?	Blocați semnătura în pagină?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	O semnătură plasată este un comentariu până când este blocată: oricine are un editor PDF o poate muta sau elimina. Blocarea face ca textul, marcajele și semnăturile din Completare și semnare să devină parte a paginii.
+	Lock and save	Blocare și salvare
+	Keep editable	Păstrare editabilă
+	Don't ask again	Nu mai întreba
+	Lock into the page when saving	Blocare în pagină la salvare
+	Otherwise, ask on the first save after a signature is placed	Altfel, întreabă la prima salvare după plasarea unei semnături
+	Signature added. Others can move it until it's locked.	Semnătură adăugată. Alții o pot muta până când este blocată.
+	Lock now	Blocare acum
+	Signature locked into the page.	Semnătura a fost blocată în pagină.

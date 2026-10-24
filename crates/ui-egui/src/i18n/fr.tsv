@@ -67,6 +67,17 @@
 	Side panels	Panneaux latéraux
 	Enable Acrobat JavaScript	Activer Acrobat JavaScript
 	Flatten Fill & Sign when saving	Aplatir Remplir et signer à l'enregistrement
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Intégrer votre signature à la page ?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Une signature placée reste un commentaire tant qu’elle n’est pas intégrée : n’importe qui avec un éditeur PDF peut la déplacer ou la supprimer. L’intégration rend le texte, les marques et les signatures de Remplir et signer partie de la page.
+	Don't ask again	Ne plus demander
+	Lock and save	Intégrer et enregistrer
+	Keep editable	Garder modifiable
+	Lock into the page when saving	Intégrer à la page à l’enregistrement
+	Otherwise, ask on the first save after a signature is placed	Sinon, demander au premier enregistrement après avoir placé une signature
+	Signature added. Others can move it until it's locked.	Signature ajoutée. D’autres peuvent la déplacer tant qu’elle n’est pas intégrée.
+	Lock now	Intégrer maintenant
+	Signature locked into the page.	Signature intégrée à la page.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Le texte, les marques et les signatures deviennent partie de la page. Les autres commentaires restent modifiables.
 	OK	OK
 	Join our Discord	Rejoindre notre Discord

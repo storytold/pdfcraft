@@ -2177,6 +2177,17 @@ action wizard	Start	Iniciar
 	First	Primeiro
 	First commit	Primeiro commit
 	Flatten Fill & Sign when saving	Nivelar Preencher e assinar ao salvar
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Fixar sua assinatura na página?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Uma assinatura colocada é um comentário até ser fixada: qualquer pessoa com um editor de PDF pode movê-la ou removê-la. Fixar torna o texto, as marcas e as assinaturas de Preencher e assinar parte da página.
+	Don't ask again	Não perguntar novamente
+	Lock and save	Fixar e salvar
+	Keep editable	Manter editável
+	Lock into the page when saving	Fixar na página ao salvar
+	Otherwise, ask on the first save after a signature is placed	Caso contrário, perguntar ao salvar pela primeira vez após colocar uma assinatura
+	Signature added. Others can move it until it's locked.	Assinatura adicionada. Outras pessoas podem movê-la até que seja fixada.
+	Lock now	Fixar agora
+	Signature locked into the page.	Assinatura fixada na página.
 	H / Space (hold)	H / Espaço (manter pressionado)
 	Home / End	Home / End
 	Inserted text	Texto inserido

@@ -90,6 +90,17 @@
 	Side panels	Paneles laterales
 	Enable Acrobat JavaScript	Activar Acrobat JavaScript
 	Flatten Fill & Sign when saving	Acoplar Rellenar y firmar al guardar
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	¿Fijar su firma en la página?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Una firma colocada es un comentario hasta que se fija: cualquiera con un editor de PDF puede moverla o quitarla. Al fijarla, el texto, las marcas y las firmas de Rellenar y firmar pasan a formar parte de la página.
+	Don't ask again	No volver a preguntar
+	Lock and save	Fijar y guardar
+	Keep editable	Mantener editable
+	Lock into the page when saving	Fijar en la página al guardar
+	Otherwise, ask on the first save after a signature is placed	Si no, preguntar al guardar por primera vez tras colocar una firma
+	Signature added. Others can move it until it's locked.	Firma añadida. Otros pueden moverla hasta que se fije.
+	Lock now	Fijar ahora
+	Signature locked into the page.	Firma fijada en la página.
 	Text, marks and signatures become part of the page. Other comments stay editable.	El texto, las marcas y las firmas pasan a formar parte de la página. Los demás comentarios siguen siendo editables.
 	OK	Aceptar
 	Join our Discord	Únete a nuestro Discord
