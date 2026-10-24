@@ -1933,3 +1933,52 @@ fn annots_of(doc: &Document) -> Vec<Dict> {
         .filter(|d| d.get(b"Subtype") != Some(&Object::name("Widget")))
         .collect()
 }
+
+/// An FDF comment's pop-up is an annotation of its own (`/Popup` → a `/Subtype /Popup` object
+/// with `/Parent`). The import copied the pop-up's dictionary into the comment as a direct value,
+/// which ISO 32000-2 Table 172 says shall be an indirect reference to an annotation on the page.
+/// The import now places a pop-up of its own, as the XFDF import does, keeping its place and
+/// open state.
+#[test]
+fn an_fdf_comment_popup_is_not_copied_in_as_a_direct_dictionary() {
+    let fdf = fdf_with(
+        "/Annots [2 0 R 3 0 R]",
+        &[
+            "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (n) /Page 0 /Contents (note) /Popup 3 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Popup /Rect [40 10 140 60] /Parent 2 0 R /Page 0 /Open true >>".into(),
+        ],
+    );
+    let mut dst = blank();
+    assert_eq!(import(&mut dst, &fdf).unwrap().comments, 1);
+    let note = find_by_name(&dst, "n").unwrap();
+    let popup = dst.get(note).as_dict().unwrap().get(b"Popup").cloned();
+    let page = pdfcraft_model::pages(&dst)[0].dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
+    let pr = popup.as_ref().and_then(Object::as_ref).filter(|r| page.contains(&Object::Ref(*r)));
+    let pr = pr.unwrap_or_else(|| panic!("/Popup must be a reference to an annotation on the page: {popup:?}"));
+    let pd = dst.get(pr).as_dict().cloned().unwrap();
+    assert_eq!(pd.name(b"Subtype"), Some(b"Popup".as_slice()));
+    assert_eq!(pd.get(b"Parent"), Some(&Object::Ref(note)));
+    assert_eq!(pd.get(b"Open"), Some(&Object::Bool(true)));
+    let rect: Vec<f64> = pd.get(b"Rect").and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+    assert_eq!(rect, [40.0, 10.0, 140.0, 60.0]);
+}
+
+/// A pop-up without a usable `/Rect` cannot be placed: the comment still imports, with no
+/// `/Popup` at all (neither the FDF's dictionary copied in nor a pop-up on the page).
+#[test]
+fn an_fdf_comment_popup_without_a_rect_is_dropped() {
+    let fdf = fdf_with(
+        "/Annots [2 0 R 3 0 R]",
+        &[
+            "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (n) /Page 0 /Contents (note) /Popup 3 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Popup /Parent 2 0 R /Page 0 /Open true >>".into(),
+        ],
+    );
+    let mut dst = blank();
+    assert_eq!(import(&mut dst, &fdf).unwrap().comments, 1);
+    let note = find_by_name(&dst, "n").unwrap();
+    assert!(dst.get(note).as_dict().unwrap().get(b"Popup").is_none());
+    let page = pdfcraft_model::pages(&dst)[0].dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
+    let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
+    assert_eq!(popups, 0);
+}
