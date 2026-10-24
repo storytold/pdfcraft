@@ -3107,9 +3107,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
         (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
-    // Within a point, as above.
+    // Within a point, as above: at an edge of the scrolled content, or of the current page or
+    // spread shown whole that way (in continuous view the content is as wide as the widest page,
+    // and a narrower current page shows whole inside it).
     let max_x = (out.content_size.x - out.inner_rect.width()).max(0.0);
-    view.side_edges = Some((out.state.clamped_offset().x <= 1.0, out.state.clamped_offset().x >= max_x - 1.0));
+    let row = shown_row(view).iter().filter_map(|&p| view.page_xform(p)).map(|xf| xf.rect).reduce(Rect::union);
+    let inner = out.inner_rect;
+    view.side_edges = Some((
+        out.state.clamped_offset().x <= 1.0 || row.is_some_and(|r| r.left() >= inner.left() - 1.0),
+        out.state.clamped_offset().x >= max_x - 1.0 || row.is_some_and(|r| r.right() <= inner.right() + 1.0),
+    ));
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);

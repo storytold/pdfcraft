@@ -1521,6 +1521,39 @@ fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
     assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 3);
 }
 
+/// Continuous view with pages of different widths: the content is as wide as the widest page, but
+/// on a narrow page that shows whole → turns the page; on the wide one it scrolls first.
+#[test]
+fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
+    use egui::Key;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("mixed.pdf", None, sized_fixture(&[(200, 1200), (3000, 1200), (200, 1200)])).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().active = Some(0);
+    assert!(h.state().views[0].continuous);
+    // Each page taller than the window, so one is the current page.
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(6);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.key_press(Key::ArrowRight);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(1).map(|r| r.left()))
+    };
+    assert_eq!(h.state().views[0].current, 0);
+    let (page, start) = press(&mut h);
+    assert_eq!(page, 1, "→ on the narrow page shown whole turns it");
+    let (page, left) = press(&mut h);
+    assert_eq!(page, 1, "→ on the wide page scrolls it");
+    assert!(left.zip(start).is_some_and(|(l, s)| l < s - 10.0), "the wide page moved left: {left:?} from {start:?}");
+}
+
 #[test]
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
