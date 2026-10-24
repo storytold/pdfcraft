@@ -1724,6 +1724,7 @@ theme	Appearance	Giao diện
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo của chữ ký RSA không có tham số NULL (các trình ký cũ ghi như vậy); nó vẫn được đọc.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Chứng chỉ của {} không cho phép có nhiều chứng chỉ CA ở dưới nó như vậy (độ dài đường dẫn), nên nó không được dùng để bảo chứng cho {}.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Chứng chỉ của {} không phải là chứng chỉ CA được phép cấp chứng chỉ, nên nó không được dùng để bảo chứng cho {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Chứng chỉ của {} có các phần mở rộng quan trọng mà PdfCraft không nhận ra, nên nó không được dùng để bảo chứng cho {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Chứng chỉ của {} không hợp lệ tại thời điểm ký, nên nó không được dùng để bảo chứng cho {}.
 	The checker found problems which may prevent the document from being fully accessible.	Trình kiểm tra tìm thấy các vấn đề có thể khiến tài liệu không thể tiếp cận đầy đủ.
 	The document has been altered or corrupted since the signature was applied.	Tài liệu đã bị thay đổi hoặc hỏng kể từ khi chữ ký được áp dụng.
@@ -1772,6 +1773,7 @@ theme	Appearance	Giao diện
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Danh tính của người ký không rõ vì nó chưa được đưa vào danh sách chứng chỉ tin cậy của bạn và không chứng chỉ cấp trên nào của nó là chứng chỉ tin cậy.
 	The signer's identity is valid.	Danh tính của người ký hợp lệ.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Chứng chỉ của cơ quan cấp dấu thời gian không hợp lệ tại thời điểm đóng dấu thời gian.
+	The timestamp authority's certificate is not issued for time stamping.	Chứng chỉ của cơ quan cấp dấu thời gian không được cấp cho mục đích đóng dấu thời gian.
 	The timestamp contents are not hexadecimal.	Nội dung dấu thời gian không phải là thập lục phân.
 	The timestamp has no valid byte range.	Dấu thời gian không có dải byte hợp lệ.
 	The timestamp token could not be read ({}).	Không thể đọc mã thông báo dấu thời gian ({}).

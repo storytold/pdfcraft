@@ -494,9 +494,48 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_style_of(egui::Theme::Dark, style);
 }
 
+/// WCAG 2 contrast ratio between two opaque colours.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let lin = |v: u8| {
+            let s = v as f32 / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    };
+    let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
+    x.max(y) / x.min(y)
+}
+
+/// `color` as text on `background`: itself when it reads (a WCAG 2 contrast of at least 3:1, the
+/// level for large or bold text), otherwise moved towards `text` until it does. A document's own
+/// colours (a bookmark's `/C`) were chosen for a white panel, and dark blue on a dark theme would
+/// be lost.
+pub fn readable(color: Color32, background: Color32, text: Color32) -> Color32 {
+    (0..=4).map(|step| color.lerp_to_gamma(text, step as f32 / 4.0)).find(|c| contrast(*c, background) >= 3.0).unwrap_or(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3193: a bookmark's own colour is kept where it reads on the panel, and moved towards the
+    /// theme's text colour where it doesn't (dark blue on the dark panel), never past it.
+    #[test]
+    fn a_document_colour_is_kept_where_it_reads() {
+        let (light, dark) = (Tokens::for_kind(ThemeKind::Light), Tokens::for_kind(ThemeKind::Dark));
+        let red = Color32::from_rgb(255, 0, 0);
+        assert_eq!(readable(red, light.panel, light.text), red, "red reads on white");
+        let navy = Color32::from_rgb(0, 0, 128);
+        assert_eq!(readable(navy, light.panel, light.text), navy);
+        let lifted = readable(navy, dark.panel, dark.text);
+        assert_ne!(lifted, navy, "navy is lost on the dark panel");
+        assert!(contrast(lifted, dark.panel) >= 3.0, "{lifted:?}");
+        assert_ne!(lifted, dark.text, "only as far as it needs");
+        // Even the panel's own colour comes out readable.
+        assert!(contrast(readable(dark.panel, dark.panel, dark.text), dark.panel) >= 3.0);
+        assert!(contrast(readable(light.panel, light.panel, light.text), light.panel) >= 3.0);
+    }
     use egui::epaint::text::{Fonts, TextOptions};
 
     const HINTING_CORPUS: [&str; 4] = ["Il1MWmw", "Hamburgefonts", "0123456789 .,;:!?()[]{}+-=/\\", "Café Ångström déjà-vu Ωμέγα Ελληνικά Журнал"];
@@ -728,19 +767,6 @@ mod tests {
         assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Dark), ThemeKind::Dark);
         assert_eq!(ThemePreference::Light.resolve(Some(true), ThemeKind::Dark), ThemeKind::Light);
         assert_eq!(ThemePreference::Dark.resolve(Some(false), ThemeKind::Light), ThemeKind::Dark);
-    }
-
-    /// WCAG 2 contrast ratio between two opaque colours.
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let lum = |c: Color32| {
-            let lin = |v: u8| {
-                let s = v as f32 / 255.0;
-                if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
-            };
-            0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
-        };
-        let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
-        x.max(y) / x.min(y)
     }
 
     #[test]

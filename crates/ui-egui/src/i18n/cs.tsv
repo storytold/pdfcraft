@@ -2615,6 +2615,7 @@ animation effects	Off	Vypnuto
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo podpisu RSA nemá parametr NULL (starší podepisovací programy jej tak zapisují); přesto byl načten.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Certifikát {} nepovoluje pod sebou tolik certifikátů CA (délka cesty), proto se nepoužije k ručení za {}.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Certifikát {} není certifikát CA, který smí vydávat certifikáty, proto se nepoužije k ručení za {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Certifikát {} má kritická rozšíření, která PdfCraft nezná, proto se nepoužije k ručení za {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certifikát {} nebyl v době podpisu platný, proto se nepoužije k ručení za {}.
 	The checker found problems which may prevent the document from being fully accessible.	Kontrola našla problémy, které mohou bránit plné přístupnosti dokumentu.
 	The document has been altered or corrupted since the signature was applied.	Dokument byl od připojení podpisu změněn nebo poškozen.
@@ -2657,6 +2658,7 @@ animation effects	Off	Vypnuto
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identita podepisující osoby je neznámá, protože není ve vašem seznamu důvěryhodných certifikátů a žádný z jejích nadřazených certifikátů není důvěryhodný.
 	The signer's identity is valid.	Identita podepisující osoby je platná.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Certifikát autority časových razítek nebyl v době vystavení razítka platný.
+	The timestamp authority's certificate is not issued for time stamping.	Certifikát autority časových razítek není vystaven pro vydávání časových razítek.
 	The timestamp contents are not hexadecimal.	Obsah časového razítka není šestnáctkový.
 	The timestamp has no valid byte range.	Časové razítko nemá platný rozsah bajtů.
 	The timestamp token could not be read ({}).	Časové razítko nebylo možné načíst ({}).

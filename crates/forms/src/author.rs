@@ -980,7 +980,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     {
         return invalid("alignment is 0 (left), 1 (centre) or 2 (right)");
     }
-    if props.options.as_ref().is_some_and(|o| o.is_empty()) && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
+    if props.options.as_ref().is_some_and(Vec::is_empty) && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
         return invalid("a list needs at least one option");
     }
     if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
@@ -1239,8 +1239,17 @@ fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &st
 
 /// Delete a field: its widgets leave their pages and the field leaves the form.
 pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
-    let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    delete_found_field(doc, f)
+}
+
+/// [`delete_field`] for the field object `obj`, when separate fields share one name.
+pub fn delete_field_object(doc: &mut Document, obj: ObjRef) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.obj == obj).ok_or_else(|| FormError::NoSuchField(format!("{obj:?}")))?;
+    delete_found_field(doc, f)
+}
+
+fn delete_found_field(doc: &mut Document, f: Field) -> Result<(), FormError> {
     let widgets: std::collections::HashSet<ObjRef> = f.widgets.iter().map(|w| w.obj).collect();
     for p in page_refs(doc) {
         let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
@@ -1278,6 +1287,31 @@ pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
                 }
                 _ => {}
             }
+        }
+    }
+    // Out of the calculation order too: a `/CO` entry would keep the field, its value and its
+    // widgets reachable for a full save.
+    drop_from_calculation_order(doc, |r| r == f.obj || widgets.contains(&r))
+}
+
+/// Remove the `/CO` entries `gone` matches, whether the form and the array are held directly or
+/// by reference.
+fn drop_from_calculation_order(doc: &mut Document, gone: impl Fn(ObjRef) -> bool) -> Result<(), FormError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    let Some(af_obj) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
+    let Some(mut af) = doc.resolve(&af_obj).as_dict().cloned() else { return Ok(()) };
+    let Some(co_obj) = af.get(b"CO").cloned() else { return Ok(()) };
+    let co = doc.resolve(&co_obj).as_array().cloned().unwrap_or_default();
+    let kept: Vec<Object> = co.iter().filter(|o| !o.as_ref().is_some_and(&gone)).cloned().collect();
+    if kept.len() == co.len() {
+        return Ok(());
+    }
+    match (co_obj.as_ref(), af_obj.as_ref()) {
+        (Some(r), _) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(kept)),
+        (_, Some(af_ref)) => doc.update_dict(af_ref, |d| d.set(b"CO".to_vec(), Object::Array(kept)))?,
+        (_, None) => {
+            af.set(b"CO".to_vec(), Object::Array(kept));
+            doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af)))?;
         }
     }
     Ok(())

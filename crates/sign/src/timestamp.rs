@@ -62,6 +62,8 @@ pub struct TimestampToken {
     pub policy: String,
     pub serial: Vec<u8>,
     pub gen_time: Time,
+    /// The TSTInfo nonce, when it has one that fits a `u64` (the size requests use).
+    pub nonce: Option<u64>,
 }
 
 impl TimestampToken {
@@ -140,6 +142,9 @@ pub fn parse_token(raw: &[u8]) -> Result<TimestampToken, SignError> {
         .to_vec();
     let serial = fields.get(3).ok_or_else(|| bad("TSTInfo has no serial number"))?.uint_bytes().to_vec();
     let gen_time = fields.get(4).ok_or_else(|| bad("TSTInfo has no generation time"))?.time()?;
+    // The nonce is the only INTEGER after genTime (RFC 3161 §2.4.2): accuracy is a SEQUENCE and
+    // ordering a BOOLEAN.
+    let nonce = fields.iter().skip(5).find(|f| f.tag == tag::INTEGER).and_then(|f| f.u64().ok());
     // The signed messageDigest uses the SignerInfo's digest algorithm, which need not be the
     // imprint's (RFC 5652 §5.4).
     let content_digest = token.signer.digest.digest(&[info]);
@@ -151,7 +156,7 @@ pub fn parse_token(raw: &[u8]) -> Result<TimestampToken, SignError> {
     if !token.verify_signature(cert, &content_digest)? {
         return Err(bad("TSA signature is invalid"));
     }
-    Ok(TimestampToken { raw: raw.to_vec(), digest, imprint, policy, serial, gen_time })
+    Ok(TimestampToken { raw: raw.to_vec(), digest, imprint, policy, serial, gen_time, nonce })
 }
 
 /// Parse and validate a `TimeStampResp`, including the CMS signature and message imprint.
@@ -169,6 +174,12 @@ pub fn parse_response(bytes: &[u8], query: &TimestampQuery) -> Result<TimestampT
     let token = parse_token(token.raw)?;
     if token.digest != query.digest || token.imprint != query.imprint {
         return Err(bad("message imprint does not match the requested digest"));
+    }
+    if query.nonce.is_some() && token.nonce != query.nonce {
+        return Err(bad("time-stamp token does not carry the requested nonce"));
+    }
+    if query.policy.as_ref().is_some_and(|p| *p != token.policy) {
+        return Err(bad("time-stamp token was issued under another policy than the one requested"));
     }
     Ok(token)
 }

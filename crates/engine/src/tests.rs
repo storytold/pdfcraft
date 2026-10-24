@@ -373,6 +373,31 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
     }
 }
 
+/// A visible digital signature reads upright as the page is displayed on every page rotation:
+/// its picture, alone in the box, shows its quadrants where they are in the image.
+#[test]
+fn visible_signatures_keep_displayed_orientation_on_rotated_pages() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let picture = image::load_from_memory(&quadrant_png()).unwrap().to_rgba8();
+    let graphic = sign::Graphic::Image { width: picture.width(), height: picture.height(), rgba: Arc::new(picture.into_raw()) };
+    let bare = sign::Appearance { name: false, date: false, reason: false, location: false, distinguished_name: false, labels: false };
+    for degrees in [0, 90, 180, 270] {
+        // After the test certificate's start date (2026-10-02).
+        let mut session = Session::new().with_clock(|| 1_800_000_000);
+        let blank = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open_new("contract.pdf", blank).unwrap();
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        // The picture's proportions (2:1) as displayed, centred at (100, 100).
+        let rect = displayed_rect(&info, 100.0, 100.0, 80.0, 40.0);
+        let opts = SignOptions { page: 0, rect: Some(rect), graphic: Some(graphic.clone()), appearance: bare.clone(), ..SignOptions::default() };
+        let signed = session.sign(id, &digital_id, opts).unwrap();
+        let reopened = session.open("signed.pdf", None, signed, None).unwrap();
+        assert_upright_quadrants(&session, reopened, degrees);
+    }
+}
+
 /// #1398: a PDF page used as a stamp stays upright, at its natural size and in an explicit box.
 #[test]
 fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
@@ -403,6 +428,48 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
         assert!(left[0] > 200 && left[1] < 40, "rotation {degrees}, natural {natural}: left {left:?} should be red");
         assert!(right.iter().all(|c| *c > 240), "rotation {degrees}, natural {natural}: right {right:?} should be paper");
     }
+}
+
+/// #4077: a PDF page stamped into a box of another shape is fitted inside it, keeping its shape
+/// and centred, and stays vector: a form XObject, not a picture of it.
+#[test]
+fn pdf_page_stamps_fit_inside_an_explicit_box() {
+    let bytes = Arc::new(half_red_page());
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("text.pdf", blank).unwrap();
+    // 483 pt wide (a text column) and 300 pt tall: the 80 × 40 page is 483 × 241.5, centred.
+    let stamp = |rect| Edit::AddCustomStamp {
+        page: 0,
+        rect,
+        name: "Diagram".into(),
+        file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
+        author: "Test".into(),
+    };
+    session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
+    // A box too tall and narrow: the width limits it, and it is centred vertically.
+    session.apply(id, stamp([100.0, 100.0, 140.0, 300.0])).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[1].rect, [100.0, 190.0, 140.0, 210.0]);
+
+    let doc = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap());
+    let first = annots.as_array().unwrap()[0].as_ref().unwrap();
+    let annot = doc.get(first);
+    let annot = annot.as_dict().unwrap();
+    let pdfcraft_cos::Object::Stream(picture) = doc.get(annot.reference(b"PCPicture").unwrap()).as_ref().clone() else {
+        panic!("the picture is a stream")
+    };
+    assert_eq!(picture.dict.name(b"Subtype"), Some(&b"Form"[..]), "the page is kept as a form XObject");
+    let ap = doc.resolve(annot.get(b"AP").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap()).as_ref().clone() else {
+        panic!("an appearance stream")
+    };
+    let bbox: Vec<f64> = normal.dict.get(b"BBox").unwrap().as_array().unwrap().iter().filter_map(pdfcraft_cos::Object::as_f64).collect();
+    assert_eq!(bbox, [56.0, 429.25, 539.0, 670.75]);
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    assert!(content.contains("/Pic Do") && !content.contains("BI"), "{content}");
 }
 
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
@@ -1311,6 +1378,12 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     let oid = s.open("r.pdf", None, bytes, Some("owner")).unwrap();
     assert!(s.get(oid).unwrap().allows_copying());
     assert!(extracting.iter().all(|c| enabled(&s, oid, c)));
+    // Comparing reads both documents' text out, into the result, the report and the comments.
+    let refused = || Err(EditError::NotPermitted("copying text and images"));
+    assert_eq!((s.compare(id, oid).map(|_| ()), s.compare(oid, id).map(|_| ())), (refused(), refused()));
+    assert_eq!(s.compare_report(oid, id).map(|_| ()), refused());
+    assert!(s.compare(oid, oid).is_ok());
+    assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
@@ -1332,6 +1405,115 @@ fn print_restricted_documents_disable_print_unless_opened_by_the_owner() {
     assert!(enabled(&s, oid, "print.dialog"), "the owner may print");
     let low = s.open("low.pdf", None, protected("", "owner", -1 ^ (1 << 11)), None).unwrap();
     assert!(enabled(&s, low, "print.dialog"), "low-resolution printing is printing");
+}
+
+/// Table 22, bit 12 clear: printing is limited to a low-level representation. Whatever the
+/// settings ask for, the print-ready PDF carries each page as a picture of at most 150 dpi, with
+/// no text or vector artwork left; the owner password lifts the limit.
+#[test]
+fn low_resolution_printing_prints_pictures_of_at_most_150_dpi() {
+    let bytes = protected("", "owner", -1 ^ (1 << 11));
+    let mut s = Session::new();
+    let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
+    let width = f64::from(s.get(low).unwrap().info.pages[0].width);
+    let actual = print::Settings { pages: vec![0], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false })] {
+        let printed = s.print_pdf(low, &print::Settings { raster, ..actual.clone() }).unwrap();
+        let mut s2 = Session::new();
+        let id2 = s2.open("print.pdf", None, Arc::new(printed.clone()), None).unwrap();
+        assert!(page_texts(&s2, id2).iter().all(|t| t.trim().is_empty()), "{raster:?}: no text is left");
+        let doc = pdfcraft_cos::Document::open(Arc::new(printed)).unwrap();
+        let widths: Vec<i64> = doc
+            .scan_objects()
+            .filter_map(|(_, o)| match &*o {
+                pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image") => st.dict.int(b"Width"),
+                _ => None,
+            })
+            .collect();
+        assert!(!widths.is_empty() && widths.iter().all(|&w| w as f64 <= width * 150.0 / 72.0 + 1.0), "{raster:?}: {widths:?} px for {width} pt");
+    }
+    let owner = s.open("low.pdf", None, bytes, Some("owner")).unwrap();
+    let printed = s.print_pdf(owner, &actual).unwrap();
+    let mut s2 = Session::new();
+    let id2 = s2.open("print.pdf", None, Arc::new(printed), None).unwrap();
+    assert!(page_texts(&s2, id2).iter().any(|t| !t.trim().is_empty()), "the owner prints the pages themselves");
+}
+
+/// A 100 × 400 pt page with one band per kind of thing that prints, top to bottom: page content
+/// (blue), a filled text field (green), a stamp (red) and a square comment (yellow).
+fn print_content_pdf() -> Vec<u8> {
+    let content = "0 0 1 rg 0 300 100 100 re f";
+    let ap = |colour: &str| {
+        let ops = format!("{colour} rg 0 0 100 100 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >> stream\n{ops}\nendstream", ops.len())
+    };
+    format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 400] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Filled) /F 4 /P 3 0 R /Rect [0 200 100 300] /AP << /N 8 0 R >> >> endobj\n\
+         6 0 obj << /Type /Annot /Subtype /Stamp /F 4 /P 3 0 R /Rect [0 100 100 200] /AP << /N 9 0 R >> >> endobj\n\
+         7 0 obj << /Type /Annot /Subtype /Square /F 4 /P 3 0 R /Rect [0 0 100 100] /AP << /N 10 0 R >> >> endobj\n\
+         8 0 obj {} endobj\n\
+         9 0 obj {} endobj\n\
+         10 0 obj {} endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        ap("0 1 0"),
+        ap("1 0 0"),
+        ap("1 1 0"),
+    )
+    .into_bytes()
+}
+
+/// Low-resolution printing prints what the chosen content prints when the pages themselves are
+/// printed: form fields only leaves out the page content and every comment, the document alone
+/// leaves out the comments, and the document with stamps keeps only the stamps.
+#[test]
+fn low_resolution_printing_prints_only_the_chosen_content() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(print_content_pdf())).unwrap();
+    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ (1 << 11),
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
+    let owner = s.open("low.pdf", None, bytes, Some("owner")).unwrap();
+    // Each band's centre, in pixels from the top of the sheet at 72 dpi, and its colour.
+    let bands = [("content", 50, [0, 0, 255]), ("field", 150, [0, 255, 0]), ("stamp", 250, [255, 0, 0]), ("comment", 350, [255, 255, 0])];
+    let all: &[&str] = &["content", "field", "stamp", "comment"];
+    for (content, shown) in [
+        (print::Content::DocumentAndMarkups, all),
+        (print::Content::Document, &["content", "field"][..]),
+        (print::Content::DocumentAndStamps, &["content", "field", "stamp"][..]),
+        (print::Content::FormFieldsOnly, &["field"][..]),
+    ] {
+        let settings = print::Settings {
+            pages: vec![0],
+            paper: (100.0, 400.0),
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            content,
+            ..Default::default()
+        };
+        for (id, how) in [(owner, "pages"), (low, "pictures")] {
+            let (w, h, rgba) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+            assert_eq!((w, h), (100, 400), "{content:?} as {how}");
+            for (band, y, colour) in bands {
+                let px = rgba.get((y * w as usize + 50) * 4..).and_then(|p| p.get(..3)).unwrap();
+                let near = |c: [u8; 3]| px.iter().zip(c).all(|(&a, b)| a.abs_diff(b) < 40);
+                let expected = shown.contains(&band);
+                assert!(if expected { near(colour) } else { near([255; 3]) }, "{content:?} as {how}: {band} drawn {expected} expected, pixel {px:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -1773,6 +1955,34 @@ fn permissions_password_restricts_others_but_not_this_session() {
     assert!(s2.get(id3).unwrap().allows_security_change());
 }
 
+/// Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted document
+/// it needs the same rights as removing security, not just the right to make changes (#3921).
+#[test]
+fn convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document() {
+    let pdfa = || Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b };
+    let refused = Err(EditError::NotPermitted("removing the encryption, which PDF/A forbids"));
+    // Changes allowed; printing (bit 3) and copying (bit 5) withheld.
+    let bytes = protected("pw", "owner", !((1 << 2) | (1 << 4)));
+    let mut s = Session::new();
+    let id = s.open("x.pdf", None, bytes.clone(), Some("pw")).unwrap();
+    assert!(s.get(id).unwrap().allows_modification());
+    assert_eq!(s.apply(id, pdfa()), refused);
+    // Nor inside a batch.
+    let batch = Edit::Batch { label: "x".into(), edits: vec![Edit::RotatePages { pages: vec![0], degrees: 90 }, pdfa()] };
+    assert_eq!(s.apply(id, batch), refused);
+    // Nothing was applied: no undo step, and saving gives back the encrypted original.
+    assert!(s.get(id).unwrap().can_undo().is_none());
+    assert_eq!(s.save_bytes(id).unwrap().as_slice(), bytes.as_slice());
+    // The owner's password allows it, and the result is no longer encrypted.
+    let id2 = s.open("x.pdf", None, bytes, Some("owner")).unwrap();
+    s.apply(id2, pdfa()).unwrap();
+    let saved = s.save_bytes(id2).unwrap();
+    assert!(pdfcraft_cos::Document::open(saved).unwrap().trailer().get(b"Encrypt").is_none());
+    // An unencrypted document needs nothing more.
+    let (mut s, id) = session_with(1);
+    s.apply(id, pdfa()).unwrap();
+}
+
 #[test]
 fn combine_source_check_says_why_a_file_cannot_be_combined() {
     let (mut s, id) = session_with(1);
@@ -2138,12 +2348,17 @@ fn setting_the_calculation_order_recalculates_and_undoes() {
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {
+    one_line_page_with(resources, "", body)
+}
+
+/// [`one_line_page`] with `stream_entries` added to the content stream's dictionary.
+fn one_line_page_with(resources: &str, stream_entries: &str, body: &str) -> Vec<u8> {
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 300] >>".to_string(),
         format!("<< /Type /Page /Parent 2 0 R /Resources << {resources} >> /Contents 5 0 R >>"),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        format!("<< /Length {} {stream_entries} >>\nstream\n{body}\nendstream", body.len()),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -2174,31 +2389,76 @@ fn mark_shown_text(s: &mut Session, id: DocId, needle: &str) {
     s.apply(id, mark).unwrap();
 }
 
-/// Redaction removes text by the positions its own interpreter works out. Here the font and size
-/// come from an ExtGState /Font entry (`gs`), which the renderer honours and the interpreter does
-/// not model, so it places no glyph under the mark the user drew over the word as displayed: it
-/// used to report success and leave the word in the file. The renderer is asked now, and the edit
-/// is refused.
+/// Redaction removes text by the positions its own interpreter works out, and the renderer has
+/// the last word: where the two disagree, a page that still shows a glyph mostly under a mark
+/// fails the edit. The check is run here on a page nothing was removed from, as if the
+/// interpreter had placed the word elsewhere. Only the overlay streams an apply added are left
+/// out: a content stream of the input labelled like one (`/PCMark /Redaction`) is checked too.
 #[test]
-fn redaction_is_refused_when_the_page_still_shows_text_under_a_mark() {
+fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "/PCMark /Redaction", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("shown.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let doc = s.get(id).unwrap();
+    let mut cos = doc.editor.as_ref().unwrap().cos.clone();
+    let marks = pdfcraft_redact::marks(&cos);
+    let refused = |cos: &pdfcraft_cos::Document| {
+        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None);
+        matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
+    };
+    assert!(refused(&cos));
+    // The page's contents as an array, as they are once an apply has added its overlay.
+    let page = pdfcraft_model::pages(&cos).swap_remove(0);
+    let contents = page.dict.get(b"Contents").cloned().unwrap();
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Array(vec![contents]))).unwrap();
+    assert!(refused(&cos), "the labelled input stream was not checked");
+}
+
+/// Inline image data `7FEI 1 0 0 1 200 0 cm` holds an `EI` the renderer ends the image at, so it
+/// runs the `cm` and shows SECRET 200 pt to the right. Redaction reads the image the same way, so
+/// a mark drawn over the word as shown takes it out of the file.
+#[test]
+fn text_after_an_inline_image_is_redacted_where_the_page_shows_it() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page(
+        "/Font << /F1 4 0 R >>",
+        "BI /W 1 /H 1 /CS /G /BPC 8 /F /AHx ID 7FEI 1 0 0 1 200 0 cm EI BT /F1 10 Tf 10 100 Td (SECRET) Tj ET",
+    );
+    let id = s.open("inline.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    assert!(!page_texts(&s, id).concat().contains("SECRET"));
+    let saved = s.save_bytes(id).unwrap();
+    let held = |d: &[u8]| d.windows(6).any(|w| w == b"SECRET");
+    assert!(!held(&saved), "the saved file holds the redacted word");
+    let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+    assert!(
+        !reopened.scan_objects().any(|(_, o)| matches!(&*o, pdfcraft_cos::Object::Stream(st) if st.decoded().is_ok_and(|d| held(&d)))),
+        "a saved stream holds the redacted word"
+    );
+}
+
+/// A word whose font and size an ExtGState /Font entry (`gs`) sets is placed where the renderer
+/// draws it, so a mark drawn over it as displayed takes it out of the file.
+#[test]
+fn a_word_in_a_font_set_by_an_extgstate_is_redacted() {
     let line = "Public words then SECRET42 and more";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let by_gs = one_line_page("/ExtGState << /GS1 << /Type /ExtGState /Font [4 0 R 16] >> >>", &format!("BT /GS1 gs 20 150 Td ({line}) Tj ET"));
     let id = s.open("gs.pdf", None, Arc::new(by_gs), None).unwrap();
     mark_shown_text(&mut s, id, "SECRET42");
-    let refused = s.apply(id, Edit::ApplyRedactions { pages: None });
-    assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
-    // Nothing was changed: the mark is still pending and the page still shows the line.
-    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
-    assert_eq!(page_texts(&s, id), [line]);
-
-    // The same line with its font set by `Tf`: the mark is applied and the word is gone.
-    let by_tf = one_line_page("/Font << /F1 4 0 R >>", &format!("BT /F1 16 Tf 20 150 Td ({line}) Tj ET"));
-    let id = s.open("tf.pdf", None, Arc::new(by_tf), None).unwrap();
-    mark_shown_text(&mut s, id, "SECRET42");
     s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
     let shown = page_texts(&s, id).swap_remove(0);
     assert!(shown.starts_with("Public words then") && shown.ends_with("and more") && !shown.contains("SECRET42"), "{shown}");
+    let saved = s.save_bytes(id).unwrap();
+    let held = |d: &[u8]| d.windows(8).any(|w| w == b"SECRET42");
+    assert!(!held(&saved), "the saved file holds the redacted word");
+    let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+    assert!(
+        !reopened.scan_objects().any(|(_, o)| matches!(&*o, pdfcraft_cos::Object::Stream(st) if st.decoded().is_ok_and(|d| held(&d)))),
+        "a saved stream holds the redacted word"
+    );
 }
 
 #[test]
@@ -3911,6 +4171,20 @@ fn form_javascript_validates_calculates_and_formats() {
     assert!(s.run_javascript(id, "1", None).is_err());
 }
 
+/// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
+/// each of their scripts, and alert when either is missing.
+#[test]
+fn scripts_in_an_xfa_form_see_the_xfa_plugin_installed() {
+    let check = "typeof xfa_installed + ' ' + typeof xfa_version + ' ' + xfa_version";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let xfa = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3))), None).unwrap();
+    let o = s.run_javascript(xfa, check, None).unwrap();
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("boolean number 3.5")));
+    let plain = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let o = s.run_javascript(plain, check, None).unwrap();
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("undefined number 3.5")));
+}
+
 #[test]
 fn edit_history_does_not_replay_field_script_side_effects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -4234,6 +4508,24 @@ fn actions_run_their_steps_on_files() {
     assert_eq!(d.info.title.as_deref(), Some("Q3"));
     assert!(page_texts(&s2, id)[0].contains("DRAFT"));
     assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), |_, _| {}).is_err());
+}
+
+/// A removal step that fails (here: a signed file can't be rewritten without its hidden data)
+/// fails the action, so the file is not passed on as cleaned.
+#[test]
+fn actions_fail_when_hidden_information_could_not_be_removed() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Author".into(), value: "Private Name".into() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved, None).unwrap();
+    let signed = s.sign(id, &digital_id, SignOptions { page: 1, ..SignOptions::default() }).unwrap();
+    let built = actions::builtin();
+    let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
+    let e = actions::run_on(sanitize, "signed.pdf", signed, |_, _| {}).map(|r| r.log).unwrap_err();
+    assert!(e.starts_with("Sanitize document:"), "{e}");
 }
 
 #[test]
@@ -6512,7 +6804,7 @@ fn exporting_a_jpeg_logo_to_word_keeps_the_image() {
         assert!(jpeg.starts_with(&[0xFF, 0xD8]));
         let docx = d.export_office(compare::OfficeFormat::Docx);
         assert!(docx.windows(21).any(|w| w == b"word/media/image1.jpg"), "overlap {overlaps}");
-        assert!(docx.windows(jpeg.len()).any(|w| w == jpeg.as_slice()), "the JPEG is stored unchanged (overlap {overlaps})");
+        assert!(docx.windows(jpeg.len()).any(|w| w == &jpeg[..]), "the JPEG is stored unchanged (overlap {overlaps})");
     }
 }
 
@@ -7099,4 +7391,50 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let entries = ["Art.1. Scope .................... 3", "Art.2. Eligibility .................... 7", "Art.3. Application .................... 12"];
     let positions: Vec<_> = entries.iter().map(|entry| html.find(&format!("<p>{entry}</p>")).expect("one paragraph per entry")).collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
+}
+
+/// A page whose forms go past the reading limit and whose picture goes past the image budget is
+/// listed once among the truncated pages.
+#[test]
+fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
+    let depth = compare::MAX_FORM_DEPTH + 1;
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        String::new(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\0\x20\x40\x7f\nendstream".into(),
+        "<< /Length 34 >>\nstream\nq 10 0 0 10 0 0 cm /Im Do Q /D1 Do\nendstream".into(),
+    ];
+    // Forms D1..D{depth}, objects 6 onwards, each drawing the next.
+    let xobjects: String = (1..=depth).map(|i| format!("/D{i} {} 0 R ", 5 + i)).collect();
+    let resources = format!("<< /XObject << /Im 4 0 R {xobjects}>> >>");
+    for i in 1..=depth {
+        let body = if i == depth { "q Q".to_string() } else { format!("/D{} Do", i + 1) };
+        objs.push(format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources {resources} /Length {} >>\nstream\n{body}\nendstream",
+            body.len()
+        ));
+    }
+    objs[2] = format!("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources {resources} >>");
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("both.pdf", None, Arc::new(bytes), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.export_pages_checked(false, 0).1, [0], "the forms alone truncate the page");
+    let (exported, _) = doc.export_pages_checked(true, 1 << 20);
+    assert_eq!(exported[0].images.len(), 1, "the picture exports within a sufficient budget");
+    let (pages, truncated) = doc.export_pages_checked(true, 0);
+    assert!(pages[0].images.is_empty(), "the picture is past the budget");
+    assert_eq!(truncated, [0]);
 }

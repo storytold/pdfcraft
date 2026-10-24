@@ -132,7 +132,10 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => Cow::Owned(crate::security::transform(h, o, num, generation, false)),
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
+            let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
+            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+        }
         _ => Cow::Borrowed(o),
     }
 }

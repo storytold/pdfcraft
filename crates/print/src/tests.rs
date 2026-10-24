@@ -71,8 +71,10 @@ fn page_selection() {
     assert_eq!(select_pages(1, None, &[], Subset::Even, false), Err(PrintError::NoPages));
     // An explicit list (selected thumbnails): positions, never labels, in the order given.
     assert_eq!(select_listed(5, &[1, 3], Subset::All, false).unwrap(), [1, 3]);
-    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Even, false).unwrap(), [2]);
-    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Odd, true).unwrap(), [4, 0]);
+    // Picked pages keep their page numbers: pages 1, 3 and 5 are all odd.
+    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Even, false), Err(PrintError::NoPages));
+    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Odd, true).unwrap(), [4, 2, 0]);
+    assert_eq!(select_listed(5, &[1, 2, 3], Subset::Even, false).unwrap(), [1, 3]);
     assert_eq!(select_listed(5, &[1, 5], Subset::All, false), Err(PrintError::OutOfRange(6, 5)));
     assert!(matches!(select_listed(0, &[usize::MAX], Subset::All, false), Err(PrintError::OutOfRange(_, 0))));
     assert_eq!(select_listed(5, &[], Subset::All, false), Err(PrintError::NoPages));
@@ -190,6 +192,17 @@ fn custom_pages_per_sheet_never_overfill_the_grid() {
     // The imposed PDF has one page per sheet.
     let out = impose(&fixture(7), &settings((0..7).collect(), Layout::multiple(3))).unwrap();
     assert_eq!(pdfcraft_model::pages(&Document::open(Arc::new(out)).unwrap()).len(), 3);
+}
+
+#[test]
+fn imposing_lists_the_pages_once() {
+    let n = 150;
+    let doc = fixture(n);
+    PAGES_LISTED.with(|c| c.set(0));
+    let out = impose(&doc, &settings((0..n).collect(), Layout::multiple(2))).unwrap();
+    let listed = PAGES_LISTED.with(|c| c.get());
+    assert!(listed <= 2 * n, "{listed} pages listed to print {n}");
+    assert_eq!(pdfcraft_model::pages(&Document::open(Arc::new(out)).unwrap()).len(), n / 2);
 }
 
 #[test]
@@ -877,3 +890,74 @@ fn driver_options_take_the_ppds_own_names_in_the_ui_language() {
 }
 
 mod appearances;
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let page: Dict = [(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream); 300]))].into_iter().collect();
+    let data = decoded_contents(&doc, &page, &mut DecodeBudget::page());
+    assert!(data.is_none_or(|d| d.len() <= pdfcraft_cos::MAX_PAGE_DECODED + 300));
+}
+
+/// 20 draws of a form that draws the next form 20 times, four levels down: 168,420 form
+/// entries from a few hundred bytes.
+fn form_fanout(doc: &mut Document) -> Dict {
+    let draws = "/X Do ".repeat(20);
+    let mut form = |content: &str, inner: Option<ObjRef>| {
+        let mut d: Dict = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect();
+        if let Some(inner) = inner {
+            let xobjects: Dict = [(b"X".to_vec(), Object::Ref(inner))].into_iter().collect();
+            let res: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        }
+        doc.add(Stream::from_raw(d, content.as_bytes().to_vec()))
+    };
+    let mut inner = form("BT 0 1 -1 0 0 0 Tm (a) Tj ET", None);
+    for _ in 0..3 {
+        inner = form(&draws, Some(inner));
+    }
+    let xobjects: Dict = [(b"X".to_vec(), Object::Ref(inner))].into_iter().collect();
+    [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect()
+}
+
+#[test]
+fn text_direction_stops_at_the_form_budget() {
+    let mut doc = Document::new_empty();
+    let res = form_fanout(&mut doc);
+    let mut score = 0;
+    text_direction(&doc, "/X Do ".repeat(20).as_bytes(), &res, Matrix::IDENTITY, 0, &mut score, &mut DecodeBudget::page());
+    assert!(score > 0 && score <= pdfcraft_cos::MAX_PAGE_FORMS as i64, "score {score}");
+}
+
+/// A form refused by the spent budget is left out; the text drawn after it still counts.
+#[test]
+fn text_direction_reads_on_past_a_refused_form() {
+    let mut doc = Document::new_empty();
+    let form = doc.add(Stream::from_raw([(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect(), Vec::new()));
+    let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
+    let res: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
+    let mut score = 0;
+    let content = b"/X Do BT 0 1 -1 0 0 0 Tm (a) Tj ET";
+    text_direction(&doc, content, &res, Matrix::IDENTITY, 0, &mut score, &mut DecodeBudget::new(1 << 20, 0));
+    assert_eq!(score, 1);
+}
+
+/// #3984: odd and even are page numbers, as Acrobat counts them, not places in the range.
+#[test]
+fn odd_and_even_pages_are_page_numbers_not_places_in_the_range() {
+    let even = |range: &str| select_pages(12, Some(range), &[], Subset::Even, false).unwrap();
+    let odd = |range: &str| select_pages(12, Some(range), &[], Subset::Odd, false).unwrap();
+    // Adobe Acrobat DC Help (11/28/2019), Options in the Print dialog box, p. 515: "if you set the
+    // range to 2, 7–10 and choose Even Pages Only, only pages 2, 8, and 10 print".
+    assert_eq!(even("2, 7-10"), [1, 7, 9]);
+    // The report: 4–11 and 3–11 both print pages 4, 6, 8 and 10 as Even pages only.
+    assert_eq!(even("4-11"), [3, 5, 7, 9]);
+    assert_eq!(even("3-11"), [3, 5, 7, 9]);
+    assert_eq!(odd("4-11"), [4, 6, 8, 10]);
+    // Typed order is kept, and Reverse turns it round.
+    assert_eq!(even("10, 3, 4"), [9, 3]);
+    assert_eq!(select_pages(12, Some("10, 3, 4"), &[], Subset::Even, true).unwrap(), [3, 9]);
+    // A range with no page of the kind prints nothing.
+    assert_eq!(select_pages(12, Some("3, 5"), &[], Subset::Even, false), Err(PrintError::NoPages));
+}

@@ -876,8 +876,9 @@ impl DocView {
         self.goto_point = None;
         self.zoom_anchor = None;
         self.flash = None;
-        // A thumbnail drag holds page indexes from before the change.
+        // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
+        self.org_drag = None;
         self.reset_coarse_state();
     }
 

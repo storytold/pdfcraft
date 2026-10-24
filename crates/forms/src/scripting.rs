@@ -176,6 +176,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(names) = cat.as_dict().and_then(|c| c.get(b"Names")).map(|n| doc.resolve(n)) else { return Vec::new() };
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).cloned() else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut scripts = crate::script_budget();
     // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
     // or among its own kids, must not multiply the work.
     let mut stack = vec![tree];
@@ -203,7 +204,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
                     Object::String(s) => s.to_text(),
                     _ => continue,
                 };
-                if let Some(js) = crate::script(doc, v) {
+                if let Some(js) = crate::script(doc, v, &mut scripts) {
                     out.push((key, js));
                 }
             }

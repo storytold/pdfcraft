@@ -138,7 +138,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
             .response
             .on_hover_text(tl!("Font size"));
         let swatch = colour_button(ui, t, look.color);
-        egui::Popup::menu(&swatch).show(|ui| {
+        egui::Popup::menu(&swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             if let Some(picked) = crate::comments::swatch_grid(ui, Some(look.color)) {
                 look.color = picked;
                 ui.close();

@@ -383,6 +383,36 @@ impl Automation {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
             }
+            "bookmark_set_style" => {
+                let path = a.path("path")?;
+                // Left out keeps the colour; [0, 0, 0] is the default black.
+                let color = match a.get("color") {
+                    None => None,
+                    Some(v) => {
+                        let rgb: Option<Vec<f64>> = v.as_array().and_then(|c| c.iter().map(Value::as_f64).collect());
+                        match rgb.as_deref() {
+                            Some(&[r, g, b]) if [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) => Some([r, g, b]),
+                            _ => return Err(ToolError::InvalidArgs("color must be [r, g, b], each from 0 to 1".into())),
+                        }
+                    }
+                };
+                let (bold, italic) = (a.opt_bool("bold")?, a.opt_bool("italic")?);
+                if color.is_none() && bold.is_none() && italic.is_none() {
+                    return Err(ToolError::InvalidArgs("give color, bold or italic".into()));
+                }
+                let mut edits = Vec::new();
+                if let Some(color) = color {
+                    edits.push(Edit::SetBookmarkColor { path: path.clone(), color: Some(color) });
+                }
+                if bold.is_some() || italic.is_some() {
+                    edits.push(Edit::SetBookmarkStyle { path, bold, italic });
+                }
+                // A colour and a style given together are one step to undo, applied all or nothing.
+                match edits.len() {
+                    1 => self.apply(&a, edits.remove(0))?,
+                    _ => self.apply(&a, Edit::Batch { label: "Style".into(), edits })?,
+                }
+            }
             "bookmark_from_structure" => {
                 let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
                 let listing = self.bookmark_listing(&a)?;
@@ -435,7 +465,7 @@ impl Automation {
             "doc_revisions" => self.doc_revisions(&a)?,
             "text_lines" => {
                 let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let doc = self.doc_to_copy(&a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
                 let lines: Vec<Value> = doc
@@ -709,7 +739,11 @@ impl Automation {
                 let moved = [block.rect[0] + dx, block.rect[1] + dy, block.rect[2] + dx, block.rect[3] + dy];
                 let wanted: String = text.split_whitespace().collect();
                 let mut out = self.apply(&a, Edit::EditTextBlock { page, block: index, text, style })?;
-                let after = self.doc(&a)?.text_blocks(page);
+                let doc = self.doc(&a)?;
+                let after = doc.text_blocks(page);
+                // Without `text` the paragraph keeps the document's own words: not echoed when
+                // the document doesn't allow copying them.
+                let copy = doc.allows_copying();
                 // Only a paragraph that now shows exactly the requested text is the edited one. A
                 // neighbour that overlaps the old box (overlaid text, a text layer) must not take
                 // its number, and neither must a paragraph the edit merged it into: rewriting that
@@ -717,7 +751,10 @@ impl Automation {
                 let edited = block_overlapping(&after, moved)
                     .filter(|&i| !wanted.is_empty() && after.get(i).is_some_and(|b| b.text.split_whitespace().collect::<String>() == wanted));
                 if let Some(b) = edited.and_then(|i| after.get(i)) {
-                    out["paragraph"] = json!({ "text": b.text, "lines": b.lines.len(), "font": b.base_font });
+                    out["paragraph"] = json!({ "lines": b.lines.len(), "font": b.base_font });
+                    if copy {
+                        out["paragraph"]["text"] = json!(b.text);
+                    }
                 }
                 let stale = self.follow_edit(id, page, k, edited.and_then(|i| after.get(i)), &after);
                 if !stale.is_empty() {
@@ -2438,6 +2475,16 @@ fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow], pages: &[pdfcraft_render::Pa
         }
         let path: Vec<usize> = row.path.iter().map(|p| p.saturating_add(1)).collect();
         let mut fields = json!({ "path": path, "title": row.title, "page": row.page.map(|p| p.saturating_add(1)), "open": row.open });
+        // Only what differs from the defaults (black, regular), as the PDF itself stores it.
+        if let Some(color) = row.color {
+            fields["color"] = json!(color);
+        }
+        if row.bold {
+            fields["bold"] = json!(true);
+        }
+        if row.italic {
+            fields["italic"] = json!(true);
+        }
         if let Some(destination) = row.page.and_then(|p| pages.get(p)).and_then(|p| destination(&row.view, p)) {
             fields["destination"] = destination;
         }
@@ -2591,7 +2638,8 @@ fn info(d: &Document) -> Value {
                     })).collect::<Vec<_>>(),
                     "preserve_rb": preserve_rb,
                 }),
-                pdfcraft_render::LinkTarget::RemoteGoTo { file, destination, new_window } => json!({
+                pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
+                    "action": if *launch { "Launch" } else { "GoToR" },
                     "remote_document": file,
                     "destination": match destination {
                         pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
@@ -2652,7 +2700,7 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
         }
     };
     let config = RenderConfig { password, ..Default::default() };
-    let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) };
+    let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).min(8) };
     // Small jobs aren't worth a second parse of the document.
     if workers == 1 || pages.len() < 8 {
         let mut r = PageRenderer::new(bytes.clone(), config);

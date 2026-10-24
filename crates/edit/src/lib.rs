@@ -17,7 +17,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -492,6 +492,9 @@ enum Isolation {
     /// the count of `q` left open at the end, when known. `marked` counts known unfinished
     /// marked-content sequences independently of graphics malformation, or zero when unknown.
     Unknown { unclosed: usize, marked: usize },
+    /// Marked content nests past [`ISOLATION_MAX_DEPTH`]: how many sequences a mark on top would
+    /// have to close (some may be hidden optional content) is unknown.
+    TooDeep,
 }
 
 const ISOLATION_MAX_STREAMS: usize = 100_000;
@@ -591,7 +594,10 @@ fn isolation(doc: &Document, list: &[Object]) -> Isolation {
             _ => {}
         }
     }
-    if malformed || text_open || path_open || !stack.is_empty() || !marked_known {
+    if !marked_known {
+        return Isolation::TooDeep;
+    }
+    if malformed || text_open || path_open || !stack.is_empty() {
         return Isolation::Unknown { unclosed: if malformed { 0 } else { stack.len() }, marked };
     }
     let comment_open = edges.last().is_some_and(|edge| edge.1);
@@ -601,15 +607,16 @@ fn isolation(doc: &Document, list: &[Object]) -> Isolation {
 /// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
 /// (appended, after wrapping the original content in q/Q).
 fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind)
+    place_tagged(doc, page, kind.tag(), content, behind).map(drop)
 }
 
 /// Put content on a page, tagged `tag` (see [`place`]). On top, whatever graphics state the
 /// content before leaves set (a `cm`, a clip, text state…) must not reach the mark, including
 /// content appended after an earlier PdfCraft wrapper by another tool (#3084): the stretch of
 /// content that leaves state set is wrapped in q/Q, once. Any known unfinished marked-content
-/// sequences are closed at the end too, so hidden optional content cannot hide the new mark.
-fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
+/// sequences are closed at the end too, so hidden optional content cannot hide the new mark; when
+/// their number is unknown, nothing is placed on top. Returns the new content stream.
+fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<ObjRef, EditError> {
     let mut list = contents(doc, page)?;
     // The behind-marks at the start: backgrounds in the order added, then watermarks.
     let behind_kinds = [MarkKind::Background.tag(), MarkKind::Watermark.tag()];
@@ -623,9 +630,12 @@ fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, cont
             // behind-marks at the start. A `q` it leaves open is closed at its end, where
             // closing it changes nothing already drawn.
             Isolation::Unknown { unclosed, marked } => (behind_marks < list.len()).then_some((behind_marks, unclosed, marked)),
+            // Content left inside an optional-content sequence it cannot close could be hidden.
+            Isolation::TooDeep => return Err(too_deep_on_top()),
         }
     };
-    let mark = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), &content))));
+    let mark_ref = doc.add(Object::Stream(Stream::flate(tagged(tag), &content)));
+    let mark = Object::Ref(mark_ref);
     if behind {
         // Right after the backgrounds already there, so a new background is painted over the
         // older ones (#3591) and a watermark over all of them. Not after the watermarks: on a
@@ -646,7 +656,27 @@ fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, cont
         list.push(mark);
     }
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
-    Ok(())
+    Ok(mark_ref)
+}
+
+fn too_deep_on_top() -> EditError {
+    EditError::Invalid("the page's marked content is nested too deeply to add anything on top of it".into())
+}
+
+/// The refusal [`place_tagged`] gives for a mark on top of `page`, checked before an edit changes
+/// anything (removing old marks, adding resources) so a refused edit leaves the document as it was.
+fn check_on_top(doc: &Document, page: &pdfcraft_model::Page) -> Result<(), EditError> {
+    let obj = doc.get(page.obj);
+    let list = match obj.as_dict().and_then(|d| d.get(b"Contents")) {
+        None => return Ok(()),
+        Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_else(|| vec![Object::Ref(*r)]),
+        Some(Object::Array(a)) => a.clone(),
+        Some(other) => vec![other.clone()],
+    };
+    match isolation(doc, &list) {
+        Isolation::TooDeep => Err(too_deep_on_top()),
+        _ => Ok(()),
+    }
 }
 
 /// Put content tagged `tag` first inside the q/Q wrapper, so it applies to the page's original
@@ -664,9 +694,11 @@ fn place_inside_wrapper(doc: &mut Document, page: &pdfcraft_model::Page, tag: &s
 /// Draw `content` on top of a page (0-based) as permanent page content, with standard Helvetica
 /// available as `/PCHelv`. The stream is tagged `tag` (not a mark kind, so Remove never takes
 /// it away); the original content is wrapped in q/Q first. Used for applied redaction boxes.
-pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<(), EditError> {
+/// Returns the new content stream.
+pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<ObjRef, EditError> {
     let all = page_list(doc);
     check(&[page], all.len())?;
+    check_on_top(doc, &all[page])?;
     add_resources(doc, &all[page], None, Some(&content))?;
     let p = page_list(doc).swap_remove(page);
     place_tagged(doc, &p, tag, content, false)
@@ -746,6 +778,9 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         .iter()
         .map(|&i| hf.shrink.then(|| shrink_matrix(hf, all[i].display_size(doc), all[i].view_matrix(doc))).transpose())
         .collect::<Result<Vec<_>, _>>()?;
+    for &i in pages {
+        check_on_top(doc, &all[i])?;
+    }
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
@@ -833,6 +868,11 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         && wm.offset.iter().all(|o| o.is_finite()))
     {
         return Err(EditError::Invalid("invalid watermark settings".into()));
+    }
+    if !wm.behind {
+        for &i in pages {
+            check_on_top(doc, &all[i])?;
+        }
     }
     if replace {
         remove_marks(doc, pages, MarkKind::Watermark)?;
@@ -938,7 +978,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         if before != kept.len() {
             let wrappers = match isolation(doc, &kept) {
                 Isolation::Clean { wrappers, .. } => wrappers,
-                Isolation::Unknown { .. } => {
+                Isolation::Unknown { .. } | Isolation::TooDeep => {
                     let mut opens = Vec::new();
                     let mut pairs = Vec::new();
                     for (i, o) in kept.iter().enumerate() {
@@ -994,7 +1034,7 @@ mod linebreak;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
-    clear_block, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
+    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
 };
 pub mod added;
 pub use added::{

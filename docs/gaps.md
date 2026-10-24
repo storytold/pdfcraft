@@ -124,11 +124,12 @@ update the numbers.
   [#688](https://github.com/storytold/pdfcraft/issues/688),
   [#728](https://github.com/storytold/pdfcraft/issues/728),
   [#758](https://github.com/storytold/pdfcraft/issues/758),
-  [#689](https://github.com/storytold/pdfcraft/issues/689) (Flatpak). `AGENTS.md` §1.1 bars Noto
-  CJK (Source Han rebranded), so craft-fonts needs another openly licensed Hans face.
+  [#689](https://github.com/storytold/pdfcraft/issues/689) (Flatpak). craft-fonts has Noto Sans
+  CJK SC, but at 16.4 MB it is too large to embed whole; the interface needs a cut of it
+  (storytold/craft-libs#213).
 - **Impact:** the second-largest language group sees a broken interface although the catalog is 97%
   translated.
-- **Estimate:** 6–12 h (font sourcing in craft-fonts plus the fallback chain). **Doc:**
+- **Estimate:** 6–12 h (cut CJK faces through craft-fonts-build plus the fallback chain). **Doc:**
   [localization-parity.md](localization-parity.md).
 
 ### 6. Open-issue backlog of wrong results in shipped features
@@ -254,7 +255,7 @@ update the numbers.
   reference image and no oracle. **We render 1 distinct image across all 96; Poppler renders 8**,
   drawing a blank page for the seven halftone-skip and symbol fixtures and mis-decoding TPGRON
   refinement (its output changes when TPGRON is switched on, which a correct decoder's cannot).
-  Pinned as `crates/render/tests/jbig2_invariants.rs`. **Poppler is not a usable oracle for JBIG2**,
+  Pinned as `crates/render/tests/it/jbig2_invariants.rs`. **Poppler is not a usable oracle for JBIG2**,
   and roughly a fifth of its fixtures should be read as its bugs rather than ours.
 - **Annotations are shown, and that was measured rather than argued.** Poppler synthesises an
   appearance for an annotation that has none, where we draw only what the document carries (link

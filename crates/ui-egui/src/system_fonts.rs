@@ -331,8 +331,7 @@ fn other_candidates() -> Vec<PathBuf> {
     }
 }
 
-/// Chinese sans faces the operating system ships, the UI language's own region first. Noto CJK
-/// and Source Han are left out on purpose (AGENTS.md §1.1).
+/// Chinese sans faces the operating system ships, the UI language's own region first.
 fn han_candidates(traditional: bool) -> Vec<PathBuf> {
     if cfg!(windows) {
         // Microsoft YaHei / JhengHei, then the older SimSun / MingLiU collections.
@@ -363,8 +362,7 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
     }
 }
 
-/// Well-known locations of Korean faces, best first. Noto CJK and Source Han are left out, as for
-/// Chinese (AGENTS.md §1.1).
+/// Well-known locations of Korean faces, best first.
 fn hangul_candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
         ["malgun.ttf", "gulim.ttc", "batang.ttc"].iter().map(|f| windows_fonts().join(f)).collect()
@@ -499,7 +497,7 @@ mod tests {
 
     /// `script_fallback` honours the documented installed-font switch, under which it returns
     /// nothing before order is ever consulted — so both loader tests and the macOS oracle skip when
-    /// it is off, the way `tests/fonts.rs` skips for the same reason. Without this the suite goes red in exactly the
+    /// it is off, the way `tests/it/fonts.rs` skips for the same reason. Without this the suite goes red in exactly the
     /// mode `cargo xtask screenshots` uses.
     fn installed_faces_switched_off() -> bool {
         std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0")
@@ -527,7 +525,7 @@ mod tests {
     #[test]
     fn a_script_fallback_is_the_first_candidate_with_the_probe() {
         // This one calls `script_fallback` too, so it fails under the documented switch that
-        // published screenshots use — skip with a reason, as tests/fonts.rs does.
+        // published screenshots use — skip with a reason, as tests/it/fonts.rs does.
         if installed_faces_switched_off() {
             eprintln!("skipping: PDFCRAFT_SYSTEM_FONTS=0 turns the loader off");
             return;
@@ -554,27 +552,15 @@ mod tests {
     }
 
     #[test]
-    fn hangul_candidates_are_font_files_without_adobe_designs() {
+    fn hangul_candidates_are_font_files() {
         let list = hangul_candidates();
         assert!(!list.is_empty());
         for path in list {
             assert!(path.extension().is_some_and(|e| e == "ttf" || e == "ttc"), "{path:?}");
-            let name = path.to_string_lossy().to_lowercase();
-            assert!(!["notosanscjk", "notoserifcjk", "sourcehan", "source-han"].iter().any(|b| name.contains(b)), "{name}");
         }
         // Inter has no Hangul.
         let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         assert_eq!(face_with(inter, HANGUL_PROBE), None);
-    }
-
-    #[test]
-    fn han_candidates_skip_adobe_designs() {
-        for need in [Need::Hans, Need::Hant] {
-            for path in candidates(need) {
-                let name = path.to_string_lossy().to_lowercase();
-                assert!(!["notosanscjk", "notoserifcjk", "sourcehan", "source-han"].iter().any(|b| name.contains(b)), "{name}");
-            }
-        }
     }
 
     /// Retune tripwires, deliberately separate from `the_macos_devanagari_list_is_apples_layout` below: these assert that three

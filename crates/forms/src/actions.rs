@@ -105,11 +105,11 @@ fn texts(doc: &Document, o: &Object) -> Vec<String> {
     }
 }
 
-fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef]) -> Option<FieldAction> {
+fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mut pdfcraft_cos::DecodeBudget) -> Option<FieldAction> {
     let a = doc.resolve(o);
     let d = a.as_dict()?;
     Some(match d.name(b"S")? {
-        b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o).unwrap_or_default()),
+        b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, scripts).unwrap_or_default()),
         b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| s.to_text())).unwrap_or_default()),
         b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f)).unwrap_or_default()),
         b"Named" => FieldAction::Named(d.name(b"N").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()),
@@ -145,13 +145,14 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
     let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
     let aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
+    let mut scripts = crate::script_budget();
     for t in Trigger::ALL {
         let o = match t.key() {
             None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
             Some(k) => aa.get(k).cloned(),
         };
         // An action chain (/Next) counts as its first action here.
-        if let Some(a) = o.and_then(|o| read(doc, &o, &pages)) {
+        if let Some(a) = o.and_then(|o| read(doc, &o, &pages, &mut scripts)) {
             out.push((t, a));
         }
     }

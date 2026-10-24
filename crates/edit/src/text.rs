@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
 
@@ -113,10 +113,12 @@ pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFo
     let resources = p.dict.get(b"Resources").and_then(|o| doc.dict(o)).unwrap_or_default();
     let fonts = resources.get(b"Font").and_then(|o| doc.dict(o)).unwrap_or_default();
     let mut budget = 32_usize << 20;
+    // Every program decoded counts, usable or not, so aliases of one program can't repeat the work.
+    let mut decode = DecodeBudget::new(2 * budget, 0);
     let mut result = Vec::new();
     for (name, font) in fonts.iter().take(128) {
         let Some(font) = doc.dict(font) else { continue };
-        let Some(bytes) = pdfcraft_fonts::pdf::embedded_sfnt(doc, &font) else { continue };
+        let Some(bytes) = pdfcraft_fonts::pdf::embedded_sfnt_within(doc, &font, &mut decode) else { continue };
         if bytes.len() > budget {
             continue;
         }
@@ -528,12 +530,13 @@ impl TextLine {
         self.origin.baseline
     }
 
-    /// Paint position of the line's last text-showing operator: `(content-stream index,
-    /// operator index in the page's joined stream)`. Lines paint in order of this tuple.
+    /// Paint position of the line's first operator: `(content-stream index, operator index in
+    /// the page's joined stream)`. A line joins runs painted at different times, so anything
+    /// painted after this position may lie on top of part of it.
     /// (Lines from `text_lines` never come from form XObjects, so `stream` is always a
     /// page content-stream index and `ops` are indices into the joined operator list.)
-    pub fn paint_pos(&self) -> (usize, usize) {
-        (self.stream, self.ops.iter().max().copied().unwrap_or(0))
+    pub fn first_paint_pos(&self) -> (usize, usize) {
+        (self.stream, self.ops.iter().min().copied().unwrap_or(0))
     }
 
     fn rotation(&self) -> f64 {
@@ -615,7 +618,16 @@ struct Ts {
     unreadable: Option<Rc<str>>,
 }
 
-pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
+/// The page's content streams as listed, each with its decoded data (empty when it doesn't
+/// decode), within one page's [`DecodeBudget`]. An error when the content runs past it: reading
+/// or rewriting a page from part of its content would lose the rest.
+pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
+    content_streams_within(doc, page, &mut DecodeBudget::page())
+}
+
+/// [`content_streams`], decoded against `budget`, which a walk of the page's forms then goes on
+/// spending.
+pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -623,15 +635,19 @@ pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u
             _ => vec![c.clone()],
         },
     };
-    list.into_iter()
-        .map(|o| {
-            let data = match &*doc.resolve(&o) {
-                Object::Stream(s) => s.decoded().unwrap_or_default(),
-                _ => Vec::new(),
-            };
-            (o, data)
-        })
-        .collect()
+    let mut out = Vec::with_capacity(list.len());
+    for o in list {
+        let data = match &*doc.resolve(&o) {
+            Object::Stream(s) => match budget.decode(s) {
+                Ok(data) => data,
+                Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
+                Err(_) => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        out.push((o, data));
+    }
+    Ok(out)
 }
 
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
@@ -887,7 +903,14 @@ struct Carry {
     marked: Vec<Option<usize>>,
     /// For each open marked-content sequence, its optional content group when it is `/OC`.
     layers: Vec<Option<Vec<u8>>>,
+    /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
+    text_left: usize,
 }
+
+/// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
+/// copied for every glyph showing its code, so a small page can otherwise expand into gigabytes;
+/// real pages hold far less (a whole novel is about 1 MB).
+const MAX_PAGE_TEXT: usize = 16 << 20;
 
 impl Carry {
     fn new() -> Self {
@@ -907,7 +930,7 @@ impl Carry {
             vertical: None,
             unreadable: None,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new() }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
     }
 }
 
@@ -1119,7 +1142,13 @@ fn interpret(
                                 let blank =
                                     m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                                 match shown {
-                                    Some(t) => text.push_str(&t),
+                                    Some(t) => {
+                                        carry.text_left = carry
+                                            .text_left
+                                            .checked_sub(t.len())
+                                            .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
+                                        text.push_str(&t);
+                                    }
                                     None => decodable = false,
                                 }
                                 let spacing = ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
@@ -1277,17 +1306,29 @@ fn interpret(
 
 /// The lines of text on a page (0-based), in content order.
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    let p = page_dict(doc, page)?;
+    text_lines_in(doc, &page_dict(doc, page)?, true)
+}
+
+/// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
+/// page draws, not what its marked-content metadata says the glyphs mean. For checks that must
+/// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
+/// through every page doesn't walk the page tree again for each.
+pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
+    text_lines_in(doc, page, false)
+}
+
+/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans.
+fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) -> Result<Vec<TextLine>, EditError> {
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     let mut carry = Carry::new();
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
-    let pieces = Pieces::join(&content_streams(doc, &p.dict).into_iter().map(|(_, d)| d).collect::<Vec<_>>());
+    let pieces = Pieces::join(&content_streams(doc, &p.dict)?.into_iter().map(|(_, d)| d).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
-    let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, Some(&properties))?;
+    let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
         // A single RTL glyph's ActualText (e.g. lam-alef) is an inline ligature, not a
@@ -1490,13 +1531,21 @@ pub const MAX_FORM_DEPTH: usize = 50;
 pub const MAX_FORM_VISITS: usize = 50_000;
 
 /// One page's walk through the form XObjects it draws: how many it entered (the page's
-/// [`MAX_FORM_VISITS`]), and whether a limit left a form unread.
-#[derive(Default)]
+/// [`MAX_FORM_VISITS`]), the bytes the page's content and forms may still decode to, and whether
+/// a limit left a form unread.
 pub(crate) struct FormBudget {
     visits: usize,
-    /// A form was left unread because it nests deeper than [`MAX_FORM_DEPTH`] or comes past
-    /// [`MAX_FORM_VISITS`]: what it draws is missing from the walk.
+    decode: DecodeBudget,
+    /// A form was left unread because it nests deeper than [`MAX_FORM_DEPTH`], comes past
+    /// [`MAX_FORM_VISITS`] or past the decode budget: what it draws is missing from the walk.
     pub(crate) truncated: bool,
+}
+
+impl FormBudget {
+    /// The walk of a page's forms, spending what `decode` has left after the page's content.
+    pub(crate) fn new(decode: DecodeBudget) -> Self {
+        Self { visits: 0, decode, truncated: false }
+    }
 }
 
 /// A form XObject a page draws: its object, content, resources and its matrix composed with the
@@ -1519,7 +1568,7 @@ pub(crate) fn form_call(
     path: &[pdfcraft_cos::ObjRef],
     budget: &mut FormBudget,
 ) -> Option<FormCall> {
-    let limited = path.len() >= MAX_FORM_DEPTH || budget.visits >= MAX_FORM_VISITS;
+    let limited = path.len() >= MAX_FORM_DEPTH || budget.visits >= MAX_FORM_VISITS || budget.decode.remaining() == 0;
     // Once a limit has cut the page short, refusing the rest costs nothing more.
     if limited && budget.truncated {
         return None;
@@ -1546,13 +1595,16 @@ pub(crate) fn form_call(
     });
     // A form without its own resources uses the ones it was drawn with (PDF 1.1 files).
     let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+    let data = match budget.decode.decode(s) {
+        Ok(data) => data,
+        Err(_) if budget.decode.remaining() == 0 => {
+            budget.truncated = true;
+            return None;
+        }
+        Err(_) => Vec::new(),
+    };
     budget.visits = budget.visits.saturating_add(1);
-    Some(FormCall {
-        obj,
-        data: s.decoded().unwrap_or_default(),
-        resources: own.unwrap_or_else(|| resources.clone()),
-        ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)),
-    })
+    Some(FormCall { obj, data, resources: own.unwrap_or_else(|| resources.clone()), ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
 }
 
 /// The lines a page shows as it reads, including text drawn by form XObjects (which
@@ -1578,7 +1630,7 @@ fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), E
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
             while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts)?;
+                enter(w, resources, &name, ts, &mut carry.text_left)?;
                 // Text after a form starts a new line.
                 last = None;
             }
@@ -1590,21 +1642,23 @@ fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), E
             add_shown(&mut w.lines, &mut last, s, si);
         }
         for (_, name, ts) in forms {
-            enter(w, resources, &name, ts)?;
+            enter(w, resources, &name, ts, &mut carry.text_left)?;
         }
         Ok(())
     }
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts) -> Result<(), EditError> {
+    /// `text_left`: the page's text budget, shared with the forms the page draws.
+    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize) -> Result<(), EditError> {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new() };
+        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
             w.path.push(r);
         }
         walk(w, &ops, &form.resources, &mut carry, &|_| stream)?;
+        *text_left = carry.text_left;
         if form.obj.is_some() {
             w.path.pop();
         }
@@ -1612,8 +1666,9 @@ fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), E
     }
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
-    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::default() };
+    let mut decode = DecodeBudget::page();
+    let streams = content_streams_within(doc, &p.dict, &mut decode)?;
+    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::new(decode) };
     let mut carry = Carry::new();
     // Read the page's streams as the one stream they are, in one pass, as rendering and editing
     // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
@@ -2235,7 +2290,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
@@ -2440,7 +2495,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     drops.extend(target.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()));
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
@@ -2486,14 +2541,17 @@ pub fn reading_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, Edi
 pub struct ReadingBlocks {
     /// The paragraphs, as [`reading_blocks`] returns them.
     pub blocks: Vec<TextBlock>,
-    /// The page draws forms nested deeper than [`MAX_FORM_DEPTH`], or more of them than
-    /// [`MAX_FORM_VISITS`]. Reading leaves those out to stay bounded on hostile files, so their
-    /// text is missing from `blocks`; [`crate::reading_images`] walks the same forms and misses
+    /// The page draws forms nested deeper than [`MAX_FORM_DEPTH`], more of them than
+    /// [`MAX_FORM_VISITS`], or forms that run past what the page's content left of its decode
+    /// budget. Reading leaves those forms out to stay bounded on hostile files, so their text
+    /// is missing from `blocks`; [`crate::reading_images`] walks the same forms and misses
     /// their images too.
     pub truncated: bool,
 }
 
-/// [`reading_blocks`], saying whether the limits that bound reading left text out.
+/// [`reading_blocks`], saying whether the limits that bound reading left text out. A page
+/// whose `/Contents` alone runs past its decode budget is an [`EditError::Invalid`], not a
+/// truncated result.
 pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBlocks, EditError> {
     let (lines, truncated) = reading_lines(doc, page)?;
     Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
@@ -2661,7 +2719,7 @@ fn rewrite_block_from(
     {
         return rewrite_styled_block(doc, page, &b, &lines, text, style);
     }
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // Explicit line breaks stay (#1443); within a line, runs of white space become one space.
@@ -2722,8 +2780,9 @@ fn rewrite_block_from(
     // A paragraph keeps its width (or takes the one asked for); a single line grows to the right
     // (to the left when right-to-left), up to the page's margin.
     let width = match style.width {
-        // Capped at the largest page PDF allows (14 400 pt).
-        Some(w) if w.is_finite() => w.clamp(size * k, 14_400.0),
+        // Capped at the largest page PDF allows (14 400 pt), even for text set larger than that
+        // (`clamp` panics when its minimum is the larger, or NaN).
+        Some(w) if w.is_finite() => w.clamp((size * k).min(14_400.0), 14_400.0),
         Some(_) => return Err(EditError::Invalid("the paragraph's width must be a number".into())),
         // Turned text: the page's margins are along another axis. A single line grows (below).
         None if !upright => (frame[2] - frame[0]).max(size * k),
@@ -3044,7 +3103,7 @@ pub(crate) fn selectable_blocks(
     excluded: &std::collections::BTreeSet<pdfcraft_cos::ObjRef>,
 ) -> Result<Vec<(usize, TextBlock)>, EditError> {
     let p = page_dict(doc, page)?;
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let lines = text_lines(doc, page)?;
     Ok(group_blocks(&lines)
         .into_iter()
@@ -3133,7 +3192,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         return Ok(());
     }
     let p = page_dict(doc, page)?;
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
     let mut selected = std::collections::BTreeSet::new();

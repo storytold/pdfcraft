@@ -172,11 +172,24 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
 /// start and end of its value, and its quote character. Only matches inside a start tag.
 fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
     let mut from = 0;
+    // The last `<` and `>` before the match, found by one pass over the packet rather than by
+    // searching back from every match.
+    let (mut scanned, mut last_open, mut last_close) = (0, None, None);
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
         from = i + name.len();
         let before = xmp.get(..i)?;
+        let gap = xmp.get(scanned..i)?;
+        #[cfg(test)]
+        crate::work(gap.len());
+        if let Some(at) = gap.rfind('<') {
+            last_open = Some(scanned + at);
+        }
+        if let Some(at) = gap.rfind('>') {
+            last_close = Some(scanned + at);
+        }
+        scanned = i;
         // Preceded by whitespace, and inside a tag (the last `<` comes after the last `>`).
-        if !before.ends_with(char::is_whitespace) || before.rfind('<') < before.rfind('>') || before.rfind('<').is_none() {
+        if !before.ends_with(char::is_whitespace) || last_open < last_close || last_open.is_none() {
             continue;
         }
         let rest = xmp.get(from..)?;
@@ -268,5 +281,19 @@ mod tests {
                 let _ = set_property(packet, "pdf:Keywords", PDF, Shape::Text, value);
             }
         }
+    }
+
+    #[test]
+    fn attribute_search_scans_the_packet_once() {
+        // Thousands of attribute-like words in one text node: none is inside a tag.
+        let packet = format!("<x:xmpmeta><rdf:RDF><rdf:Description>{}</rdf:Description></rdf:RDF></x:xmpmeta>", " rdf:about".repeat(5_000));
+        crate::take_work();
+        assert_eq!(attribute_span(&packet, "rdf:about"), None);
+        let work = crate::take_work();
+        assert!(work <= 2 * packet.len(), "{work} bytes scanned in a {}-byte packet", packet.len());
+        // A real attribute after them is still found.
+        let packet = packet.replace("</rdf:Description>", "</rdf:Description><rdf:Description rdf:about='u'/>");
+        let (_, s, e, q) = attribute_span(&packet, "rdf:about").unwrap();
+        assert_eq!((packet.get(s..e), q), (Some("u"), '\''));
     }
 }

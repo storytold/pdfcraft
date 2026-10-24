@@ -1735,6 +1735,7 @@
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	RSA parašo „DigestInfo“ neturi parametro NULL (taip įrašo senesnės pasirašymo programos); jis vis tiek perskaitytas.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Subjekto {} sertifikatas neleidžia tiek žemesnio lygio sertifikavimo įstaigų sertifikatų (grandinės ilgio riba), todėl juo nepatvirtinamas {} sertifikatas.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Subjekto {} sertifikatas nėra sertifikavimo įstaigos sertifikatas, leidžiantis išduoti sertifikatus, todėl juo nepatvirtinamas {} sertifikatas.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Subjekto {} sertifikatas pasirašymo metu negaliojo, todėl juo nepatvirtinamas {} sertifikatas.
 	The checker found problems which may prevent the document from being fully accessible.	Tikrintuvas aptiko problemų, dėl kurių dokumentas gali būti nevisiškai pritaikytas prieinamumui.
 	The document has been altered or corrupted since the signature was applied.	Po pasirašymo dokumentas buvo pakeistas arba pažeistas.
@@ -1783,6 +1784,7 @@
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Pasirašiusiojo tapatybė nežinoma, nes jo sertifikato nėra patikimų sertifikatų sąraše ir nė vienas aukštesnio lygio sertifikatas nėra patikimas.
 	The signer's identity is valid.	Pasirašiusiojo tapatybė patvirtinta.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Laiko žymą išdavusios įstaigos sertifikatas žymos sukūrimo metu negaliojo.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
 	The timestamp contents are not hexadecimal.	Laiko žymos turinys nėra šešioliktainis.
 	The timestamp has no valid byte range.	Laiko žyma neturi tinkamo baitų intervalo.
 	The timestamp token could not be read ({}).	Nepavyko perskaityti laiko žymos žetono ({}).

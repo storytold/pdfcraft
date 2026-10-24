@@ -532,7 +532,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         } else {
             Some(by_som.iter().filter(|(som, _)| names.iter().any(|n| som_matches(som, n))).map(|(_, f)| f.clone()).collect())
         };
-        if listed.as_ref().is_some_and(|l| l.is_empty()) {
+        if listed.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
         }
         pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;

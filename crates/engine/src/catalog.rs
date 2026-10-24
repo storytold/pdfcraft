@@ -596,6 +596,19 @@ mod tests {
         assert!(menus >= 3);
     }
 
+    // Regression test for #2028: Edit text & images sat under "Add content", though it changes
+    // what is already on the page; it belongs first under "Modify page".
+    #[test]
+    fn edit_text_and_images_is_the_first_item_under_modify_page() {
+        let edit = group("edit").expect("the Edit a PDF tool");
+        let section_of = |command: &str| edit.sections.iter().find(|s| s.items.iter().any(|i| i.command == command)).map(|s| s.title);
+        assert_eq!(section_of("edit.edit_text"), Some("Modify page"), "Edit text & images is a Modify page tool");
+        let modify = edit.sections.iter().find(|s| s.title == "Modify page").expect("a Modify page section");
+        assert_eq!(modify.items.first().map(|i| i.command), Some("edit.edit_text"), "and the first one, so it is not below the fold");
+        let add = edit.sections.iter().find(|s| s.title == "Add content").expect("an Add content section");
+        assert!(add.items.iter().all(|i| i.command != "edit.edit_text"), "it adds nothing, so it is not listed under Add content");
+    }
+
     #[test]
     fn every_update_and_remove_command_is_reachable_from_a_tool_entry() {
         let reachable: HashSet<&str> =

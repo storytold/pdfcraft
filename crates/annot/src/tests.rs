@@ -1504,3 +1504,174 @@ fn typed_signature_uses_nonzero_winding_fill() {
     assert!(ap.ends_with("h\nf\n"), "expected non-zero winding fill (`f`), got: {ap}");
     assert!(!ap.contains("f*"), "must not use even-odd fill (`f*`): {ap}");
 }
+
+/// Many page tree nodes sharing one `/Kids` array read it once, not once per node.
+#[test]
+fn page_walk_reads_a_shared_kids_array_once() {
+    let mut doc = fixture();
+    let root = ObjRef { num: 2, generation: 0 };
+    let (first, second) = (ObjRef { num: 3, generation: 0 }, ObjRef { num: 4, generation: 0 });
+    let shared = doc.add(Object::Array([Object::Ref(first), Object::Ref(second)].into_iter().cycle().take(2_000).collect()));
+    let nodes: Vec<Object> = (0..1_000)
+        .map(|_| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Kids".to_vec(), Object::Ref(shared));
+            Object::Ref(doc.add(d))
+        })
+        .collect();
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
+    let mut walk = PageWalk::new(&doc, root);
+    let pages: Vec<ObjRef> = walk.by_ref().collect();
+    assert_eq!(pages, [first, second]);
+    assert!(walk.examined <= 10_000, "{} kids entries read", walk.examined);
+}
+
+/// Adding many links to a page extends its `/Annots` once, not once per link.
+#[test]
+fn many_links_extend_a_page_annotation_list_once() {
+    let mut doc = fixture();
+    let before = annots(&doc, page_refs(&doc).unwrap()[0]).len();
+    let n = 2_000;
+    let rects: Vec<[f64; 4]> = (0..n).map(|i| [10.0, i as f64 * 0.1, 50.0, i as f64 * 0.1 + 5.0]).collect();
+    ANNOTS_ENTRIES_COPIED.with(|c| c.set(0));
+    let added = links::add_many(&mut doc, &[(0, rects, "https://example.com".into())], &links::LinkStyle::default()).unwrap();
+    let copied = ANNOTS_ENTRIES_COPIED.with(std::cell::Cell::get);
+    assert_eq!(added, n);
+    assert_eq!(annots(&doc, page_refs(&doc).unwrap()[0]).len(), before + n);
+    assert!(copied <= 4 * n, "{copied} annotation entries copied for {n} links");
+}
+
+/// A batch with one bad entry adds nothing: no link objects are left behind unattached.
+#[test]
+fn a_link_batch_with_a_bad_entry_creates_no_objects() {
+    let mut doc = fixture();
+    let page = page_refs(&doc).unwrap()[0];
+    let before = (annots(&doc, page).len(), doc.scan_objects().count());
+    let good = [10.0, 10.0, 50.0, 20.0];
+    let style = links::LinkStyle::default();
+    for bad in [
+        vec![(0, vec![good], "https://example.com".to_string()), (0, vec![good, [f64::NAN, 0.0, 10.0, 10.0]], "https://example.com".into())],
+        vec![(0, vec![good], "https://example.com".to_string()), (0, vec![good], "  ".into())],
+        vec![(0, vec![good], "https://example.com".to_string()), (99, vec![good], "https://example.com".into())],
+    ] {
+        assert!(links::add_many(&mut doc, &bad, &style).is_err());
+        assert_eq!((annots(&doc, page).len(), doc.scan_objects().count()), before);
+    }
+}
+
+fn doc_of(objs: &[String]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).expect("opens")
+}
+
+#[test]
+fn link_listing_skips_repeated_refs_and_caps_web_address_text() {
+    // One link referenced 1000 times, and 300 small links sharing one 64 KiB address.
+    let annots = format!("{}{}", " 4 0 R".repeat(1000), "<< /Subtype /Link /Rect [0 0 1 1] /A 5 0 R >>".repeat(300));
+    let doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{annots}] >>"),
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A 5 0 R >>".into(),
+        "<< /S /URI /URI 6 0 R >>".into(),
+        format!("({})", "u".repeat(64 << 10)),
+    ]);
+    let all = links::list(&doc);
+    assert_eq!(all.iter().filter(|l| l.obj == Some(ObjRef::new(4, 0))).count(), 1);
+    assert_eq!(all.len(), 301, "every distinct link is still listed");
+    let kept: usize = all.iter().map(|l| if let links::LinkAction::Uri(u) = &l.action { u.len() } else { 0 }).sum();
+    assert!(kept <= links::MAX_URI_BYTES, "{kept} bytes of web addresses kept");
+    assert!(matches!(&all[0].action, links::LinkAction::Uri(u) if u.len() == 64 << 10));
+}
+
+#[test]
+fn web_address_cap_counts_the_text_kept_after_conversion() {
+    // 200 links sharing a 64 KiB address of invalid UTF-8: 12.5 MiB of bytes, each byte kept as a
+    // three-byte replacement character.
+    let annots = "<< /Subtype /Link /Rect [0 0 1 1] /A 4 0 R >>".repeat(200);
+    let doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{annots}] >>"),
+        "<< /S /URI /URI 5 0 R >>".into(),
+        format!("<{}>", "FF".repeat(64 << 10)),
+    ]);
+    let all = links::list(&doc);
+    assert_eq!(all.len(), 200);
+    let kept: usize = all.iter().map(|l| if let links::LinkAction::Uri(u) = &l.action { u.len() } else { 0 }).sum();
+    assert!(kept <= links::MAX_URI_BYTES, "{kept} bytes of web addresses kept");
+    assert!(kept > 0);
+}
+
+#[test]
+fn cloud_outline_has_a_bump_budget() {
+    // 50 long edges would each ask for 10,000 bumps of radius 1.
+    let pts: Vec<(f64, f64)> = (0..50).map(|i| (f64::from(i) * std::f64::consts::TAU / 50.0).sin_cos()).map(|(s, c)| (1e7 * c, 1e7 * s)).collect();
+    let bumps = appearance::cloud_path(&pts, 1.0).lines().filter(|l| l.ends_with(" c")).count();
+    assert!((pts.len()..=appearance::MAX_CLOUD_BUMPS + 2 * pts.len()).contains(&bumps), "{bumps} bumps");
+}
+
+/// A note's drawn icon (its built appearance's content) for `/Name` (none when `None`) and `/C`.
+fn note_drawing(name: Option<&str>, color: [f64; 3]) -> Vec<u8> {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Text"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 20.0, 20.0].map(Object::Real).to_vec()));
+    d.set(b"C".to_vec(), Object::Array(color.map(Object::Real).to_vec()));
+    if let Some(n) = name {
+        d.set(b"Name".to_vec(), Object::name(n));
+    }
+    crate::appearance::build(&d).expect("a note is drawn").decoded().unwrap()
+}
+
+/// ISO 32000-2 §12.5.6.4, Table 175: a viewer shall provide icons for the seven standard names,
+/// and may support more. Each of the fourteen names PdfCraft offers draws a shape of its own, so
+/// a note shows the icon it names; a name it doesn't know, and a note without one, draw `Note`
+/// (the table's default).
+#[test]
+fn every_note_icon_draws_its_own_shape() {
+    let yellow = [1.0, 0.82, 0.0];
+    let drawn: Vec<Vec<u8>> = NoteIcon::ALL.iter().map(|i| note_drawing(Some(i.name()), yellow)).collect();
+    for (i, a) in drawn.iter().enumerate() {
+        for (j, b) in drawn.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "{} and {} look alike", NoteIcon::ALL[i].name(), NoteIcon::ALL[j].name());
+        }
+    }
+    let note = note_drawing(Some("Note"), yellow);
+    assert_eq!(note_drawing(Some("Sparkle"), yellow), note, "an unknown name");
+    assert_eq!(note_drawing(None, yellow), note, "no name");
+    for icon in NoteIcon::ALL {
+        assert_eq!(NoteIcon::from_name(icon.name()), Some(icon));
+    }
+}
+
+/// A note named with one of the further icons reads as that icon, and a colour change redraws it
+/// as itself, not as a page.
+#[test]
+fn a_star_note_keeps_its_star_when_recoloured() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [100 100 120 120] /Name /Star /C [1 0.82 0] /F 4 >>",
+    ]);
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.icon), Some(NoteIcon::Star));
+    set_style(&mut doc, 0, 0, Some([0.0, 0.0, 1.0]), None, None, None, &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[0];
+    assert_eq!(d.name(b"Name"), Some(&b"Star"[..]));
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!() };
+    assert_eq!(s.decoded().unwrap(), note_drawing(Some("Star"), [0.0, 0.0, 1.0]));
+}

@@ -1692,7 +1692,7 @@ fn outline_with(items: &[&str]) -> Document {
         format!("<< /Type /Outlines /First 5 0 R /Count {} >>", items.len()),
         "<< /Type /Page /Parent 2 0 R >>".into(),
     ];
-    b.extend(items.iter().map(|s| s.to_string()));
+    b.extend(items.iter().map(ToString::to_string));
     open(build(&b, "/Root 1 0 R"))
 }
 
@@ -3131,4 +3131,239 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_copying_attributes() {
     assert_eq!(media_box, Some(vec![0, 0, 500, 500]), "own MediaBox kept over the root's");
     assert!(walk.next().is_none());
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
+}
+
+/// A one-page document whose page carries `annots` (object bodies 5…), with `extra` bodies after them.
+fn page_with_annots(annots: &[String], extra: &[String], catalog_extra: &str) -> Document {
+    let n = annots.len();
+    let refs: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{refs}] >>"),
+        body("P1"),
+    ];
+    b.extend(annots.iter().cloned());
+    b.extend(extra.iter().cloned());
+    open(build(&b, "/Root 1 0 R"))
+}
+
+#[test]
+fn registering_many_imported_fields_is_linear() {
+    let n = 2_000;
+    let widgets: Vec<String> = (0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /Rect [0 0 10 10] >>")).collect();
+    let src = page_with_annots(&widgets, &[], "");
+    take_work();
+    let out = extract_pages(&src, &[0]).unwrap();
+    let work = take_work();
+    assert!(work <= 4 * n, "{work} steps registering {n} fields");
+    let form = out.resolve(catalog(&out).get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(form.get(b"Fields").and_then(|f| f.as_array()).map(Vec::len), Some(n));
+}
+
+#[test]
+fn renaming_many_same_named_fields_resumes_the_suffix_search() {
+    let n = 2_000;
+    let widgets: Vec<String> = (0..n).map(|_| "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [0 0 10 10] >>".to_string()).collect();
+    let src = page_with_annots(&widgets, &[], "");
+    take_work();
+    let renames = combine_field_conflicts(&[&src]).remove(0);
+    let work = take_work();
+    assert!(work <= 4 * n, "{work} suffix attempts for {n} fields");
+    // Still the first free variant, in order.
+    assert_eq!(renames.len(), n - 1);
+    assert_eq!(renames.first(), Some(&("x".to_string(), "x-1".to_string())));
+    assert_eq!(renames.last(), Some(&("x".to_string(), format!("x-{}", n - 1))));
+}
+
+#[test]
+fn annotation_actions_share_the_objects_they_copy() {
+    // Fifty links whose URI actions all point at one string object.
+    let n = 50;
+    let links: Vec<String> =
+        (0..n).map(|_| format!("<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI {} 0 R >> >>", n + 5)).collect();
+    let src = page_with_annots(&links, &["(https://example.com/shared)".into()], "");
+    let out = extract_pages(&src, &[0]).unwrap();
+    let copies = out
+        .object_numbers()
+        .into_iter()
+        .filter(|&o| out.get(ObjRef::new(o, out.generation(o))).as_string().is_some_and(|s| s.bytes == b"https://example.com/shared"))
+        .count();
+    assert_eq!(copies, 1, "the shared URI is copied once, not once per action");
+}
+
+#[test]
+fn name_trees_with_shared_kids_are_walked_once_per_node() {
+    // Each level lists the next one twice: 2^depth paths through `depth` nodes.
+    let depth = 10;
+    let first = 6; // after the catalog, pages, page, content and the link
+    let mut extra = Vec::new();
+    for tree in 0..2 {
+        let base = first + tree * (depth + 1);
+        for level in 0..depth {
+            let next = base + level + 1;
+            extra.push(format!("<< /Kids [{next} 0 R {next} 0 R] >>"));
+        }
+        extra.push(if tree == 0 {
+            "<< /Names [(a.txt) << /Type /Filespec /F (a.txt) >>] >>".into()
+        } else {
+            "<< /Names [(other) [3 0 R /Fit]] >>".into()
+        });
+    }
+    let link = "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest (missing) >>".to_string();
+    let catalog_extra = format!("/Names << /EmbeddedFiles {first} 0 R /Dests {} 0 R >>", first + depth + 1);
+    let src = page_with_annots(&[link], &extra, &catalog_extra);
+    take_work();
+    let out = combine(&[("a", &src)]).unwrap();
+    let work = take_work();
+    assert!(work <= 8 * (depth + 1), "{work} name-tree nodes visited");
+    let names = out.resolve(catalog(&out).get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let tree = out.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(tree.get(b"Names").and_then(|n| n.as_array()).map(Vec::len), Some(2), "one attachment, listed once");
+}
+
+#[test]
+fn a_form_drawing_itself_repeatedly_is_analysed_once() {
+    let form = "/F Do /F Do /F Do /F Do";
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /F 5 0 R /Unused 6 0 R >> >> >>".into(),
+        "<< /Length 5 >>\nstream\n/F Do\nendstream".into(),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /F 5 0 R >> >> /Length {} >>\nstream\n{form}\nendstream",
+            form.len()
+        ),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    take_work();
+    let out = extract_pages(&src, &[0]).unwrap();
+    let work = take_work();
+    assert!(work <= 4, "{work} form analyses");
+    let page = out.get(pages(&out).unwrap()[0].obj).as_dict().cloned().unwrap();
+    let res = out.resolve(page.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let x = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    assert!(x.contains(b"F") && !x.contains(b"Unused"), "pruning still keeps what is drawn and drops the rest");
+}
+
+/// One page whose /Contents names the same 1 MiB stream 300 times (a few kilobytes on disk).
+fn repeated_contents() -> Document {
+    use pdfcraft_cos::{Dict, Stream};
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let pages = doc.add(Object::Null);
+    let page: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Page".to_vec())),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::from).to_vec())),
+        (b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream); 300])),
+    ]
+    .into_iter()
+    .collect();
+    let page = doc.add(page);
+    let tree: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Pages".to_vec())),
+        (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+        (b"Count".to_vec(), Object::Int(1)),
+    ]
+    .into_iter()
+    .collect();
+    doc.set(pages, Object::Dict(tree));
+    let catalog: Dict = [(b"Type".to_vec(), Object::Name(b"Catalog".to_vec())), (b"Pages".to_vec(), Object::Ref(pages))].into_iter().collect();
+    let catalog = doc.add(catalog);
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    doc
+}
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    let src = repeated_contents();
+    let mut dst = Document::new_empty();
+    if let Ok((form, _)) = page_as_form(&mut dst, &src, 0) {
+        let Object::Stream(s) = &*dst.get(form) else { panic!("not a stream") };
+        let len = s.decoded().unwrap().len();
+        assert!(len <= pdfcraft_cos::MAX_PAGE_DECODED + 300, "{len} bytes");
+    }
+}
+
+/// #3193: the bookmark list reads a bookmark's colour and style as the inspector does (ISO
+/// 32000-2 §12.3.3, Tables 151 and 152): `/C` within 0–1, black and malformed values as none,
+/// `/F` bit 1 italic and bit 2 bold, through indirect values too.
+#[test]
+fn bookmarks_report_their_colour_and_style() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 10 0 R /Count 6 >>".into(),
+    ];
+    objs.push("<< /Title (Plain) /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".into()); // 5
+    objs.push("<< /Title (Red bold) /Parent 4 0 R /Prev 5 0 R /Next 7 0 R /Dest [3 0 R /Fit] /C [1 0 0] /F 2 >>".into()); // 6
+    objs.push("<< /Title (Indirect) /Parent 4 0 R /Prev 6 0 R /Next 8 0 R /Dest [3 0 R /Fit] /C 11 0 R /F 12 0 R >>".into()); // 7
+    objs.push("<< /Title (Black) /Parent 4 0 R /Prev 7 0 R /Next 9 0 R /Dest [3 0 R /Fit] /C [0 0 0] /F 1 >>".into()); // 8
+    objs.push("<< /Title (Bright) /Parent 4 0 R /Prev 8 0 R /Next 10 0 R /Dest [3 0 R /Fit] /C [2 -1 0.5] >>".into()); // 9
+    objs.push("<< /Title (Short) /Parent 4 0 R /Prev 9 0 R /Dest [3 0 R /Fit] /C [1 0] /F 4 >>".into()); // 10
+    objs.push("[0 0.5 0]".into()); // 11
+    objs.push("3".into()); // 12
+    let doc = open(build(&objs, "/Root 1 0 R"));
+    let got: Vec<(String, Option<[f32; 3]>, bool, bool)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.color, b.italic, b.bold)).collect();
+    assert_eq!(
+        got,
+        [
+            ("Plain".into(), None, false, false),
+            ("Red bold".into(), Some([1.0, 0.0, 0.0]), false, true),
+            ("Indirect".into(), Some([0.0, 0.5, 0.0]), true, true),
+            ("Black".into(), None, true, false),
+            ("Bright".into(), Some([1.0, 0.0, 0.5]), false, false),
+            ("Short".into(), None, false, false),
+        ]
+    );
+}
+
+/// #3193: setting a bookmark's style and colour writes what ISO 32000-2 §12.3.3 asks for: bold is
+/// `/F 2` and bold italic `/F 3` (Table 152), and neither removes `/F`, whose default is 0; a
+/// style change leaves `/C` alone and a colour change leaves `/F`; black, the default (Table 151),
+/// removes `/C`. Bits the table doesn't define are kept, and a colour outside 0–1 is refused.
+#[test]
+fn bookmark_style_and_colour_are_set_as_the_table_says() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 6 0 R /Count 2 >>".into(),
+    ];
+    objs.push("<< /Title (Plain) /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".into()); // 5
+    objs.push("<< /Title (Odd bits) /Parent 4 0 R /Prev 5 0 R /Dest [3 0 R /Fit] /F 4 /C [1 0 0] >>".into()); // 6
+    let mut doc = open(build(&objs, "/Root 1 0 R"));
+    let raw = |doc: &Document, n: u32, key: &[u8]| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.get(key).cloned());
+    crate::set_bookmark_style(&mut doc, &[0], Some(true), None).unwrap();
+    assert_eq!(raw(&doc, 5, b"F"), Some(Object::Int(2)), "bold");
+    crate::set_bookmark_style(&mut doc, &[0], None, Some(true)).unwrap();
+    assert_eq!(raw(&doc, 5, b"F"), Some(Object::Int(3)), "bold italic");
+    crate::set_bookmark_color(&mut doc, &[0], Some([0.0, 0.5, 0.0])).unwrap();
+    assert_eq!(raw(&doc, 5, b"C"), Some(Object::Array(vec![Object::Real(0.0), Object::Real(0.5), Object::Real(0.0)])));
+    assert_eq!(raw(&doc, 5, b"F"), Some(Object::Int(3)), "a colour change keeps the style");
+    crate::set_bookmark_style(&mut doc, &[0], Some(false), Some(false)).unwrap();
+    assert_eq!(raw(&doc, 5, b"F"), None, "regular removes /F");
+    assert!(raw(&doc, 5, b"C").is_some(), "a style change keeps the colour");
+    crate::set_bookmark_color(&mut doc, &[0], Some([0.0; 3])).unwrap();
+    assert_eq!(raw(&doc, 5, b"C"), None, "black removes /C");
+
+    crate::set_bookmark_style(&mut doc, &[1], Some(true), None).unwrap();
+    assert_eq!(raw(&doc, 6, b"F"), Some(Object::Int(6)), "bold beside a bit the table doesn't define");
+    crate::set_bookmark_style(&mut doc, &[1], Some(false), Some(false)).unwrap();
+    assert_eq!(raw(&doc, 6, b"F"), Some(Object::Int(4)), "that bit stays");
+    crate::set_bookmark_color(&mut doc, &[1], None).unwrap();
+    assert_eq!(raw(&doc, 6, b"C"), None, "no colour is black");
+    for bad in [[1.5, 0.0, 0.0], [0.0, -0.1, 0.0], [f64::NAN, 0.0, 0.0]] {
+        assert_eq!(crate::set_bookmark_color(&mut doc, &[1], Some(bad)), Err(crate::OutlineError::BadColor), "{bad:?}");
+    }
+    assert_eq!(crate::set_bookmark_style(&mut doc, &[7], Some(true), None), Err(crate::OutlineError::NoSuchBookmark(vec![7])));
+
+    crate::set_bookmark_style(&mut doc, &[0], Some(true), Some(true)).unwrap();
+    crate::set_bookmark_color(&mut doc, &[0], Some([0.0, 0.0, 1.0])).unwrap();
+    let saved = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    let got: Vec<_> = bookmarks(&saved).into_iter().map(|b| (b.color, b.bold, b.italic)).collect();
+    assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
 }

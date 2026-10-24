@@ -122,6 +122,12 @@ pub(crate) fn run_order(doc: &Document, fields: &[Field]) -> (Vec<(usize, bool)>
     (run, extra)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Read names compared while merging a field's reads.
+    pub(crate) static NAMES_COMPARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The form's calculation order (`fields` as [`fields`] reads them), with each calculated field's
 /// reads and issues, and Fix order's order.
 pub fn calculation_order(doc: &Document, fields: &[Field]) -> CalculationOrder {
@@ -132,8 +138,11 @@ pub fn calculation_order(doc: &Document, fields: &[Field]) -> CalculationOrder {
         .map(|(f, _)| {
             let mut names = f.actions.calculate.reads();
             if let Some(js) = &f.actions.scripts.calculate {
+                let mut known: HashSet<String> = names.iter().cloned().collect();
                 for name in crate::af::calculation_reads(js) {
-                    if !names.contains(&name) {
+                    #[cfg(test)]
+                    NAMES_COMPARED.with(|n| n.set(n.get() + 1));
+                    if known.insert(name.clone()) {
                         names.push(name);
                     }
                 }
@@ -234,13 +243,7 @@ fn components(links: &[Vec<usize>]) -> Vec<usize> {
                 continue;
             }
             if low[v] == index[v] {
-                while let Some(w) = stack.pop() {
-                    on_stack[w] = false;
-                    component[w] = count;
-                    if w == v {
-                        break;
-                    }
-                }
+                pop_component(&mut stack, &mut on_stack, &mut component, v, count);
                 count += 1;
             }
             if let Some(&(parent, _)) = work.last() {
@@ -249,6 +252,16 @@ fn components(links: &[Vec<usize>]) -> Vec<usize> {
         }
     }
     component
+}
+
+fn pop_component(stack: &mut Vec<usize>, on_stack: &mut [bool], component: &mut [usize], v: usize, count: usize) {
+    while let Some(w) = stack.pop() {
+        on_stack[w] = false;
+        component[w] = count;
+        if w == v {
+            break;
+        }
+    }
 }
 
 /// Fix order: every node after the nodes it reads in other components, the earliest ready node

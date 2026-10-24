@@ -120,12 +120,18 @@ fn smooth_curve(pts: &[(f64, f64)]) -> String {
     smooth_segments(pts).iter().map(|[a, b, e]| format!("{} {} {} {} {} {} c\n", n(a.0), n(a.1), n(b.0), n(b.1), n(e.0), n(e.1))).collect()
 }
 
+/// Bumps one cloudy outline draws at most (plus one per edge); past it the bumps grow.
+pub(crate) const MAX_CLOUD_BUMPS: usize = 20_000;
+
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
 pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
     let area: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     // Outward normal of an edge: to the right of travel for counter-clockwise outlines.
     let sign = if area >= 0.0 { 1.0 } else { -1.0 };
+    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| (b.0 - a.0).hypot(b.1 - a.1)).sum();
+    // Each edge rounds to at least one bump, so the total stays within the budget plus one per edge.
+    let r = r.max(perimeter / (2.0 * MAX_CLOUD_BUMPS as f64));
     let mut c = String::new();
     for (i, (a, b)) in pts.iter().zip(pts.iter().cycle().skip(1)).enumerate() {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -969,14 +975,107 @@ fn attach_icon(name: &str, col: Rgb) -> String {
     s
 }
 
+/// A closed circle path (four Bézier quarters) centred on (`x`, `y`).
+fn circle_path(x: f64, y: f64, r: f64) -> String {
+    let k = r * 0.5523;
+    let p = |v: f64| n(v);
+    format!(
+        "{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c h\n",
+        p(x + r),
+        p(y),
+        p(x + r),
+        p(y + k),
+        p(x + k),
+        p(y + r),
+        p(x),
+        p(y + r),
+        p(x - k),
+        p(y + r),
+        p(x - r),
+        p(y + k),
+        p(x - r),
+        p(y),
+        p(x - r),
+        p(y - k),
+        p(x - k),
+        p(y - r),
+        p(x),
+        p(y - r),
+        p(x + k),
+        p(y - r),
+        p(x + r),
+        p(y - k),
+        p(x + r),
+        p(y)
+    )
+}
+
+/// A note's icon in a 20 × 20 box: filled in `col`, outlined in dark grey. Each name of
+/// [`crate::NoteIcon`] has its own shape, so the icon a note names is the one it shows (ISO
+/// 32000-2 §12.5.6.4, Table 175); a name PdfCraft doesn't know draws as `Note`.
 fn note_icon(name: &str, col: Rgb) -> String {
     let mut s = format!("{}0.25 0.25 0.25 RG 0.8 w 1 j 1 J\n", rg(col));
-    if name == "Comment" {
-        s.push_str("3 18.5 m 17 18.5 l 18.5 18.5 18.5 17 18.5 17 c 18.5 8 l 18.5 6.5 17 6.5 17 6.5 c 9.5 6.5 l 5 2 l 5.5 6.5 l 3 6.5 l 1.5 6.5 1.5 8 1.5 8 c 1.5 17 l 1.5 18.5 3 18.5 3 18.5 c h B\n");
-        s.push_str("4.5 15 m 15.5 15 l 4.5 12.5 m 15.5 12.5 l 4.5 10 m 11.5 10 l S\n");
-    } else {
-        s.push_str("3 19 m 13 19 l 17 15 l 17 1 l 3 1 l h B\n13 19 m 13 15 l 17 15 l S\n");
-        s.push_str("5.5 12 m 14.5 12 l 5.5 9 m 14.5 9 l 5.5 6 m 11.5 6 l S\n");
+    match name {
+        "Comment" => {
+            s.push_str("3 18.5 m 17 18.5 l 18.5 18.5 18.5 17 18.5 17 c 18.5 8 l 18.5 6.5 17 6.5 17 6.5 c 9.5 6.5 l 5 2 l 5.5 6.5 l 3 6.5 l 1.5 6.5 1.5 8 1.5 8 c 1.5 17 l 1.5 18.5 3 18.5 3 18.5 c h B\n");
+            s.push_str("4.5 15 m 15.5 15 l 4.5 12.5 m 15.5 12.5 l 4.5 10 m 11.5 10 l S\n");
+        }
+        // A key lying flat: a round bow with a hole, a shaft and two bits.
+        "Key" => {
+            s.push_str(&circle_path(5.5, 10.0, 4.5));
+            s.push_str(&circle_path(5.0, 10.0, 1.5));
+            s.push_str(
+                "9.5 11.2 m 18.5 11.2 l 18.5 8.8 l 17 8.8 l 17 6 l 15 6 l 15 8.8 l 13.5 8.8 l 13.5 6.8 l 11.5 6.8 l 11.5 8.8 l 9.5 8.8 l h B*\n",
+            );
+        }
+        // A disc with a question mark.
+        "Help" => {
+            s.push_str(&circle_path(10.0, 10.0, 8.5));
+            s.push_str("B\n1.6 w 7 12.8 m 7 15.6 13 15.6 13 12.8 c 13 10.6 10 10.8 10 8.2 c S\n10 5 m 10 5.1 l S\n");
+        }
+        // An insertion caret.
+        "Insert" => s.push_str("1.5 3 m 10 18 l 18.5 3 l 14.5 3 l 10 11 l 5.5 3 l h B\n"),
+        // A caret over a bar: a new paragraph goes here.
+        "NewParagraph" => s.push_str("3.5 9 m 10 18.5 l 16.5 9 l h B\n3 2 14 4 re B\n"),
+        // A pilcrow: a filled bowl and two stems.
+        "Paragraph" => {
+            s.push_str("11 18.5 m 7 18.5 4 16.3 4 13.2 c 4 10.1 7 8 11 8 c h B\n");
+            s.push_str("11 18.5 m 16 18.5 l 16 1.5 l 14 1.5 l 14 16.5 l 13 16.5 l 13 1.5 l 11 1.5 l h B\n");
+        }
+        // A tick.
+        "Check" => s.push_str("1.5 10.5 m 4.5 13.5 l 8 9.5 l 16 18.5 l 18.5 15.5 l 8 3.5 l h B\n"),
+        // A ring.
+        "Circle" => {
+            s.push_str(&circle_path(10.0, 10.0, 8.5));
+            s.push_str(&circle_path(10.0, 10.0, 5.0));
+            s.push_str("B*\n");
+        }
+        // A thick X.
+        "Cross" => s.push_str("4 1.5 m 10 7.5 l 16 1.5 l 18.5 4 l 12.5 10 l 18.5 16 l 16 18.5 l 10 12.5 l 4 18.5 l 1.5 16 l 7.5 10 l 1.5 4 l h B\n"),
+        // A ring with sighting lines through it.
+        "CrossHairs" => {
+            s.push_str(&circle_path(10.0, 10.0, 7.0));
+            s.push_str(&circle_path(10.0, 10.0, 4.5));
+            s.push_str("B*\n1.2 w 10 0.5 m 10 19.5 l 0.5 10 m 19.5 10 l S\n");
+        }
+        // A five-pointed star.
+        "Star" => {
+            let points: Vec<String> = (0..10)
+                .map(|i| {
+                    let r = if i % 2 == 0 { 9.5 } else { 3.9 };
+                    let a = std::f64::consts::FRAC_PI_2 + f64::from(i) * std::f64::consts::PI / 5.0;
+                    format!("{} {}", n(10.0 + r * a.cos()), n(9.5 + r * a.sin()))
+                })
+                .collect();
+            s.push_str(&format!("{} m {} l h B\n", points[0], points[1..].join(" l ")));
+        }
+        // Block arrows.
+        "RightArrow" => s.push_str("1.5 7 m 11 7 l 11 2.5 l 18.5 10 l 11 17.5 l 11 13 l 1.5 13 l h B\n"),
+        "UpArrow" => s.push_str("7 1.5 m 7 11 l 2.5 11 l 10 18.5 l 17.5 11 l 13 11 l 13 1.5 l h B\n"),
+        _ => {
+            s.push_str("3 19 m 13 19 l 17 15 l 17 1 l 3 1 l h B\n13 19 m 13 15 l 17 15 l S\n");
+            s.push_str("5.5 12 m 14.5 12 l 5.5 9 m 14.5 9 l 5.5 6 m 11.5 6 l S\n");
+        }
     }
     s
 }

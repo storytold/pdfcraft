@@ -2496,6 +2496,7 @@ animation effects	Off	Ei käytössä
 	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Allekirjoittajan varmennetta ei ole myönnetty asiakirjojen allekirjoittamiseen (sen laajennettu avaimen käyttö ei sisällä asiakirjojen allekirjoitusta).
 	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Allekirjoittajan varmenteessa on kriittisiä laajennuksia, joita PdfCraft ei tunnista ({}).
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Kohteen {} varmenne ei ole varmenteita myöntävä CA-varmenne, joten sitä ei käytetä kohteen {} vahvistamiseen.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Kohteen {} varmenne ei salli näin montaa alempaa CA-varmennetta (polun pituus), joten sitä ei käytetä kohteen {} vahvistamiseen.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Kohteen {} varmenne ei ollut voimassa allekirjoitushetkellä, joten sitä ei käytetä kohteen {} vahvistamiseen.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Allekirjoittajan henkilöllisyys on tuntematon, koska sitä ei ole lisätty luotettujen varmenteiden luetteloon eikä mikään sen ylemmistä varmenteista ole luotettu varmenne.
@@ -2515,6 +2516,7 @@ animation effects	Off	Ei käytössä
 	The timestamp token could not be read ({}).	Aikaleimatunnistetta ei voitu lukea ({}).
 	The document has been altered or corrupted since the timestamp was applied.	Asiakirjaa on muutettu tai se on vioittunut aikaleiman lisäämisen jälkeen.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Aikaleiman myöntäjän varmenne ei ollut voimassa aikaleimaushetkellä.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
 	This document has not been modified since this timestamp was applied.	Asiakirjaa ei ole muokattu tämän aikaleiman lisäämisen jälkeen.
 	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Asiakirjaa on muokattu tämän aikaleiman lisäämisen jälkeen, mutta muutokset ovat sallittuja ({}).
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Asiakirjaa on muutettu tämän aikaleiman lisäämisen jälkeen tavoilla, joita se ei salli ({}).

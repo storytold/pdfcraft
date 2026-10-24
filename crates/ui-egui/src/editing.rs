@@ -637,6 +637,7 @@ impl PdfCraftApp {
         let (name, path) = (doc.name.clone(), doc.path.clone());
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let doc_path = path.clone();
             let destination = match (target, path, &self.save_override) {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
@@ -645,6 +646,7 @@ impl PdfCraftApp {
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
+                    let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
                         app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
@@ -709,7 +711,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
-        if own && self.watch.disk_differs(id, dest) {
+        if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
             self.dialog = Some(crate::Dialog::OverwriteChanged);
             return false;
@@ -785,6 +787,8 @@ impl PdfCraftApp {
                     view.disk_changed = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                #[cfg(target_os = "macos")]
+                crate::macos_association::repair(std::path::Path::new(dest));
                 true
             }
             Err(e) => {
@@ -1017,17 +1021,42 @@ fn is_form_edit(edit: &Edit) -> bool {
 ///
 /// Outlook opens an attachment from its own cache: `INetCache\Content.Outlook\<random>\` for
 /// classic Outlook (`Temporary Internet Files\Content.Outlook\` on older Windows), and the
-/// `Microsoft.OutlookForWindows` package folder for the new Outlook. Saving there either fails,
+/// `Packages\Microsoft.OutlookForWindows_<id>` package folder for the new Outlook. The patterns
+/// follow those layouts, so an ordinary folder that merely shares a name doesn't match. Saving there either fails,
 /// because Outlook can still hold the file, or appears to work while the edits stay out of the
 /// email and are deleted with the cache. Apple Mail opens one from `Mail Downloads/<UUID>/` in
 /// its sandbox container, where other apps can't write, so saving there fails (#2751). Matched on
 /// either separator and in any case, so it can be tested on every platform.
 pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
     let p = path.replace('\\', "/").to_ascii_lowercase();
-    p.contains("/inetcache/content.outlook/")
-        || p.contains("/temporary internet files/content.outlook/")
-        || p.contains("/microsoft.outlookforwindows")
+    // Outlook's cache holds `<marker><random folder>/<file>`: exactly one folder, then the file.
+    let in_outlook_cache = |marker: &str| {
+        p.split_once(marker)
+            .is_some_and(|(_, rest)| matches!(rest.split('/').collect::<Vec<_>>()[..], [dir, file] if !dir.is_empty() && !file.is_empty()))
+    };
+    in_outlook_cache("/inetcache/content.outlook/")
+        || in_outlook_cache("/temporary internet files/content.outlook/")
+        || p.contains("/packages/microsoft.outlookforwindows_")
         || p.contains("/library/containers/com.apple.mail/data/library/mail downloads/")
+}
+
+/// The folder a Save As style dialog should open in for a document stored at `path`: the
+/// document's own folder, as Acrobat and Foxit do, instead of whichever folder the system picks.
+/// `None` (keep the system's choice) for a new document, a path with no parent, or an email
+/// attachment's temporary copy (`is_mail_temp_copy`), which is no place to keep work. Also right
+/// for UNC paths on Windows (`\\server\share\dir\f.pdf` gives `\\server\share\dir`).
+pub(crate) fn save_dialog_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
+    let path = path.filter(|p| !is_mail_temp_copy(p))?;
+    let parent = std::path::Path::new(path).parent()?;
+    (!parent.as_os_str().is_empty()).then(|| parent.to_path_buf())
+}
+
+/// `dialog` opened in the folder of the document stored at `path` ([`save_dialog_folder`]).
+pub(crate) fn in_document_folder(dialog: rfd::AsyncFileDialog, path: Option<&str>) -> rfd::AsyncFileDialog {
+    match save_dialog_folder(path) {
+        Some(dir) => dialog.set_directory(dir),
+        None => dialog,
+    }
 }
 
 /// Write via a temporary file in the same directory and rename over the target, so a crash or
@@ -1105,6 +1134,8 @@ impl PdfCraftApp {
             }
             A::Rename(path, title) => Edit::RenameBookmark { path, title },
             A::SetToCurrentPage(path) => Edit::SetBookmarkPage { path, page: current },
+            A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
+            A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
             A::Delete(path) => Edit::DeleteBookmark { path },
             A::MoveUp(path) => {
                 let at = path[path.len() - 1].saturating_sub(1);
@@ -1142,7 +1173,31 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{SaveTarget, is_mail_temp_copy, write_atomically, write_atomically_syncing, write_atomically_with};
+    use super::{SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
+
+    #[test]
+    fn save_dialogs_open_in_the_documents_folder() {
+        use std::path::PathBuf;
+        assert_eq!(save_dialog_folder(Some("/home/a/plans/f.pdf")), Some(PathBuf::from("/home/a/plans")));
+        // A new document has no folder yet; a bare name has an empty parent; the root has none.
+        assert_eq!(save_dialog_folder(None), None);
+        assert_eq!(save_dialog_folder(Some("f.pdf")), None);
+        assert_eq!(save_dialog_folder(Some("/")), None);
+        // An email attachment's temporary copy is not offered.
+        assert_eq!(save_dialog_folder(Some("C:\\Users\\a\\AppData\\Local\\Microsoft\\Windows\\INetCache\\Content.Outlook\\AB12\\f.pdf")), None);
+        assert_eq!(save_dialog_folder(Some("/Users/a/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/UUID/f.pdf")), None);
+    }
+
+    /// The Windows rules for `Path::parent` (UNC share roots included) only apply on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn save_dialog_folder_handles_unc_paths() {
+        use std::path::PathBuf;
+        assert_eq!(save_dialog_folder(Some(r"\\nas\projets\2026\f.pdf")), Some(PathBuf::from(r"\\nas\projets\2026")));
+        assert_eq!(save_dialog_folder(Some(r"\\nas\projets\f.pdf")), Some(PathBuf::from(r"\\nas\projets\")));
+        assert_eq!(save_dialog_folder(Some(r"\\nas\projets")), None);
+        assert_eq!(save_dialog_folder(Some(r"C:\Users\a\f.pdf")), Some(PathBuf::from(r"C:\Users\a")));
+    }
     use pdfcraft_platform::staging::{STAGING_ATTEMPTS, staging_suffixes};
     use std::path::{Path, PathBuf};
 
@@ -1336,6 +1391,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_save_preserves_opening_settings_changed_while_staging() {
+        let dir = staging_dir("opening-metadata-changed");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        xattr::set(&target, "com.apple.LaunchServices.OpenWith", b"old handler").unwrap();
+        xattr::set(&target, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
+        let suffixes = std::iter::once_with(|| {
+            xattr::set(&target, "com.apple.LaunchServices.OpenWith", b"new handler").unwrap();
+            xattr::set(&target, "com.apple.quarantine", b"0082;5678;another app;").unwrap();
+            7
+        });
+        write_atomically_with(&target.to_string_lossy(), b"NEW", suffixes).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(xattr::get(&target, "com.apple.LaunchServices.OpenWith").unwrap(), Some(b"new handler".to_vec()));
+        assert_eq!(xattr::get(&target, "com.apple.quarantine").unwrap(), Some(b"0082;5678;another app;".to_vec()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn outlook_attachment_copies_are_recognised_on_either_separator_and_in_any_case() {
         for p in [
@@ -1365,6 +1440,9 @@ mod tests {
             r"C:\Users\me\Documents\Quote.pdf",
             r"C:\Users\me\OneDrive - Contoso\Content.Outlook notes\Quote.pdf",
             r"C:\Users\me\AppData\Local\Microsoft\Windows\INetCache\IE\Quote.pdf",
+            "/home/microsoft.outlookforwindows/report.pdf",
+            "/x/inetcache/content.outlook/y.pdf",
+            "/x/temporary internet files/content.outlook/y.pdf",
             "/home/me/Documents/Quote.pdf",
             "/Users/me/Downloads/Mail Downloads/booking.pdf",
             "/Users/me/Library/Containers/com.apple.Notes/Data/Library/Mail Downloads/booking.pdf",

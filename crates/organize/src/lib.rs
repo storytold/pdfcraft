@@ -34,7 +34,7 @@ pub use import::{
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
     Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark,
-    move_bookmark, rename_bookmark, set_bookmark_open, set_bookmark_page, top_level_bookmarks,
+    move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
@@ -737,6 +737,25 @@ pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), 
         }
     }
     if removed { Ok(()) } else { Err(OrganizeError::Invalid(format!("the document doesn't declare {}", standard.label()))) }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Steps taken on this thread by loops whose cost follows the input's shape, so a test can
+    /// bound the work a hostile document causes without timing it.
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count `n` steps of input-shaped work (see [`WORK`]).
+#[cfg(test)]
+fn work(n: usize) {
+    WORK.with(|w| w.set(w.get().saturating_add(n)));
+}
+
+/// The steps counted on this thread since the last call.
+#[cfg(test)]
+fn take_work() -> usize {
+    WORK.with(|w| w.replace(0))
 }
 
 #[cfg(test)]

@@ -27,9 +27,11 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use boa_engine::context::HostHooks;
 use boa_engine::object::builtins::{JsArray, JsFunction};
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
 use boa_engine::property::Attribute;
+use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 /// The kinds of field, as `field.type` names them.
@@ -142,6 +144,8 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// The document has an XFA form, so scripts see `xfa_installed`.
+    pub xfa: bool,
 }
 
 /// Something a script asked the viewer to do.
@@ -201,6 +205,66 @@ struct Host {
     console: Vec<String>,
     requests: Vec<Request>,
     doc: DocInfo,
+    /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
+    kept: usize,
+    /// Alerts, console lines and requests the limits left out.
+    dropped: usize,
+}
+
+impl Host {
+    /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.
+    fn room(&mut self, bytes: usize) -> bool {
+        match self.kept.checked_add(bytes).filter(|k| *k <= xfa::MAX_PAYLOAD) {
+            Some(k) => {
+                self.kept = k;
+                true
+            }
+            None => {
+                self.dropped = self.dropped.saturating_add(1);
+                false
+            }
+        }
+    }
+
+    fn alert(&mut self, m: String) {
+        if self.alerts.len() >= xfa::MAX_ALERTS {
+            self.dropped = self.dropped.saturating_add(1);
+        } else if self.room(m.len()) {
+            self.alerts.push(m);
+        }
+    }
+
+    fn print(&mut self, m: String) {
+        if self.console.len() >= xfa::MAX_CONSOLE {
+            self.dropped = self.dropped.saturating_add(1);
+        } else if self.room(m.len()) {
+            self.console.push(m);
+        }
+    }
+
+    /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
+    /// requests and the run's byte budget.
+    fn request(&mut self, r: Request) {
+        if self.requests.len() >= xfa::MAX_EFFECTS {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        let r = match r {
+            Request::Reset(names) => Request::Reset(names.into_iter().map(xfa::clip).collect()),
+            Request::LaunchUrl(u) => Request::LaunchUrl(xfa::clip(u)),
+            Request::Submit(u) => Request::Submit(xfa::clip(u)),
+            Request::Focus(n) => Request::Focus(xfa::clip(n)),
+            other => other,
+        };
+        let bytes = match &r {
+            Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
+            Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
+            _ => 0,
+        };
+        if self.room(bytes) {
+            self.requests.push(r);
+        }
+    }
 }
 
 type Shared = RefCell<Host>;
@@ -219,6 +283,19 @@ fn text(v: &JsValue, ctx: &mut Context) -> JsResult<String> {
         return Ok(String::new());
     }
     Ok(v.to_string(ctx)?.to_std_string_escaped())
+}
+
+/// [`text`] cut to a message's length ([`xfa::clip`]), without first copying all of a longer
+/// string.
+fn text_line(v: &JsValue, ctx: &mut Context) -> JsResult<String> {
+    if v.is_undefined() || v.is_null() {
+        return Ok(String::new());
+    }
+    let js = v.to_string(ctx)?;
+    // Two UTF-16 units per character at most: the clip still sees more than a line's worth.
+    let keep = xfa::MAX_LINE.saturating_add(1).saturating_mul(2);
+    let js = if js.len() > keep { js.get(..keep).unwrap_or_default() } else { js };
+    Ok(xfa::clip(js.to_std_string_escaped()))
 }
 
 fn arg(args: &[JsValue], i: usize) -> JsValue {
@@ -438,7 +515,7 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         Ok(JsValue::undefined())
     }
     fn set_focus(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        host(c)?.borrow_mut().requests.push(Request::Focus(name.to_std_string_escaped()));
+        host(c)?.borrow_mut().request(Request::Focus(name.to_std_string_escaped()));
         Ok(JsValue::undefined())
     }
 
@@ -492,12 +569,12 @@ fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
 
 fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let names = strings(&arg(args, 0), ctx)?;
-    host(ctx)?.borrow_mut().requests.push(Request::Reset(names));
+    host(ctx)?.borrow_mut().request(Request::Reset(names));
     Ok(JsValue::undefined())
 }
 
 fn print(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().requests.push(Request::Print);
+    host(ctx)?.borrow_mut().request(Request::Print);
     Ok(JsValue::undefined())
 }
 
@@ -510,7 +587,7 @@ fn submit_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsV
         }
         _ => text(&a, ctx)?,
     };
-    host(ctx)?.borrow_mut().requests.push(Request::Submit(url));
+    host(ctx)?.borrow_mut().request(Request::Submit(url));
     Ok(JsValue::undefined())
 }
 
@@ -532,38 +609,38 @@ fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let last = h.doc.num_pages.saturating_sub(1);
     let p = (n.max(0.0) as usize).min(last);
     h.doc.page = p;
-    h.requests.push(Request::GoToPage(p));
+    h.request(Request::GoToPage(p));
     Ok(JsValue::undefined())
 }
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
 
-/// A message argument: a string, or an object with `cMsg`.
+/// A message argument: a string, or an object with `cMsg`, cut to a message's length.
 fn message(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<String> {
     match v.as_object() {
         Some(o) if !o.is_array() && !o.is_callable() => {
             let m = o.get(JsString::from(key), ctx)?;
-            text(&m, ctx)
+            text_line(&m, ctx)
         }
-        _ => text(v, ctx),
+        _ => text_line(v, ctx),
     }
 }
 
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = message(&arg(args, 0), "cMsg", ctx)?;
-    host(ctx)?.borrow_mut().alerts.push(m);
+    host(ctx)?.borrow_mut().alert(m);
     // The OK button.
     Ok(JsValue::from(1))
 }
 
 fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().requests.push(Request::Beep);
+    host(ctx)?.borrow_mut().request(Request::Beep);
     Ok(JsValue::undefined())
 }
 
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let u = message(&arg(args, 0), "cURL", ctx)?;
-    host(ctx)?.borrow_mut().requests.push(Request::LaunchUrl(u));
+    host(ctx)?.borrow_mut().request(Request::LaunchUrl(u));
     Ok(JsValue::undefined())
 }
 
@@ -573,8 +650,8 @@ fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
 }
 
 fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = text(&arg(args, 0), ctx)?;
-    host(ctx)?.borrow_mut().console.push(m);
+    let m = text_line(&arg(args, 0), ctx)?;
+    host(ctx)?.borrow_mut().print(m);
     Ok(JsValue::undefined())
 }
 
@@ -750,7 +827,11 @@ fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
     let mut i = 0;
     while i < b.len() {
         let c = b[i];
-        let run = b[i..].iter().take_while(|x| **x == c).count();
+        // Only date letters read as runs; a literal is copied one character at a time, so
+        // measuring its run would rescan a long literal stretch at every position.
+        let run = if b"ymdHhMst".contains(&c) { b[i..].iter().take_while(|x| **x == c).count() } else { 1 };
+        #[cfg(test)]
+        PRINTD_SCANNED.fetch_add(run as u64, std::sync::atomic::Ordering::Relaxed);
         let push_num = |out: &mut String, v: i64, n: usize| {
             if n >= 2 {
                 out.push_str(&format!("{v:02}"));
@@ -892,6 +973,11 @@ fn color_object(ctx: &mut Context) -> JsObject {
     o.build()
 }
 
+/// The XFA version scripts see as `xfa_version`.
+const XFA_VERSION: f64 = 3.5;
+
+/// Define the globals every script sees: the document's functions and properties (`getField`,
+/// `numPages`, `info`, the XFA version), and `app`, `util`, `console`, `display` and `color`.
 fn install(ctx: &mut Context) -> JsResult<()> {
     let globals: [(&str, usize, NativeFunction); 9] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
@@ -912,9 +998,9 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
     let ps = function(ctx, NativeFunction::from_fn_ptr(page_num_set));
-    let (file, pages, info) = {
+    let (file, pages, info, xfa) = {
         let h = host(ctx)?.borrow();
-        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone())
+        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone(), h.doc.xfa)
     };
     let mut io = ObjectInitializer::new(ctx);
     for (k, v) in &info {
@@ -927,6 +1013,12 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
     ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
     ctx.register_global_property(js_string!("info"), info, rw)?;
+    // XFA forms check both before they run: every document sees the XFA version, and only an
+    // XFA form sees `xfa_installed`.
+    ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;
+    if xfa {
+        ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
+    }
 
     let app = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
@@ -1008,6 +1100,10 @@ fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
 // with a large stack (address space, committed only as it is used). Together these bound the
 // stack a script can use: brackets and prefix operators by the limits below, and every other
 // construct (a few KiB per level, several bytes of source each) by the length limit.
+
+/// Bytes `util.printd` has scanned for runs of a format character, for tests that bound its work.
+#[cfg(test)]
+pub(crate) static PRINTD_SCANNED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -1128,8 +1224,46 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     run_here(script, event, doc, fields, doc_scripts, limits)
 }
 
+/// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
+/// and async kin). Such code is built at run time, so it never passed [`refuse`], and boa's
+/// recursive parser would overflow the stack on a deeply nested one.
+struct NoCodeFromStrings;
+
+impl HostHooks for NoCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, _: &[JsString], _: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
+        Err(JsNativeError::typ().with_message("scripts can't compile code from strings (eval, Function)").into())
+    }
+}
+
+/// Host hooks that hold code compiled from strings to the checks a script passes ([`refuse`]),
+/// for runners that start the script itself through `eval`.
+pub(crate) struct CheckedCodeFromStrings;
+
+impl HostHooks for CheckedCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, parameters: &[JsString], body: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
+        let units = parameters.iter().chain(std::iter::once(body)).fold(0usize, |n, s| n.saturating_add(s.len()));
+        if units > MAX_SCRIPT_BYTES {
+            return Err(JsNativeError::range().with_message("the code is too long to compile").into());
+        }
+        // As one text: brackets left open in one parameter carry into the next.
+        let mut source = parameters.iter().map(JsString::to_std_string_lossy).collect::<Vec<_>>().join(",");
+        source.push('\n');
+        source.push_str(&body.to_std_string_lossy());
+        match refuse(&source) {
+            Some(why) => Err(JsNativeError::range().with_message(why).into()),
+            None => Ok(()),
+        }
+    }
+}
+
 fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
-    let mut ctx = Context::default();
+    let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            let error = Some(format!("the script engine could not start: {e}"));
+            return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
+        }
+    };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
@@ -1139,6 +1273,8 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
+        kept: 0,
+        dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let result = (|| -> JsResult<()> {
@@ -1169,6 +1305,9 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
         out.alerts = h.alerts;
         out.console = h.console;
         out.requests = h.requests;
+        if h.dropped > 0 {
+            out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
+        }
     }
     out
 }

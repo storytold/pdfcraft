@@ -2283,6 +2283,7 @@ action wizard	Start	Inicia
 	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	El certificat del signant no s'ha emès per signar documents (el seu ús estès de clau no inclou el propòsit de signatura de documents).
 	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	El certificat del signant té extensions crítiques que PdfCraft no reconeix ({}).
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	El certificat de {} no és un certificat de CA que pugui emetre certificats, de manera que no s'utilitza per avalar {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	El certificat de {} no permet tants certificats de CA per sota seu (longitud de camí), de manera que no s'utilitza per avalar {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	El certificat de {} no era vàlid en el moment de signar, de manera que no s'utilitza per avalar {}.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	La identitat del signant és desconeguda perquè no s'ha inclòs a la llista de certificats de confiança i cap dels seus certificats pare és un certificat de confiança.
@@ -2302,6 +2303,7 @@ action wizard	Start	Inicia
 	The timestamp token could not be read ({}).	No s'ha pogut llegir el testimoni de marca de temps ({}).
 	The document has been altered or corrupted since the timestamp was applied.	El document ha estat alterat o s'ha corromput des que es va aplicar la marca de temps.
 	The timestamp authority's certificate was not valid at the time of timestamping.	El certificat de l'autoritat de marca de temps no era vàlid en el moment de marcar el temps.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
 	This document has not been modified since this timestamp was applied.	Aquest document no s'ha modificat des que es va aplicar aquesta marca de temps.
 	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	El document s'ha modificat des que es va aplicar aquesta marca de temps, però els canvis són permesos ({}).
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El document ha estat alterat des que es va aplicar aquesta marca de temps d'una manera que no permet ({}).

@@ -346,7 +346,7 @@ fn date(s: &[char], i: usize) -> Option<usize> {
     // Numeric: m/d/yy(yy), m-d-yyyy, d.m.yyyy, yyyy-mm-dd.
     if let Some(a) = number(s, i, 1, 4) {
         let sep = s.get(i + a).copied();
-        if matches!(sep, Some('/' | '-' | '.'))
+        if matches!(sep, Some('-'..='/'))
             && let Some(b) = number(s, i + a + 1, 1, 2)
             && s.get(i + a + 1 + b).copied() == sep
             && let Some(c) = number(s, i + a + b + 2, if a == 4 { 1 } else { 2 }, if a == 4 { 2 } else { 4 })

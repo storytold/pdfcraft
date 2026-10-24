@@ -147,7 +147,8 @@ fn promotion_preserves_streams_and_explicit_subtypes() {
     for subtype in [None, Some(Object::name("Form")), Some(Object::name("Image")), Some(Object::Null), Some(Object::Int(7))] {
         let (mut doc, ap, _) = widget_fixture(subtype.clone(), Some([2.0, 0.0, 0.0, 3.0, 5.0, 7.0]));
         let original = doc.get(ap);
-        let form = page_form(&mut doc, 0, Content::Document, &mut std::collections::HashMap::new()).unwrap();
+        let pages = pdfcraft_model::pages(&doc);
+        let form = page_form(&mut doc, &pages, 0, Content::Document, &mut std::collections::HashMap::new()).unwrap();
         assert_eq!(doc.get(ap), original, "original in the print clone");
         let promoted = xobject(&doc, doc.get(form).as_dict().unwrap(), b"PCPrA0");
         if subtype.is_some() {

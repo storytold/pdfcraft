@@ -441,11 +441,8 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
             "yyyy" | "yy" | "mm" | "m" | "dd" | "d" => {
                 // Digits up to the next literal (or a fixed width).
                 let fixed = matches!(t.as_str(), "yyyy" | "yy" | "mm" | "dd");
-                let width = if fixed {
-                    t.len()
-                } else {
-                    rest.chars().take_while(|c| c.is_ascii_digit()).count().min(if t == "d" || t == "m" { 2 } else { 4 })
-                };
+                let width =
+                    if fixed { t.len() } else { rest.chars().take_while(char::is_ascii_digit).count().min(if t == "d" || t == "m" { 2 } else { 4 }) };
                 let digits: String = rest.chars().take(width).collect();
                 if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
                     return None;
@@ -519,6 +516,21 @@ fn escape(s: &str) -> (String, bool) {
 const MAX_NEW_NODES: usize = 20_000;
 /// Highest same-name sibling index a write follows.
 const MAX_INDEX: usize = 10_000;
+/// Most bytes of names the nodes one write creates hold together: every sibling an index
+/// skips over gets its own copy of the name.
+const MAX_NEW_NAME_BYTES: usize = 4 << 20;
+
+/// What one write may still create: nodes and bytes of their names.
+struct NewNodes {
+    nodes: usize,
+    name_bytes: usize,
+}
+
+impl NewNodes {
+    fn new() -> NewNodes {
+        NewNodes { nodes: MAX_NEW_NODES, name_bytes: MAX_NEW_NAME_BYTES }
+    }
+}
 
 /// A data tree being built for writing.
 #[derive(Default)]
@@ -533,8 +545,8 @@ struct Build {
 impl Build {
     /// The node at `path` below this one, created as needed. `None` when the path is deeper
     /// than [`MAX_DEPTH`], an index is above [`MAX_INDEX`], or creating it would spend more
-    /// than `budget` new nodes.
-    fn at(&mut self, path: &[(String, usize)], budget: &mut usize) -> Option<&mut Build> {
+    /// new nodes or name bytes than `budget` holds.
+    fn at(&mut self, path: &[(String, usize)], budget: &mut NewNodes) -> Option<&mut Build> {
         if path.len() > MAX_DEPTH {
             return None;
         }
@@ -547,15 +559,15 @@ impl Build {
             let have = node.by_name.get(&name).map_or(0, Vec::len);
             if *idx >= have {
                 let need = idx - have + 1;
-                if need > *budget {
+                let bytes = need.saturating_mul(name.len());
+                if need > budget.nodes || bytes > budget.name_bytes {
                     return None;
                 }
-                *budget -= need;
-                for _ in 0..need {
-                    let pos = node.children.len();
-                    node.by_name.entry(name.clone()).or_default().push(pos);
-                    node.children.push(Build { name: name.clone(), ..Default::default() });
-                }
+                budget.nodes -= need;
+                budget.name_bytes -= bytes;
+                let start = node.children.len();
+                node.children.extend((0..need).map(|_| Build { name: name.clone(), ..Default::default() }));
+                node.by_name.entry(name.clone()).or_default().extend(start..start + need);
             }
             let pos = *node.by_name.get(&name)?.get(*idx)?;
             node = node.children.get_mut(pos)?;
@@ -675,7 +687,7 @@ const CONTROL: &str = "Characters XML can't hold were left out of the XFA data o
 /// Fresh data for `wants`: the children of an `xfa:data` element.
 fn build_children(wants: &[Want], warnings: &mut Vec<String>) -> String {
     let mut root = Build::default();
-    let mut budget = MAX_NEW_NODES;
+    let mut budget = NewNodes::new();
     for w in wants {
         match root.at(&w.path, &mut budget) {
             Some(node) => node.text = w.text.clone(),
@@ -801,19 +813,52 @@ pub struct ImportNode {
 /// Deepest data an import keeps.
 const MAX_IMPORT_DEPTH: usize = MAX_DEPTH;
 
-/// `n` as an [`ImportNode`], counting nodes against `budget`; `None` past the depth or node
-/// limits.
-fn import_node(n: roxmltree::Node, depth: usize, budget: &mut usize) -> Option<ImportNode> {
-    if depth > MAX_IMPORT_DEPTH || *budget == 0 {
-        return None;
+/// Most bytes of names, namespaces, attributes and text an import copies out of its file: a
+/// namespace declared once is copied into every element and attribute that inherits it.
+pub(crate) const MAX_IMPORT_BYTES: usize = 4 * MAX_IMPORT;
+
+/// What an import may still copy: nodes and bytes.
+struct ImportBudget {
+    nodes: usize,
+    bytes: usize,
+}
+
+impl ImportBudget {
+    fn new() -> ImportBudget {
+        ImportBudget { nodes: MAX_NODES as usize, bytes: MAX_IMPORT_BYTES }
     }
-    *budget -= 1;
+
+    fn take_bytes(&mut self, n: usize) -> Result<(), XfaError> {
+        self.bytes = self
+            .bytes
+            .checked_sub(n)
+            .ok_or_else(|| XfaError::TooLarge(format!("the data file expands to more than {} MB", MAX_IMPORT_BYTES >> 20)))?;
+        Ok(())
+    }
+}
+
+/// `n` as an [`ImportNode`], counting nodes and copied bytes against `budget`; `TooLarge` past
+/// the depth or either budget.
+fn import_node(n: roxmltree::Node, depth: usize, budget: &mut ImportBudget) -> Result<ImportNode, XfaError> {
+    if depth > MAX_IMPORT_DEPTH {
+        return Err(XfaError::TooLarge(format!("the data file nests more than {MAX_IMPORT_DEPTH} levels deep")));
+    }
+    budget.nodes = budget.nodes.checked_sub(1).ok_or_else(|| XfaError::TooLarge("the data file holds too many nodes".into()))?;
+    let name = n.tag_name().name();
+    let ns = n.tag_name().namespace();
+    budget.take_bytes(name.len().saturating_add(ns.map_or(0, str::len)))?;
+    let mut attrs = Vec::new();
+    for a in n.attributes().filter(|a| a.name() != "xmlns" && a.namespace() != Some("http://www.w3.org/2000/xmlns/")) {
+        budget.take_bytes(a.namespace().map_or(0, str::len).saturating_add(a.name().len()).saturating_add(a.value().len()))?;
+        attrs.push((a.namespace().map(str::to_string), a.name().to_string(), a.value().to_string()));
+    }
     let mut children = Vec::new();
     let mut text = String::new();
     for c in n.children() {
         if c.is_element() {
             children.push(import_node(c, depth + 1, budget)?);
         } else if let Some(t) = c.text() {
+            budget.take_bytes(t.len())?;
             text.push_str(t);
         }
     }
@@ -821,17 +866,7 @@ fn import_node(n: roxmltree::Node, depth: usize, budget: &mut usize) -> Option<I
     if !children.is_empty() && text.trim().is_empty() {
         text.clear();
     }
-    Some(ImportNode {
-        name: n.tag_name().name().to_string(),
-        ns: n.tag_name().namespace().map(str::to_string),
-        attrs: n
-            .attributes()
-            .filter(|a| a.name() != "xmlns" && a.namespace() != Some("http://www.w3.org/2000/xmlns/"))
-            .map(|a| (a.namespace().map(str::to_string), a.name().to_string(), a.value().to_string()))
-            .collect(),
-        text,
-        children,
-    })
+    Ok(ImportNode { name: name.to_string(), ns: ns.map(str::to_string), attrs, text, children })
 }
 
 /// `nodes` as markup for a packet whose XFA data namespace prefix is `xfa` (declared where
@@ -1072,7 +1107,7 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
     let tree = data.document();
     // Nodes to add, per existing element they go into.
     let mut added: Vec<(roxmltree::NodeId, Build)> = Vec::new();
-    let mut budget = MAX_NEW_NODES;
+    let mut budget = NewNodes::new();
     for w in wants {
         let (escaped, dropped) = escape(&w.text);
         let mut node = data;
@@ -1379,15 +1414,14 @@ pub fn parse_data_file(text: &str, expect_root: Option<&str>) -> Result<Vec<Impo
             {
                 return Err(XfaError::Malformed(format!("the data file's root is <{local}>; this form's data root is <{want}>")));
             }
-            let mut budget = MAX_NODES as usize;
-            let node = import_node(root, 0, &mut budget).ok_or_else(|| XfaError::TooLarge("the data file holds too many nodes".into()))?;
+            let node = import_node(root, 0, &mut ImportBudget::new())?;
             return Ok(vec![node]);
         }
     };
-    let mut budget = MAX_NODES as usize;
+    let mut budget = ImportBudget::new();
     let mut out = Vec::new();
     for c in data.children().filter(|c| c.is_element()) {
-        out.push(import_node(c, 1, &mut budget).ok_or_else(|| XfaError::TooLarge("the data file holds too many nodes".into()))?);
+        out.push(import_node(c, 1, &mut budget)?);
     }
     Ok(out)
 }
@@ -1516,6 +1550,16 @@ fn element_markup(src: &str, n: roxmltree::Node) -> Option<String> {
     Some(format!("{}{decls}{}", text.get(..name_end)?, text.get(name_end..)?))
 }
 
+/// Most instance nodes one [`write_data_ops`] queues over all its passes (a removal starts a new
+/// pass, which asks for the instances again).
+const MAX_ENSURED: usize = 200_000;
+
+// Instance nodes write_data_ops has queued on this thread, for tests that bound its work.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static ENSURED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Apply `ops` to the datasets packet, in order, as one rewrite of it: everything one script
 /// event changed becomes a single new datasets stream. When the packet is already the stream
 /// `reuse` (written earlier for the same event), that stream is replaced in place instead of
@@ -1525,6 +1569,9 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
     let mut steps: Vec<Vec<Want>> = Vec::new();
     let mut removes: Vec<Option<DataPath>> = Vec::new();
     let mut run: Vec<Want> = Vec::new();
+    // Instances queued in this run, by parent and name: asking for more only queues the rest.
+    let mut queued: HashMap<(&DataPath, &str), usize> = HashMap::new();
+    let (mut ensured, mut capped) = (0usize, false);
     let flush = |run: &mut Vec<Want>, steps: &mut Vec<Vec<Want>>, removes: &mut Vec<Option<DataPath>>| {
         if !run.is_empty() {
             let mut seen = std::collections::HashSet::new();
@@ -1541,7 +1588,17 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
                 run.push(Want { som: path_som(path), path: path.clone(), text: text.clone(), ensure: false });
             }
             DataOp::Instances { parent, name, count } => {
-                for k in 0..(*count).min(MAX_INDEX) {
+                let done = queued.entry((parent, name.as_str())).or_insert(0);
+                while *done < (*count).min(MAX_INDEX) {
+                    if ensured >= MAX_ENSURED {
+                        capped = true;
+                        break;
+                    }
+                    ensured += 1;
+                    #[cfg(test)]
+                    ENSURED.with(|n| n.set(n.get() + 1));
+                    let k = *done;
+                    *done += 1;
                     let mut path = parent.clone();
                     path.push((name.clone(), k));
                     run.push(Want { som: format!("{name}[{k}]"), path, text: String::new(), ensure: true });
@@ -1549,6 +1606,7 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
             }
             DataOp::Remove(path) if !path.is_empty() => {
                 flush(&mut run, &mut steps, &mut removes);
+                queued.clear();
                 steps.push(Vec::new());
                 removes.push(Some(path.clone()));
             }
@@ -1564,7 +1622,11 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
             None => Op::Values(w),
         })
         .collect();
-    rewrite(doc, &plan, reuse)
+    let mut written = rewrite(doc, &plan, reuse)?;
+    if capped {
+        written.warnings.push(format!("XFA data instances not written past {MAX_ENSURED}: the rows were added and removed too often"));
+    }
+    Ok(written)
 }
 
 /// Put `bytes` in the document as a datasets stream: in place of `old` when that is the stream

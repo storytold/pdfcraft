@@ -15,6 +15,9 @@ pub const OVERRIDES_KEY: &[u8] = b"PCXfaOverrides";
 
 const MAX_DEPTH: usize = 64;
 const MAX_EVENTS: usize = 20_000;
+/// Most bytes of script the events hold together: each instance of a repeated subform holds its
+/// own copy, so a long script repeated many times stops here (as much as the XFA packets hold).
+pub(crate) const MAX_EVENT_SCRIPT_BYTES: usize = 64 << 20;
 /// Most objects of the live form built (the scripting engine's snapshot holds as many):
 /// nested repeating subforms multiply, so the walk stops here and says so.
 pub const MAX_FORM_NODES: usize = 200_000;
@@ -67,8 +70,8 @@ pub struct LiveForm {
     pub root: FormNode,
     /// Every scripted event, in document order.
     pub events: Vec<ScriptEvent>,
-    /// The form was larger than [`MAX_FORM_NODES`] objects (or [`MAX_EVENTS`] events): what
-    /// is past that was left out.
+    /// The form was larger than [`MAX_FORM_NODES`] objects (or [`MAX_EVENTS`] events, or
+    /// [`MAX_EVENT_SCRIPT_BYTES`] of their scripts): what is past that was left out.
     pub truncated: bool,
 }
 
@@ -172,6 +175,8 @@ struct Walker<'a> {
     data: Option<&'a DataNode>,
     ov: &'a Overrides,
     events: Vec<ScriptEvent>,
+    /// Bytes of script the events hold.
+    script_bytes: usize,
     /// Objects built so far.
     nodes: usize,
     truncated: bool,
@@ -190,43 +195,34 @@ impl Walker<'_> {
 
     /// Record the scripts of the object at `som` as events: each non-empty event script, then its
     /// calculate and validate scripts (the validate one with `message`). Once [`MAX_EVENTS`] events
-    /// are recorded, nothing more is and the form is marked truncated.
+    /// or [`MAX_EVENT_SCRIPT_BYTES`] of their scripts are recorded, nothing more is and the form is
+    /// marked truncated.
     fn push_events(&mut self, som: &str, scripts: &[Script], calculate: Option<&Script>, validate: Option<&Script>, message: Option<&str>) {
         if self.events.len() >= MAX_EVENTS {
             self.truncated = true;
             return;
         }
-        for s in scripts {
+        let all = scripts
+            .iter()
+            .map(|s| (s, s.activity.as_str(), None))
+            .chain(calculate.map(|c| (c, "calculate", None)))
+            .chain(validate.map(|v| (v, "validate", message)));
+        for (s, activity, message) in all {
             if s.text.trim().is_empty() {
                 continue;
             }
+            match self.script_bytes.checked_add(s.text.len()).filter(|n| *n <= MAX_EVENT_SCRIPT_BYTES) {
+                Some(n) => self.script_bytes = n,
+                None => {
+                    self.truncated = true;
+                    return;
+                }
+            }
             self.events.push(ScriptEvent {
                 som: som.to_string(),
-                activity: s.activity.clone(),
+                activity: activity.to_string(),
                 script: s.text.clone(),
                 formcalc: s.formcalc,
-                message: None,
-            });
-        }
-        if let Some(c) = calculate
-            && !c.text.trim().is_empty()
-        {
-            self.events.push(ScriptEvent {
-                som: som.to_string(),
-                activity: "calculate".into(),
-                script: c.text.clone(),
-                formcalc: c.formcalc,
-                message: None,
-            });
-        }
-        if let Some(v) = validate
-            && !v.text.trim().is_empty()
-        {
-            self.events.push(ScriptEvent {
-                som: som.to_string(),
-                activity: "validate".into(),
-                script: v.text.clone(),
-                formcalc: v.formcalc,
                 message: message.map(str::to_string),
             });
         }
@@ -410,7 +406,7 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
-    let mut w = Walker { tpl, data, ov, events: Vec::new(), nodes: 0, truncated: false };
+    let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
