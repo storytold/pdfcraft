@@ -60,6 +60,9 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             allowed: true,
             hidden: false,
             redact_mark: ([0.0; 3], 1.0),
+            snap: None,
+            snap_comments: None,
+            snap_cycle: None,
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
