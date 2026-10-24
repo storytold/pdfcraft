@@ -590,6 +590,60 @@ pub enum ImageResolution {
     Dpi(f64),
 }
 
+/// How the page an image is placed on is sized.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ImagePage {
+    /// The page is the image's own size at its resolution, so a page is as large as its photo
+    /// (a 4000 × 3000 phone picture with no stored resolution gives a 4000 × 3000 pt page).
+    #[default]
+    Image,
+    /// Every page is this size in points, with the image scaled to fit inside it and centred,
+    /// so a set of photos of different pixel sizes gives one paper size throughout.
+    Fixed {
+        width: f64,
+        height: f64,
+        /// Turn the sheet to match each image, so a landscape photo gets a landscape page
+        /// instead of being shrunk into a portrait one.
+        turn: bool,
+    },
+}
+
+impl ImagePage {
+    /// A4, Letter and the rest are resolved by the caller: the paper table lives in
+    /// `pdfcraft-print`, which is this crate's own layer, so names are parsed above both.
+    pub fn fixed(size: (f64, f64), turn: bool) -> Self {
+        Self::Fixed { width: size.0, height: size.1, turn }
+    }
+
+    fn check(self) -> Result<(), CreateError> {
+        let Self::Fixed { width, height, .. } = self else { return Ok(()) };
+        if !(width.is_finite() && height.is_finite() && (3.0..=MAX_SIDE).contains(&width) && (3.0..=MAX_SIDE).contains(&height)) {
+            return Err(CreateError::Invalid(format!("the page must be between 3 and {MAX_SIDE} points on each side")));
+        }
+        Ok(())
+    }
+
+    /// The page `(width, height)` for an image of `(w, h)` points, and where to draw it:
+    /// `(scaled width, scaled height, x, y)`.
+    fn place(self, w: f64, h: f64) -> ((f64, f64), (f64, f64, f64, f64)) {
+        let Self::Fixed { width, height, turn } = self else { return ((w, h), (w, h, 0.0, 0.0)) };
+        // A square image keeps the page as given; only a clear difference turns the sheet.
+        let (pw, ph) = if turn && (w > h) != (width > height) && w != h { (height, width) } else { (width, height) };
+        // A scale is a ratio, not a length, so `MAX_SIDE` has no business capping it: it bounds
+        // a page side, which `ImagePage::check` has already applied. Capping the scale with it
+        // only shrank a small image on a large sheet (a 4 x 2 image at 1200 dpi covered 3456 pt
+        // of a 14400 pt page instead of all of it). The fit scale needs no cap of its own: it is
+        // `min(pw / w, ph / h)`, so the drawn size is the page's by construction.
+        //
+        // `w` and `h` are above zero, so the division is defined: a decoded image has at least
+        // one pixel, and every decoder here falls back to 72 dpi rather than pass on a
+        // non-positive resolution (`xppu > 0 && yppu > 0` for PNG, `> 1.0` for JPEG).
+        let k = (pw / w).min(ph / h);
+        let (dw, dh) = (w * k, h * k);
+        ((pw, ph), (dw, dh, (pw - dw) / 2.0, (ph - dh) / 2.0))
+    }
+}
+
 /// One page per image, each the size of its image at the image's resolution.
 pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError> {
     from_images_with_resolution(images, ImageResolution::Embedded)
@@ -597,11 +651,17 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
 
 /// Create image pages with embedded resolution or a fixed dpi (72 gives one point per pixel).
 pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Document, CreateError> {
+    from_images_with(images, resolution, ImagePage::Image)
+}
+
+/// Create image pages at a resolution, each on a page of its own size or on a fixed sheet.
+pub fn from_images_with(images: &[(String, Vec<u8>)], resolution: ImageResolution, page: ImagePage) -> Result<Document, CreateError> {
     if let ImageResolution::Dpi(dpi) = resolution
         && (!dpi.is_finite() || !(1.0..=1200.0).contains(&dpi))
     {
         return Err(CreateError::Invalid("image DPI must be finite and between 1 and 1200".into()));
     }
+    page.check()?;
     if images.is_empty() {
         return Err(CreateError::Invalid("no images".into()));
     }
@@ -617,13 +677,14 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         let k = (MAX_SIDE / w.max(h)).min(1.0);
         w *= k;
         h *= k;
+        let ((pw, ph), (dw, dh, x, y)) = page.place(w, h);
         let xr = add_image(&mut doc, img, &mut profiles);
         let mut xobj = Dict::new();
         xobj.set(b"Im0".to_vec(), Object::Ref(xr));
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xobj));
-        let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
-        add_page(&mut doc, w, h, res, Some(content))?;
+        let content = format!("q {dw:.3} 0 0 {dh:.3} {x:.3} {y:.3} cm /Im0 Do Q\n").into_bytes();
+        add_page(&mut doc, pw, ph, res, Some(content))?;
     }
     if let Some((name, _)) = images.first() {
         set_title(&mut doc, name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s));

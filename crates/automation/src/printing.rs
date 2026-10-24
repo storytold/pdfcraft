@@ -127,17 +127,7 @@ impl Automation {
         };
         let paper = match a.opt_str("paper")? {
             None => PAPERS[0].1,
-            Some(p) => PAPERS
-                .iter()
-                .find(|(n, _)| {
-                    n.eq_ignore_ascii_case(p)
-                        || n.replace("US ", "").eq_ignore_ascii_case(p)
-                        || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
-                })
-                .map(|x| x.1)
-                .ok_or_else(|| {
-                    bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
-                })?,
+            Some(p) => paper_named(p)?,
         };
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
@@ -189,6 +179,21 @@ impl Automation {
         }
         Ok(out)
     }
+}
+
+/// The size in points of a paper named as the tools accept it: the table's own name, that name
+/// without the `US ` prefix, or the short name before a parenthesised size (`A4`, `Letter`,
+/// `ARCH C`). Shared so Print and Create answer the same names.
+pub(crate) fn paper_named(p: &str) -> Result<(f64, f64)> {
+    PAPERS
+        .iter()
+        .find(|(n, _)| {
+            n.eq_ignore_ascii_case(p)
+                || n.replace("US ", "").eq_ignore_ascii_case(p)
+                || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
+        })
+        .map(|x| x.1)
+        .ok_or_else(|| bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", "))))
 }
 
 #[cfg(test)]

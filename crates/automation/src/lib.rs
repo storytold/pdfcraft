@@ -1469,6 +1469,23 @@ impl Automation {
         }
     }
 
+    /// The sheet image pages go on: `page_size` as a paper name ("A4", "Letter", "ARCH C") or
+    /// `[width, height]` in points, with the image scaled to fit and centred. Absent, each page
+    /// is the size of its own image, which is what a phone photo's pixels give.
+    fn image_page(a: &Args) -> Result<pdfcraft_engine::ImagePage> {
+        let turn = a.opt_bool("page_turn")?.unwrap_or(true);
+        let bad = || ToolError::InvalidArgs("page_size must be a paper name or [width, height] in points".into());
+        match a.get("page_size") {
+            None | Some(Value::Null) => Ok(pdfcraft_engine::ImagePage::Image),
+            Some(Value::String(s)) => Ok(pdfcraft_engine::ImagePage::fixed(printing::paper_named(s)?, turn)),
+            Some(Value::Array(v)) if v.len() == 2 => {
+                let side = |i: usize| v.get(i).and_then(Value::as_f64).ok_or_else(bad);
+                Ok(pdfcraft_engine::ImagePage::fixed((side(0)?, side(1)?), turn))
+            }
+            Some(_) => Err(bad()),
+        }
+    }
+
     fn doc_create(&mut self, a: &Args) -> Result<Value> {
         let (name, bytes) = match a.str("from")? {
             "blank" => {
@@ -1489,7 +1506,7 @@ impl Automation {
                 } else {
                     "Images.pdf".into()
                 };
-                (name, self.session.create_from_images_with_resolution(&images, resolution).map_err(failed)?)
+                (name, self.session.create_from_images_with(&images, resolution, Self::image_page(a)?).map_err(failed)?)
             }
             "text" => {
                 let (title, text) = match (a.opt_str("text")?, a.opt_str("path")?) {
@@ -1711,12 +1728,13 @@ impl Automation {
             Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
+        let page = Self::image_page(a)?;
         // Each file is read, converted and copied in turn, so a long list holds one file at a time.
         let sources = paths.into_iter().zip(ranges).map(|(p, range)| -> std::result::Result<pdfcraft_engine::CombineSource, ToolError> {
             let path = self.resolve(p, false)?;
             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            let (_, pdf) = self.session.convert_to_pdf_with(&name, &Arc::new(bytes), page).map_err(failed)?;
             let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Ok((title, pdf, range))
         });
@@ -1727,6 +1745,8 @@ impl Automation {
     /// One PDF per file, written into `out_dir`; a file that fails doesn't stop the others.
     fn create_separate(&mut self, a: &Args, paths: &[&str]) -> Result<Value> {
         let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("mode \"separate\" needs out_dir".into()))?, true)?;
+        // Checked before the folder is made, so a bad page_size leaves nothing behind.
+        let page = Self::image_page(a)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut out = Vec::new();
         for &p in paths {
@@ -1734,7 +1754,7 @@ impl Automation {
                 let bytes = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
                 let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let stem = src.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                let (kind, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(|e| e.to_string())?;
+                let (kind, pdf) = self.session.convert_to_pdf_with(&name, &Arc::new(bytes), page).map_err(|e| e.to_string())?;
                 Ok((kind, stem, pdf))
             });
             out.push(match converted {

@@ -251,12 +251,13 @@ pub fn tools() -> Vec<ToolDef> {
                     "passwords": { "type": "array", "items": { "type": ["string", "null"] } },
                     "groups": { "type": "array", "items": { "type": ["integer", "null"], "minimum": 0 } },
                     "field_conflicts": { "type": "string", "enum": ["rename", "merge"] },
+
                     "out": save_out,
                     "open": open,
                 }),
                 &["paths"],
             )),
-        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
+        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run; page_size puts each image on a sheet of one size instead of a page as large as the image. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
             .cmd("create.multiple")
             .with(schema(
                 json!({
@@ -266,6 +267,8 @@ pub fn tools() -> Vec<ToolDef> {
                     "out": save_out.clone(),
                     "open": open.clone(),
                     "out_dir": { "type": "string", "description": "Folder for mode \"separate\"." },
+                    "page_size": { "type": ["string", "array"], "items": { "type": "number", "minimum": 3 }, "minItems": 2, "maxItems": 2, "description": "For image files: put each image on a sheet of this size instead of a page as large as the image. A paper name (A4, Letter, Legal, Tabloid, A0-A6, ARCH A-E, ANSI C-E) or [width, height] in points; the image is scaled to fit and centred." },
+                    "page_turn": { "type": "boolean", "description": "With page_size: turn the sheet to match each image's orientation, so a landscape photo gets a landscape page (default true)." },
                 }),
                 &["paths"],
             )),
@@ -1271,6 +1274,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "width": { "type": "number", "minimum": 3 },
                 "height": { "type": "number", "minimum": 3 },
                 "name": { "type": "string", "description": "Name for the new document (default derived from the source)." },
+                "page_size": { "type": ["string", "array"], "items": { "type": "number", "minimum": 3 }, "minItems": 2, "maxItems": 2, "description": "For image files: put each image on a sheet of this size instead of a page as large as the image. A paper name (A4, Letter, Legal, Tabloid, A0-A6, ARCH A-E, ANSI C-E) or [width, height] in points; the image is scaled to fit and centred." },
+                "page_turn": { "type": "boolean", "description": "With page_size: turn the sheet to match each image's orientation, so a landscape photo gets a landscape page (default true)." },
+
             }),
             &["from"],
         )),
