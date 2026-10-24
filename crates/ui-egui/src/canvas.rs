@@ -420,6 +420,9 @@ pub struct DocView {
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
     /// from the viewport's top-left corner.
     goto_point: Option<(usize, Option<f32>, Option<f32>, Vec2)>,
+    /// The height `goto_point`'s page is displayed at, in points, as of when it was set: what
+    /// turns its point into the place at the window's top before it is drawn.
+    goto_point_height: f32,
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
@@ -619,6 +622,10 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// Where the window's top was within the current page when last drawn, as a fraction of the
+    /// page's height (what [`Self::goto`] takes): 0 at its top edge, 0.5 halfway down. Negative
+    /// when the window's top is still on the page before it (#2310).
+    top_in_page: f32,
     /// Side-by-side compare: scroll to here this frame, following the other half.
     pub(crate) sync_scroll: Option<Vec2>,
     /// The page widget's id, by which the Hand tool finds its drag before the pages are laid out.
@@ -752,6 +759,7 @@ impl DocView {
             forward: Vec::new(),
             goto: None,
             goto_point: None,
+            goto_point_height: 0.0,
             key_scroll: 0.0,
             single_edges: None,
             flash: None,
@@ -828,6 +836,7 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            top_in_page: 0.0,
             sync_scroll: None,
             page_widget: None,
             pan_hold_until: 0.0,
@@ -897,6 +906,8 @@ impl DocView {
         fresh.show_page_gaps = self.show_page_gaps;
         fresh.rotation = self.rotation;
         fresh.current = self.current;
+        // Where on the page, for a tab not drawn again before the session is saved (#2310).
+        fresh.top_in_page = self.position_in_page();
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
         fresh.thumbnail_zoom = self.thumbnail_zoom;
@@ -917,9 +928,14 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        let page = self.current;
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
+        if self.current != page {
+            // The page is gone, and the place on it with it: the last page shows from its top.
+            self.top_in_page = 0.0;
+        }
         self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
         self.page_input_reselect = true;
     }
@@ -1309,6 +1325,24 @@ impl DocView {
         self.current = page;
     }
 
+    /// Where the reader is within the current page: the fraction of its height above the window's
+    /// top, as [`Self::goto`] takes it, so `goto = Some((current, position_in_page()))` comes back
+    /// to the same place (#2310). A jump not yet drawn counts as done: for a destination's point
+    /// (a bookmark's or link's `/XYZ` top, a rectangle centred), the place drawing it will leave
+    /// at the window's top, short of the scroll limits at the document's ends.
+    pub fn position_in_page(&self) -> f32 {
+        match (self.goto_point, self.goto) {
+            (Some((page, _, Some(fy), rel)), _) if page == self.current => {
+                // The inverse of drawing it: `fy` lands `rel.y` below the window's top.
+                let h = self.goto_point_height;
+                let top = if h > 0.0 { fy + (self.page_gap() - rel.y) / h } else { fy };
+                if top.is_finite() { top } else { fy }
+            }
+            (_, Some((page, frac))) if page == self.current => frac,
+            _ => self.top_in_page,
+        }
+    }
+
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
         self.go_to_page(page);
@@ -1322,6 +1356,7 @@ impl DocView {
         let y = rect[1] * 0.5 + rect[3] * 0.5;
         let [fx, fy] = p.dest_fraction(Some(x), Some(y), self.rotation);
         self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
+        self.goto_point_height = self.display_size(p).1 * self.zoom * PT;
     }
 
     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
@@ -1382,6 +1417,7 @@ impl DocView {
         };
         if fx.is_some() || fy.is_some() {
             self.goto_point = Some((page, fx, fy, rel));
+            self.goto_point_height = self.display_size(p).1 * self.zoom * PT;
         }
     }
 
@@ -4044,6 +4080,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (page, out.state.offset.y <= MARGIN - view.page_gap() + 1.0, out.state.offset.y >= max_y - 1.0)
     });
 
+    // The inverse of `goto` above, for coming back to this place later (#2310).
+    if let Some(r) = rects.get(view.current).filter(|r| r.height() > 0.0) {
+        let top = (out.state.offset.y + y_shift + view.page_gap() - r.top()) / r.height();
+        if top.is_finite() {
+            view.top_in_page = top;
+        }
+    }
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
@@ -6878,6 +6921,31 @@ trailer << /Root 1 0 R >>
         let empty = pdfcraft_render::DocInfo::default();
         v.go_to_dest(1, DestView::FitH { top: Some(100.0) }, &empty);
         assert_eq!((v.current, v.goto_point), (1, None));
+    }
+
+    #[test]
+    fn a_destination_not_drawn_yet_is_the_place_on_its_page() {
+        // Saved before the next frame, the place is where the destination sends the reader,
+        // not the top of its page (#2310).
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..3)
+                .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        let mut v = view(3, PageLayout::Single, true);
+        v.go_to_dest(2, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+        // A quarter down, at the window's top, which leaves the page gap above it.
+        let h = 400.0 * v.zoom * PT;
+        assert!((v.position_in_page() - (0.25 + GAP / h)).abs() < 1e-5, "{}", v.position_in_page());
+        // No vertical position: the page's top, as the jump itself.
+        v.go_to_dest(1, DestView::FitV { left: Some(75.0) }, &info);
+        assert_eq!(v.position_in_page(), 0.0);
+        (v.viewport_w, v.viewport_h) = (800.0, 600.0);
+        v.go_to_dest(0, DestView::FitR { rect: [0.0, 300.0, 100.0, 350.0] }, &info);
+        // The rectangle's centre (75/400 down) half a window (300 pt) below the window's top, at
+        // the zoom /FitR chose (8 pt per page point: 3200 pt for the page).
+        assert!((v.position_in_page() - (75.0 / 400.0 + (GAP - 300.0) / 3200.0)).abs() < 1e-4, "{}", v.position_in_page());
     }
 
     #[test]
