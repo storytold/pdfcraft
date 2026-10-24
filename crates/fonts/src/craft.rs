@@ -350,6 +350,8 @@ pub fn available_thai_fonts() -> Vec<ThaiFontEntry> {
 
 /// Force a rescan of font directories (useful if new fonts were added to the directory).
 pub fn rescan_thai_fonts() -> Vec<ThaiFontEntry> {
+    #[cfg(not(target_arch = "wasm32"))]
+    THAI_DISCOVERY_ATTEMPTED.store(false, std::sync::atomic::Ordering::Relaxed);
     let list = scan_thai_fonts_from_dirs();
     set_discovered_thai_fonts(list.clone());
     list

@@ -213,6 +213,31 @@ pub fn is_thai(c: char) -> bool {
     ('\u{0E01}'..='\u{0E7F}').contains(&c)
 }
 
+/// Whether a Thai character is a combining mark (vowel sign, tone mark, or diacritic).
+pub fn is_thai_combining(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0E31}' | '\u{0E33}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4E}'
+    )
+}
+
+/// Group a string into visual comb units (grapheme-like units), keeping Thai combining marks
+/// attached to their preceding base letter.
+pub fn comb_units(text: &str, limit: usize) -> Vec<String> {
+    let mut units: Vec<String> = Vec::new();
+    for ch in text.chars() {
+        if is_thai_combining(ch) && let Some(last) = units.last_mut() {
+            last.push(ch);
+        } else {
+            if units.len() >= limit {
+                break;
+            }
+            units.push(ch.to_string());
+        }
+    }
+    units
+}
+
 /// The font resource for `name` from the form's `/DR`, if it is a font we can encode for.
 fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     let af = acroform(doc)?;
@@ -511,7 +536,7 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
             sample_strings.extend(f.options.iter().map(|(_, d)| d.as_str()));
         } else if comb {
             let cells = f.max_len.unwrap_or(1).max(1);
-            comb_cells = text.chars().take(cells).map(|c| c.to_string()).collect();
+            comb_cells = comb_units(&text, cells);
             sample_strings.extend(comb_cells.iter().map(|s| s.as_str()));
             sample_strings.push(&text);
         } else {
@@ -654,9 +679,8 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
                 if comb {
                     let cells = f.max_len.unwrap_or(1).max(1);
                     let cell = width / cells as f64;
-                    for (i, ch) in text.chars().take(cells).enumerate() {
-                        let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s, size);
+                    for (i, unit) in comb_units(&text, cells).iter().enumerate() {
+                        show(&mut body, cell * i as f64 + (cell - width_of(unit, size)) / 2.0, y, unit, size);
                     }
                 } else {
                     show(&mut body, x_for(&text, size), y, &text, size);

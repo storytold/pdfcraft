@@ -2895,6 +2895,18 @@ fn thai_text_field_stacked_floating_marks_render_without_collision() {
     assert!(cmap_str.contains(&hex_cluster2), "ToUnicode CMap must contain cluster น\u{0e35}\u{e49}: {cmap_str}");
 }
 
+#[test]
+fn thai_comb_field_groups_base_and_combining_marks() {
+    let units = appearance::comb_units("กิ่", 5);
+    assert_eq!(units, vec!["กิ่".to_string()]);
+
+    let units2 = appearance::comb_units("น้ำใจ", 5);
+    assert_eq!(units2, vec!["น้ำ".to_string(), "ใ".to_string(), "จ".to_string()]);
+
+    let units_limited = appearance::comb_units("น้ำใจ", 2);
+    assert_eq!(units_limited, vec!["น้ำ".to_string(), "ใ".to_string()]);
+}
+
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,
 /// B none, C its own (`(old C)`), D is a combo without one, E a check box with states, F a list
 /// box without one, and G only a down appearance (`/D`, no `/N`).
