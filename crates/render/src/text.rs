@@ -302,8 +302,8 @@ impl PageText {
     /// newspaper columns) share a row and are separated by a tab, so a pasted table lands in
     /// spreadsheet cells. Rows of right-to-left text put their pieces right to left. When any
     /// selected glyph does not run horizontally (CJK vertical writing, turned text, a page shown
-    /// turned by `/Rotate`) rows mean nothing, and the lines come out one per row in reading order
-    /// instead.
+    /// turned by `/Rotate`), or sits in a column of upright CJK glyphs placed one per baseline,
+    /// rows mean nothing, and the lines come out one per row in reading order instead.
     pub fn column_text(&self, glyphs: &[usize]) -> String {
         // The selected glyphs of each line, with their box: (glyphs, bbox).
         let mut lines: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
@@ -321,8 +321,40 @@ impl PageText {
                 }
             }
         }
+        // Whether glyphs `range` of the page stack down a column, as the layout reads an upright
+        // CJK column written one glyph per baseline (#3712). Such a glyph runs horizontally, so
+        // its direction does not give the column away.
+        let stacked = |range: std::ops::Range<usize>| {
+            let mut column = range.filter_map(|i| self.glyphs.get(i));
+            let Some(mut upper) = column.next() else { return false };
+            let Some(mut lower) = column.next() else { return false };
+            loop {
+                if !stacks_vertically(upper, lower) {
+                    return false;
+                }
+                let Some(next) = column.next() else { return true };
+                (upper, lower) = (lower, next);
+            }
+        };
+        // The whole line decides, not only the glyphs the rectangle caught: a shallow selection
+        // takes one glyph from each column, and those must still read as columns, not as the row
+        // they happen to share. A line's glyphs are one contiguous run of the page.
+        let line_range = |line: u32, at: usize| {
+            let same = |i: usize| self.line_of.get(i) == Some(&line);
+            let mut start = at;
+            while start > 0 && same(start - 1) {
+                start -= 1;
+            }
+            let mut end = at + 1;
+            while same(end) {
+                end += 1;
+            }
+            start..end
+        };
         // Within the layout's own tolerance for reading a glyph as unturned.
-        let vertical = glyphs.iter().any(|&i| self.glyphs.get(i).is_some_and(|g| g.direction[1].abs() > WORD_GAP));
+        let turned = glyphs.iter().any(|&i| self.glyphs.get(i).is_some_and(|g| g.direction[1].abs() > WORD_GAP));
+        let vertical =
+            turned || lines.iter().zip(&line_ids).any(|((members, _), &line)| members.first().is_some_and(|&at| stacked(line_range(line, at))));
         let piece = |members: &[usize]| {
             let mut s = String::new();
             let mut prev: Option<usize> = None;
@@ -378,6 +410,14 @@ const DIRECTION_TOLERANCE: f64 = WORD_GAP as f64;
 
 /// A word gap is wider than the line's typical letter gap by this fraction of the line height.
 const WORD_GAP: f32 = 0.15;
+/// A stack of upright CJK glyphs drawn one per baseline (a horizontal font placing each character
+/// on its own, the way OCR text layers and some converters write vertical Chinese and Japanese)
+/// reads as one vertical line when consecutive boxes overlap this much horizontally and drop no
+/// more than this fraction of their height (#3712).
+const VERTICAL_COLUMN_OVERLAP: f32 = 0.6;
+const VERTICAL_COLUMN_DROP: f32 = 0.6;
+/// How much taller or shorter a glyph may be than the one above it in a vertical column.
+const VERTICAL_COLUMN_HEIGHT: f32 = 0.35;
 
 /// A glyph with its writing direction to the nearest quarter turn (right, down, left, up) and as
 /// a unit vector.
@@ -1001,6 +1041,9 @@ struct Seg {
     extra: Option<Box<SegExtra>>,
     bbox: [f32; 4],
     h: f32,
+    /// A column of upright CJK glyphs, one per baseline, read top to bottom: it must not be merged
+    /// with the horizontal lines its characters would otherwise form across columns (#3712).
+    vertical: bool,
 }
 
 #[derive(Default)]
@@ -1010,7 +1053,12 @@ struct SegExtra {
 
 impl Seg {
     fn new(first: Run, bbox: [f32; 4], h: f32) -> Self {
-        Seg { first, extra: None, bbox, h }
+        Seg { first, extra: None, bbox, h, vertical: false }
+    }
+
+    /// A line of upright CJK glyphs drawn one per baseline, top to bottom (#3712).
+    fn vertical(first: Run, bbox: [f32; 4], h: f32) -> Self {
+        Seg { first, extra: None, bbox, h, vertical: true }
     }
 
     fn cy(&self) -> f32 {
@@ -1166,8 +1214,10 @@ fn restarts_run(glyphs: &[&TextGlyph], start: usize, next: usize, progress: f32)
 ///
 /// Glyphs are placed by x. Runs that collide, meaning that glyphs of different runs overprint each other, stay whole
 /// and are placed by their left edge. Runs that only interleave along the line, such as symbols between letters, keep
-/// their glyph-by-glyph order, so the common case is one sort. A run of zero-width glyphs (a combining mark) has no
-/// extent of its own, so it goes next to the glyph it starts at.
+/// their glyph-by-glyph order, so the common case is one sort. A vertical column keeps the drawing order it was
+/// written in, top to bottom, because the x offsets between its stacked glyphs are not the line positions a sort
+/// would order. A run of zero-width glyphs (a combining mark) has no extent of its own, so it goes next to the glyph
+/// it starts at.
 fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, s: &Seg, sc: &mut Scratch) {
     let x0 = |i: usize| glyphs[i].rect[0];
     let zero_width = |i: usize| glyphs[i].rect[2] - glyphs[i].rect[0] <= 0.05 * height(i);
@@ -1182,7 +1232,11 @@ fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, s: &Seg, s
             sc.text.push(run);
         }
     }
-    if sc.text.len() <= 1 {
+    if s.vertical {
+        // A column of stacked glyphs reads top to bottom in drawing order, whatever small x
+        // offsets sit between them (the stack allows part of a glyph width).
+        sc.placed.extend(s.first.range());
+    } else if sc.text.len() <= 1 {
         // A single run cannot collide with itself: its glyphs only need sorting by x.
         sc.placed.extend(sc.text.iter().flat_map(|run| run.range()));
         sc.placed.sort_unstable_by(|a, b| x0(*a).total_cmp(&x0(*b)).then(a.cmp(b)));
@@ -1459,6 +1513,31 @@ fn union(a: &mut [f32; 4], b: &[f32; 4]) {
     a[3] = a[3].max(b[3]);
 }
 
+/// Whether `lower` continues the vertical column `upper` starts: both upright CJK glyphs (kana,
+/// kanji and their punctuation) of similar height, `lower`'s box overlapping `upper`'s horizontally
+/// and touching it, or nearly touching, from below. A horizontal font placing one character per
+/// baseline (OCR text layers and some converters write vertical text this way) makes such stacks,
+/// and nothing else does (#3712).
+fn stacks_vertically(upper: &TextGlyph, lower: &TextGlyph) -> bool {
+    let cjk = |g: &TextGlyph| g.text.chars().any(is_cjk);
+    if !cjk(upper) || !cjk(lower) {
+        return false;
+    }
+    let (hu, hl) = ((upper.rect[3] - upper.rect[1]).max(0.1), (lower.rect[3] - lower.rect[1]).max(0.1));
+    let (wu, wl) = (upper.rect[2] - upper.rect[0], lower.rect[2] - lower.rect[0]);
+    if wu <= 0.0 || wl <= 0.0 || (hu / hl - 1.0).abs() > VERTICAL_COLUMN_HEIGHT {
+        return false;
+    }
+    let overlap = upper.rect[2].min(lower.rect[2]) - upper.rect[0].max(lower.rect[0]);
+    if overlap < VERTICAL_COLUMN_OVERLAP * wu.min(wl) {
+        return false;
+    }
+    // y grows downward: `lower`'s top is below `upper`'s bottom.
+    let drop = lower.rect[1] - upper.rect[3];
+    let h = hu.min(hl);
+    drop <= VERTICAL_COLUMN_DROP * h && drop >= -0.5 * h
+}
+
 /// Reading-order layout. Glyphs are reordered so that `glyphs` is in reading order, lines are
 /// numbered in that order, and word gaps are inferred per line.
 ///
@@ -1517,13 +1596,54 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let height = |i: usize| (glyphs[i].rect[3] - glyphs[i].rect[1]).max(0.1);
     let cy = |i: usize| (glyphs[i].rect[1] + glyphs[i].rect[3]) / 2.0;
 
-    // 1. Segments in content order. Every run is a range of consecutive glyphs.
+    // Vertical columns of upright CJK glyphs drawn one per baseline: each stack of two or more
+    // consecutive glyphs that continues downward with the same x is one vertical line, so the
+    // horizontal segments and their same-baseline merge below cannot join the rows the columns
+    // make across the page (#3712).
+    let mut stacks: Vec<Option<usize>> = vec![None; n];
+    {
+        let mut start: Option<usize> = None;
+        for i in 1..n {
+            if stacks_vertically(glyphs[i - 1], glyphs[i]) {
+                start.get_or_insert(i - 1);
+            } else if let Some(s) = start.take()
+                && i - s >= 2
+            {
+                stacks[s] = Some(i);
+            }
+        }
+        if let Some(s) = start
+            && n - s >= 2
+        {
+            stacks[s] = Some(n);
+        }
+    }
+
+    // 1. Segments in content order. Every run is a range of consecutive glyphs; a vertical column
+    // is one segment over its stack.
     let mut segs: Vec<Seg> = Vec::new();
     let mut run_start_x = 0.0;
     let mut furthest_progress = 0.0;
-    for i in 0..n {
+    let mut i = 0;
+    while i < n {
+        if let Some(end) = stacks[i] {
+            let mut bbox = glyphs[i].rect;
+            let mut h = 0.0f32;
+            for glyph in &glyphs[i..end] {
+                union(&mut bbox, &glyph.rect);
+                h = h.max((glyph.rect[3] - glyph.rect[1]).max(0.1));
+            }
+            segs.push(Seg::vertical(Run { start: i, end }, bbox, h));
+            run_start_x = bbox[0];
+            furthest_progress = 0.0;
+            i = end;
+            continue;
+        }
         let g = glyphs[i].rect;
         let cont = segs.last().is_some_and(|s| {
+            if s.vertical {
+                return false;
+            }
             let Some(p) = s.first.end.checked_sub(1) else { return false };
             let ph = height(p).min(height(i));
             let gap = g[0] - glyphs[p].rect[2];
@@ -1546,6 +1666,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
+        i += 1;
     }
     // A run that redraws an earlier run at the same place (doubled or shadowed text) is dropped, as a doubled glyph is
     // above. Runs are keyed by a fingerprint of their glyph texts and a grid cell a fifth of a line high. A key leads to
@@ -1601,6 +1722,9 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                     continue;
                 }
                 let (sa, sb) = (&segs[a], &segs[b]);
+                if sa.vertical || sb.vertical {
+                    continue;
+                }
                 let h = sa.h.min(sb.h);
                 let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
                 if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
@@ -1649,58 +1773,98 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // The box of a block's first line. Every block is created with one segment, so the block's own box is a fallback
     // that is never used.
     let first_line = |b: usize| blocks[b].0.first().and_then(|&s| segs.get(s)).map_or(blocks[b].1, |s| s.bbox);
-    while let Some(&top) = remaining.iter().min_by(|a, b| blocks[**a].1[1].total_cmp(&blocks[**b].1[1])) {
-        // A column goes on past a paragraph gap (#3658): the nearest block below the one just read that overlaps it
-        // horizontally comes next, if the gap above it is at most two and a half heights of the last line read (a
-        // footer, a footnote or a caption under a figure is further) and no other unread block
+    // While walking a group of vertical columns right to left, the next column is chosen from the
+    // one just taken, not from the top of the page again (#3712).
+    let mut focus: Option<usize> = None;
+    // The block a walk starts from: the topmost remaining block, or the rightmost column of the
+    // group of vertical columns that starts at that height (#3712).
+    let top_block = |remaining: &[usize]| -> Option<usize> {
+        let top = remaining.iter().copied().min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
+        if blocks[top].0.len() == 1 && segs[blocks[top].0[0]].vertical {
+            let top_of = blocks[top].1[1];
+            remaining
+                .iter()
+                .copied()
+                .filter(|c| blocks[*c].0.len() == 1 && segs[blocks[*c].0[0]].vertical && (blocks[*c].1[1] - top_of).abs() <= 1.0)
+                .max_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+                .or(Some(top))
+        } else {
+            Some(top)
+        }
+    };
+    while !remaining.is_empty() {
+        // A focused column has already been taken, so it only anchors the next pick: the column
+        // nearest on its left that shares vertical space with it. When no column is left of it,
+        // its group has ended and selection resumes from the remaining blocks; taking the
+        // finished column again would leave `remaining` unchanged, so it would be pushed into
+        // `block_order` forever.
+        let next = focus.and_then(|f| {
+            let fb = blocks[f].1;
+            remaining.iter().copied().filter(|c| beside_left(&fb, &blocks[*c].1)).max_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+        });
+        let continuing = next.is_some();
+        let Some(top) = next.or_else(|| top_block(&remaining)) else { break };
+        let tb = blocks[top].1;
+        let vertical_top = blocks[top].0.len() == 1 && segs[blocks[top].0[0]].vertical;
+        // The first column of a vertical group is taken as it is (its rightmost); then each next
+        // one is its nearest column on the left (#3712). Any other block goes on past a paragraph
+        // gap (#3658): the nearest block below the one just read that overlaps it horizontally comes next, if the gap
+        // above it is at most two and a half heights of the last line read (a footer, a footnote or a caption under a
+        // figure is further) and no other unread block
         // - sits above it in its own horizontal span (the rest of a column above a full-width heading or footnote),
         // - is beside it on its left, or
         // - shares its first line: their first lines overlap by at least 30% of the taller one (a table or form row,
         //   which reads across, even with labels and values in different sizes or on shifted baselines; a line that
         //   only touches it, or a small superscript or footnote marker, is not a row).
-        let next_in_column = block_order.last().and_then(|&prev| {
-            let pb = blocks[prev].1;
-            // The gap is measured in the height of the block's last line, which borders it.
-            let pl = blocks[prev].0.last().and_then(|&s| segs.get(s)).map_or(pb, |s| s.bbox);
-            let tol = (pl[3] - pl[1]).max(0.1) * 0.5;
-            let c = remaining
-                .iter()
-                .copied()
-                .filter(|&c| {
-                    let cb = blocks[c].1;
-                    let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
-                    let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
-                    cb[1] >= pb[3] - tol && overlap > minw * 0.3
-                })
-                .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
-            let cb = blocks[c].1;
-            if cb[1] - pb[3] >= tol * 5.0 {
-                return None;
-            }
-            let cl = first_line(c);
-            let blocked = remaining.iter().any(|&r| {
-                if r == c {
-                    return false;
+        let pick = if continuing || vertical_top {
+            top
+        } else {
+            let next_in_column = block_order.last().and_then(|&prev| {
+                let pb = blocks[prev].1;
+                // The gap is measured in the height of the block's last line, which borders it.
+                let pl = blocks[prev].0.last().and_then(|&s| segs.get(s)).map_or(pb, |s| s.bbox);
+                let tol = (pl[3] - pl[1]).max(0.1) * 0.5;
+                let c = remaining
+                    .iter()
+                    .copied()
+                    .filter(|&c| {
+                        let cb = blocks[c].1;
+                        let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
+                        let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
+                        cb[1] >= pb[3] - tol && overlap > minw * 0.3
+                    })
+                    .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
+                let cb = blocks[c].1;
+                if cb[1] - pb[3] >= tol * 5.0 {
+                    return None;
                 }
-                let rb = blocks[r].1;
-                let rl = first_line(r);
-                let shared = rl[3].min(cl[3]) - rl[1].max(cl[1]);
-                let row = shared > 0.3 * (rl[3] - rl[1]).max(cl[3] - cl[1]);
-                (rb[1] < cb[1] && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb) || row
+                let cl = first_line(c);
+                let blocked = remaining.iter().any(|&r| {
+                    if r == c {
+                        return false;
+                    }
+                    let rb = blocks[r].1;
+                    let rl = first_line(r);
+                    let shared = rl[3].min(cl[3]) - rl[1].max(cl[1]);
+                    let row = shared > 0.3 * (rl[3] - rl[1]).max(cl[3] - cl[1]);
+                    (rb[1] < cb[1] && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb) || row
+                });
+                (!blocked).then_some(c)
             });
-            (!blocked).then_some(c)
-        });
-        let pick = next_in_column.unwrap_or_else(|| {
-            let tb = blocks[top].1;
-            remaining
-                .iter()
-                .copied()
-                .filter(|c| beside_left(&tb, &blocks[*c].1))
-                .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
-                .unwrap_or(top)
-        });
+            next_in_column.unwrap_or_else(|| {
+                remaining
+                    .iter()
+                    .copied()
+                    .filter(|c| beside_left(&tb, &blocks[*c].1))
+                    .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+                    .unwrap_or(top)
+            })
+        };
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
+        // A column anchors the next pick whether or not it continued a walk, so a column that
+        // starts lower than the ones to its right is still read in its turn, not after them.
+        focus = vertical_top.then_some(pick);
     }
 
     // 4. Emit each segment in block order. Its glyphs are placed here, into scratch that every segment reuses, and
@@ -1791,6 +1955,177 @@ mod tests {
             em_box("E", 16.0, 92.5, 21.0, 100.6),
         ];
         assert_eq!(layout(glyphs).plain_text(), "CO2-E");
+    }
+
+    /// Three columns of upright CJK glyphs placed one per baseline, right to left, as OCR text
+    /// layers and some converters write vertical Chinese (#3712).
+    fn stacked_vertical_columns(columns: &[&str], spacing: f32) -> Vec<TextGlyph> {
+        let mut glyphs = Vec::new();
+        for (i, column) in columns.iter().enumerate() {
+            for (j, ch) in column.chars().enumerate() {
+                let x = 500.0 - spacing * i as f32;
+                let y = 740.0 + 12.0 * j as f32;
+                glyphs.push(em_box(&ch.to_string(), x, y, x + 12.0, y + 12.0));
+            }
+        }
+        glyphs
+    }
+
+    #[test]
+    fn stacked_vertical_cjk_copies_column_by_column_right_to_left() {
+        let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+        let text = layout(stacked_vertical_columns(&columns, 18.0));
+        assert_eq!(text.plain_text(), columns.join("\n"));
+        // A drag down the rightmost column copies just that column.
+        assert_eq!(text.text_of(0..7), columns[0]);
+        // Search finds the columns as the lines they are.
+        assert_eq!(text.find("春天來得很早"), vec![0..6]);
+        assert_eq!(text.find("慢慢上山"), vec![16..20]);
+        // Three lines, one per column.
+        assert_eq!(text.line_of, [0; 7].iter().copied().chain([1; 7]).chain([2; 7]).collect::<Vec<u32>>());
+        // A rectangle around all three columns copies them in reading order, not as one row.
+        let all = text.glyphs_in([460.0, 735.0, 516.0, 830.0]);
+        assert_eq!(all, (0..21).collect::<Vec<_>>());
+        assert_eq!(text.column_text(&all), columns.join("\n"));
+        // A rectangle around the rightmost column copies just that column.
+        let right = text.glyphs_in([494.0, 735.0, 516.0, 830.0]);
+        assert_eq!(text.column_text(&right), columns[0]);
+    }
+
+    #[test]
+    fn a_shallow_rectangle_copies_stacked_columns_in_column_order() {
+        // A rectangle that catches only the top glyph of each column selects three columns, not
+        // the row those glyphs happen to share: the line's whole sequence says it is a column.
+        let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+        let text = layout(stacked_vertical_columns(&columns, 18.0));
+        let top = text.glyphs_in([460.0, 738.0, 516.0, 752.0]);
+        assert_eq!(top, vec![0, 7, 14], "one glyph from each column, in content order");
+        assert_eq!(text.column_text(&top), "春\n山\n遊");
+    }
+
+    #[test]
+    fn stacked_vertical_columns_do_not_join_rows_or_each_other() {
+        let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+        for spacing in [24.0, 36.0, 48.0] {
+            let text = layout(stacked_vertical_columns(&columns, spacing));
+            assert_eq!(text.plain_text(), columns.join("\n"), "spacing {spacing}");
+            // Never the row-by-row order the columns used to read as.
+            assert_ne!(text.plain_text(), "春客上天慢開來慢滿得上櫻很山花早。。，");
+        }
+    }
+
+    #[test]
+    fn a_vertical_column_keeps_its_glyph_order_whatever_the_x_offsets() {
+        // A converter's text layer can put the glyphs of one column a point or two off each
+        // other's x; the column still reads top to bottom, in drawing order, not left to right.
+        let column = "見出本文";
+        let offsets = [0.0, 2.0, 1.0, 3.0];
+        let mut glyphs = Vec::new();
+        for (j, (ch, dx)) in column.chars().zip(offsets).enumerate() {
+            let (x, y) = (200.0 + dx, 100.0 + 12.0 * j as f32);
+            glyphs.push(em_box(&ch.to_string(), x, y, x + 12.0, y + 12.0));
+        }
+        let text = layout(glyphs);
+        assert_eq!(text.plain_text(), column);
+        assert!(text.line_of.iter().all(|l| *l == 0));
+    }
+
+    #[test]
+    fn horizontal_cjk_text_stays_horizontal() {
+        // Adjacent CJK glyphs on one baseline are not a vertical stack, even when they kern into
+        // each other, and a paragraph of them keeps its lines in order.
+        let line = "春天來得很早";
+        let mut glyphs = Vec::new();
+        for (j, ch) in line.chars().enumerate() {
+            let x = 72.0 + 11.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), x, 100.0, x + 12.0, 112.0));
+        }
+        let text = layout(glyphs);
+        assert_eq!(text.plain_text(), line);
+        assert!(text.line_of.iter().all(|l| *l == 0));
+    }
+
+    #[test]
+    fn a_vertical_column_below_horizontal_text_keeps_both_orders() {
+        let mut glyphs = Vec::new();
+        for (j, ch) in "見出し".chars().enumerate() {
+            let x = 200.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), x, 100.0, x + 12.0, 112.0));
+        }
+        // A column of six characters, under the heading and to the right of the page's left edge.
+        for (j, ch) in "縦書き本文".chars().enumerate() {
+            let y = 300.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), 200.0, y, 212.0, y + 12.0));
+        }
+        let text = layout(glyphs);
+        assert_eq!(text.plain_text(), "見出し\n縦書き本文");
+    }
+
+    /// Layout under a hang guard: a block order that takes the block it just took leaves
+    /// `remaining` unchanged, so the test fails at the guard instead of exhausting memory.
+    fn layout_bounded(glyphs: Vec<TextGlyph>) -> PageText {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(layout(glyphs));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("layout finishes: each block is taken exactly once")
+    }
+
+    #[test]
+    fn a_vertical_column_above_horizontal_text_ends_the_walk() {
+        // Two upright CJK glyphs stacked near the top of the page, then a horizontal line well
+        // below them. The column is taken first; the line shares no vertical space with it, so
+        // no successor is left of the column while a block remains.
+        let mut glyphs = Vec::new();
+        for (j, ch) in "縦書".chars().enumerate() {
+            let y = 100.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), 200.0, y, 212.0, y + 12.0));
+        }
+        for (j, ch) in "本文".chars().enumerate() {
+            let x = 72.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), x, 400.0, x + 12.0, 412.0));
+        }
+        let text = layout_bounded(glyphs);
+        assert_eq!(text.plain_text(), "縦書\n本文");
+        assert_eq!(text.glyphs.len(), 4, "each glyph is emitted exactly once");
+        assert_eq!(text.line_of, [0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn two_vertically_disjoint_vertical_columns_both_end() {
+        // Two groups of stacked upright CJK glyphs with no vertical space between them. After
+        // the first group is taken nothing is left of it, but the second group still remains.
+        let mut glyphs = Vec::new();
+        for (j, ch) in "上組".chars().enumerate() {
+            let y = 100.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), 300.0, y, 312.0, y + 12.0));
+        }
+        for (j, ch) in "下組".chars().enumerate() {
+            let y = 400.0 + 12.0 * j as f32;
+            glyphs.push(em_box(&ch.to_string(), 300.0, y, 312.0, y + 12.0));
+        }
+        let text = layout_bounded(glyphs);
+        assert_eq!(text.plain_text(), "上組\n下組");
+        assert_eq!(text.glyphs.len(), 4, "each glyph is emitted exactly once");
+        assert_eq!(text.line_of, [0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn a_vertical_column_that_starts_lower_is_read_in_its_turn() {
+        // Four columns right to left, the third starting 30 pt lower than the others, as an
+        // indented or ragged column does. The walk follows each column to its left neighbour.
+        let columns = ["春夏秋冬梅雨", "東西南北中央", "山川草木鳥獣", "日月星辰天地"];
+        let mut glyphs = Vec::new();
+        for (i, column) in columns.iter().enumerate() {
+            let x = 500.0 - 18.0 * i as f32;
+            let down = if i == 2 { 30.0 } else { 0.0 };
+            for (j, ch) in column.chars().enumerate() {
+                let y = 100.0 + down + 12.0 * j as f32;
+                glyphs.push(em_box(&ch.to_string(), x, y, x + 12.0, y + 12.0));
+            }
+        }
+        let text = layout_bounded(glyphs);
+        assert_eq!(text.plain_text(), columns.join("\n"));
     }
 
     #[test]
@@ -2280,6 +2615,68 @@ mod tests {
         // stays after its letter.
         let marked = ligature_pages("3 beginbfchar <61> <0628064E> <62> <0627> <63> <0628> endbfchar", "cba", &["1 0 0 1 100 150"]);
         assert_eq!(extract_page(&marked, 0, &InterpreterSettings::default()).unwrap().plain_text(), "بَاب");
+    }
+
+    /// The page from #3712: three columns of upright Traditional Chinese glyphs placed one per
+    /// baseline, right to left, the way OCR text layers and some converters write vertical text.
+    /// The extractor (which selection copy and search read) puts them in column order.
+    #[test]
+    fn stacked_vertical_cjk_from_a_pdf_copies_in_reading_order() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+        let mut chars: Vec<char> = columns.iter().flat_map(|c| c.chars()).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        let cid: std::collections::HashMap<char, u16> = chars.iter().enumerate().map(|(i, c)| (*c, i as u16 + 1)).collect();
+        let mut body = String::new();
+        for (i, column) in columns.iter().enumerate() {
+            for (j, ch) in column.chars().enumerate() {
+                body.push_str(&format!("1 0 0 1 {} {} Tm <{:04X}> Tj ", 500 - 18 * i, 740 - 12 * j, cid[&ch]));
+            }
+        }
+        let operators = format!("/P << /MCID 0 >> BDC BT /CH 12 Tf {body}ET EMC");
+        let mut cmap = String::from(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Adobe-Identity-UCS def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange\n",
+        );
+        cmap.push_str(&format!("{} beginbfchar\n", cid.len()));
+        for (ch, code) in &cid {
+            cmap.push_str(&format!("<{code:04X}> <{:04X}>\n", *ch as u32));
+        }
+        cmap.push_str("endbfchar endcmap CMapName currentdict /CMap defineresource pop end end");
+        let mut doc = Document::with_version("1.7");
+        let unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+        let descendant = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "CraftMing",
+            "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+            "DW" => 1000, "CIDToGIDMap" => "Identity"
+        });
+        let font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "CraftMing", "Encoding" => "Identity-H",
+            "DescendantFonts" => vec![Object::Reference(descendant)], "ToUnicode" => unicode
+        });
+        let content = doc.add_object(Stream::new(dictionary! {}, operators.into_bytes()));
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages,
+            "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(595), Object::Integer(842)],
+            "Resources" => dictionary! { "Font" => dictionary! { "CH" => font } }, "Contents" => content
+        });
+        doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+        let expected = columns.join("\n");
+        assert_eq!(text.plain_text(), expected);
+        // A drag down the rightmost column selects just that column, and search finds each one.
+        let glyphs = columns[0].chars().count();
+        assert_eq!(text.text_of(0..glyphs), columns[0]);
+        assert_eq!(text.find("春天來得很早"), vec![0..6]);
+        assert_eq!(text.find("遊客慢慢上山"), vec![14..20]);
+        // Three lines, one per column, and no line reads across the page.
+        assert_eq!(text.line_of, [0; 7].iter().copied().chain([1; 7]).chain([2; 7]).collect::<Vec<u32>>());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M2/gap 6: vertical CJK placed one upright glyph per baseline copies and searches in column order, #3712; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -156,6 +157,13 @@ update the numbers.
   non-Identity CMaps. Unknown CMaps and foreign registries remain refused. Synthetic checker
   and read-only automation regressions cover the change; per-glyph validation and the
   separate embedded-font extraction gap remain open. No readiness or backlog re-count.
+- **Fix verified (2026-10-22):** vertical Chinese and Japanese written the way OCR text layers and
+  some converters do it — one upright glyph placed on its own, top to bottom, columns right to
+  left — selected and copied row by row across the columns (#3712). Such stacks are now read as
+  vertical columns (top to bottom, columns right to left) for selection, copy and search; text
+  drawn with a vertical font (Identity-V) and turned baselines is unchanged, and so is horizontal
+  text. Synthetic PDF regressions cover the reported page, search hits, column spacing of 24–48 pt
+  and a horizontal paragraph.
 - **Impact:** every one is a user who lost trust. Crash reports outrank feature work
   (`AGENTS.md` §4).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
