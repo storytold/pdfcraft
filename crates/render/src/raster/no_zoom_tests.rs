@@ -153,3 +153,52 @@ fn the_inspector_marks_comments_that_keep_their_size() {
     assert!(!marked.contains(&("Text".to_string(), false)), "{marked:?}");
     assert!(!marked.iter().any(|(s, z)| matches!(s.as_str(), "Link" | "Widget") && *z), "{marked:?}");
 }
+
+/// A 400 × 300 page with one annotation, 20 × 20 with the upper-left corner at (`LEFT[2]`, 200):
+/// `body` is everything in its dictionary but `/Type` and `/Rect`.
+fn one_annotation(body: &str) -> Vec<u8> {
+    let (x, y) = (LEFT[2], TOP);
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 18 >> stream
+0 g 0 0 20 20 re f
+endstream endobj
+5 0 obj << /Type /Annot {body} /Rect [{x} {} {} {y}] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF
+",
+        y - SIDE,
+        x + SIDE
+    )
+    .into_bytes()
+}
+
+/// The box `pdf`'s one annotation is drawn in at 400% on screen.
+fn drawn_at_400(pdf: Vec<u8>) -> Option<[u32; 4]> {
+    let m = 4.0;
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let page = renderer.render(RenderRequest { scale: m, magnification: Some(m), ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    ink_box(&page, LEFT[2], m, top_row(m))
+}
+
+/// A NoZoom highlight without an appearance, drawn from its `/QuadPoints`, keeps its size on
+/// the screen as one with an appearance does.
+#[test]
+fn a_no_zoom_highlight_without_an_appearance_keeps_its_size() {
+    let (x0, x1, y0, y1) = (LEFT[2], LEFT[2] + SIDE, TOP - SIDE, TOP);
+    let body = format!("/Subtype /Highlight /F 12 /C [0 0 0] /QuadPoints [{x0} {y1} {x1} {y1} {x0} {y0} {x1} {y0}]");
+    let got = drawn_at_400(one_annotation(&body));
+    assert!(close(got, expected(LEFT[2], 4.0, SIDE)), "drawn at {got:?}");
+}
+
+/// `/F` written as a real (`12.0`) is read as the integer flags it holds, as the inspector reads
+/// it, so the NoZoom square keeps its size.
+#[test]
+fn a_real_flags_value_is_read_as_its_integer() {
+    let got = drawn_at_400(one_annotation("/Subtype /Square /F 12.0 /AP << /N 4 0 R >>"));
+    assert!(close(got, expected(LEFT[2], 4.0, SIDE)), "drawn at {got:?}");
+}

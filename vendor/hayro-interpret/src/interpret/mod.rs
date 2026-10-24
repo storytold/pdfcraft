@@ -308,7 +308,17 @@ pub fn interpret_page<'a>(
                 context.restore_state(device);
             } else if annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref() == Some(b"Highlight") {
                 // PdfCraft patch: a Highlight without a usable normal appearance was not drawn.
+                // Patch 51: with NoZoom it keeps its size on the screen, scaled about the
+                // upper-left corner of /Rect as an appearance is (no /Rect, no scale).
+                let scale = annot.get::<Rect>(RECT).and_then(|rect| {
+                    no_zoom_scale(&annot, flags, context.settings.magnification, &rect.to_kurbo())
+                });
+                context.save_state();
+                if let Some(scale) = scale {
+                    context.pre_concat_affine(scale);
+                }
                 draw_highlight_without_appearance(&annot, context, device);
+                context.restore_state(device);
             }
         }
         device.end_annotations();
