@@ -14,7 +14,6 @@ use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, fi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
-use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Background of the in-place text field editor, the same in every theme.
@@ -42,6 +41,25 @@ pub struct Focus {
     /// The text the calendar last saw, so it moves to a typed date once, when the typing becomes
     /// a whole date, and otherwise keeps the month its arrows turned to.
     pub calendar_text: Option<String>,
+    /// Drop-downs: where the open list is scrolled to and which item is current.
+    pub list: ChoiceList,
+}
+
+/// A drop-down's open list: the first item shown, the item the keys or the pointer are on, and
+/// where on the scroll bar's thumb a drag took hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChoiceList {
+    pub first: usize,
+    pub current: Option<usize>,
+    pub grab: Option<f32>,
+    /// Wheel movement not yet a whole row.
+    pub wheel: f32,
+    /// Where the pointer was last frame: only a pointer that moves makes the item under it
+    /// current, so a resting one keeps no claim on the highlight when the keys scroll the list
+    /// beneath it.
+    pub pointer_at: Option<egui::Pos2>,
+    /// Set on the first frame, from the field's value.
+    pub placed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -108,6 +126,8 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+/// Editor state for opening widget `widget` of `f`: it starts from the field's value, asks
+/// for keyboard focus, and gives a drop-down a fresh list that places itself from that value.
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
@@ -120,6 +140,7 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar: None,
         calendar_rect: None,
         calendar_text: None,
+        list: ChoiceList::default(),
     }
 }
 
@@ -490,8 +511,25 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
+            if f.kind == FormFieldKind::Combo && fillable(f) {
+                paint_drop_down_arrow(painter, r);
+            }
         }
     }
+}
+
+/// A drop-down's arrow at the right of its box, which says the field opens a list (its page
+/// appearance shows only the value). Drawn on screen only, not into the file.
+fn paint_drop_down_arrow(painter: &egui::Painter, r: Rect) {
+    let width = (r.height() * 0.45).clamp(5.0, 12.0);
+    let inset = (r.height() * 0.25).clamp(2.0, 6.0);
+    // Too narrow a box keeps its value visible instead.
+    if r.width() < width * 3.0 {
+        return;
+    }
+    let (x, y, half) = (r.max.x - inset - width / 2.0, r.center().y, width / 2.0);
+    let points = vec![egui::pos2(x - half, y - half / 2.0), egui::pos2(x + half, y - half / 2.0), egui::pos2(x, y + half / 2.0)];
+    painter.add(egui::Shape::convex_polygon(points, Color32::BLACK, Stroke::NONE));
 }
 
 /// The size, in points, a text field shows `text` at on screen: its `/DA` size, or for auto size
@@ -645,7 +683,6 @@ pub(crate) fn overlay(
     };
     let rect = widget_rect(&xf, info, page, w.rect);
     let zoom = xf.zoom();
-    let t = Tokens::get(ctx);
     let mut edit = None;
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
@@ -763,28 +800,20 @@ pub(crate) fn overlay(
         }
         FormFieldKind::Combo => {
             // An editable combo box has a text box over the field as well as its list (ISO
-            // 32000-2 Table 233, Edit).
+            // 32000-2 Table 233, Edit); the keys are the text box's then, and the list takes
+            // the pointer.
             if editable_combo(f) {
                 combo_editor(ctx, view, form, f, w, rect, zoom, focus.widget);
             }
-            let resp = egui::Area::new(egui::Id::new(("form-choices", view.id.0)))
-                .order(egui::Order::Foreground)
-                .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(rect.width().max(160.0));
-                        ui.label(egui::RichText::new(&f.name).small().color(t.text_faint));
-                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                            for (export, display) in &f.options {
-                                let on = f.value.first() == Some(export);
-                                if ui.selectable_label(on, display).clicked() {
-                                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export.clone()]) });
-                                    close = true;
-                                }
-                            }
-                        });
-                    });
-                });
+            let mut st = view.forms.focus.as_ref().map(|x| x.list).unwrap_or_default();
+            let (chosen, resp) = choice_list(ctx, view.id.0, f, w, rect, zoom, &mut st, !editable_combo(f));
+            if let Some(fx) = view.forms.focus.as_mut() {
+                fx.list = st;
+            }
+            if let Some((export, _)) = chosen.and_then(|i| f.options.get(i)) {
+                edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export.clone()]) });
+                close = true;
+            }
             let clicked_away = ctx.input(|i| i.pointer.any_click())
                 && !resp.response.contains_pointer()
                 && !ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
@@ -922,6 +951,195 @@ pub(crate) fn overlay(
         edit = edit.or(pending);
     }
     edit.or_else(|| view.pending_edit.take())
+}
+
+/// Items a drop-down's list shows before it scrolls.
+const LIST_ROWS: usize = 9;
+
+/// A drop-down's open list, under the field and drawn like it, as other viewers draw theirs: as
+/// wide as the box, its items in the field's text size and alignment, black on white with a blue
+/// highlight that follows the pointer and the arrow keys, and a scroll bar with step buttons when
+/// there are more than nine items. Returns the item chosen (a click, or Enter on the current one)
+/// and the list's response. With `keys` off (an editable combo box, whose text box has the keys)
+/// only the pointer moves through and picks from it.
+#[allow(clippy::too_many_arguments)]
+fn choice_list(
+    ctx: &egui::Context,
+    view: u64,
+    f: &FormField,
+    w: &FormWidget,
+    rect: Rect,
+    zoom: f32,
+    st: &mut ChoiceList,
+    keys: bool,
+) -> (Option<usize>, egui::InnerResponse<()>) {
+    let n = f.options.len();
+    let shown = n.min(LIST_ROWS);
+    let max_first = n.saturating_sub(shown);
+    // Auto-sized text is fitted to what the field shows (its chosen item's shown name), so the
+    // list's items come out at the size the field's value is drawn at.
+    let value_text = f.value.first().map_or("", |v| f.options.iter().find(|(e, _)| e == v).map_or(v.as_str(), |(_, d)| d.as_str()));
+    let size = (field_text_size(&ctx.layer_painter(egui::LayerId::background()), f, w, value_text) * zoom).clamp(6.0, 48.0);
+    let row = (size * 1.45).round().max(8.0);
+    let bar = if n > shown { (row * 0.7).round().clamp(12.0, 22.0) } else { 0.0 };
+    let width = rect.width().max(24.0 + bar);
+    if !st.placed {
+        st.current = f.value.first().and_then(|v| f.options.iter().position(|(e, _)| e == v));
+        st.first = st.current.map_or(0, |c| c.min(max_first));
+        st.placed = true;
+    }
+    // Consumed, so the keys move through the list rather than the page.
+    let key = |k| keys && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+    let moved = if n == 0 {
+        None
+    } else if key(egui::Key::ArrowUp) {
+        Some(st.current.map_or(0, |c| c.saturating_sub(1)))
+    } else if key(egui::Key::ArrowDown) {
+        Some(st.current.map_or(0, |c| (c + 1).min(n - 1)))
+    } else if key(egui::Key::PageUp) {
+        Some(st.current.map_or(0, |c| c.saturating_sub(shown)))
+    } else if key(egui::Key::PageDown) {
+        Some(st.current.map_or(0, |c| (c + shown).min(n - 1)))
+    } else if key(egui::Key::Home) {
+        Some(0)
+    } else if key(egui::Key::End) {
+        Some(n - 1)
+    } else {
+        None
+    };
+    if let Some(m) = moved {
+        st.current = Some(m);
+        st.first = if m < st.first {
+            m
+        } else if m >= st.first + shown {
+            m + 1 - shown
+        } else {
+            st.first
+        };
+    }
+    let mut chosen = key(egui::Key::Enter).then_some(st.current).flatten();
+    let align = match f.quadding {
+        1 => egui::Align::Center,
+        2 => egui::Align::Max,
+        _ => egui::Align::Min,
+    };
+    let resp = egui::Area::new(egui::Id::new(("form-choices", view))).order(egui::Order::Foreground).fixed_pos(rect.left_bottom()).show(ctx, |ui| {
+        let (outer, area) = ui.allocate_exact_size(vec2(width, shown as f32 * row + 2.0), egui::Sense::hover());
+        let p = ui.painter();
+        // The list is drawn as the form's own, a white list in the field's font with a blue
+        // highlight, in light and dark themes alike, so its colors are fixed, not the app's tokens.
+        p.rect_filled(outer, CornerRadius::ZERO, Color32::WHITE);
+        // The wheel scrolls the list, a row at a time, and not the page under it.
+        if area.contains_pointer() && n > shown {
+            st.wheel += ctx.input(|i| i.smooth_scroll_delta.y);
+            ctx.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+            let steps = (st.wheel / row).trunc();
+            if steps != 0.0 {
+                st.wheel -= steps * row;
+                st.first = (st.first as f32 - steps).clamp(0.0, max_first as f32) as usize;
+            }
+        }
+        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        let pointer_moved = pointer != st.pointer_at;
+        let font = egui::FontId::proportional(size);
+        for k in 0..shown {
+            let i = st.first + k;
+            let Some((_, display)) = f.options.get(i) else { break };
+            let r = Rect::from_min_size(outer.min + vec2(1.0, 1.0 + k as f32 * row), vec2(width - 2.0 - bar, row));
+            let item = ui.interact(r, ui.id().with(("choice", i)), egui::Sense::click());
+            item.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, st.current == Some(i), display));
+            if item.hovered() && pointer_moved {
+                st.current = Some(i);
+            }
+            if item.clicked() {
+                chosen = Some(i);
+            }
+            let on = st.current == Some(i);
+            if on {
+                p.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0x1F, 0x65, 0xD6));
+            }
+            let galley = p.layout_no_wrap(display.clone(), font.clone(), if on { Color32::WHITE } else { Color32::BLACK });
+            let inner = r.shrink2(vec2(3.0, 0.0));
+            let x = match align {
+                egui::Align::Center => inner.center().x - galley.size().x / 2.0,
+                egui::Align::Max => inner.max.x - galley.size().x,
+                egui::Align::Min => inner.min.x,
+            };
+            p.with_clip_rect(r).galley(egui::pos2(x, r.center().y - galley.size().y / 2.0), galley, Color32::BLACK);
+        }
+        st.pointer_at = pointer;
+        if bar > 0.0 {
+            scroll_bar(ui, Rect::from_min_max(egui::pos2(outer.max.x - 1.0 - bar, outer.min.y + 1.0), outer.max - vec2(1.0, 1.0)), shown, n, st);
+        }
+        p.rect_stroke(outer, CornerRadius::ZERO, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
+    });
+    (chosen, resp)
+}
+
+/// A list's classic scroll bar: step buttons at each end, a thumb sized to the share of the
+/// items shown that can be dragged, and a track that pages when clicked.
+fn scroll_bar(ui: &egui::Ui, track: Rect, shown: usize, n: usize, st: &mut ChoiceList) {
+    let max_first = n.saturating_sub(shown);
+    if max_first == 0 {
+        return;
+    }
+    let side = track.width();
+    let up = Rect::from_min_size(track.min, vec2(side, side));
+    let down = Rect::from_min_max(egui::pos2(track.min.x, track.max.y - side), track.max);
+    let trough = Rect::from_min_max(egui::pos2(track.min.x, up.max.y), egui::pos2(track.max.x, down.min.y));
+    let thumb_len = (trough.height() * shown as f32 / n as f32).max(side * 0.75).min(trough.height());
+    let travel = (trough.height() - thumb_len).max(1.0);
+    let thumb_at = |first: usize| trough.min.y + travel * first as f32 / max_first as f32;
+    let id = ui.id().with("choice-bar");
+    let p = ui.painter();
+    p.rect_filled(track, CornerRadius::ZERO, Color32::from_gray(240));
+    for (r, step, pointing_up) in [(up, -1i64, true), (down, 1, false)] {
+        let b = ui.interact(r, id.with(pointing_up), egui::Sense::click());
+        if b.clicked() {
+            st.first = (st.first as i64 + step).clamp(0, max_first as i64) as usize;
+        }
+        p.rect_filled(r.shrink(1.0), CornerRadius::ZERO, if b.hovered() { Color32::from_gray(205) } else { Color32::from_gray(222) });
+        p.rect_stroke(r.shrink(1.0), CornerRadius::ZERO, Stroke::new(1.0, Color32::from_gray(150)), egui::StrokeKind::Inside);
+        let (c, h) = (r.center(), (side * 0.18).max(2.0));
+        let tip = if pointing_up { -h } else { h };
+        let points = vec![egui::pos2(c.x - h * 1.4, c.y - tip / 2.0), egui::pos2(c.x + h * 1.4, c.y - tip / 2.0), egui::pos2(c.x, c.y + tip / 2.0)];
+        p.add(egui::Shape::convex_polygon(points, Color32::from_gray(40), Stroke::NONE));
+    }
+    let thumb = Rect::from_min_size(egui::pos2(trough.min.x, thumb_at(st.first)), vec2(side, thumb_len));
+    let t = ui.interact(thumb, id.with("thumb"), egui::Sense::drag());
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    if t.drag_started() {
+        st.grab = pointer.map(|q| q.y - thumb.min.y);
+    }
+    if t.dragged()
+        && let (Some(q), Some(grab)) = (pointer, st.grab)
+    {
+        let share = ((q.y - grab - trough.min.y) / travel).clamp(0.0, 1.0);
+        st.first = (share * max_first as f32).round() as usize;
+    }
+    if t.drag_stopped() {
+        st.grab = None;
+    }
+    let page = ui.interact(trough, id.with("trough"), egui::Sense::click());
+    if page.clicked()
+        && let Some(q) = pointer
+        && !thumb.contains(q)
+    {
+        st.first = if q.y < thumb.min.y { st.first.saturating_sub(shown) } else { (st.first + shown).min(max_first) };
+    }
+    let thumb = Rect::from_min_size(egui::pos2(trough.min.x, thumb_at(st.first)), vec2(side, thumb_len)).shrink2(vec2(1.0, 0.5));
+    p.rect_filled(thumb, CornerRadius::ZERO, if t.dragged() || t.hovered() { Color32::from_gray(176) } else { Color32::from_gray(196) });
+    p.rect_stroke(thumb, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_gray(140)), egui::StrokeKind::Inside);
+    // Grip lines across the middle of the thumb.
+    if thumb.height() > side {
+        for k in -1..=1 {
+            let y = thumb.center().y + k as f32 * 3.0;
+            p.line_segment(
+                [egui::pos2(thumb.min.x + side * 0.3, y), egui::pos2(thumb.max.x - side * 0.3, y)],
+                Stroke::new(1.0, Color32::from_gray(120)),
+            );
+        }
+    }
 }
 
 /// Where a field's widget is on screen (tests and automation).

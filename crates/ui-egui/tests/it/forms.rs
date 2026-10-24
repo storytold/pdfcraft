@@ -1528,3 +1528,326 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     assert_eq!(h.state().right, None);
 }
+
+/// Where the first widget of field `name` is on screen in the first view.
+fn field_rect(h: &Harness<'static, PdfCraftApp>, name: &str) -> egui::Rect {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == name).unwrap();
+    pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+}
+
+/// Filled triangles painted inside `within`, at any depth of the frame's shapes.
+fn triangles_in(h: &Harness<'static, PdfCraftApp>, within: egui::Rect) -> Vec<Vec<egui::Pos2>> {
+    /// Collects the filled three-point paths of `shape` that lie inside `within`, descending into
+    /// nested shape lists.
+    fn walk(shape: &egui::Shape, within: egui::Rect, out: &mut Vec<Vec<egui::Pos2>>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, within, out)),
+            egui::Shape::Path(p) if p.points.len() == 3 && p.fill != egui::Color32::TRANSPARENT && p.points.iter().all(|q| within.contains(*q)) => {
+                out.push(p.points.clone())
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.output().shapes {
+        walk(&c.shape, within, &mut out);
+    }
+    out
+}
+
+/// A drop-down draws one filled arrow at the right of its box, and a text field draws none.
+#[test]
+fn a_drop_down_shows_its_arrow_and_text_fields_do_not() {
+    let mut h = harness();
+    h.run_steps(2);
+    let country = field_rect(&h, "country");
+    let arrows = triangles_in(&h, country);
+    assert_eq!(arrows.len(), 1, "one arrow in the drop-down: {arrows:?}");
+    let tip = arrows[0].iter().fold(egui::Pos2::ZERO, |a, p| egui::pos2(a.x.max(p.x), a.y.max(p.y)));
+    assert!(tip.x > country.center().x, "at the right of the box");
+    assert!(triangles_in(&h, field_rect(&h, "city")).is_empty(), "a text field has none");
+}
+
+/// A drop-down's list opens on the field's left edge and no wider than the field, without
+/// showing the field's name, and clicking an item chooses it.
+#[test]
+fn a_drop_downs_list_opens_as_wide_as_the_field_without_its_internal_name() {
+    let mut h = harness();
+    click_field(&mut h, "country", 0);
+    let country = field_rect(&h, "country");
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "country").is_none(), "the field's name isn't shown");
+    let item = egui_kittest::kittest::Queryable::get_by_label(&h, "France").rect();
+    assert!((item.left() - country.left()).abs() <= 2.0 && item.right() <= country.right() + 1.0, "{item:?} in {country:?}");
+    egui_kittest::kittest::Queryable::get_by_label(&h, "France").click();
+    h.run_steps(4);
+    assert_eq!(value(&h, "country"), ["fr"]);
+}
+
+/// A drop-down with 30 options keeps its scroll bar in its own room, so the items stop short
+/// of the field's right edge.
+#[test]
+fn a_long_drop_down_list_keeps_its_scroll_bar_beside_the_items() {
+    let mut h = harness();
+    let options: Vec<String> = (0..30).map(|i| format!("{i:02}00")).collect();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "country".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { options: Some(options), ..Default::default() }),
+    }));
+    h.run_steps(3);
+    click_field(&mut h, "country", 0);
+    let country = field_rect(&h, "country");
+    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
+    // A scroll bar that stays shown takes its own room, so people see there is more below.
+    assert!(first.right() <= country.right() - 6.0, "{first:?} leaves room for the bar in {country:?}");
+}
+
+/// Where `text` is drawn in the last frame, if anywhere.
+fn text_rect(h: &Harness<'static, PdfCraftApp>, text: &str) -> Option<egui::Rect> {
+    /// The rectangle of the text shape in `shape` that reads exactly `text`, searching nested
+    /// shape lists.
+    fn walk(shape: &egui::Shape, text: &str) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| walk(s, text)),
+            egui::Shape::Text(t) if t.galley.text() == text => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            _ => None,
+        }
+    }
+    h.output().shapes.iter().find_map(|c| walk(&c.shape, text))
+}
+
+/// Gives the "country" drop-down 30 options, "0000" to "2900", more than its list shows at once.
+fn long_country(h: &mut Harness<'static, PdfCraftApp>) {
+    let options: Vec<String> = (0..30).map(|i| format!("{i:02}00")).collect();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "country".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { options: Some(options), ..Default::default() }),
+    }));
+    h.run_steps(3);
+}
+
+/// A centered drop-down (quadding 1) centers the items of its open list too.
+#[test]
+fn a_drop_downs_list_aligns_its_items_as_the_field_does() {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "country".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { quadding: Some(1), ..Default::default() }),
+    }));
+    h.run_steps(3);
+    click_field(&mut h, "country", 0);
+    let country = field_rect(&h, "country");
+    let france = text_rect(&h, "France").expect("drawn");
+    assert!((france.center().x - country.center().x).abs() <= 2.0, "centered as the field is: {france:?} in {country:?}");
+}
+
+/// The arrow keys move through an open drop-down's list without changing the value, Enter
+/// chooses the current item and closes the list, and a reopened list starts from the value.
+#[test]
+fn the_arrow_keys_move_through_a_drop_downs_list_and_enter_chooses() {
+    let mut h = harness();
+    click_field(&mut h, "country", 0);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(value(&h, "country").is_empty(), "the arrows only move through the list");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(value(&h, "country"), ["fr"]);
+    assert!(h.state().views[0].forms.focus.is_none(), "Enter closes the list");
+    // Reopened, the list starts from the field's value.
+    click_field(&mut h, "country", 0);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(value(&h, "country"), ["ca"]);
+}
+
+/// Pressing the scroll bar's down button moves a long drop-down list on one row, and End goes
+/// to the last item, which Enter then chooses.
+#[test]
+fn a_long_drop_down_list_scrolls_by_its_arrow_button_and_to_its_end() {
+    let mut h = harness();
+    long_country(&mut h);
+    click_field(&mut h, "country", 0);
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0900").is_none(), "nine rows show");
+    let country = field_rect(&h, "country");
+    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
+    // The bar's down button, at the bottom of the bar beside the ninth row.
+    let bar = country.right() - first.right();
+    let down = egui::pos2(country.right() - bar / 2.0, first.top() + first.height() * 9.0 - bar / 2.0);
+    h.hover_at(down);
+    h.run_steps(1);
+    h.drag_at(down);
+    h.run_steps(1);
+    h.drop_at(down);
+    h.run_steps(2);
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0900").is_some(), "one row on");
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none());
+    h.key_press(egui::Key::End);
+    h.run_steps(2);
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "2900").is_some(), "End goes to the last item");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(value(&h, "country"), ["2900"]);
+}
+
+/// The mouse wheel over an open long drop-down scrolls its list and leaves the page where it was.
+#[test]
+fn the_mouse_wheel_scrolls_a_long_drop_down_list_and_not_the_page() {
+    let mut h = harness();
+    long_country(&mut h);
+    click_field(&mut h, "country", 0);
+    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
+    let page = h.state().views[0].page_screen_rect(0);
+    h.hover_at(first.center() + egui::vec2(0.0, first.height() * 4.0));
+    h.run_steps(1);
+    for _ in 0..3 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(2);
+    }
+    h.run_steps(6);
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none(), "the list scrolled down");
+    assert_eq!(h.state().views[0].page_screen_rect(0), page, "the page stayed where it was");
+}
+
+/// Escape in an open drop-down closes its list and nothing else: the find bar, which Escape
+/// closes when no field is open, stays open.
+#[test]
+fn escape_closes_an_open_drop_downs_list_and_leaves_the_page_alone() {
+    let mut h = harness();
+    long_country(&mut h);
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    assert!(h.state().views[0].find.is_some());
+    click_field(&mut h, "country", 0);
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_some(), "the list is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none(), "Escape closed the list");
+    assert!(h.state().views[0].forms.focus.is_none(), "and the field");
+    assert!(h.state().views[0].find.is_some(), "the find bar stays open");
+}
+
+/// An auto-sized drop-down's list draws its items at the size the field shows its value at, so a
+/// long chosen item fits the list as it fits the field instead of growing past it.
+#[test]
+fn an_auto_sized_drop_downs_list_shows_its_items_at_the_fields_text_size() {
+    let mut h = harness();
+    let long = "The Commonwealth of the Northern Mariana Islands";
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "country".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { options: Some(vec!["Canada".into(), long.into()]), ..Default::default() }),
+    }));
+    assert!(
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue {
+            name: "country".into(),
+            value: pdfcraft_engine::FieldValue::Choice(vec![long.into()])
+        })
+    );
+    h.run_steps(3);
+    click_field(&mut h, "country", 0);
+    let field = field_rect(&h, "country");
+    let item = text_rect(&h, long).expect("the long item in the open list");
+    assert!(item.width() <= field.width(), "the item fits as the field's value does: {} wide in a {} field", item.width(), field.width());
+}
+
+/// In single-page view, where the wheel turns pages, the wheel over an open drop-down's list
+/// scrolls the list and leaves the page as it is; over the page itself it still turns it.
+#[test]
+fn in_single_page_view_the_wheel_over_an_open_list_scrolls_the_list_not_the_page() {
+    let mut h = harness();
+    long_country(&mut h);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 }));
+    h.state_mut().set_option("continuous", "off").unwrap();
+    h.key_press(egui::Key::Home);
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() && h.state().views[0].page_screen_rect(0).is_some() {
+            break;
+        }
+    }
+    let wheel = |h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2| {
+        h.hover_at(at);
+        h.run_steps(1);
+        for _ in 0..3 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            h.run_steps(2);
+        }
+        h.run_steps(6);
+    };
+    // The control: over the page, the wheel turns it.
+    let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    wheel(&mut h, page.center());
+    assert_eq!(h.state().views[0].current, 1, "over the page, the wheel turns it");
+    h.key_press(egui::Key::Home);
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].current, 0);
+    // Over the open list, it scrolls the list instead.
+    click_field(&mut h, "country", 0);
+    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
+    wheel(&mut h, first.center() + egui::vec2(0.0, first.height() * 4.0));
+    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none(), "the list scrolled down");
+    assert_eq!(h.state().views[0].current, 0, "the page didn't turn");
+}
+
+/// With a page taller than the window and the pointer resting on an open drop-down's list,
+/// Home and the down arrow move through the list and leave the page where it was.
+#[test]
+fn an_open_drop_down_keeps_the_arrow_keys_and_home_from_moving_the_page() {
+    let mut h = harness();
+    long_country(&mut h);
+    // A page taller than the window, so the keys would scroll it.
+    h.state_mut().set_option("zoom", "300").unwrap();
+    for _ in 0..30 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+    }
+    click_field(&mut h, "country", 0);
+    // The pointer rests on the list, as it does after reaching for it.
+    let row = egui_kittest::kittest::Queryable::get_by_label(&h, "0300").rect();
+    h.hover_at(row.center());
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0);
+    h.key_press(egui::Key::Home);
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].page_screen_rect(0), page, "the page stayed where it was");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(value(&h, "country"), ["0100"], "one item down from the first");
+}
+
+/// When End scrolls a drop-down's list under a resting pointer, Enter chooses the item End
+/// went to, not the one that came under the pointer.
+#[test]
+fn a_pointer_resting_on_a_list_the_keys_scroll_keeps_the_highlight_on_the_keys() {
+    let mut h = harness();
+    long_country(&mut h);
+    click_field(&mut h, "country", 0);
+    let row = egui_kittest::kittest::Queryable::get_by_label(&h, "0300").rect();
+    h.hover_at(row.center());
+    h.run_steps(2);
+    // End scrolls the list, so another item comes under the resting pointer.
+    h.key_press(egui::Key::End);
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(value(&h, "country"), ["2900"], "the item End went to, not the one under the pointer");
+}

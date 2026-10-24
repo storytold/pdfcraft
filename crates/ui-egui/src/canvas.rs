@@ -2549,6 +2549,9 @@ impl PageXform {
     }
 }
 
+/// The document view's keyboard shortcuts: find, rotation, zoom (or the page grid's size),
+/// history, Escape, and the paging and scrolling keys. An open form field keeps the paging
+/// and scrolling keys for itself.
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -2619,8 +2622,13 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         view.view_history(true);
     }
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
+    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
+    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
+    // page keys still work there.
+    let field_open = view.forms.focus.is_some() && form_box.is_none();
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+    // So does an open field, whose list closes.
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() || view.all_text {
@@ -2629,6 +2637,10 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         } else {
             view.find = None;
         }
+    }
+    // The open field's keys leave the page under it where it is.
+    if field_open {
+        return;
     }
     if key(Key::Home) {
         view.go_to_page(0);
