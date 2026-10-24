@@ -11,7 +11,7 @@
 //!   faithfully (CMYK and other colour spaces, masks, decode arrays other than the default,
 //!   JPEG 2000, JBIG2, CCITT, other than 8 bits) are left alone.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
-//!   print settings.
+//!   print settings, form submission, import and reset actions.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
 //!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
 //!   ASCIIHex layer from streams that have one.
@@ -23,6 +23,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod form_actions;
 pub mod fragments;
 mod images;
 mod links;
@@ -38,6 +39,8 @@ pub use images::effective_resolutions;
 pub enum OptimizeError {
     #[error("the document has no page tree")]
     NoPages,
+    #[error("object {0} nests or chains its form actions too deeply to discard them")]
+    ActionLimit(ObjRef),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
     #[error("the optimization was cancelled")]
@@ -97,6 +100,8 @@ pub struct Settings {
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
     pub discard_print_settings: bool,
+    /// Remove form submission, import and reset actions; the fields and links that ran them stay.
+    pub discard_form_actions: bool,
     /// Flate-compress streams stored without a filter, and strip a redundant outer ASCII85 or
     /// ASCIIHex layer from streams that have one.
     pub flate_unencoded: bool,
@@ -117,6 +122,7 @@ impl Default for Settings {
             discard_alternate_images: true,
             discard_tags: false,
             discard_print_settings: false,
+            discard_form_actions: false,
             flate_unencoded: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
@@ -177,6 +183,8 @@ pub struct Report {
     pub alternate_images: usize,
     pub tags_removed: bool,
     pub print_settings: usize,
+    /// Form submission, import and reset actions removed.
+    pub form_actions: usize,
     pub streams_compressed: usize,
     /// Links removed and bookmarks whose destination was cleared (Clean Up).
     pub invalid_links: usize,
@@ -270,6 +278,9 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
             _ => {}
         }
+    }
+    if settings.discard_form_actions {
+        report.form_actions = form_actions::discard(doc)?;
     }
     if settings.remove_invalid_links {
         let (l, b) = links::remove_invalid(doc, &pages)?;

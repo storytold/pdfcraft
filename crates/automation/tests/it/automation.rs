@@ -5725,6 +5725,32 @@ fn optimizing_through_tools() {
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "discard": ["everything"] })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn optimizing_discards_form_actions_through_tools() {
+    let dir = workdir("optimize-form-actions");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "button", "rect": [20, 20, 120, 42], "name": "Send" }));
+    ok(
+        &mut a,
+        "form_set_actions",
+        json!({ "doc": doc, "field": "Send", "actions": [
+            { "trigger": "mouse_up", "submit": "https://example.com/submit" },
+            { "trigger": "mouse_down", "reset": [] },
+            { "trigger": "mouse_enter", "javascript": "app.alert(1);" }
+        ] }),
+    );
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf" }));
+    assert_eq!(kept["form_actions"], 0, "{kept}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf", "discard_form_actions": true }));
+    assert_eq!(r["form_actions"], 2, "{r}");
+    let small = ok(&mut a, "doc_open", json!({ "path": "small.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": small }));
+    assert!(fields.to_string().contains("Send"), "the button stays: {fields}");
+    let actions = ok(&mut a, "form_actions", json!({ "doc": small, "field": "Send" }));
+    assert_eq!(actions["actions"], json!([{ "trigger": "mouse_enter", "javascript": "app.alert(1);" }]), "{actions}");
+}
+
 /// A one-page PDF whose page picture is drawn as `rows` grey images one pixel row high, 600 px
 /// wide on a 72 pt square (600 ppi), as some PDF printers write it.
 fn printed_in_strips(rows: usize) -> Vec<u8> {

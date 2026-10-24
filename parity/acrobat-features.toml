@@ -7454,11 +7454,11 @@ title = "Discard form submit, import and reset actions"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::form_submit_import_and_reset_actions_are_discarded_and_the_fields_stay", "crates/optimize/tests/optimize.rs::a_discarded_form_action_hands_its_place_to_the_actions_after_it", "crates/optimize/tests/optimize.rs::a_form_action_listed_twice_in_a_chain_gives_way_both_times", "crates/optimize/tests/optimize.rs::a_shared_additional_actions_dictionary_is_cleaned_for_each_field_that_uses_it", "crates/optimize/tests/optimize.rs::deep_nesting_stops_the_optimization_only_when_a_form_action_is_past_the_limit", "crates/automation/tests/it/automation.rs::optimizing_discards_form_actions_through_tools"]
+notes = "PDF Optimizer ▸ Discard Objects, off by default. Removes /SubmitForm, /ImportData and /ResetForm actions from link, widget and bookmark /A, catalog /OpenAction, every /AA trigger and /Next chains; the actions after a removed one still run in order. An object that holds a form action more than 64 direct objects deep, chains form actions more than 64 deep, or makes the walk look at more than 100,000 action values stops the optimization with an error. Not changed: JavaScript that calls submitForm or resetForm (Discard all links, actions and JavaScript removes the JavaScript in links, widgets, /AA triggers, /OpenAction and the document's scripts), and XFA form submissions."
 
 [[feature]]
 id = "optimize.flatten-form-fields"

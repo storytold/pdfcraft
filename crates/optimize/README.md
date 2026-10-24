@@ -27,7 +27,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
   An image is replaced only if the result is smaller. Left alone: CMYK and other colour spaces,
   image masks, decode arrays, more than 8 bits, JPEG 2000, JBIG2 and CCITT.
-- **Discard objects:** thumbnails, alternate images, document tags, print settings.
+- **Discard objects:** thumbnails, alternate images, document tags, print settings, and form
+  submission, import and reset actions (`/SubmitForm`, `/ImportData`, `/ResetForm`, off by
+  default). The fields, links, bookmarks and pages that ran a removed action keep their other
+  actions, and the actions chained after it through `/Next` still run in order.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes). Streams with `/DecodeParms`, images and object streams are left alone.

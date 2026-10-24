@@ -206,6 +206,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.discard_thumbnails, tl!("Discard embedded page thumbnails")));
             ui.add(widgets::checkbox(&mut s.discard_tags, tl!("Discard document tags")));
             ui.add(widgets::checkbox(&mut s.discard_print_settings, tl!("Discard embedded print settings")));
+            ui.add(widgets::checkbox(&mut s.discard_form_actions, tl!("Discard all form submission, import and reset actions")));
             discard_box(ui, &mut d.discard, Hidden::Bookmarks, "Discard bookmarks");
             discard_box(ui, &mut d.discard, Hidden::FormFields, "Flatten form fields");
             discard_box(ui, &mut d.discard, Hidden::HiddenLayers, "Discard hidden layer content");
