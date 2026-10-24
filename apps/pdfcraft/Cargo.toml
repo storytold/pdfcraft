@@ -40,6 +40,16 @@ craft-quit = { workspace = true, features = ["menu"] }
 # drawn on that one (src/compositor_gpu.rs). Both are already in the tree through winit.
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
+# Opens the window through Xwayland on a Wayland session (`prefer_xwayland` in src/main.rs);
+# eframe doesn't re-export winit's X11 switch. The vendored winit eframe already uses.
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+# Checks the X server answers before the window is sent there (`x11_server_answers` in
+# src/main.rs), with the pure-Rust connection. Already in the tree through winit.
+x11rb = { version = "0.13", default-features = false }
+# Opens the libraries winit's X11 start loads before the window is sent there
+# (`x11_libraries` in src/main.rs). Both already in the tree through winit.
+x11-dl = "2.21"
+xkbcommon-dl = { version = "0.4", features = ["x11"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Whether the window is on Wayland, where it can't bring itself forward (src/single_instance.rs).

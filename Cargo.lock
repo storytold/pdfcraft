@@ -3958,6 +3958,9 @@ dependencies = [
  "winit",
  "winresource",
  "winsafe",
+ "x11-dl",
+ "x11rb",
+ "xkbcommon-dl",
 ]
 
 [[package]]

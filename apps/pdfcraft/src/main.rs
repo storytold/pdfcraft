@@ -237,8 +237,13 @@ fn main() -> eframe::Result {
     }
     let files = rejoin_split_paths(files, |p| std::path::Path::new(p).is_file());
     let integrated = cfg!(target_os = "macos");
-    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
-    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
+    let xwayland = prefer_xwayland(|name| std::env::var(name).ok(), std::path::Path::exists, x11_server_answers);
+    if xwayland {
+        log::info!("Wayland session: opening the window through Xwayland (PDFCRAFT_NATIVE_WAYLAND=1 keeps Wayland)");
+    }
+    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs); an X11 window
+    // manager always draws it.
+    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) || xwayland { None } else { decorations::app_drawn() };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
@@ -276,7 +281,7 @@ fn main() -> eframe::Result {
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
         "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
+        on_xwayland(native_options(launch.integrated, launch.window_controls.is_some(), first), xwayland),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
@@ -294,7 +299,7 @@ fn main() -> eframe::Result {
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                on_xwayland(native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow), xwayland),
                 app_creator(
                     launch,
                     started,
@@ -360,6 +365,120 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
+    native
+}
+
+/// Whether to open the window through Xwayland instead of native Wayland: the session is Wayland
+/// and its Xwayland is running (`DISPLAY` is a local X display whose socket exists and whose
+/// server `server_answers`). `PDFCRAFT_NATIVE_WAYLAND` set to anything but empty or `0` keeps
+/// Wayland. Linux only, the one platform that builds the X11 crates (Cargo.toml).
+///
+/// A stopgap: the vendored winit's Wayland backend binds neither the tablet protocol
+/// (`zwp_tablet_v2`) nor `wl_data_device`. So on KDE Plasma a pen tablet
+/// moves the cursor but its tip never clicks (#3650), and a file dropped on the window never
+/// arrives. Through Xwayland the pen is an X11 pointer (no pressure there either) and drops arrive
+/// by Xdnd.
+/// Remove this, once the vendored egui / winit supports drag and drop and
+/// pen input with pressure on Wayland.
+fn prefer_xwayland(
+    var: impl Fn(&str) -> Option<String>,
+    socket_exists: impl Fn(&std::path::Path) -> bool,
+    server_answers: impl FnOnce(&str) -> bool,
+) -> bool {
+    let set = |name: &str| var(name).is_some_and(|v| !v.trim().is_empty());
+    let keep_wayland = var("PDFCRAFT_NATIVE_WAYLAND").is_some_and(|v| !matches!(v.trim(), "" | "0"));
+    if !cfg!(target_os = "linux") || !(set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET")) || keep_wayland {
+        return false;
+    }
+    // Only a local display (`:1` or `:1.0` listens on /tmp/.X11-unix/X1): winit runs one event
+    // loop per process, so an X11 start that failed couldn't fall back to Wayland. The value is
+    // checked and probed exactly as it is, never trimmed: winit's `XOpenDisplay(NULL)` reads
+    // `DISPLAY` itself, so a probe of a cleaned-up copy could pass where winit then fails.
+    let display = var("DISPLAY").unwrap_or_default();
+    let Some(number) = local_display_number(&display) else {
+        return false;
+    };
+    socket_exists(std::path::Path::new(&format!("/tmp/.X11-unix/X{number}"))) && server_answers(&display)
+}
+
+/// The display number of a local X display written exactly `:N` or `:N.S` (ASCII digits, at most
+/// nine each), or `None` for anything else, surrounding whitespace included.
+fn local_display_number(display: &str) -> Option<&str> {
+    let digits = |s: &str| !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit());
+    let rest = display.strip_prefix(':')?;
+    let (number, screen) = rest.split_once('.').map_or((rest, None), |(n, s)| (n, Some(s)));
+    (digits(number) && screen.is_none_or(digits)).then_some(number)
+}
+
+/// Whether winit can start on the X server at `display`: the X11 libraries it loads are
+/// installed ([`x11_libraries`]) and the server completes the connection handshake,
+/// authentication included, within 2 s. A missing library, a socket left behind by a crashed
+/// server, or a server that refuses this client fails here.
+#[cfg(target_os = "linux")]
+fn x11_server_answers(display: &str) -> bool {
+    let target = display.to_owned();
+    let connect = move || x11rb::connect(Some(&target)).map(drop).map_err(|e| e.to_string());
+    match x11_usable(x11_libraries, connect) {
+        Ok(()) => true,
+        Err(why) => {
+            log::info!("staying on Wayland: the X server at {display} isn't usable ({why})");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn x11_server_answers(_display: &str) -> bool {
+    false
+}
+
+/// [`x11_server_answers`]'s check: the libraries first, since the server is asked only when
+/// winit could use it.
+#[cfg(target_os = "linux")]
+fn x11_usable(libraries: impl FnOnce() -> Result<(), String>, connect: impl FnOnce() -> Result<(), String> + Send + 'static) -> Result<(), String> {
+    libraries()?;
+    answers_within(connect, std::time::Duration::from_secs(2))
+}
+
+/// Opens the libraries winit's X11 start loads: Xlib, Xcursor, Xlib-xcb and XInput2, whose
+/// absence fails it (`XConnection::new`), and xkbcommon-x11, whose absence panics it.
+#[cfg(target_os = "linux")]
+fn x11_libraries() -> Result<(), String> {
+    use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
+    Xlib::open().map_err(|e| format!("libX11: {e}"))?;
+    Xcursor::open().map_err(|e| format!("libXcursor: {e}"))?;
+    Xlib_xcb::open().map_err(|e| format!("libX11-xcb: {e}"))?;
+    XInput2::open().map_err(|e| format!("libXi: {e}"))?;
+    xkbcommon_dl::x11::xkbcommon_x11_option().ok_or("libxkbcommon-x11 isn't installed")?;
+    Ok(())
+}
+
+/// Runs `connect` on its own thread and waits up to `timeout`, so a server that never answers
+/// can't hold up start-up. After a timeout the thread is left to finish on its own.
+#[cfg(target_os = "linux")]
+fn answers_within(connect: impl FnOnce() -> Result<(), String> + Send + 'static, timeout: std::time::Duration) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("x11-probe".into())
+        // Nobody listens after a timeout, and that's fine.
+        .spawn(move || drop(sender.send(connect())))
+        .map_err(|e| format!("no thread for the probe: {e}"))?;
+    receiver.recv_timeout(timeout).map_err(|_| format!("no answer within {timeout:?}"))?
+}
+
+/// Opens the window through Xwayland when `xwayland` ([`prefer_xwayland`]).
+fn on_xwayland(native: eframe::NativeOptions, xwayland: bool) -> eframe::NativeOptions {
+    #[cfg(target_os = "linux")]
+    if xwayland {
+        use winit::platform::x11::EventLoopBuilderExtX11 as _;
+        return eframe::NativeOptions {
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11();
+            })),
+            ..native
+        };
+    }
+    let _ = xwayland;
     native
 }
 
@@ -893,6 +1012,85 @@ mod tests {
         // Each run states its renderer rather than relying on eframe's default.
         assert_eq!(native_options(false, false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
         assert_eq!(native_options(false, false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
+    }
+
+    #[test]
+    fn a_wayland_session_with_xwayland_opens_through_it() {
+        use super::prefer_xwayland;
+        fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+            move |name| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned())
+        }
+        let x1 = |socket: &std::path::Path| socket == std::path::Path::new("/tmp/.X11-unix/X1");
+        let answers = |display: &str| display == ":1" || display == ":1.0";
+        let linux = cfg!(target_os = "linux");
+        assert_eq!(prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1")]), x1, answers), linux);
+        assert_eq!(prefer_xwayland(env(&[("WAYLAND_SOCKET", "3"), ("DISPLAY", ":1.0")]), x1, answers), linux);
+        assert_eq!(
+            prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1"), ("PDFCRAFT_NATIVE_WAYLAND", "0")]), x1, answers),
+            linux
+        );
+        // Not Wayland, or asked to stay there.
+        assert!(!prefer_xwayland(env(&[("DISPLAY", ":1")]), x1, answers));
+        assert!(!prefer_xwayland(env(&[("WAYLAND_DISPLAY", " "), ("DISPLAY", ":1")]), x1, answers));
+        assert!(!prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1"), ("PDFCRAFT_NATIVE_WAYLAND", "1")]), x1, answers));
+        // No Xwayland: no DISPLAY, no socket, or a display that isn't local.
+        for display in ["", ":", ":2", ":x", "host:1", "/tmp/.X11-unix/X1", ":../1", ":1234567890"] {
+            assert!(!prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", display)]), x1, answers), "{display:?}");
+        }
+        assert!(!prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0")]), x1, answers));
+        // A DISPLAY winit's Xlib can't open as written keeps Wayland, even when the server would
+        // answer: the probe must test the value winit reads, not a cleaned-up copy.
+        for display in [" :1.0 ", " :1", ":1 ", ":1.0 ", "\t:1", ":1\n", ":1.", ":1.x", ":1.0.0", ": 1"] {
+            assert!(!prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", display)]), x1, |_| true), "{display:?}");
+        }
+        // The probe gets DISPLAY exactly as it is.
+        let probed = std::cell::RefCell::new(None);
+        prefer_xwayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1.0")]), x1, |display| {
+            *probed.borrow_mut() = Some(display.to_owned());
+            true
+        });
+        assert_eq!(probed.into_inner().as_deref(), linux.then_some(":1.0"));
+        // A socket whose server doesn't answer (a crashed one left it behind) keeps Wayland, and
+        // without a socket the server isn't asked.
+        let wayland = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1")];
+        assert!(!prefer_xwayland(env(&wayland), x1, |_| false));
+        assert!(!prefer_xwayland(env(&wayland), |_| false, |_| panic!("no socket, no connection")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_x_server_probe_waits_for_an_answer_but_not_forever() {
+        use super::{answers_within, x11_server_answers};
+        use std::time::{Duration, Instant};
+        assert_eq!(answers_within(|| Ok(()), Duration::from_secs(10)), Ok(()));
+        assert_eq!(answers_within(|| Err("refused".into()), Duration::from_secs(10)), Err("refused".into()));
+        let started = Instant::now();
+        let silent = || {
+            std::thread::sleep(Duration::from_secs(30));
+            Ok(())
+        };
+        assert!(answers_within(silent, Duration::from_millis(100)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(10), "a silent server holds up start-up");
+        // No server listens on a display this high.
+        assert!(!x11_server_answers(":987654"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_missing_x11_library_keeps_wayland() {
+        use super::x11_usable;
+        assert_eq!(x11_usable(|| Ok(()), || Ok(())), Ok(()));
+        assert_eq!(x11_usable(|| Ok(()), || Err("refused".into())), Err("refused".into()));
+        // The server would answer, but winit couldn't start on it.
+        assert_eq!(x11_usable(|| Err("libXcursor: missing".into()), || Ok(())), Err("libXcursor: missing".into()));
+    }
+
+    #[test]
+    fn only_a_launch_through_xwayland_changes_the_event_loop() {
+        use super::{native_options, on_xwayland};
+        let native = || native_options(false, false, eframe::Renderer::Glow);
+        assert!(on_xwayland(native(), false).event_loop_builder.is_none());
+        assert_eq!(on_xwayland(native(), true).event_loop_builder.is_some(), cfg!(target_os = "linux"));
     }
 
     #[test]
