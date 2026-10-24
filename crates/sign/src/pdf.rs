@@ -1837,14 +1837,17 @@ fn version_number(name: &[u8]) -> Option<(u32, u32)> {
 
 /// Whether the catalog `d` keeps the signed catalog `b`'s `/Version` or raises it. The entry
 /// exists so a writer can lift the version in an incremental update (ISO 32000-2 §7.7.2), as PAdES
-/// LTV writers do when they add the DSS. A signed version may not drop or go back, and one that
-/// does not read as a version may not change at all.
+/// LTV writers do when they add the DSS. A signed version may not drop or go back. Only a name that
+/// reads as a version on both sides is compared by number; any other signed value, a string or an
+/// integer say, may not change in any way.
 fn version_not_lowered(d: &Dict, b: &Dict) -> bool {
-    let Some(was) = b.name(b"Version") else { return true };
-    let Some(now) = d.name(b"Version") else { return false };
-    match (version_number(was), version_number(now)) {
-        (Some(was), Some(now)) => now >= was,
-        _ => now == was,
+    let Some(signed) = b.get(b"Version") else { return true };
+    match (b.name(b"Version"), d.name(b"Version")) {
+        (Some(was), Some(now)) => match (version_number(was), version_number(now)) {
+            (Some(was), Some(now)) => now >= was,
+            _ => now == was,
+        },
+        _ => d.get(b"Version") == Some(signed),
     }
 }
 

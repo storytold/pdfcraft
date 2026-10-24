@@ -814,11 +814,11 @@ fn a_writer_may_raise_the_catalog_version_after_signing_but_not_lower_or_drop_it
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let trust = TrustStore { certs: vec![id.certificate.clone()] };
     let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
-    let version = |base: &[u8], v: Option<&str>| {
+    let set = |base: &[u8], v: Option<Object>| {
         edit_after(base, |doc| {
             let root = doc.root().unwrap();
             doc.update_dict(root, |c| match v {
-                Some(v) => c.set(b"Version".to_vec(), Object::name(v)),
+                Some(v) => c.set(b"Version".to_vec(), v),
                 None => {
                     c.remove(b"Version");
                 }
@@ -826,6 +826,7 @@ fn a_writer_may_raise_the_catalog_version_after_signing_but_not_lower_or_drop_it
             .unwrap();
         })
     };
+    let version = |base: &[u8], v: Option<&str>| set(base, v.map(Object::name));
     let disallowed = (Status::Invalid, Modification::Disallowed(vec![kind::STRUCTURE]));
     // Signed without a version: any may be declared afterwards.
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
@@ -864,6 +865,16 @@ fn a_writer_may_raise_the_catalog_version_after_signing_but_not_lower_or_drop_it
         },
         disallowed
     );
+    // A signed version that is not a name at all (a string, an integer) may not change, be swapped
+    // for a name, or go.
+    for odd in [Object::from(PdfString::text("1.5")), Object::Int(2)] {
+        let signed = pdfcraft_sign::sign(&open(&set(&fixture(), Some(odd))), &id, &opts()).unwrap();
+        assert_eq!(check(&signed).status, Status::Valid);
+        for edit in [Some(Object::name("1.7")), Some(PdfString::text("1.7").into()), Some(Object::Int(3)), None] {
+            let s = check(&set(&signed, edit.clone()));
+            assert_eq!((s.status, s.modification), disallowed, "{edit:?}");
+        }
+    }
 }
 
 #[test]
