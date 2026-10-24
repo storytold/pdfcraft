@@ -8988,3 +8988,87 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// Verify that `view_cursor_coordinates` calculates positions, transforms spaces, and formats units accurately.
+#[test]
+fn cursor_coordinates_tool_evaluates_points_and_dimensions() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = fixture(2);
+    std::fs::write(dir.path().join("doc.pdf"), pdf).unwrap();
+    let mut a = auto(dir.path());
+    let doc = ok(&mut a, "doc_open", json!({ "path": "doc.pdf" }))["doc"].as_u64().unwrap();
+
+    // Query dimensions without point in points (page 1 by default or explicitly).
+    let dims = ok(&mut a, "view_cursor_coordinates", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(dims["page"].as_u64().unwrap(), 1);
+    assert_eq!(dims["page_width"].as_f64().unwrap(), 200.0);
+    assert_eq!(dims["page_height"].as_f64().unwrap(), 300.0);
+    assert_eq!(dims["formatted_width"].as_str().unwrap(), "200.0 pt");
+    assert_eq!(dims["formatted_height"].as_str().unwrap(), "300.0 pt");
+    assert!(dims.get("point").is_none());
+
+    // Query with a point in user space, bottom-left origin.
+    let coords = ok(
+        &mut a,
+        "view_cursor_coordinates",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "point": [50.0, 75.0],
+            "space": "user",
+            "origin": "bottom-left",
+            "unit": "pt",
+        }),
+    );
+    let pt = &coords["point"];
+    assert_eq!(pt["x"].as_f64().unwrap(), 50.0);
+    assert_eq!(pt["y"].as_f64().unwrap(), 75.0);
+    assert_eq!(pt["formatted_x"].as_str().unwrap(), "50.0 pt");
+    assert_eq!(pt["formatted_y"].as_str().unwrap(), "75.0 pt");
+
+    // Query with top-left origin: y should be 300.0 - 75.0 = 225.0.
+    let top_left = ok(
+        &mut a,
+        "view_cursor_coordinates",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "point": [50.0, 75.0],
+            "space": "user",
+            "origin": "top-left",
+            "unit": "pt",
+        }),
+    );
+    assert_eq!(top_left["point"]["x"].as_f64().unwrap(), 50.0);
+    assert_eq!(top_left["point"]["y"].as_f64().unwrap(), 225.0);
+    assert_eq!(top_left["point"]["formatted_y"].as_str().unwrap(), "225.0 pt");
+
+    // Query in inches.
+    let inches = ok(
+        &mut a,
+        "view_cursor_coordinates",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "point": [72.0, 144.0],
+            "unit": "in",
+        }),
+    );
+    assert_eq!(inches["point"]["x"].as_f64().unwrap(), 1.0);
+    assert_eq!(inches["point"]["y"].as_f64().unwrap(), 2.0);
+    assert_eq!(inches["point"]["formatted_x"].as_str().unwrap(), "1.00 in");
+    assert_eq!(inches["point"]["formatted_y"].as_str().unwrap(), "2.00 in");
+
+    // Query in millimeters and centimeters.
+    let mm = ok(&mut a, "view_cursor_coordinates", json!({ "doc": doc, "unit": "mm" }));
+    assert!(mm["formatted_width"].as_str().unwrap().ends_with(" mm"));
+
+    let cm = ok(&mut a, "view_cursor_coordinates", json!({ "doc": doc, "unit": "cm" }));
+    assert!(cm["formatted_width"].as_str().unwrap().ends_with(" cm"));
+
+    // Error cases: invalid page (0 is rejected, 10 is out of range), unit, or point format.
+    assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "page": 0 })).is_err());
+    assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "page": 10 })).is_err());
+    assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "unit": "yards" })).is_err());
+    assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "point": [10.0] })).is_err());
+}

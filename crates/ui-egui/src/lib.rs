@@ -82,6 +82,7 @@ pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod autoscroll;
 mod bidi;
 pub mod bulk_fields;
+pub mod cursor_coordinates_ui;
 mod dialogs;
 mod edit_text_ui;
 pub mod field_table_ui;
@@ -727,6 +728,10 @@ pub struct PdfCraftApp {
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
+    /// Whether the cursor coordinates floating window is open (View ▸ Show/Hide ▸ Cursor Coordinates, `Ctrl+Y`).
+    pub show_cursor_coordinates: bool,
+    /// Whether cursor coordinates are anchored to bottom-left (PDF origin) or top-left.
+    pub cursor_coordinates_origin_bottom_left: bool,
     /// Open documents' files, watched for changes on disk.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) watch: file_watch::FileWatch,
@@ -1136,6 +1141,8 @@ impl PdfCraftApp {
             reload_changed_files: true,
             show_secured_notice: true,
             always_default_view: false,
+            show_cursor_coordinates: false,
+            cursor_coordinates_origin_bottom_left: true,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1294,6 +1301,11 @@ impl PdfCraftApp {
         ((self.left_open && matches!(self.left, LeftPanel::Tool("form") | LeftPanel::CalculationOrder))
             || matches!(self.quick_tool, QuickTool::Field(_)))
             && !self.form_preview
+    }
+
+    /// Toggle visibility of the cursor coordinates window.
+    pub fn toggle_cursor_coordinates(&mut self) {
+        self.show_cursor_coordinates = !self.show_cursor_coordinates;
     }
 
     /// Open a document the way it asks to be opened: navigation panel, layout, magnification,
@@ -3594,6 +3606,7 @@ impl eframe::App for PdfCraftApp {
         self.attend_save_prompt(ctx);
     }
 
+    /// Render the main window UI components, central canvas, dialogs, and floating tools.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
@@ -3627,6 +3640,7 @@ impl eframe::App for PdfCraftApp {
                 }
             });
             dialogs::show(self, &ctx);
+            cursor_coordinates_ui::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
@@ -3671,6 +3685,7 @@ impl eframe::App for PdfCraftApp {
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        cursor_coordinates_ui::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);

@@ -230,6 +230,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     // View-local history also appears in the Page navigation section; don't duplicate its menu.
     c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron-left"),
     c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron-right"),
+    // In View ▸ Show/Hide with the display options, so `menu = None` keeps it out of the generated
+    // View menu (where it would show twice). The palette and ⌘Y still run it.
+    ct("view.cursor_coordinates", "Cursor coordinates", None, Some(Shortcut::cmd("Y")), Document, "mouse-pointer-2"),
     c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
     c("ui.dock.reset", "Reset panel layout", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),

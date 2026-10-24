@@ -113,6 +113,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Run a registered command by id without the outer panic guard.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -244,6 +245,7 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
+            "view.cursor_coordinates" => self.toggle_cursor_coordinates(),
             layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
                 if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
                     self.views[i].set_layout(layout);
@@ -788,6 +790,7 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
 }
 
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
+/// Draw a menu of registered commands for a named section (File, Edit, Pages, View).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     for spec in commands::menu(menu) {
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
@@ -829,7 +832,8 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
         }
         let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
         let enabled = app.command_enabled(spec);
-        let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
+        let selected = spec.id == "view.cursor_coordinates" && app.show_cursor_coordinates;
+        let resp = ui.add_enabled(enabled, egui::Button::new(label).selected(selected).shortcut_text(shortcut));
         if resp.clicked() {
             app.execute(spec.id);
             ui.close();
