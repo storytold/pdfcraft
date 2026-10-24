@@ -3,6 +3,7 @@
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-21 · **Change:** minor (M10: the Print dialog and doc_print offer the Japanese papers — JIS B4 257 × 364 mm, B5 182 × 257 mm and B6 128 × 182 mm beside the ISO B4/B5, はがき, 往復はがき, 封筒 長形3号/長形4号, 角形2号/角形3号 and 四六判, each printing as a PDF page of its own size; a paper is named by its label and its short name, any case and spacing); previously minor: M5, PR #1971: bounded nested FDF export excludes source page/page-tree dictionaries; refreshed against upstream 4db6ac4a; estimates unchanged)
 > **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M3, #3808: the Pages inspector has an independent 50–150% thumbnail size slider and buttons; selection and current-page following are retained, with headless ui.set coverage. Estimates unchanged.)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M11 #3507: image merging preserves content stream boundaries; estimates unchanged)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged)
@@ -229,6 +230,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-20 (M3, #3541/#3620):** Comment hover follows the individual marked lines instead of the enclosing multiline rectangle, and overlapping comments follow paint order. Synthetic UI regressions cover all four text-markup kinds, page/view rotations, neighboring highlights, legacy rectangle fallback and unchanged PDF bytes. Estimates unchanged.
 - **2026-10-20 (M10, #3532 partial):** Vector printing retains existing widget artwork when its appearance lacks Subtype. A print-owned copy adds Form dispatch metadata. The source stream and all explicit subtypes stay unchanged. Synthetic source/output raster checks cover resources, selected/shared appearances, placement, flags and content modes. Appearance regeneration and physical printer validation remain outside this fix. Estimates unchanged.
+
+- **2026-10-21 (M10, Print):** The Print dialog and doc_print offer the Japanese paper sizes — JIS B4 257 × 364 mm, JIS B5 182 × 257 mm and JIS B6 128 × 182 mm next to the ISO B4/B5, はがき 100 × 148 mm, 往復はがき 148 × 200 mm, 封筒 長形3号 120 × 235 mm and 長形4号 90 × 205 mm, 角形2号 240 × 332 mm and 角形3号 216 × 277 mm, and 四六判 127 × 188 mm. Each prints as a PDF page of its own size (the job's /MediaBox) and the spooler is asked for that sheet (JIS B4/B5/B6 by their PPD names, the others as custom point sizes); a paper is named by its label, its short name, any case and spacing. Estimates unchanged.
 
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.
 
@@ -641,6 +644,7 @@ Newest first: the date, what moved, and the new overall estimate.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-22 | minor | M4, #3916 partial: document edits and Undo/Redo cancel Organize drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
+| 2026-10-21 | minor | M10: Japanese paper sizes in the Print dialog and doc_print — JIS B4/B5/B6 next to ISO B4/B5, はがき, 往復はがき, 封筒 長形3号/長形4号, 角形2号/角形3号 and 四六判; each prints as its own /MediaBox and is named by label or short name, any case and spacing. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |
 | 2026-10-20 | minor | M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged. |

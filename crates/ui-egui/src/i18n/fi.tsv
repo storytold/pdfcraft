@@ -2691,6 +2691,13 @@ certificate	SHA-256 digest	SHA-256-tiiviste
 	Make properties default	Aseta ominaisuudet oletuksiksi
 	Pages selected	Valitut sivut
 	Page properties	Sivun ominaisuudet
+	Japanese Postcard	Japanilainen postikortti
+	Japanese Double Postcard	Japanilainen kaksoispostikortti
+	Japanese Envelope #3	Japanilainen kirjekuori nro 3
+	Japanese Envelope #4	Japanilainen kirjekuori nro 4
+	Kaku #2	Kaku-kirjekuori nro 2
+	Kaku #3	Kaku-kirjekuori nro 3
+	Yonroku-ban	Yonroku-ban-paperi
 	The password must have at least 8 characters.	Salasanassa on oltava vähintään 8 merkkiä.
 theme	Appearance	Teema
 # Labels added upstream 2026-10-16…18.

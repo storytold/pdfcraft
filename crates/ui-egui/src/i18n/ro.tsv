@@ -2629,6 +2629,12 @@ key	Space	Spațiu
 	Found {n} untagged content problems.	Au fost găsite {n} probleme de conținut neetichetat.
 	Full Screen	Ecran complet
 	Hide hover previews for highlights without comment text	Ascunde previzualizările la trecerea mouse-ului pentru evidențierile fără text de comentariu
+	Japanese Double Postcard	Carte poștală dublă japoneză
+	Japanese Envelope #3	Plic japonez nr. 3
+	Japanese Envelope #4	Plic japonez nr. 4
+	Japanese Postcard	Carte poștală japoneză
+	Kaku #2	Plic Kaku nr. 2
+	Kaku #3	Plic Kaku nr. 3
 	Location: 	Locație: 
 	Make Properties Default	Proprietățile devin implicite
 	Make properties default	Proprietățile devin implicite
@@ -2680,6 +2686,7 @@ key	Space	Spațiu
 	Word counting stopped unexpectedly.	Numărarea cuvintelor s-a oprit neașteptat.
 	Word count…	Număr de cuvinte…
 	Words	Cuvinte
+	Yonroku-ban	Hârtie Yonroku-ban
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	„{name}” s-a modificat pe disc după ce a fost deschis sau salvat ultima dată. Salvarea acum înlocuiește acea versiune mai nouă cu aceasta.
 @id	file.word_count	Număr de cuvinte…
 theme	Appearance	Aspect

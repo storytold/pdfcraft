@@ -2739,6 +2739,13 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Japanese Postcard	Japoniškas atvirukas
+	Japanese Double Postcard	Japoniškas dvigubas atvirukas
+	Japanese Envelope #3	Japoniškas vokas Nr. 3
+	Japanese Envelope #4	Japoniškas vokas Nr. 4
+	Kaku #2	Kaku Nr. 2
+	Kaku #3	Kaku Nr. 3
+	Yonroku-ban	Japonijos Yonroku-ban
 	Bulleted list	Sąrašas su ženkleliais
 	Numbered list	Numeruotas sąrašas
 	Alignment	Lygiuotė

@@ -2629,6 +2629,12 @@ certificate	SHA-256 digest	Resum SHA-256
 	Found {n} untagged content problems.	S'han trobat {n} problemes de contingut sense etiquetar.
 	Full Screen	Pantalla completa
 	Hide hover previews for highlights without comment text	Amaga les previsualitzacions en passar-hi per sobre dels ressaltats sense text de comentari
+	Japanese Double Postcard	Targeta postal doble japonesa
+	Japanese Envelope #3	Sobre japonès núm. 3
+	Japanese Envelope #4	Sobre japonès núm. 4
+	Japanese Postcard	Targeta postal japonesa
+	Kaku #2	Sobre Kaku núm. 2
+	Kaku #3	Sobre Kaku núm. 3
 	Location: 	Ubicació: 
 	Make Properties Default	Fes que les propietats siguin les predeterminades
 	Make properties default	Fes que les propietats siguin les predeterminades
@@ -2680,6 +2686,7 @@ certificate	SHA-256 digest	Resum SHA-256
 	Word counting stopped unexpectedly.	El recompte de paraules s'ha aturat de manera inesperada.
 	Word count…	Recompte de paraules…
 	Words	Paraules
+	Yonroku-ban	Paper Yonroku-ban
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» ha canviat al disc després d'obrir-lo o d'haver-lo desat per última vegada. Si ara el deses, aquesta versió substituirà la més recent.
 @id	file.word_count	Recompte de paraules…
 theme	Appearance	Aspecte

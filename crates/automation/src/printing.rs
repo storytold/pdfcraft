@@ -22,6 +22,16 @@ fn duplex(value: &str, cut_stack: bool) -> Result<Option<spool::Duplex>> {
     })
 }
 
+/// Adds the sheet the PDF was laid out on to a job's driver options, unless the caller named one:
+/// a queue would otherwise print on its default paper.
+fn add_media(options: &mut Vec<(String, String)>, paper: usize) {
+    if !options.iter().any(|(key, _)| key.eq_ignore_ascii_case("media"))
+        && let Some(media) = print::cups_media(paper)
+    {
+        options.push(("media".to_string(), media.to_string()));
+    }
+}
+
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
@@ -125,20 +135,13 @@ impl Automation {
             "form-fields-only" => Content::FormFieldsOnly,
             c => return Err(bad(format!("unknown comments_forms {c:?}"))),
         };
-        let paper = match a.opt_str("paper")? {
-            None => PAPERS[0].1,
-            Some(p) => PAPERS
-                .iter()
-                .find(|(n, _)| {
-                    n.eq_ignore_ascii_case(p)
-                        || n.replace("US ", "").eq_ignore_ascii_case(p)
-                        || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
-                })
-                .map(|x| x.1)
-                .ok_or_else(|| {
-                    bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
-                })?,
+        let paper_index = match a.opt_str("paper")? {
+            None => 0,
+            Some(p) => print::find_paper(p).ok_or_else(|| {
+                bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
+            })?,
         };
+        let paper = PAPERS[paper_index].1;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
         let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
@@ -171,16 +174,20 @@ impl Automation {
                     scaling: spool::Scaling::Exact,
                     grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
                     title: name,
-                    options: match a.get("options") {
-                        None => Vec::new(),
-                        Some(Value::Object(m)) => m
-                            .iter()
-                            .map(|(k, v)| match v.as_str() {
-                                Some(v) => Ok((k.clone(), v.to_string())),
-                                None => Err(bad(format!("options.{k} must be a string (a choice from printer_options)"))),
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                        Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
+                    options: {
+                        let mut options = match a.get("options") {
+                            None => Vec::new(),
+                            Some(Value::Object(m)) => m
+                                .iter()
+                                .map(|(k, v)| match v.as_str() {
+                                    Some(v) => Ok((k.clone(), v.to_string())),
+                                    None => Err(bad(format!("options.{k} must be a string (a choice from printer_options)"))),
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                            Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
+                        };
+                        add_media(&mut options, paper_index);
+                        options
                     },
                 };
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
@@ -206,5 +213,20 @@ mod tests {
         assert_eq!(duplex("short-edge", false).ok(), Some(Some(spool::Duplex::ShortEdge)));
         assert!(duplex("long-edge", true).is_err());
         assert!(duplex("sideways", false).is_err());
+    }
+
+    /// The job names the sheet the PDF was laid out on, so the queue does not fall back to its
+    /// own default paper; a `media` the caller passes from `printer_options` still wins.
+    #[test]
+    fn job_media_names_the_paper_unless_the_caller_names_it() {
+        let postcard = print::find_paper("Japanese Postcard").expect("Japanese Postcard is a paper");
+        let mut options = vec![("InputSlot".to_string(), "Tray2".to_string())];
+        add_media(&mut options, postcard);
+        assert!(options.contains(&("InputSlot".to_string(), "Tray2".to_string())), "{options:?}");
+        assert!(options.contains(&("media".to_string(), "Custom.100x148mm".to_string())), "{options:?}");
+
+        let mut explicit = vec![("Media".to_string(), "A4".to_string())];
+        add_media(&mut explicit, postcard);
+        assert_eq!(explicit, vec![("Media".to_string(), "A4".to_string())]);
     }
 }
