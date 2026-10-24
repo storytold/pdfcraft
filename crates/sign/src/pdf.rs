@@ -1851,6 +1851,8 @@ fn version_not_lowered(d: &Dict, b: &Dict) -> bool {
     }
 }
 
+/// The kind of change the dictionary `d` is after signing. `before` is the dictionary it replaces in
+/// the signed revision, or `None` for an object added since.
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature

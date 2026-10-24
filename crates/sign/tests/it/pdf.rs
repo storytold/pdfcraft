@@ -760,6 +760,8 @@ fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::STRUCTURE])));
 }
 
+/// A signature stays valid through the revisions an LTV writer and a second signer add: the DSS with
+/// `/ADBE` and `/Version`, an `/ESIC` declaration with a second signature, and a last DSS update.
 #[test]
 fn a_signature_stays_valid_through_a_dss_then_an_esic_declaration_then_a_second_signature() {
     use pdfcraft_sign::dss::{self, Evidence};
@@ -809,6 +811,8 @@ fn a_signature_stays_valid_through_a_dss_then_an_esic_declaration_then_a_second_
     assert!(matches!(&a.modification, Modification::Allowed(k) if !k.contains(&kind::STRUCTURE)), "{:?}", a.modification);
 }
 
+/// A writer may add or raise the catalog `/Version` after signing, but not lower or drop it, and a
+/// signed value that is not a version name may not change at all.
 #[test]
 fn a_writer_may_raise_the_catalog_version_after_signing_but_not_lower_or_drop_it() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
