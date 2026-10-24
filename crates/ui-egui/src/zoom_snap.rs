@@ -89,8 +89,15 @@ impl PdfCraftApp {
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         // About 800 px along the longer side is plenty to find the margins.
         let size = doc.info.pages.get(page).map_or(792.0, |p| p.width.max(p.height));
-        let out =
-            r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (800.0 / size).clamp(0.1, 4.0), tag: 0, preview: false });
+        let out = r.render(RenderRequest {
+            page,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: (800.0 / size).clamp(0.1, 4.0),
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         if let Some(e) = out.error {
             return Err(e);
         }
@@ -133,7 +140,10 @@ impl PdfCraftApp {
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
-        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
+        // The area as the page view shows it: NoZoom comments and notes at the size they have
+        // on screen (ISO 32000-2 §12.5.3), not grown with the page.
+        let magnification = Some(view.zoom);
+        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false, magnification });
         if let Some(e) = out.error {
             return Err(e);
         }

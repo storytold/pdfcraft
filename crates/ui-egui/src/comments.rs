@@ -16,7 +16,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PT, PageXform};
 use crate::theme::{self, Tokens};
 use crate::{QuickTool, icons};
 
@@ -623,9 +623,24 @@ impl PageCx<'_> {
         self.info.pages.get(self.page).map_or(0, |p| p.rotation)
     }
 
-    /// Where a comment is drawn on screen (a sticky note stays upright on a turned page).
+    /// Where a comment is drawn on screen (a NoZoom comment or a note keeps its size, and a
+    /// sticky note stays upright on a turned page).
     fn screen_rect(&self, a: &Annotation) -> Rect {
-        self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
+        self.zoomed_screen_rect(a, a.rect.map(f64::from))
+    }
+
+    /// The page's magnification on screen (1.0 = 100%): what the canvas asks the renderer to
+    /// draw it at.
+    fn magnification(&self) -> f32 {
+        self.xf.zoom() / PT
+    }
+
+    /// Where `a` is drawn on screen with its `/Rect` at `rect`: [`zoomed_rect`] at this page's
+    /// magnification, then turned upright for a NoRotate comment ([`Annotation::shown`]). Both
+    /// keep the upper-left corner of `/Rect` in place, as the renderer's scale and turn do.
+    fn zoomed_screen_rect(&self, a: &Annotation, rect: [f64; 4]) -> Rect {
+        let shown = a.shown(zoomed_rect(a, rect, self.magnification()), self.rotation());
+        self.xf.user_rect(self.info, self.page, shown.map(|v| v as f32))
     }
 
     /// Top-level comments on this page, in paint order.
@@ -637,16 +652,7 @@ impl PageCx<'_> {
     pub(crate) fn screen_rects<'b>(&'b self, a: &'b Annotation) -> impl Iterator<Item = Rect> + 'b {
         let quads = if is_markup(&a.subtype) { a.quads.as_slice() } else { &[] };
         let fallback = quads.is_empty().then(|| self.screen_rect(a));
-        quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .chain(fallback)
+        quads.iter().map(|q| self.quad_screen_rect(a, q)).chain(fallback)
     }
 
     /// A redaction mark's areas: one per marked quad, or its rectangle.
@@ -654,16 +660,18 @@ impl PageCx<'_> {
         if a.quads.is_empty() {
             return vec![self.screen_rect(a)];
         }
-        a.quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .collect()
+        a.quads.iter().map(|q| self.quad_screen_rect(a, q)).collect()
+    }
+
+    /// Where the `/QuadPoints` quadrilateral `q` of `a` is drawn on screen: its bounds, scaled
+    /// with `a` as [`zoomed_quad`] scales them.
+    fn quad_screen_rect(&self, a: &Annotation, q: &[f32; 8]) -> Rect {
+        let xs = [q[0], q[2], q[4], q[6]];
+        let ys = [q[1], q[3], q[5], q[7]];
+        let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+        let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+        let bounds = zoomed_quad(a, [x0, y0, x1, y1].map(f64::from), self.magnification());
+        self.xf.user_rect(self.info, self.page, bounds.map(|v| v as f32))
     }
 
     /// The topmost comment under `p`.
@@ -694,13 +702,13 @@ impl PageCx<'_> {
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.xf.user_rect(self.info, self.page, a.shown(*rect, self.rotation()).map(|v| v as f32));
+            return self.zoomed_screen_rect(a, *rect);
         }
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            let r = a.shown_rect(self.rotation());
-            return self.xf.user_rect(self.info, self.page, [r[0] + *dx as f32, r[1] + *dy as f32, r[2] + *dx as f32, r[3] + *dy as f32]);
+            let r = a.rect.map(f64::from);
+            return self.zoomed_screen_rect(a, [r[0] + *dx, r[1] + *dy, r[2] + *dx, r[3] + *dy]);
         }
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
@@ -714,6 +722,46 @@ impl PageCx<'_> {
 
 fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
+}
+
+/// Where `a`, with its `/Rect` at `rect`, is drawn in user space on a page shown at
+/// `magnification` (the view's zoom, 1.0 = 100%): `rect`, or for a comment that keeps its size on
+/// the screen ([`Annotation::no_zoom`]) `rect` scaled by `1/magnification` about its upper-left
+/// corner, which stays where it is on the page (ISO 32000-2 §12.5.3). The renderer draws it there
+/// (hayro-interpret patch 54). A magnification that isn't finite and greater than zero leaves
+/// `rect` as it is, as the renderer does.
+pub(crate) fn zoomed_rect(a: &Annotation, rect: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return rect;
+    }
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    [x0, y1 - (y1 - y0) * s, x0 + (x1 - x0) * s, y1]
+}
+
+/// Where the user-space box `bounds` (a text markup quadrilateral's) of `a` is drawn on a page
+/// shown at `magnification`: for a comment that keeps its size on the screen, scaled by
+/// `1/magnification` about the upper-left corner of `a`'s `/Rect`, as the renderer scales its
+/// appearance (hayro-interpret patch 54), and as it is otherwise. The guards are
+/// [`zoomed_rect`]'s, and a scaled box that isn't finite leaves `bounds` as it is.
+pub(crate) fn zoomed_quad(a: &Annotation, bounds: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return bounds;
+    }
+    let r = a.rect.map(f64::from);
+    let (px, py) = (r[0].min(r[2]), r[1].max(r[3]));
+    let scaled = [px + (bounds[0] - px) * s, py + (bounds[1] - py) * s, px + (bounds[2] - px) * s, py + (bounds[3] - py) * s];
+    if scaled.iter().all(|v| v.is_finite()) { scaled } else { bounds }
+}
+
+/// The `/Rect` that [`zoomed_rect`] draws in the user-space box `shown`: its inverse, for a box
+/// resized as drawn. The upper-left corner stays, and the sides grow by `magnification`.
+pub(crate) fn rect_for_zoomed(a: &Annotation, shown: [f64; 4], magnification: f32) -> [f64; 4] {
+    let m = f64::from(magnification);
+    let [x0, y0, x1, y1] = [shown[0].min(shown[2]), shown[1].min(shown[3]), shown[0].max(shown[2]), shown[1].max(shown[3])];
+    let rect = [x0, y1 - (y1 - y0) * m, x0 + (x1 - x0) * m, y1];
+    if a.no_zoom && m.is_finite() && m > 0.0 && rect.iter().all(|v| v.is_finite()) { rect } else { shown }
 }
 
 /// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
@@ -1233,7 +1281,7 @@ fn select_input(
                     let from_rect = cx.screen_rect(a);
                     let shift = ui.input(|i| i.modifiers.shift);
                     let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                    let rect = rect_for_zoomed(a, a.rect_for_shown(cx.rect_to_user(r), cx.rotation()), cx.magnification());
                     if r.width() >= 4.0 && r.height() >= 4.0 {
                         view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
                     }
@@ -2315,6 +2363,7 @@ mod tests {
             fill_sign: false,
             no_rotate,
             points: Vec::new(),
+            no_zoom: false,
         };
         let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
         let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -2553,6 +2602,7 @@ mod tests {
                 fill_sign: false,
                 points: Vec::new(),
                 no_rotate: false,
+                no_zoom: false,
             }],
             ..Default::default()
         };

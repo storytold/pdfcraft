@@ -551,6 +551,7 @@ fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfc
         scale,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     if out.error.is_some() || out.width == 0 {
         return None;

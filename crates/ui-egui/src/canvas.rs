@@ -1922,6 +1922,7 @@ impl DocView {
                     tag: THUMB_TAG | u64::from(scale.to_bits()),
                     // Thumbnails are previews: tiny images are skipped for them.
                     preview: true,
+                    magnification: None,
                 })
             })
             .collect()
@@ -2364,7 +2365,7 @@ impl DocView {
             let tag = scale_tag(scale) | PRINT_TAG | if self.grayscale { GRAYSCALE_TAG } else { 0 };
             let fresh = self.print_pages.get(&page).is_some_and(|(have, _)| *have == tag);
             if !fresh {
-                self.frame_queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag, preview: false });
+                self.frame_queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag, preview: false, magnification: None });
             }
         }
     }
@@ -4252,6 +4253,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // It is the whole-page request whose scale is not the current one; sharp tiles
             // and whole-page finals always draw everything.
             preview: tile.is_none() && (wanted_scale != scale || wanted_tag != tag),
+            // The page is on screen at the view's zoom: NoZoom comments and notes keep their
+            // size (ISO 32000-2 §12.5.3), and `comments::zoomed_rect` hit-tests them there.
+            magnification: Some(view.zoom),
         })
         .collect();
     // While the zoom or pan is settling, hold back sharp re-renders of pages that already
@@ -4302,6 +4306,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         scale: 1.0,
         tag: TEXT_TAG,
         preview: false,
+        magnification: None,
     }));
     view.frame_queue = queue;
     view.frame_visible = visible_now.iter().copied().collect();
@@ -5551,6 +5556,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                             tag: GRID_TAG,
                             // Grid cells are previews: tiny images are skipped for them.
                             preview: true,
+                            magnification: None,
                         });
                     }
                 }
@@ -5887,6 +5893,7 @@ mod tests {
             fill_sign,
             no_rotate: false,
             points: Vec::new(),
+            no_zoom: false,
         }
     }
 
@@ -6018,7 +6025,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let mut r = pdfcraft_render::PageRenderer::new(Arc::new(pdf.to_vec()), Default::default());
-        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 0, preview: false });
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 0, preview: false, magnification: None });
         assert!(out.error.is_none(), "{:?}", out.error);
         let size = [out.width as usize, out.height as usize];
         let copied = egui::ColorImage::from_rgba_premultiplied(size, &out.rgba);
@@ -6941,6 +6948,36 @@ trailer << /Root 1 0 R >>
         let app = h.state();
         let generation = app.session.get(app.views[0].id).unwrap().edit_generation();
         assert_eq!(app.views[0].edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
+    }
+
+    /// The page view asks for its pages at the view's zoom as the magnification, so NoZoom
+    /// comments and notes keep their size on screen (ISO 32000-2 §12.5.3); thumbnails, text
+    /// layers and the rest have no on-screen magnification.
+    #[test]
+    fn the_page_view_renders_with_its_zoom_as_the_magnification() {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+            app.open_bytes("magnification.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.set_option("left", "pages").unwrap();
+            app
+        });
+        let (mut pages, mut others) = (Vec::new(), Vec::new());
+        for step in 0..44 {
+            if step == 4 {
+                h.state_mut().set_option("zoom", "250").unwrap();
+            }
+            h.run_steps(1);
+            let v = &h.state().views[0];
+            for r in &v.last_queue {
+                let page_view = r.kind == RequestKind::Pixels && r.tag & (THUMB_TAG | TEXT_TAG | GRID_TAG | PRINT_TAG) == 0;
+                if page_view { pages.push((r.magnification, v.zoom)) } else { others.push(r.magnification) }
+            }
+        }
+        assert!(pages.iter().any(|(m, _)| *m == Some(2.5)), "the page is rendered at 250%: {pages:?}");
+        assert!(pages.iter().all(|(m, zoom)| *m == Some(*zoom)), "{pages:?}");
+        // Thumbnails and text layers are asked for whenever their results happen to be pending.
+        assert!(others.iter().all(Option::is_none), "{others:?}");
     }
 
     #[test]

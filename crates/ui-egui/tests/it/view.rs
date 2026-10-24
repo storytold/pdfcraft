@@ -1660,6 +1660,7 @@ fn compare_page_with_raster(h: &mut Harness<'static, PdfCraftApp>, pdf: &[u8], z
         scale,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     assert!(page.error.is_none(), "{:?}", page.error);
     // Compare the lined area (page x 40..270 pt, y 60..330 pt from the top), screen against raster.

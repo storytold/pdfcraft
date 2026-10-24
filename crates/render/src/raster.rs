@@ -17,6 +17,8 @@ use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::{Receiver, sync_channel};
 
 #[cfg(test)]
+mod no_zoom_tests;
+#[cfg(test)]
 mod radial_softmask_tests;
 mod work_queue;
 use std::sync::{Arc, Mutex};
@@ -170,6 +172,12 @@ pub struct RenderRequest {
     /// few device pixels are skipped. Never set it for a final render (tiles, whole pages,
     /// print, export): previews may differ by those pixels.
     pub preview: bool,
+    /// The view's zoom for an on-screen page (1.0 = 100%), not device pixels per point: a HiDPI
+    /// factor or an export resolution is no magnification. Annotations with the NoZoom flag, and
+    /// text annotations, keep the size they have at 100% about the upper-left corner of their
+    /// `/Rect` (ISO 32000-2 §12.5.3, §12.5.6.4). `None` (print, export, thumbnails, the CLI)
+    /// scales every annotation with the page.
+    pub magnification: Option<f32>,
 }
 
 /// The tag bit of a print-preview raster. Such requests always render the document's true
@@ -382,6 +390,7 @@ fn render_page<'a>(
         // Previews render at low detail (tiny images are skipped); finals always draw all.
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
+        preview_settings.magnification = req.magnification;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
         Ok((w.into(), h.into(), pixels, None))
     }));
@@ -2006,6 +2015,7 @@ mod tests {
                 scale: 1.0,
                 tag: 0,
                 preview: false,
+                magnification: None,
             });
             assert!(page.error.is_none(), "Lab ({l} {a} {b}): {:?}", page.error);
             assert_eq!((page.width, page.height), (200, 200));
@@ -2049,6 +2059,7 @@ mod tests {
                 scale: 1.0,
                 tag: 0,
                 preview: false,
+                magnification: None,
             });
             assert!(page.error.is_none(), "{content}: {:?}", page.error);
             assert_eq!((page.width, page.height), (200, 200));
@@ -4901,7 +4912,15 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+            let _ = tx.send(r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(120)).expect("a large page must render");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -4920,7 +4939,15 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+            let _ = tx.send(r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("an inline image must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -4946,7 +4973,15 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+            let _ = tx.send(r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the polyline must render");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -4970,7 +5005,15 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+            let _ = tx.send(r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the path must render");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -4992,7 +5035,15 @@ trailer << /Root 1 0 R >>
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+                let _ = tx.send(r.render(RenderRequest {
+                    page: 0,
+                    kind: RequestKind::Pixels,
+                    tile: None,
+                    scale: 1.0,
+                    tag: 0,
+                    preview: false,
+                    magnification: None,
+                }));
             });
             let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the rectangle must render");
             assert!(page.error.is_none(), "{:?}", page.error);
@@ -5084,8 +5135,17 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
-            let last = r.render(RenderRequest { page: PAGES - 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+            let first =
+                r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
+            let last = r.render(RenderRequest {
+                page: PAGES - 1,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            });
             let _ = tx.send((first, last));
         });
         let (first, last) =
@@ -5146,6 +5206,7 @@ trailer << /Root 1 0 R >>
                 scale: 2.0,
                 tag: 0,
                 preview: false,
+                magnification: None,
             });
             assert!(page.error.is_none(), "{:?}", page.error);
             page.rgba.to_vec()
@@ -5171,7 +5232,15 @@ trailer << /Root 1 0 R >>
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+            let _ = tx.send(r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale: 1.0,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            }));
         });
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a content bomb must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
@@ -6803,7 +6872,7 @@ trailer << /Root 1 0 R >>
             content.len()
         )
         .into_bytes();
-        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false };
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false, magnification: None };
         let render = |reading_colors: ReadingColors| {
             let mut r = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig { reading_colors, ..Default::default() });
             let page = r.render(req);
@@ -6948,6 +7017,7 @@ trailer << /Root 1 0 R >>
                 scale: 1.0,
                 tag: 0,
                 preview,
+                magnification: None,
             });
             assert!(p.error.is_none(), "{group} {form}: {:?}", p.error);
             p
@@ -7200,18 +7270,28 @@ trailer << /Root 1 0 R >>
 
         // The page and its black rectangle in their true colours.
         let mut plain = PageRenderer::new(pdf.clone(), RenderConfig::default());
-        let truth = plain.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false });
+        let truth =
+            plain.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false, magnification: None });
         assert!(truth.error.is_none(), "{:?}", truth.error);
         assert_eq!(px(&truth, 5, 5), &[255, 255, 255, 255]);
         assert_eq!(px(&truth, 50, 60), &[0, 0, 0, 255]);
 
         let mut recoloured = PageRenderer::new(pdf.clone(), RenderConfig { reading_colors: ReadingColors::WHITE_ON_BLACK, ..Default::default() });
         // A plain request honours the setting: the page clears black, the rect maps white.
-        let on = recoloured.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false });
+        let on = recoloured.render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 2.0,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         assert_eq!(px(&on, 5, 5), &[0, 0, 0, 255]);
         assert_eq!(px(&on, 50, 60), &[255, 255, 255, 255]);
         // A print-preview request ignores the setting and matches the true colours exactly.
-        let preview = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: PRINT_TAG, preview: false };
+        let preview =
+            RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: PRINT_TAG, preview: false, magnification: None };
         let off = recoloured.render(preview);
         assert_eq!(px(&off, 5, 5), &[255, 255, 255, 255]);
         assert_eq!(px(&off, 50, 60), &[0, 0, 0, 255]);
@@ -7236,9 +7316,11 @@ trailer << /Root 1 0 R >>
     fn reading_colors_tiles_match_full_render() {
         let mut r =
             PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig { reading_colors: ReadingColors::WHITE_ON_BLACK, ..Default::default() });
-        let full = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false });
+        let full =
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false, magnification: None });
         let tile = Tile { x: 30, y: 40, w: 50, h: 30 };
-        let part = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: Some(tile), scale: 2.0, tag: 0, preview: false });
+        let part =
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: Some(tile), scale: 2.0, tag: 0, preview: false, magnification: None });
         assert!(full.error.is_none() && part.error.is_none(), "{:?} {:?}", full.error, part.error);
         assert_eq!((part.width, part.height), (50, 30));
         for y in 0..30u32 {
@@ -7392,7 +7474,8 @@ trailer << /Root 1 0 R >>
             pixels.len()
         );
         let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-        let mut render = |preview| r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview });
+        let mut render =
+            |preview| r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview, magnification: None });
         let first = render(false);
         let second = render(false);
         assert!(first.error.is_none(), "{:?}", first.error);
@@ -7449,7 +7532,7 @@ endstream endobj
             "<< /XObject << /A 5 0 R /B 6 0 R >> >>",
             &[(ONE_PIXEL_RGB, b"\xff\x00\x00"), (ONE_PIXEL_RGB, b"\x00\x00\xff")],
         );
-        let req = |preview| RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview };
+        let req = |preview| RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview, magnification: None };
         let mut r = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig::default());
         let out = r.render(req(false));
         assert!(out.error.is_none(), "{:?}", out.error);
@@ -7479,7 +7562,7 @@ endstream endobj
             &[(ONE_PIXEL_RGB, b"\xff\x00\x00"), ("<< /FunctionType 4 /Domain [0 1] /Range [0 1] /Length 14 >>", b"{ 1 exch sub }")],
         );
         let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
         assert!(out.error.is_none(), "{:?}", out.error);
         let w = out.width as usize;
         assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 255, 255], "the transfer function was not applied to a cached image");
@@ -7570,7 +7653,7 @@ endstream endobj
     /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
     fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
         let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
         assert!(out.error.is_none(), "{:?}", out.error);
         out
     }
@@ -8023,7 +8106,8 @@ endstream endobj
         };
         let render = |bytes: Vec<u8>| {
             let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+            let p =
+                r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
             assert!(p.error.is_none(), "{:?}", p.error);
             p
         };

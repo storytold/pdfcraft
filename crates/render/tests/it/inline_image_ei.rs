@@ -108,14 +108,30 @@ fn unfiltered_inline_image_samples_containing_ei_are_not_executed_as_content() {
     let mut renderer = PageRenderer::new(Arc::clone(&pdf), RenderConfig::default());
     let mut greys = Vec::new();
     for page_idx in 0..4 {
-        let text_page = renderer.render(RenderRequest { page: page_idx, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
+        let text_page = renderer.render(RenderRequest {
+            page: page_idx,
+            kind: RequestKind::Text,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         assert!(text_page.error.is_none(), "page {} text error: {:?}", page_idx + 1, text_page.error);
         let text = text_page.text.expect("page text");
         let plain = text.plain_text();
         assert_eq!(plain.trim(), format!("After image P{}", page_idx + 1), "page {}", page_idx + 1);
         assert!(text.find("Injected").is_empty(), "page {} must not match Injected in Find", page_idx + 1);
 
-        let rendered = renderer.render(RenderRequest { page: page_idx, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        let rendered = renderer.render(RenderRequest {
+            page: page_idx,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         assert!(rendered.error.is_none(), "page {} render error: {:?}", page_idx + 1, rendered.error);
 
         let dark = dark_pixels_in_box(&rendered.rgba, rendered.width, 72, 172, 200, 196);
@@ -147,7 +163,8 @@ fn form_xobject_inline_image_with_ei_in_samples_keeps_all_samples() {
     let pdf = Arc::new(build_pdf(&[page_content], &[(6, form_obj)], "/XObject << /Fm1 6 0 R >>"));
 
     let mut renderer = PageRenderer::new(Arc::clone(&pdf), RenderConfig::default());
-    let rendered = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let rendered =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(rendered.error.is_none(), "{:?}", rendered.error);
 
     let grey = mean_grey_in_box(&rendered.rgba, rendered.width, 110, 302, 290, 482);
@@ -181,14 +198,30 @@ fn unfiltered_inline_image_layouts_and_mismatched_l_do_not_inject_content() {
 
     for (i, (params, _)) in cases.iter().enumerate() {
         let page_idx = i;
-        let text_page = renderer.render(RenderRequest { page: page_idx, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
+        let text_page = renderer.render(RenderRequest {
+            page: page_idx,
+            kind: RequestKind::Text,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         assert!(text_page.error.is_none(), "case {params} text error: {:?}", text_page.error);
         let text = text_page.text.expect("page text");
         let plain = text.plain_text();
         assert_eq!(plain.trim(), format!("After image P{}", i + 1), "case {params}");
         assert!(text.find("Injected").is_empty(), "case {params} must not match Injected in Find");
 
-        let rendered = renderer.render(RenderRequest { page: page_idx, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        let rendered = renderer.render(RenderRequest {
+            page: page_idx,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         assert!(rendered.error.is_none(), "case {params} render error: {:?}", rendered.error);
 
         let dark = dark_pixels_in_box(&rendered.rgba, rendered.width, 72, 172, 200, 196);
