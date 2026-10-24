@@ -328,7 +328,9 @@ impl StandardFontBlob {
 
     pub(crate) fn advance_width(&self, glyph: GlyphId) -> Option<f32> {
         match self {
-            Self::Cff(_) => None,
+            // PdfCraft patch (67): the stand-in's own advance, so a glyph drawn wider than the
+            // standard metrics (the € of the bundled stand-ins) is fitted to them.
+            Self::Cff(blob) => blob.advance_width(glyph),
             Self::Otf(blob, _) => blob.glyph_metrics().advance_width(glyph),
         }
     }
