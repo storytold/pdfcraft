@@ -1257,8 +1257,7 @@ fn select_input(
             && !consumed
             && cv.gesture.is_none()
             && !resp.double_clicked()
-            && pointer
-                .is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p)));
+            && pointer.is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.link_contains(cx.info, cx.page, link, p)));
         match pointer.and_then(|p| cx.hit(p)) {
             Some(a) if a.subtype == "Highlight" && follow_link => {
                 // A plain click follows the link beneath text highlighting. Keep other

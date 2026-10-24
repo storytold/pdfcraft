@@ -42,11 +42,13 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text the link listing, and name, description and embedded-file key text the
-/// attachment listing, keep together. Many links or attachments can share one long string, which
-/// each would otherwise copy. Past it, a link to a web address lists as a URI action without its
-/// address, an attachment under its generic name without a description, and an embedded file whose
-/// key does not fit is not listed.
+/// Web-address text and `/QuadPoints` geometry the link listing, and name, description and
+/// embedded-file key text the attachment listing, keep together. Many links or attachments can
+/// share one long string or array, which each would otherwise copy. Past it, a link to a web
+/// address lists as a URI action without its address (or keeps a relative address unresolved
+/// against the document's base), a link is active over its whole `/Rect`, an attachment is listed
+/// under its generic name without a description, and an embedded file whose key does not fit is
+/// not listed.
 const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// The bytes a listed annotation keeps.
@@ -102,6 +104,9 @@ pub struct DocInfo {
     pub annotations: Vec<Annotation>,
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
+    /// The catalog's `/URI /Base` (ISO 32000-2 Table 211), the base for relative URI actions, when
+    /// it is a string of at most [`crate::MAX_URI_BASE_BYTES`].
+    pub uri_base: Option<String>,
     pub layers: Vec<Layer>,
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
@@ -313,13 +318,32 @@ pub struct Link {
     /// Zero-based position in the page's raw `/Annots` array.
     pub index: usize,
     pub rect: [f32; 4],
+    /// Where the link is active when that isn't the whole of `rect`: its `/QuadPoints`, 8 numbers
+    /// each in user space (ISO 32000-2 Table 176). Empty when the link is active over `rect`
+    /// ([`crate::link_quads`]).
+    pub quads: Vec<[f32; 8]>,
     pub target: LinkTarget,
+}
+
+impl Link {
+    /// Whether the user-space point `(x, y)` activates the link: inside one of its quadrilaterals,
+    /// or inside its rectangle when it has none.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        if self.quads.is_empty() {
+            let [x0, y0, x1, y1] = self.rect;
+            return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+        }
+        self.quads.iter().any(|q| crate::quad_contains(q, x, y))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
     /// A destination in this document: the 0-based page and where on it the view goes.
     Page(usize, DestView),
+    /// A URI action's address, resolved against the catalog's `/URI /Base` when it is a relative
+    /// reference ([`crate::resolve_uri`]); not yet checked, as the opener must
+    /// (`pdfcraft_engine::links::document_url`).
     Uri(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
@@ -773,6 +797,10 @@ impl<'a> Inspector<'a> {
         if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
             (info.outline, info.outline_more) = self.outline_window(first);
         }
+        info.uri_base = catalog.get(b"URI").ok().and_then(|o| self.dict(o)).and_then(|d| match d.get(b"Base").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) if bytes.len() <= crate::MAX_URI_BASE_BYTES => std::str::from_utf8(bytes).ok().map(str::to_owned),
+            _ => None,
+        });
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
         self.annotations(info, &mut text_budget);
         self.transitions(info);
@@ -1363,7 +1391,7 @@ impl<'a> Inspector<'a> {
                     info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
                 }
                 if subtype == "Link" {
-                    if let Some(link) = self.link(page, index, d, text_budget) {
+                    if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget) {
                         if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                             info.has_javascript = true;
                         }
@@ -1452,7 +1480,8 @@ impl<'a> Inspector<'a> {
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
     }
 
-    fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
+    /// `base` is the catalog's `/URI /Base`, which relative URI actions are resolved against.
+    fn link(&self, page: usize, index: usize, d: &Dictionary, base: Option<&str>, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -1467,7 +1496,15 @@ impl<'a> Inspector<'a> {
                 Some("URI") => {
                     let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
                     match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
-                        Some(uri) => LinkTarget::Uri(uri),
+                        Some(uri) => match crate::resolve_uri(base, &uri) {
+                            // The raw address is spent already. What the base adds is spent too, or
+                            // the link keeps the raw address.
+                            Some(resolved) if resolved.len().saturating_sub(uri.len()) <= *text_budget => {
+                                *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
+                                LinkTarget::Uri(resolved)
+                            }
+                            _ => LinkTarget::Uri(uri),
+                        },
                         None => LinkTarget::Other("URI".into()),
                     }
                 }
@@ -1478,7 +1515,24 @@ impl<'a> Inspector<'a> {
                 None => return None,
             }
         };
-        Some(Link { page, index, rect, target })
+        let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+            // Read no further than one value past the cap: a longer array isn't used.
+            Ok(Object::Array(q)) if q.len() <= crate::MAX_LINK_QUADS.saturating_mul(8) => {
+                let values: Vec<Option<f32>> = q.iter().map(|o| self.resolve(o).as_float().ok()).collect();
+                let quads = crate::link_quads(&values, rect);
+                // Many links can share one long array, which each would otherwise copy. Past the
+                // budget a link is active over its whole `/Rect`.
+                let bytes = std::mem::size_of_val(quads.as_slice());
+                if bytes <= *text_budget {
+                    *text_budget = text_budget.saturating_sub(bytes);
+                    quads
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        };
+        Some(Link { page, index, rect, quads, target })
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
@@ -3053,6 +3107,111 @@ trailer << /Root 1 0 R >>
         assert!(info.attachments.iter().all(|a| a.name == "a.txt"));
         assert_eq!(info.links.len(), 1);
         assert!(matches!(&info.links[0].target, LinkTarget::Uri(u) if *u == uri));
+    }
+
+    fn links_of(catalog_extra: &str, annots: &str) -> DocInfo {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R {catalog_extra} >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [{annots}] >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF"
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 300.0, height: 300.0, crop: [0.0, 0.0, 300.0, 300.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        info
+    }
+
+    fn uris(info: &DocInfo) -> Vec<String> {
+        info.links.iter().map(|l| if let LinkTarget::Uri(u) = &l.target { u.clone() } else { format!("{:?}", l.target) }).collect()
+    }
+
+    /// ISO 32000-2 §12.6.4.8, Table 211: a relative URI action is resolved against the catalog's
+    /// `/URI /Base`; absolute addresses, and a base that isn't a web address, change nothing.
+    #[test]
+    fn relative_uri_actions_resolve_against_the_catalog_base() {
+        let annots = "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (page.html) >> >> \
+                      << /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (javascript:alert(1)) >> >> \
+                      << /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.org/abs) >> >>";
+        let info = links_of("/URI << /Base (https://example.com/base/) >>", annots);
+        assert_eq!(info.uri_base.as_deref(), Some("https://example.com/base/"));
+        assert_eq!(uris(&info), ["https://example.com/base/page.html", "javascript:alert(1)", "https://example.org/abs"]);
+        // An indirect URI dictionary is followed too.
+        let pdf_indirect = links_of("/URI 4 0 R >> endobj\n4 0 obj << /Base (https://example.com/b/) >> endobj\n5 0 obj <<", annots);
+        assert_eq!(uris(&pdf_indirect).first().map(String::as_str), Some("https://example.com/b/page.html"));
+        // Without a base, or with one that isn't a web address, the address stays as written.
+        assert_eq!(uris(&links_of("", annots)).first().map(String::as_str), Some("page.html"));
+        for base in ["/URI << /Base (file:///C:/docs/) >>", "/URI << /Base /NotAString >>", "/URI 7", "/URI << /Base (javascript:x//) >>"] {
+            assert_eq!(uris(&links_of(base, annots)).first().map(String::as_str), Some("page.html"), "{base}");
+        }
+    }
+
+    /// ISO 32000-2 §12.5.6.5, Table 176: a link is active in its `/QuadPoints`, or over its
+    /// `/Rect` when they are missing, malformed or reach outside it.
+    #[test]
+    fn links_are_active_in_their_quad_points() {
+        let link = |quads: &str| format!("<< /Subtype /Link /Rect [10 10 200 30] {quads} /A << /S /URI /URI (https://example.org/) >> >>");
+        let info = links_of("", &link("/QuadPoints [10 10 60 10 60 30 10 30]"));
+        let l = &info.links[0];
+        assert_eq!(l.quads, vec![[10.0, 10.0, 60.0, 10.0, 60.0, 30.0, 10.0, 30.0]]);
+        assert!(l.contains(30.0, 20.0), "the first word");
+        assert!(!l.contains(150.0, 20.0), "inside /Rect but outside the quad");
+        for fallback in [
+            "",
+            "/QuadPoints [10 10 60 10 60 30 10]",
+            "/QuadPoints [10 10 60 10 60 30 10 (x)]",
+            "/QuadPoints [10 10 260 10 260 30 10 30]",
+            "/QuadPoints 5",
+        ] {
+            let info = links_of("", &link(fallback));
+            let l = &info.links[0];
+            assert!(l.quads.is_empty(), "{fallback}");
+            assert!(l.contains(150.0, 20.0) && !l.contains(250.0, 20.0), "{fallback}: active over /Rect");
+        }
+        let many = "10 10 60 10 60 30 10 30 ".repeat(crate::MAX_LINK_QUADS + 1);
+        assert!(links_of("", &link(&format!("/QuadPoints [{many}]"))).links[0].quads.is_empty(), "too many quads");
+    }
+
+    /// Links sharing one long `/QuadPoints` array, or a relative address resolved against a long
+    /// `/URI /Base`, keep their copies only within `MAX_LINK_ATTACHMENT_TEXT_BYTES`, and every
+    /// link is still listed.
+    #[test]
+    fn links_sharing_quad_points_or_a_long_base_keep_them_within_a_budget() {
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let fill = |catalog_extra: &str, links: &str, object5: &str| {
+            let pdf = format!(
+                "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R {catalog_extra} >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{links}] >> endobj\n\
+                 5 0 obj {object5} endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF"
+            );
+            let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+            let mut info = DocInfo { pages: vec![page.clone()], ..Default::default() };
+            Inspector::new(&doc).fill(&mut info);
+            info
+        };
+
+        let count = MAX_LINK_ATTACHMENT_TEXT_BYTES / (crate::MAX_LINK_QUADS * std::mem::size_of::<[f32; 8]>()) + 20;
+        let quads = format!("[{}]", "10 10 60 10 60 30 10 30 ".repeat(crate::MAX_LINK_QUADS));
+        let links = "<< /Subtype /Link /Rect [0 0 100 100] /QuadPoints 5 0 R /A << /S /URI /URI (https://example.org/) >> >> ".repeat(count);
+        let info = fill("", &links, &quads);
+        assert_eq!(info.links.len(), count);
+        let kept: usize = info.links.iter().map(|l| std::mem::size_of_val(l.quads.as_slice())).sum();
+        assert!(kept > 0 && kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} quad bytes kept");
+        assert!(info.links.iter().any(|l| l.quads.is_empty()), "past the budget a link is active over its /Rect");
+
+        let base = format!("https://example.com/{}/", "b".repeat(crate::MAX_URI_BASE_BYTES - 32));
+        let count = MAX_LINK_ATTACHMENT_TEXT_BYTES / base.len() + 20;
+        let links = "<< /Subtype /Link /Rect [0 0 1 1] /A 5 0 R >> ".repeat(count);
+        let info = fill(&format!("/URI << /Base ({base}) >>"), &links, "<< /S /URI /URI (p.html) >>");
+        assert_eq!(info.links.len(), count);
+        let addresses = uris(&info);
+        let kept: usize = addresses.iter().map(String::len).sum();
+        assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} address bytes kept");
+        assert_eq!(addresses.first(), Some(&format!("{base}p.html")));
+        assert!(addresses.iter().any(|u| u == "p.html"), "past the budget a link keeps its raw address");
     }
 
     /// Embedded files whose name-tree keys share one long string keep it, as key and as name, only
