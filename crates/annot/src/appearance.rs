@@ -142,15 +142,33 @@ fn cloud_bump(w: f64, intensity: f64) -> f64 {
     cloud_radius(w) * intensity.clamp(0.5, 2.0)
 }
 
+/// `/RD` when it is four finite, non-negative numbers (Tables 170 and 180).
+fn rd_of(d: &Dict) -> Option<Vec<f64>> {
+    nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite() && *x >= 0.0))
+}
+
+/// `rect` less `rd`, whose four numbers are the left, top, right and bottom differences.
+fn less_rd(rect: [f64; 4], rd: &[f64]) -> [f64; 4] {
+    let at = |i: usize| rd.get(i).copied().unwrap_or(0.0);
+    [rect[0] + at(0), rect[1] + at(3), rect[2] - at(2), rect[3] - at(1)]
+}
+
+/// The box a plain (not cloudy) square or circle is drawn in: `/Rect` less a usable `/RD` (Table
+/// 180: the differences between `/Rect` and "the actual boundaries of the underlying square or
+/// circle"), or `None` when there is no `/RD`, it isn't four finite non-negative numbers, or it
+/// leaves less than a point either way, so the caller draws in `/Rect` as without one.
+fn rect_less_rd(d: &Dict, rect: [f64; 4]) -> Option<[f64; 4]> {
+    let inner = less_rd(rect, &rd_of(d)?);
+    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
+}
+
 /// The shape a cloudy square, circle or text box draws its bumps around: `/Rect` less `/RD`
 /// (Table 180: the differences between "the left, top, right, and bottom coordinates of Rect and
 /// those of the square or circle, respectively"), kept as given; or, without a usable `/RD`,
 /// less the bumps' greatest reach and half the line, so they stay inside `/Rect`.
 fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<[f64; 4]> {
-    let rd = nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite() && *x >= 0.0));
-    let inner = match rd {
-        // Left, top, right, bottom.
-        Some(rd) => [rect[0] + rd[0], rect[1] + rd[3], rect[2] - rd[2], rect[3] - rd[1]],
+    let inner = match rd_of(d) {
+        Some(rd) => less_rd(rect, &rd),
         None => {
             // `cloud_path` rounds each edge to whole bumps, so one may span up to three radii
             // and bulge 1.5 radii; it also grows the radius to keep within its bump budget.
@@ -531,8 +549,11 @@ pub fn build(d: &Dict) -> Option<Stream> {
             if stroke.is_none() && fill.is_none() {
                 return Some(form(rect, c.as_bytes(), res));
             }
+            // A plain square or circle lies within /Rect less /RD (Table 180), its stroke centred
+            // half the width inside that box.
+            let shape = rect_less_rd(d, rect).unwrap_or(rect);
             let inset = w / 2.0;
-            let [x0, y0, x1, y1] = [rect[0] + inset, rect[1] + inset, rect[2] - inset, rect[3] - inset];
+            let [x0, y0, x1, y1] = [shape[0] + inset, shape[1] + inset, shape[2] - inset, shape[3] - inset];
             if let Some(f) = fill {
                 c.push_str(&rg(f));
             }

@@ -1980,3 +1980,46 @@ fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
         drawn("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
     assert!(small_rd.contains("101 101"), "the inner square starts where /RD says: {small_rd}");
 }
+
+/// ISO 32000-2 Table 180: `/RD` gives the differences between `/Rect` and "the actual boundaries
+/// of the underlying square or circle", so a plain square or circle (no cloudy border) is drawn
+/// inside `/Rect` less `/RD` (left, top, right, bottom) too, its stroke centred half the width
+/// inside that box. An `/RD` that isn't four finite non-negative numbers, or leaves no box, is
+/// ignored and the shape fills `/Rect` as before.
+#[test]
+fn plain_squares_and_circles_are_drawn_inside_rect_less_rd() {
+    let square = |rd: &str| drawn(&format!("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> {rd} >>")).unwrap();
+    // Rect + 15 + 1.5 on every side: a 67 × 67 square from 116.5.
+    assert!(square("/RD [15 15 15 15]").contains("116.5 116.5 67 67 re"), "{}", square("/RD [15 15 15 15]"));
+    // Left 10, top 40, right 20, bottom 30: the box is 110..180 × 130..160.
+    assert!(square("/RD [10 40 20 30]").contains("111.5 131.5 67 27 re"), "{}", square("/RD [10 40 20 30]"));
+    for ignored in ["", "/RD [-1 0 0 0]", "/RD [1 2 3]", "/RD [60 0 60 0]", "/RD [0 50 0 49.5]", "/RD (x)"] {
+        assert!(square(ignored).contains("101.5 101.5 97 97 re"), "{ignored}: {}", square(ignored));
+    }
+    let circle = drawn("<< /Type /Annot /Subtype /Circle /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> /RD [15 15 15 15] >>").unwrap();
+    // The ellipse starts at its rightmost point: 200 - 15 - 1.5, at mid-height.
+    assert!(circle.starts_with("1 0 0 RG\n3 w\n183.5 150 m"), "{circle}");
+}
+
+/// The circles and rectangles PdfCraft draws write no `/RD`, so their appearance is unchanged by
+/// it: the stroke still sits half its width inside `/Rect`.
+#[test]
+fn pdfcraft_rectangles_and_ellipses_still_fill_their_rect() {
+    let mut doc = fixture();
+    let rect = [10.0, 10.0, 110.0, 60.0];
+    for shape in [Shape::Rectangle { rect }, Shape::Oval { rect }] {
+        let oval = matches!(shape, Shape::Oval { .. });
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("r")).unwrap();
+        let d = list(&doc, 0).remove(i);
+        assert!(!d.contains(b"RD"));
+        let w = appearance::border_width(&d);
+        let ap = ap_content(&doc, &d);
+        let r: Vec<f64> = d.get(b"Rect").and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+        let expected = if oval {
+            format!("{} {} m", n(r[2] - w / 2.0), n((r[1] + r[3]) / 2.0))
+        } else {
+            format!("{} {} {} {} re", n(r[0] + w / 2.0), n(r[1] + w / 2.0), n(r[2] - r[0] - w), n(r[3] - r[1] - w))
+        };
+        assert!(ap.contains(&expected), "{expected} in {ap}");
+    }
+}
