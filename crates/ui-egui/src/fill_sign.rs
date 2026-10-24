@@ -1119,7 +1119,7 @@ impl crate::PdfCraftApp {
         let epoch = self.dialog_epoch();
         let initials = self.signature_draft.initials;
         let scan = self.signature_draft.scan_mode;
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
+        let dialog = crate::fd::AsyncFileDialog::new().add_filter(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
         #[cfg(not(target_arch = "wasm32"))]
         self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
             if app.dialog_epoch() != epoch

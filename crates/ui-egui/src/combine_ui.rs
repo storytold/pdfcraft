@@ -2537,7 +2537,7 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let title = if recursive { tl!("Add folder and subfolders") } else { tl!("Add folder") };
-            let dialog = rfd::AsyncFileDialog::new().set_title(title);
+            let dialog = crate::fd::AsyncFileDialog::new().set_title(title);
             self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.add_folder_to_combine(&dir, recursive));
         }
         #[cfg(target_arch = "wasm32")]

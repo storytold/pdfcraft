@@ -84,6 +84,7 @@ fn safe_name(s: &str) -> String {
 /// `~/.cache/pdfcraft/clipboard` (others). Never the shared temporary folder, where another user
 /// could plant a link or a folder of their own.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn clipboard_dir() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     if let Some(dir) = crate::portable::data_dir() {
@@ -102,6 +103,7 @@ fn clipboard_dir() -> Option<std::path::PathBuf> {
 /// Whether `name` is a file Copy Image in Original Format writes: `<stem> p<page> img<index>.<ext>`
 /// with a JPEG or PNG extension. Only such files are ever removed from the clipboard folder.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn is_copied_image_name(name: &str) -> bool {
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let Some((rest, ext)) = name.rsplit_once('.') else { return false };
@@ -117,6 +119,7 @@ fn is_copied_image_name(name: &str) -> bool {
 /// earlier copies PdfCraft wrote there, and writes `bytes` as a new file `name`. Links are never
 /// followed and nothing else in the folder is touched.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn write_clipboard_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
     use std::io::Write;
     if !is_copied_image_name(name) || name.contains(['/', '\\']) {
@@ -206,7 +209,7 @@ impl PdfCraftApp {
 
     /// Writes `bytes` to PdfCraft's private clipboard folder ([`clipboard_dir`]), replacing the
     /// previous copy, and puts that file on the system clipboard.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     fn put_file_on_clipboard(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
         if !self.system_clipboard {
             return Ok(());
@@ -214,6 +217,13 @@ impl PdfCraftApp {
         let dir = clipboard_dir().ok_or("there is no folder for the copied file")?;
         let path = write_clipboard_file(&dir, name, bytes)?;
         arboard::Clipboard::new().and_then(|mut c| c.set().file_list(&[path])).map_err(|e| e.to_string())
+    }
+
+    /// Android has no system clipboard (arboard has no backend for it); the app's own
+    /// `last_copied_file` still makes Copy/Paste inside PrintCraft work.
+    #[cfg(target_os = "android")]
+    fn put_file_on_clipboard(&self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
+        Ok(())
     }
 
     #[cfg(target_arch = "wasm32")]

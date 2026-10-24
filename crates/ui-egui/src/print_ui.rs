@@ -782,7 +782,7 @@ impl PdfCraftApp {
             Some(p) => write(self, p.into()),
             None => {
                 let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
-                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf"));
+                let dialog = crate::fd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf"));
                 self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| {
                     write(app, path);
                 })

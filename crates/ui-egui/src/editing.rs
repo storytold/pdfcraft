@@ -676,7 +676,7 @@ impl PdfCraftApp {
                 (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
-                    let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
+                    let dialog = crate::fd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
@@ -1114,7 +1114,7 @@ pub(crate) fn save_dialog_folder(path: Option<&str>) -> Option<std::path::PathBu
 }
 
 /// `dialog` opened in the folder of the document stored at `path` ([`save_dialog_folder`]).
-pub(crate) fn in_document_folder(dialog: rfd::AsyncFileDialog, path: Option<&str>) -> rfd::AsyncFileDialog {
+pub(crate) fn in_document_folder(dialog: crate::fd::AsyncFileDialog, path: Option<&str>) -> crate::fd::AsyncFileDialog {
     match save_dialog_folder(path) {
         Some(dir) => dialog.set_directory(dir),
         None => dialog,

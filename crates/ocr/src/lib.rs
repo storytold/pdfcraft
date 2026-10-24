@@ -69,6 +69,12 @@ impl Models {
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
             dirs.extend(Self::dirs_beside_exe(&exe));
         }
+        // The source-tree fallback below is meaningless on Android -- an APK ships no source
+        // tree -- and `env!("CARGO_MANIFEST_DIR")` bakes the *builder's* absolute home directory
+        // into the shipped .so. `--remap-path-prefix` does not touch it, because cargo injects it
+        // as an env-var string rather than as a debug-info path. Gating it out on Android both
+        // removes the leak and drops a lookup that could never succeed there.
+        #[cfg(not(target_os = "android"))]
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models"));
         dirs
     }

@@ -261,7 +261,7 @@ impl PdfCraftApp {
             match self.export_dir_override.clone() {
                 Some(d) => start(self, d.into(), true),
                 None => {
-                    let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the exported files").to_string());
+                    let dialog = crate::fd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the exported files").to_string());
                     self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| start(app, dir, false));
                 }
             }

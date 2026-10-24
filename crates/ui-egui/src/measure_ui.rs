@@ -595,7 +595,7 @@ fn export_csv(app: &mut PdfCraftApp) {
                 match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
                     Some(path) => write(app, path),
                     None => {
-                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
+                        let dialog = crate::fd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
                         app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                     }
                 }
