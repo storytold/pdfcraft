@@ -44,9 +44,23 @@ pub fn names(bytes: &[u8]) -> Result<(String, String), String> {
     Ok((family, postscript))
 }
 
-/// A selected external font is document input. Require its own open-licence declaration;
-/// never turn a proprietary system-interface fallback into an exported PDF font.
-pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
+/// What lets a font the user selected into an exported PDF.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum FontGrant {
+    /// The font's name table declares an open licence. The default.
+    #[default]
+    OpenLicence,
+    /// The user opted in to fonts installed on their own machine (#2077): the vendor's OS/2
+    /// `fsType` embedding permission decides, as [`validate`] checks it for every font, and the
+    /// user answers for the font's licence when sharing the PDF. The font is read from the
+    /// user's machine at runtime and never bundled, shipped or committed (AGENTS.md §1.4).
+    InstalledEmbeddable,
+}
+
+/// A selected external font is document input. Under [`FontGrant::OpenLicence`] it must declare
+/// an open licence itself; excluded families and Adobe-authored fonts are refused under either
+/// grant, and an interface fallback font is never exported.
+pub fn validate_document_input(bytes: &[u8], grant: FontGrant) -> Result<(), String> {
     use skrifa::string::StringId;
     let (family, _) = names(bytes)?;
     let key = face_key(&family);
@@ -58,6 +72,9 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
         [StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER].into_iter().flat_map(|id| f.localized_strings(id)).map(|s| s.to_string()).collect();
     if attribution.to_ascii_lowercase().contains("adobe") {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
+    }
+    if grant == FontGrant::InstalledEmbeddable {
+        return Ok(());
     }
     let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
     if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
@@ -371,6 +388,47 @@ mod tests {
         embed(&mut doc, &mut second, bytes, "Inter").unwrap();
         assert_eq!(doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count(), 1);
         assert_eq!(face_key("ABCDEF+Droid-Sans-Fallback"), face_key("Droid Sans Fallback"));
+    }
+
+    /// `font` with its licence declaration (name ID 13) hidden and, if given, another OS/2 fsType.
+    fn without_licence(font: &[u8], fs_type: Option<u16>) -> Vec<u8> {
+        let mut out = font.to_vec();
+        let be = |at: usize| usize::from(u16::from_be_bytes([font[at], font[at + 1]]));
+        let table = |tag: &[u8]| {
+            let record = (0..be(4)).map(|i| 12 + 16 * i).find(|&r| &font[r..r + 4] == tag).unwrap();
+            u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize
+        };
+        let name = table(b"name");
+        for i in 0..be(name + 2) {
+            let id = name + 6 + 12 * i + 6;
+            if be(id) == 13 {
+                out[id..id + 2].copy_from_slice(&0x7fffu16.to_be_bytes());
+            }
+        }
+        if let Some(fs_type) = fs_type {
+            let os2 = table(b"OS/2");
+            out[os2 + 8..os2 + 10].copy_from_slice(&fs_type.to_be_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn an_installed_font_without_an_open_licence_needs_the_grant_and_its_embedding_permission() {
+        let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        assert_eq!(validate_document_input(inter, FontGrant::OpenLicence), Ok(()));
+        assert_eq!(validate_document_input(inter, FontGrant::InstalledEmbeddable), Ok(()));
+        // Editable embedding (0x0008), as Arial or Calibri declare it.
+        let editable = without_licence(inter, Some(0x0008));
+        assert!(validate_document_input(&editable, FontGrant::OpenLicence).is_err());
+        assert_eq!(validate_document_input(&editable, FontGrant::InstalledEmbeddable), Ok(()));
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        assert!(embed(&mut doc, &mut fonts, &editable, "Inter").is_ok());
+        // Restricted (0x0002), preview & print (0x0004) and bitmap-only (0x0200) stay refused.
+        for fs_type in [0x0002, 0x0004, 0x0208] {
+            let font = without_licence(inter, Some(fs_type));
+            assert!(validate_document_input(&font, FontGrant::InstalledEmbeddable).is_err(), "fsType {fs_type:#06x}");
+        }
     }
 
     #[test]

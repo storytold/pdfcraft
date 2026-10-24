@@ -632,7 +632,7 @@ impl Automation {
                 } else {
                     pdfcraft_engine::text_fonts::installed_directories()
                 };
-                json!({"fonts": pdfcraft_engine::text_fonts::discover(&roots).into_iter().map(|f| json!({"path":f.path,"family":f.family,"font":f.face})).collect::<Vec<_>>()})
+                json!({"fonts": pdfcraft_engine::text_fonts::discover(&roots, a.font_grant()?).into_iter().map(|f| json!({"path":f.path,"family":f.family,"font":f.face})).collect::<Vec<_>>()})
             }
             "text_font_import" => {
                 let page = self.page(&a)?;
@@ -645,7 +645,7 @@ impl Automation {
                     return Err(ToolError::InvalidArgs("font input exceeds 16 MiB".into()));
                 }
                 let before: Vec<_> = self.doc(&a)?.text_editor_fonts(page).into_iter().map(|f| f.resource).collect();
-                let mut out = self.apply(&a, Edit::RegisterTextFont { page, bytes: Arc::new(bytes) })?;
+                let mut out = self.apply(&a, Edit::RegisterTextFont { page, bytes: Arc::new(bytes), grant: a.font_grant()? })?;
                 let added = self
                     .doc(&a)?
                     .text_editor_fonts(page)
@@ -2425,6 +2425,14 @@ impl Args<'_> {
     }
     fn opt_bool(&self, key: &str) -> Result<Option<bool>> {
         self.get(key).map(|v| v.as_bool().ok_or_else(|| Self::wrong(key, "true or false"))).transpose()
+    }
+    /// What lets a selected font into the PDF: `installed: true` opts in to installed fonts.
+    fn font_grant(&self) -> Result<pdfcraft_engine::FontGrant> {
+        Ok(if self.opt_bool("installed")?.unwrap_or(false) {
+            pdfcraft_engine::FontGrant::InstalledEmbeddable
+        } else {
+            pdfcraft_engine::FontGrant::OpenLicence
+        })
     }
     fn ints(&self, key: &str) -> Result<Vec<i64>> {
         self.opt_ints(key)?.ok_or_else(|| Self::missing(key))

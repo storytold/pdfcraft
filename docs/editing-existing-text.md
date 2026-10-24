@@ -30,7 +30,10 @@ they can draw all of it, and the bundled Inter face (`assets/fonts`) for the Lat
 Cyrillic letters they lack (Uzbek `қизил`, Kazakh `әже`): that face needs no build input, so
 these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
-no open-licence declaration are refused. Interface fallback fonts are never exported.
+no open-licence declaration are refused. The engine and the automation tools (`installed: true`)
+can opt in to installed fonts instead: a font without an open-licence declaration is then
+accepted when its OS/2 `fsType` permits editable embedding, and the user answers for its
+licence when sharing the PDF (#2077). Interface fallback fonts are never exported.
 
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
 Saving and reopening therefore needs no locally installed font. Editing the same text again

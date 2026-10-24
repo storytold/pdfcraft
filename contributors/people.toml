@@ -176,3 +176,8 @@ real_name = "Nick Nyssen"
 
 [people.agent-reed]
 sync_github_name = true
+
+[people.Hagma2023]
+real_name = "Marco Hagspiel"
+display_name = "Marco Hagspiel"
+sync_github_name = false

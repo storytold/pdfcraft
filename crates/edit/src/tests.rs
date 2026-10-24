@@ -5338,7 +5338,7 @@ fn a_new_character_comes_from_the_source_fonts_own_embedded_program() {
 fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
     let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
-    let resource = text::register_text_font(&mut doc, 0, inter).unwrap();
+    let resource = text::register_text_font(&mut doc, 0, inter, pdfcraft_fonts::embedding::FontGrant::OpenLicence).unwrap();
     // Marks shaped beside their letters (q́, x̣) and one stacked above another (ñ̄).
     let typed = "q\u{301}x\u{323} n\u{303}\u{304} Cafe\u{301}";
     let style = text::BlockStyle { width: Some(400.0), resource: Some(resource), ..Default::default() };

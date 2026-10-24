@@ -536,6 +536,49 @@ fn tool_table_is_well_formed() {
     }
 }
 
+/// `font` with its licence declaration (name ID 13) hidden and another OS/2 fsType.
+fn without_licence(font: &[u8], fs_type: u16) -> Vec<u8> {
+    let mut out = font.to_vec();
+    let be = |at: usize| usize::from(u16::from_be_bytes([font[at], font[at + 1]]));
+    let table = |tag: &[u8]| {
+        let record = (0..be(4)).map(|i| 12 + 16 * i).find(|&r| &font[r..r + 4] == tag).unwrap();
+        u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize
+    };
+    let name = table(b"name");
+    for i in 0..be(name + 2) {
+        let id = name + 6 + 12 * i + 6;
+        if be(id) == 13 {
+            out[id..id + 2].copy_from_slice(&0x7fffu16.to_be_bytes());
+        }
+    }
+    let os2 = table(b"OS/2");
+    out[os2 + 8..os2 + 10].copy_from_slice(&fs_type.to_be_bytes());
+    out
+}
+
+#[test]
+fn installed_fonts_without_an_open_licence_load_only_when_opted_in() {
+    let dir = workdir("installed-fonts");
+    let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    std::fs::write(dir.join("editable.ttf"), without_licence(inter, 0x0008)).unwrap();
+    std::fs::write(dir.join("restricted.ttf"), without_licence(inter, 0x0002)).unwrap();
+    let mut a = auto(&dir);
+    assert_eq!(ok(&mut a, "text_font_files", json!({}))["fonts"], json!([]));
+    let found = ok(&mut a, "text_font_files", json!({"installed": true}));
+    let fonts = found["fonts"].as_array().unwrap();
+    assert_eq!(fonts.len(), 1, "{found}");
+    assert!(fonts[0]["path"].as_str().unwrap().ends_with("editable.ttf"));
+    let id = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    assert!(a.call("text_font_import", &json!({"doc":id,"page":1,"path":"editable.ttf"})).is_err());
+    assert!(a.call("text_font_import", &json!({"doc":id,"page":1,"path":"restricted.ttf","installed":true})).is_err());
+    let font = ok(&mut a, "text_font_import", json!({"doc":id,"page":1,"path":"editable.ttf","installed":true}));
+    let resource = font["resource"].as_str().unwrap();
+    ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":"Installed","font_resource":resource}));
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, reopened)[0].trim_end(), "Installed");
+}
+
 #[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");

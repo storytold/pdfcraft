@@ -41,7 +41,7 @@ pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_e
         if std::thread::Builder::new()
             .name("document-font-discovery".into())
             .spawn(move || {
-                let fonts = pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories());
+                let fonts = pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories(), Default::default());
                 if let Ok(mut result) = result.lock() {
                     *result = Some(fonts);
                 }
@@ -478,7 +478,7 @@ impl PdfCraftApp {
             FilePurpose::TextFont { page } => {
                 let Some((_, bytes)) = files.into_iter().next() else { return };
                 let bytes = Arc::new(bytes);
-                if !self.apply_edit(Edit::RegisterTextFont { page, bytes: bytes.clone() }) {
+                if !self.apply_edit(Edit::RegisterTextFont { page, bytes: bytes.clone(), grant: Default::default() }) {
                     return;
                 }
                 let Some((index, id)) = self.active_ids() else { return };

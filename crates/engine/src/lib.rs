@@ -94,6 +94,7 @@ pub enum ImageEdit {
     },
     Delete,
 }
+pub use pdfcraft_fonts::embedding::FontGrant;
 pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
@@ -1713,10 +1714,13 @@ pub enum Edit {
         /// Formatting changes (font, size, colour, alignment); default keeps the paragraph's.
         style: pdfcraft_edit::BlockStyle,
     },
-    /// An explicit open-licensed full font program, completing subsets or selected by a user.
+    /// An explicit full font program, completing subsets or selected by a user.
     RegisterTextFont {
         page: usize,
         bytes: Arc<Vec<u8>>,
+        /// What lets the font into the PDF: its open licence (the default) or, when the user
+        /// opted in to installed fonts, its embedding permission.
+        grant: FontGrant,
     },
     /// Order tabs manually: move a field one place earlier or later on its page.
     MoveInTabOrder {
@@ -2723,8 +2727,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }
-        Edit::RegisterTextFont { page, bytes } => {
-            pdfcraft_edit::text::register_text_font(doc, *page, bytes)?;
+        Edit::RegisterTextFont { page, bytes, grant } => {
+            pdfcraft_edit::text::register_text_font(doc, *page, bytes, *grant)?;
         }
         Edit::MarkDecorative { figure } => {
             let r = pdfcraft_cos::ObjRef::new(*figure, doc.generation(*figure));
