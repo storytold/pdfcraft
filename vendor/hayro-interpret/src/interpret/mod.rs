@@ -1,7 +1,7 @@
 use crate::{BlendMode, FillRule};
 use crate::color::{ColorSpace, DefaultColorSpaces, DeviceFamily};
 use crate::context::Context;
-use crate::convert::{convert_line_cap, convert_line_join};
+use crate::convert::{convert_dash_array, convert_line_cap, convert_line_join, convert_line_width};
 use crate::device::Device;
 use crate::font::{Font, FontData, FontQuery, StandardFont};
 use crate::interpret::path::{
@@ -481,7 +481,9 @@ fn interpret_window<'a>(
                 context.get_mut().graphics_state.stroke_pattern = None;
             }
             TypedInstruction::LineWidth(w) => {
-                context.get_mut().graphics_state.stroke_props.line_width = w.0.as_f32();
+                // PdfCraft patch (61): see `convert_line_width`.
+                context.get_mut().graphics_state.stroke_props.line_width =
+                    convert_line_width(w.0.as_f32());
             }
             TypedInstruction::LineCap(c) => {
                 context.get_mut().graphics_state.stroke_props.line_cap = convert_line_cap(c);
@@ -560,13 +562,12 @@ fn interpret_window<'a>(
             }
             TypedInstruction::LineTo(m) => {
                 if !context.path().elements().is_empty() {
-                    let last_point = *context.last_point();
-                    let mut p = Point::new(m.0.as_f64(), m.1.as_f64());
+                    // PdfCraft patch (61): a segment to the point it starts from is kept as it
+                    // is. Upstream nudged its end a ten-thousandth of a point to the right so
+                    // round caps drew a dot, which also gave butt and square caps a direction
+                    // to draw in; `stroke_path_impl` now handles degenerate subpaths.
+                    let p = Point::new(m.0.as_f64(), m.1.as_f64());
                     *(context.last_point_mut()) = p;
-                    if last_point == p {
-                        // Add a small delta so that zero width lines can still have a round stroke.
-                        p.x += 0.0001;
-                    }
 
                     context.path_mut().line_to(p);
                 }
@@ -675,11 +676,9 @@ fn interpret_window<'a>(
             }
             TypedInstruction::DashPattern(p) => {
                 context.get_mut().graphics_state.stroke_props.dash_offset = p.1.as_f32();
-                // kurbo apparently cannot properly deal with offsets that are exactly 0.
+                // PdfCraft patch (61): see `convert_dash_array`.
                 context.get_mut().graphics_state.stroke_props.dash_array =
-                    p.0.iter::<f32>()
-                        .map(|n| if n == 0.0 { 0.01 } else { n })
-                        .collect();
+                    convert_dash_array(p.0.iter::<f32>());
             }
             TypedInstruction::RenderingIntent(_) => {
                 // Ignore for now.
