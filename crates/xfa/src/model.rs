@@ -306,10 +306,39 @@ impl Para {
     }
 }
 
+/// `<bind match="…" ref="…"/>`: how an object finds its data node.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Bind {
+    /// By its name under the parent's data node (the default).
+    #[default]
+    Once,
+    /// No data node: a subform's children bind under the parent's; a field keeps its template
+    /// value and writes none.
+    None,
+    /// The first data node of the same name, wherever it is.
+    Global,
+    /// The node a SOM expression into the data names (`$record.header.name`, `$.other`,
+    /// `line[*]`, `a..b`).
+    DataRef(String),
+}
+
+/// `<keep>`: what a page break must not separate from this object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Keep {
+    /// `intact`: the object itself is not split across content areas (when it fits in one).
+    pub intact: bool,
+    /// `next`: it stays in the content area of the sibling after it.
+    pub next: bool,
+    /// `previous`: it stays in the content area of the sibling before it.
+    pub previous: bool,
+}
+
 /// What every container and leaf shares: name, box, presence, margins, border, text defaults.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Common {
     pub name: Option<String>,
+    pub bind: Bind,
+    pub keep: Keep,
     pub id: Option<String>,
     pub x: Option<f64>,
     pub y: Option<f64>,
@@ -708,6 +737,11 @@ pub struct PageArea {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Template {
     pub root: Subform,
+    /// Some object binds other than by name (`<bind match="none|global|dataRef">`).
+    pub explicit_binds: bool,
+    /// Some object binds to a node elsewhere (`global`, or a `dataRef` that can be followed):
+    /// two objects may share a node, and resolving a path may need the data.
+    pub aliasing_binds: bool,
     /// Fields that compute the page number or the page count on layout, by `id`, so text that
     /// embeds them can show the numbers.
     pub page_roles: Vec<(String, PageRole)>,

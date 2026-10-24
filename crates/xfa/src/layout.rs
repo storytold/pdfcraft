@@ -13,8 +13,10 @@ use std::sync::Arc;
 use base64::Engine;
 
 use crate::XfaError;
-use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
+use crate::data::{Binder, DataNode, data_date_letters, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::*;
+use crate::script::Overrides;
+use crate::script::child_som;
 use crate::text::{self, Block, Face, Span};
 
 /// Most pages a form may lay out to.
@@ -189,6 +191,10 @@ struct Cursor {
 struct Layouter<'t> {
     tpl: &'t Template,
     data: Option<&'t DataNode>,
+    /// Data paths of the objects laid out (remembered: each is asked for several times).
+    binder: Binder<'t>,
+    /// Presence per instance of a repeating subform (see [`layout_with`]).
+    ov: &'t Overrides,
     /// Shared so a page's master items keep their addresses (the measurement cache keys on them).
     areas: Rc<Vec<PageArea>>,
     uses: Vec<usize>,
@@ -223,6 +229,13 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
+    layout_with(tpl, data, &Overrides::default())
+}
+
+/// [`layout`] with the presence overrides scripts made, applied per instance of a repeating
+/// subform (one hidden row stays hidden while the others show; an invisible one keeps its
+/// space). The template's own objects carry the rest ([`crate::script::apply_overrides`]).
+pub fn layout_with(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -242,6 +255,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     let mut l = Layouter {
         tpl,
         data,
+        binder: Binder::new(tpl, data),
+        ov,
         uses: vec![0; areas.len()],
         areas: Rc::new(areas),
         pages: Vec::new(),
@@ -323,6 +338,12 @@ fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {
 }
 
 /// Does `node` flow (may be split across pages) rather than being placed as one block?
+/// Is `node` laid out at all? What the template hides is not, except a repeating subform,
+/// whose instances are decided one by one (`Layouter::shown_instances`: a script may show one).
+fn laid_out(node: &Node) -> bool {
+    node.common().presence.occupies() || matches!(node, Node::Subform(s) if s.occur.max != Some(1) && s.common.name.is_some())
+}
+
 fn splittable(node: &Node) -> bool {
     matches!(node, Node::Subform(s) if matches!(s.layout, Layout::Tb | Layout::Table) && s.common.h.is_none())
 }
@@ -779,7 +800,7 @@ impl Layouter<'_> {
         let instances = self.instances(node, &ctx.som);
         self.warn_truncated(node, &ctx.som, instances);
         let ctx_parent = ctx;
-        for i in 0..instances {
+        for (i, shown) in self.shown_instances(node, &ctx_parent.som, sib) {
             // Every instance spends budget, so nested repeats that place nothing still stop.
             self.measures.set(self.measures.get().saturating_add(1));
             self.check_measures()?;
@@ -787,11 +808,25 @@ impl Layouter<'_> {
             let (rect, _, _) = self.cursor();
             let (x, w) = avail.unwrap_or((rect.x, rect.w));
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
+            if !shown {
+                // Invisible: its space, nothing drawn.
+                let (_, h) = self.size_of(node, w, ctx_parent, depth);
+                self.make_room(h)?;
+                self.place(h);
+                continue;
+            }
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
                 let (_, h) = self.size_of(node, w, ctx_parent, depth);
                 self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
                 continue;
+            }
+            if sf.common.keep.intact {
+                // Kept whole when it fits in a content area: moved to the next if need be.
+                let (_, h) = self.size_of(node, w, ctx_parent, depth);
+                if h <= self.cursor().0.h + 0.01 {
+                    self.make_room(h)?;
+                }
             }
             let m = sf.common.margin;
             self.advance(m.top);
@@ -802,18 +837,20 @@ impl Layouter<'_> {
                 _ => {
                     let sibs = SomIndices::of(&sf.children);
                     for (ci, child) in sf.children.iter().enumerate() {
-                        if !child.common().presence.occupies() {
+                        if !laid_out(child) {
                             continue;
                         }
                         let csib = sibs.at(ci);
+                        if let Some(need) = self.keep_group(&sf.children, ci, &ctx.som, |k| self.size_of(k, inner_w, &ctx, depth + 1).1) {
+                            self.make_room(need)?;
+                        }
                         if let Node::Subform(_) = child
                             && splittable(child)
                         {
                             self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
-                        let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1);
-                        self.flow_block(child, inner_x, (cw, ch), &ctx, depth + 1, csib)?;
+                        self.flow_blocks(child, inner_x, inner_w, &ctx, depth, csib)?;
                     }
                 }
             }
@@ -833,33 +870,41 @@ impl Layouter<'_> {
         vec![inner_w / cells as f64; cells]
     }
 
+    /// Flows the rows of table `sf`, repeating its leader row after a break, each row once per
+    /// shown instance; children that are not rows flow as blocks.
     fn flow_table(&mut self, sf: &Subform, x: f64, inner_w: f64, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
         let cols = self.columns(sf, inner_w);
         let leader =
             sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().position(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
         let sibs = SomIndices::of(&sf.children);
         for (ci, child) in sf.children.iter().enumerate() {
-            if !child.common().presence.occupies() {
+            if !laid_out(child) {
                 continue;
             }
             let csib = sibs.at(ci);
+            let measure = |k: &Node| match k {
+                Node::Subform(r) if r.layout == Layout::Row => self.row_height(r, &cols, inner_w, ctx, depth + 1),
+                _ => self.size_of(k, inner_w, ctx, depth + 1).1,
+            };
+            if let Some(need) = self.keep_group(&sf.children, ci, &ctx.som, measure)
+                && self.make_room(need)?
+            {
+                self.table_leader(sf, leader, ci, &cols, x, inner_w, ctx, depth)?;
+            }
             if let Node::Subform(row) = child
                 && row.layout == Layout::Row
             {
                 // Rows added as data (in another viewer) repeat the row.
                 let instances = self.instances(child, &ctx.som);
                 self.warn_truncated(child, &ctx.som, instances);
-                for inst in 0..instances {
+                for (inst, shown) in self.shown_instances(child, &ctx.som, csib) {
                     let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
-                    if self.make_room(h)?
-                        && let Some(li) = leader
-                        && li != ci
-                        && let Some(Node::Subform(l)) = sf.children.get(li)
-                    {
-                        let lh = self.row_height(l, &cols, inner_w, ctx, depth + 1);
-                        let (_, y, _) = self.cursor();
-                        self.draw_row(l, &cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1, sibs.at(li))?;
-                        self.place(lh);
+                    if self.make_room(h)? {
+                        self.table_leader(sf, leader, ci, &cols, x, inner_w, ctx, depth)?;
+                    }
+                    if !shown {
+                        self.place(h);
+                        continue;
                     }
                     let (_, y, _) = self.cursor();
                     self.draw_row(row, &cols, Rect::new(x, y, inner_w, h), ctx, depth + 1, csib + inst)?;
@@ -873,8 +918,31 @@ impl Layouter<'_> {
                 self.flow_subform(child, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }
-            let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
-            self.flow_block(child, x, (cw, ch), ctx, depth + 1, csib)?;
+            self.flow_blocks(child, x, inner_w, ctx, depth, csib)?;
+        }
+        Ok(())
+    }
+
+    /// Flows `child` (at SOM index `sib` under `ctx`) as a block that is not split across
+    /// pages, once per instance [`Self::shown_instances`] gives: every data instance of a
+    /// repeating subform that is positioned or has a fixed height, less the ones hidden by the
+    /// template or a script. An invisible instance takes its space and shows nothing.
+    fn flow_blocks(&mut self, child: &Node, x: f64, inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        if let Node::Subform(_) = child {
+            let instances = self.instances(child, &ctx.som);
+            self.warn_truncated(child, &ctx.som, instances);
+        }
+        let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
+        for (i, shown) in self.shown_instances(child, &ctx.som, sib) {
+            // Every instance spends budget, so nested repeats that place nothing still stop.
+            self.measures.set(self.measures.get().saturating_add(1));
+            self.check_measures()?;
+            if !shown {
+                self.make_room(ch)?;
+                self.place(ch);
+                continue;
+            }
+            self.flow_block(child, x, (cw, ch), ctx, depth + 1, sib + i)?;
         }
         Ok(())
     }
@@ -888,21 +956,96 @@ impl Layouter<'_> {
     /// repeating subform's `occur` and data instances ([`instance_count`]); one for anything else.
     fn instances(&self, node: &Node, parent_som: &str) -> usize {
         let Node::Subform(sf) = node else { return 1 };
-        let from_data = match (&sf.common.name, self.data) {
-            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-            _ => 0,
-        };
-        instance_count(&sf.occur, from_data)
+        instance_count(&sf.occur, self.binder.instances(parent_som, sf))
+    }
+
+    /// The instances of `node` (the child at SOM index `sib` under `parent_som`) that take
+    /// space, each with whether it is drawn: the template's presence, or the override on that
+    /// instance (one hiding it leaves it out, one making it invisible keeps its space). Anything
+    /// but a named subform is one instance.
+    fn shown_instances(&self, node: &Node, parent_som: &str, sib: usize) -> Vec<(usize, bool)> {
+        let n = self.instances(node, parent_som);
+        let base = node.common().presence;
+        let Node::Subform(sf) = node else { return vec![(0, base != Presence::Invisible)] };
+        let name = sf.common.name.as_deref();
+        (0..n)
+            .filter_map(|i| {
+                let p = match name {
+                    Some(_) if !self.ov.presence.is_empty() => {
+                        self.ov.presence.get(&child_som(parent_som, name, sib + i)).map(|p| Presence::parse(Some(p))).unwrap_or(base)
+                    }
+                    _ => base,
+                };
+                match p {
+                    Presence::Hidden | Presence::Inactive => None,
+                    Presence::Invisible => Some((i, false)),
+                    Presence::Visible => Some((i, true)),
+                }
+            })
+            .collect()
+    }
+
+    /// How many instances [`Self::shown_instances`] gives (no allocation when there are no
+    /// overrides, which is the measurement loops' common case).
+    fn shown_count(&self, node: &Node, parent_som: &str, sib: usize) -> usize {
+        if self.ov.presence.is_empty() {
+            return if node.common().presence.occupies() { self.instances(node, parent_som) } else { 0 };
+        }
+        self.shown_instances(node, parent_som, sib).len()
+    }
+
+    /// The height child `ci` needs together with what `keep` binds it to (its own `next`, the
+    /// following child's `previous`, and so on), when that fits in one content area: a break
+    /// must not fall inside the group. `None` when nothing binds it, or the group is taller than
+    /// an area (a break has to fall somewhere). Nothing is measured unless something is bound.
+    fn keep_group(&self, children: &[Node], ci: usize, parent_som: &str, measure: impl Fn(&Node) -> f64) -> Option<f64> {
+        let group: Vec<(usize, &Node)> = children.get(ci..)?.iter().enumerate().filter(|(_, k)| laid_out(k)).take(64).collect();
+        let mut end = 0;
+        while let (Some((_, k)), Some((_, next))) = (group.get(end), group.get(end + 1)) {
+            if !(k.common().keep.next || next.common().keep.previous) {
+                break;
+            }
+            end += 1;
+        }
+        if end == 0 {
+            return None;
+        }
+        let sibs = SomIndices::of(children);
+        let total: f64 = group.iter().take(end + 1).map(|(j, k)| measure(k) * self.shown_count(k, parent_som, sibs.at(ci + j)).max(1) as f64).sum();
+        (total <= self.cursor().0.h + 0.01).then_some(total)
+    }
+
+    /// A table's repeated header (`<overflow leader>`), drawn at the top of a new content area
+    /// when the break fell before row `ci` (not before the header itself).
+    #[allow(clippy::too_many_arguments)]
+    fn table_leader(
+        &mut self,
+        sf: &Subform,
+        leader: Option<usize>,
+        ci: usize,
+        cols: &[f64],
+        x: f64,
+        inner_w: f64,
+        ctx: &Ctx,
+        depth: usize,
+    ) -> Result<(), XfaError> {
+        if let Some(li) = leader
+            && li != ci
+            && let Some(Node::Subform(l)) = sf.children.get(li)
+        {
+            let lh = self.row_height(l, cols, inner_w, ctx, depth + 1);
+            let (_, y, _) = self.cursor();
+            self.draw_row(l, cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1, SomIndices::of(&sf.children).at(li))?;
+            self.place(lh);
+        }
+        Ok(())
     }
 
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations
     /// then see only those.
     fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
         let Node::Subform(sf) = node else { return };
-        let from_data = match (&sf.common.name, self.data) {
-            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-            _ => 0,
-        };
+        let from_data = self.binder.instances(parent_som, sf);
         if from_data > laid_out {
             self.warn_once(format!(
                 "{}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those)",
@@ -986,12 +1129,15 @@ impl Layouter<'_> {
                     Node::Subform(s) => match s.layout {
                         Layout::Positioned => self.positioned_height(&s.children, inner_w, &ctx, depth),
                         // Each instance of a repeating child takes its height again.
-                        Layout::Tb => s
-                            .children
-                            .iter()
-                            .filter(|k| k.common().presence.occupies())
-                            .map(|k| self.size_of(k, inner_w, &ctx, depth + 1).1 * self.instances(k, &som) as f64)
-                            .sum(),
+                        Layout::Tb => {
+                            let sibs = SomIndices::of(&s.children);
+                            s.children
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, k)| laid_out(k))
+                                .map(|(i, k)| self.size_of(k, inner_w, &ctx, depth + 1).1 * self.shown_count(k, &som, sibs.at(i)) as f64)
+                                .sum()
+                        }
                         Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, &ctx, depth, &som).1,
                         Layout::Table => {
                             let cols = self.columns(s, inner_w);
@@ -1160,7 +1306,11 @@ impl Layouter<'_> {
         if !f.grows_with_text() || f.common.name.is_none() {
             return 0.0;
         }
-        let value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+        let value = self
+            .data
+            .and_then(|d| self.binder.path(&ctx.som).and_then(|p| d.value_at(&p)))
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| f.value.plain());
         let Some(value) = value.filter(|t| !t.trim().is_empty()) else { return 0.0 };
         // Beside a caption the text has what the caption leaves; a widget's text has 2pt of
         // padding on each side, a non-interactive field's (drawn as text) none, so it wraps
@@ -1201,21 +1351,22 @@ impl Layouter<'_> {
     /// Left-to-right packing: rows of children, wrapped at the available width, as (child,
     /// instance, place). A repeating subform is packed once per instance it has under the
     /// container at `som`.
-    fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<(usize, usize, Rect)>, f64) {
+    fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<(usize, usize, Rect, bool)>, f64) {
         let mut out = Vec::new();
+        let sibs = SomIndices::of(children);
         let (mut x, mut y, mut line_h) = (0.0, 0.0, 0.0);
         for (i, k) in children.iter().enumerate() {
-            if !k.common().presence.occupies() {
+            if !laid_out(k) {
                 continue;
             }
             let (w, h) = self.size_of(k, inner_w, ctx, depth + 1);
-            for instance in 0..self.instances(k, som) {
+            for (instance, shown) in self.shown_instances(k, som, sibs.at(i)) {
                 if x > 0.0 && x + w > inner_w + 0.05 {
                     y += line_h;
                     x = 0.0;
                     line_h = 0.0;
                 }
-                out.push((i, instance, Rect::new(x, y, w, h)));
+                out.push((i, instance, Rect::new(x, y, w, h), shown));
                 x += w;
                 line_h = line_h.max(h);
             }
@@ -1226,7 +1377,7 @@ impl Layouter<'_> {
     /// [`Self::pack_instances`] for children that don't repeat (the fields of a group).
     fn pack(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
         let (placed, h) = self.pack_instances(children, inner_w, ctx, depth, "");
-        (placed.into_iter().map(|(i, _, r)| (i, r)).collect(), h)
+        (placed.into_iter().map(|(i, _, r, _)| (i, r)).collect(), h)
     }
 
     fn packed_height(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
@@ -1295,6 +1446,8 @@ impl Layouter<'_> {
         self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
     }
 
+    /// Draws `node` (the child at SOM index `sib`) into `rect` on the current page: a draw,
+    /// field or group as itself, a container with its children placed by its layout.
     fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
@@ -1349,14 +1502,16 @@ impl Layouter<'_> {
                     Layout::Tb => {
                         let mut y = inner.y;
                         for (i, k) in s.children.iter().enumerate() {
-                            if !k.common().presence.occupies() {
+                            if !laid_out(k) {
                                 continue;
                             }
                             let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
                             // A repeating subform here (a table in an area of a positioned page,
                             // say) gets its instances, as in a flowed one, one under another.
-                            for instance in 0..self.instances(k, &ctx.som) {
-                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sibs.at(i) + instance)?;
+                            for (instance, shown) in self.shown_instances(k, &ctx.som, sibs.at(i)) {
+                                if shown {
+                                    self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sibs.at(i) + instance)?;
+                                }
                                 y += h;
                             }
                         }
@@ -1365,7 +1520,10 @@ impl Layouter<'_> {
                         // A repeating subform here (rows of fields under a heading) gets its
                         // instances, as in the other layouts.
                         let (placed, _) = self.pack_instances(&s.children, inner.w, &ctx, depth, &ctx.som);
-                        for (i, instance, r) in placed {
+                        for (i, instance, r, shown) in placed {
+                            if !shown {
+                                continue;
+                            }
                             if let Some(k) = s.children.get(i) {
                                 let x = if s.layout == Layout::RlTb { inner.right() - r.x - r.w } else { inner.x + r.x };
                                 self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &ctx, depth + 1, sibs.at(i) + instance)?;
@@ -1483,6 +1641,8 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draws exclusion group `g` into `rect`: its radio buttons by its layout, the one the data
+    /// selects checked.
     fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
@@ -1490,7 +1650,7 @@ impl Layouter<'_> {
         let ctx = ctx.with_som(&g.common, sib);
         // The group's data node holds the selected button's on value.
         let selected: Option<String> =
-            self.data.and_then(|d| d.text_at(&data_path(self.tpl, &ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            self.data.and_then(|d| self.binder.path(&ctx.som).and_then(|p| d.text_at(&p))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let inner = rect.inset(&g.common.margin);
         let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"));
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
@@ -1622,7 +1782,7 @@ impl Layouter<'_> {
                 let field_name = f.common.name.clone().unwrap_or_else(|| "an image field".into());
                 let text: Vec<u8> = self
                     .data
-                    .and_then(|d| d.text_at(&data_path(self.tpl, &som_path())))
+                    .and_then(|d| self.binder.path(&som_path()).and_then(|p| d.text_at(&p)))
                     .map(|t| t.bytes().filter(|b| !b.is_ascii_whitespace()).collect())
                     .unwrap_or_default();
                 let from_data = if text.is_empty() {
@@ -1656,7 +1816,7 @@ impl Layouter<'_> {
                 self.warn_once("barcode fields show their value as text, not as bars");
                 let value = self
                     .data
-                    .and_then(|d| d.text_at(&data_path(self.tpl, &som_path())))
+                    .and_then(|d| self.binder.path(&som_path()).and_then(|p| d.text_at(&p)))
                     .map(str::to_string)
                     .or_else(|| f.value.plain())
                     .unwrap_or_default();
@@ -1676,8 +1836,11 @@ impl Layouter<'_> {
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.
         if f.grows_with_text() && rect.h > self.cursor().0.h + 0.01 {
-            let value =
-                self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+            let value = self
+                .data
+                .and_then(|d| self.binder.path(&som_path()).and_then(|p| d.value_at(&p)))
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| f.value.plain());
             if let Some(value) = value.filter(|t| !t.trim().is_empty()) {
                 let name = f.common.name.clone().unwrap_or_else(|| "a text field".into());
                 self.warn_once(format!("{name}: its text is longer than a page; it is shown across pages and can't be edited here"));
@@ -1708,7 +1871,7 @@ impl Layouter<'_> {
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
         let data_value: Option<String> =
-            self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            self.data.and_then(|d| self.binder.path(&som).and_then(|p| d.value_at(&p))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         // A choice list's default is a saved value too.
         let template_default = f.value.plain().map(|v| f.saved_value(v.trim())).filter(|v| !v.is_empty());
         let plain_value = data_value.clone().or_else(|| template_default.clone());

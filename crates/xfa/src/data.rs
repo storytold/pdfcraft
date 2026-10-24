@@ -8,11 +8,12 @@
 //! under the area's parent ([`data_path`]). Explicit `bind ref` expressions are not followed.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::XfaError;
-use crate::model::{Field, Node, SomIndices, Template};
+use crate::model::{Bind, Common, Field, Node, SomIndices, Subform, Template};
 use crate::packets::{Encoding, encode};
 
 const XFA_DATA_NS: &str = "http://www.xfa.org/schema/xfa-data/1.0/";
@@ -59,6 +60,43 @@ impl DataNode {
         }
         Some(n.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).take(1000).collect::<Vec<_>>().join("\n"))
     }
+
+    /// The path of the `nth` node named `name` below this one, in document order (a `global`
+    /// binding, or `a..b`).
+    pub fn find_named(&self, name: &str, nth: usize) -> Option<DataPath> {
+        /// Counts down `left` over the nodes named `name` under `n`, in document order; true
+        /// once the wanted one is reached, with `path` leading to it. `budget` caps the walk.
+        fn walk(n: &DataNode, name: &str, left: &mut usize, path: &mut DataPath, depth: usize, budget: &mut u32) -> bool {
+            if depth > MAX_DEPTH {
+                return false;
+            }
+            let mut seen: HashMap<&str, usize> = HashMap::new();
+            for c in &n.children {
+                if *budget == 0 {
+                    return false;
+                }
+                *budget -= 1;
+                let i = seen.entry(c.name.as_str()).or_insert(0);
+                path.push((c.name.clone(), *i));
+                *i += 1;
+                if c.name == name {
+                    if *left == 0 {
+                        return true;
+                    }
+                    *left -= 1;
+                }
+                if walk(c, name, left, path, depth + 1, budget) {
+                    return true;
+                }
+                path.pop();
+            }
+            false
+        }
+        let mut path = DataPath::new();
+        let mut left = nth;
+        let mut budget = MAX_NODES;
+        walk(self, name, &mut left, &mut path, 0, &mut budget).then_some(path)
+    }
 }
 
 fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
@@ -101,45 +139,372 @@ pub fn som_to_path(som: &str) -> DataPath {
         .collect()
 }
 
-/// The data path the object at `som` binds to: [`som_to_path`] without the areas on the way.
-/// An area is a named container in the form, so it is part of SOM expressions, but only
-/// subforms, exclusion groups and fields are data scopes: what an area holds binds under the
-/// area's parent, as Adobe's viewers write it. The template tells which segments are areas;
-/// segments it doesn't have (page-set objects, or a SOM from another template) are kept.
-pub fn data_path(tpl: &Template, som: &str) -> DataPath {
-    let mut out = DataPath::new();
-    // The template children the next segment is looked up in; `None` until the root matched,
-    // and again once a segment is not a container the template has.
-    let mut level: Option<&[Node]> = None;
-    for (i, (name, index)) in som_to_path(som).into_iter().enumerate() {
-        let found = match level {
-            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => Some(Container::Children(&tpl.root.children)),
-            None => None,
-            Some(children) => match named(children, &name, 0) {
-                Some(Node::Subform(sf)) => Some(Container::Children(&sf.children)),
-                Some(Node::Area(a)) => Some(Container::Area(&a.children)),
-                _ => None,
-            },
-        };
-        match found {
-            Some(Container::Area(children)) => level = Some(children),
-            Some(Container::Children(children)) => {
-                level = Some(children);
-                out.push((name, index));
-            }
-            None => {
-                level = None;
-                out.push((name, index));
-            }
-        }
-    }
-    out
+/// The data node the object at `som` binds to, as a path from the `xfa:data` element: by
+/// default [`som_to_path`] without the areas on the way, and as the template's `bind`
+/// elements say otherwise. An area is a named container in the form, so it is part of SOM
+/// expressions, but only subforms, exclusion groups and fields are data scopes: what an area
+/// holds binds under the area's parent, as Adobe's viewers write it. A subform bound to
+/// nothing (`match="none"`) is no data scope either; one bound to a node elsewhere
+/// (`match="dataRef"`) or to the first node of its name anywhere (`global`) puts its children
+/// under that node. `None`: the object has no data node (a field or group bound to nothing).
+/// Segments the template doesn't have (page-set objects, or a SOM from another template) are
+/// kept as they are. `data` lets `global` and `..` bindings find their node and names the
+/// record (`$record`, the data's first child); without it the root subform's name stands in
+/// and a global object binds by name. One call; a [`Binder`] remembers across many.
+pub fn data_path(tpl: &Template, data: Option<&DataNode>, som: &str) -> Option<DataPath> {
+    Binder::new(tpl, data).path(som)
 }
 
-enum Container<'a> {
-    Children(&'a [Node]),
+/// Most paths a [`Binder`] remembers, and most data nodes it indexes by name.
+const MAX_MEMO: usize = 100_000;
+const MAX_NAME_INDEX: usize = 200_000;
+/// Most bytes of paths a [`NameIndex`] holds. Every entry clones the names of its ancestors,
+/// so a small packet with a deep chain of long names would multiply into far more than itself.
+const MAX_NAME_INDEX_BYTES: usize = 32 << 20;
+
+/// Every data node's path by element name, in document order, for `global` bindings and `..`
+/// searches: built once, where a walk per object would cost the form times the data.
+pub(crate) struct NameIndex {
+    pub(crate) by_name: HashMap<String, Vec<DataPath>>,
+    /// Every node is in; past [`MAX_NAME_INDEX`] entries or [`MAX_NAME_INDEX_BYTES`] the rest
+    /// are found by walking.
+    pub(crate) complete: bool,
+}
+
+impl NameIndex {
+    /// Every node under `data` by name, in document order, up to [`MAX_NAME_INDEX`] of them
+    /// and [`MAX_NAME_INDEX_BYTES`] of path.
+    pub(crate) fn build(data: &DataNode) -> NameIndex {
+        /// Entries so far and the bytes of path they hold.
+        struct Spent {
+            entries: usize,
+            bytes: usize,
+        }
+        /// Adds `n`'s children to `out`, depth first. `path_bytes` is what the path to `n`
+        /// costs, so what one more entry under it costs is known before it is cloned.
+        fn walk(n: &DataNode, path: &mut DataPath, path_bytes: usize, out: &mut NameIndex, spent: &mut Spent, depth: usize) {
+            if depth > MAX_DEPTH {
+                return;
+            }
+            let mut seen: HashMap<&str, usize> = HashMap::new();
+            for c in &n.children {
+                // Over either budget the walk stops for good, so what is in is a prefix of the
+                // document: a hit in it is the first of its name, and nothing past it is.
+                let cost = path_bytes.saturating_add(c.name.len()).saturating_add(std::mem::size_of::<(String, usize)>());
+                if !out.complete || spent.entries >= MAX_NAME_INDEX || spent.bytes.saturating_add(cost) > MAX_NAME_INDEX_BYTES {
+                    out.complete = false;
+                    return;
+                }
+                spent.entries += 1;
+                spent.bytes = spent.bytes.saturating_add(cost);
+                let i = seen.entry(c.name.as_str()).or_insert(0);
+                path.push((c.name.clone(), *i));
+                *i += 1;
+                out.by_name.entry(c.name.clone()).or_default().push(path.clone());
+                walk(c, path, cost, out, spent, depth + 1);
+                path.pop();
+            }
+        }
+        let mut out = NameIndex { by_name: HashMap::new(), complete: true };
+        walk(data, &mut DataPath::new(), 0, &mut out, &mut Spent { entries: 0, bytes: 0 }, 0);
+        out
+    }
+}
+
+/// A [`Binder`]'s index of the data by name, to share between binders over the same data
+/// (one event's many value changes each resolve with a binder of their own).
+#[derive(Clone)]
+pub struct DataIndex(Arc<NameIndex>);
+
+/// Resolves the data paths of one template over one data tree, remembering what it found:
+/// a form's objects are looked up many times per layout, and a `global` binding or a `..`
+/// search would otherwise walk the data once per object.
+pub struct Binder<'a> {
+    tpl: &'a Template,
+    data: Option<&'a DataNode>,
+    memo: std::cell::RefCell<HashMap<String, Option<DataPath>>>,
+    index: std::cell::OnceCell<Arc<NameIndex>>,
+}
+
+impl<'a> Binder<'a> {
+    /// A binder over `tpl` and `data`, remembering nothing yet: paths are memoized and the data
+    /// indexed by name on first use.
+    pub fn new(tpl: &'a Template, data: Option<&'a DataNode>) -> Self {
+        Binder { tpl, data, memo: Default::default(), index: Default::default() }
+    }
+
+    /// A binder that starts from `index`, built by another binder over the same `data`
+    /// ([`Self::index`]); with `None` it is [`Self::new`]. The caller keeps the index and the
+    /// data together: one over other data finds the wrong nodes.
+    pub fn with_index(tpl: &'a Template, data: Option<&'a DataNode>, index: Option<DataIndex>) -> Self {
+        let b = Self::new(tpl, data);
+        if let Some(DataIndex(i)) = index {
+            // A fresh cell: setting it cannot fail.
+            let _ = b.index.set(i);
+        }
+        b
+    }
+
+    /// The index of the data this binder built, if a `global` or `..` binding made it.
+    pub fn index(&self) -> Option<DataIndex> {
+        self.index.get().cloned().map(DataIndex)
+    }
+
+    /// See [`data_path`].
+    pub fn path(&self, som: &str) -> Option<DataPath> {
+        if let Ok(memo) = self.memo.try_borrow()
+            && let Some(p) = memo.get(som)
+        {
+            return p.clone();
+        }
+        let p = self.resolve(som);
+        if let Ok(mut memo) = self.memo.try_borrow_mut()
+            && memo.len() < MAX_MEMO
+        {
+            memo.insert(som.to_string(), p.clone());
+        }
+        p
+    }
+
+    /// How many instances of the repeating subform `sf` (a child of the container at
+    /// `parent_som`) the data holds: the sibling nodes at the path it binds to. Zero when the
+    /// data doesn't drive it ([`repeats_on_data`]).
+    pub fn instances(&self, parent_som: &str, sf: &Subform) -> usize {
+        let (Some(name), Some(d)) = (&sf.common.name, self.data) else { return 0 };
+        if !repeats_on_data(sf) {
+            return 0;
+        }
+        let Some(mut path) = self.path(&crate::script::child_som(parent_som, Some(name), 0)) else { return 0 };
+        let Some((last, _)) = path.pop() else { return 0 };
+        d.count(&path, &last)
+    }
+
+    /// [`Self::path`] without the memo: walks `som` segment by segment through the template,
+    /// following each object's binding.
+    fn resolve(&self, som: &str) -> Option<DataPath> {
+        let tpl = self.tpl;
+        let mut out = DataPath::new();
+        // The template children the next segment is looked up in; `None` until the root matched,
+        // and again once a segment is not a container the template has.
+        let mut level: Option<&[Node]> = None;
+        for (i, (name, index)) in som_to_path(som).into_iter().enumerate() {
+            let found = match level {
+                None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => {
+                    Some(Found::Subform(&tpl.root.common, &tpl.root.children))
+                }
+                // Page masters' objects are named under their page area.
+                None if i == 0 => tpl
+                    .root
+                    .page_set
+                    .as_ref()
+                    .and_then(|ps| ps.areas.iter().find(|a| a.name.as_deref() == Some(name.as_str())))
+                    .map(|a| Found::PageArea(&a.items)),
+                None => None,
+                Some(children) => named(children, &name, 0).map(|n| match n {
+                    Node::Subform(sf) => Found::Subform(&sf.common, &sf.children),
+                    Node::Area(a) => Found::Area(&a.children),
+                    other => Found::Leaf(other.common()),
+                }),
+            };
+            match found {
+                Some(Found::Area(children)) => level = Some(children),
+                Some(Found::PageArea(children)) => {
+                    level = Some(children);
+                    out.push((name, index));
+                }
+                Some(Found::Subform(c, children)) => {
+                    level = Some(children);
+                    self.bind_segment(&mut out, &c.bind, name, index, true)?;
+                }
+                Some(Found::Leaf(c)) => {
+                    level = None;
+                    self.bind_segment(&mut out, &c.bind, name, index, false)?;
+                }
+                None => {
+                    level = None;
+                    out.push((name, index));
+                }
+            }
+            if out.len() > MAX_DEPTH {
+                return None;
+            }
+        }
+        Some(out)
+    }
+
+    /// Extend `out` (the parent's data path) with the node the object named `name` binds to.
+    /// `None`: the object has no data node. A binding that can't be followed (a `ref` the data
+    /// doesn't have, a global name nowhere in the data) falls back to binding by name, so a
+    /// value written there still has somewhere to go.
+    fn bind_segment(&self, out: &mut DataPath, bind: &Bind, name: String, index: usize, container: bool) -> Option<()> {
+        match bind {
+            Bind::Once => out.push((name, index)),
+            Bind::None if container => {}
+            Bind::None => return None,
+            // The first node of the name anywhere; instance k is its k-th sibling of that name.
+            Bind::Global => match self.find_named(&[], &name, 0) {
+                Some(mut path) => {
+                    if let Some(last) = path.last_mut() {
+                        last.1 = index;
+                    }
+                    *out = path;
+                }
+                None => out.push((name, index)),
+            },
+            Bind::DataRef(r) => match self.resolve_ref(r, out, index) {
+                Some(path) => *out = path,
+                None => out.push((name, index)),
+            },
+        }
+        Some(())
+    }
+
+    /// The path of the `nth` node named `name` below `under`, in document order.
+    fn find_named(&self, under: &[(String, usize)], name: &str, nth: usize) -> Option<DataPath> {
+        let d = self.data?;
+        let idx = self.index.get_or_init(|| Arc::new(NameIndex::build(d)));
+        match idx.by_name.get(name) {
+            Some(paths) => {
+                let hit = paths.iter().filter(|p| p.len() > under.len() && p.starts_with(under)).nth(nth);
+                if hit.is_some() || idx.complete {
+                    return hit.cloned();
+                }
+            }
+            None if idx.complete => return None,
+            None => {}
+        }
+        // Past what the index holds: walk.
+        let rest = d.get(under)?.find_named(name, nth)?;
+        let mut p = under.to_vec();
+        p.extend(rest);
+        Some(p)
+    }
+
+    /// The data path a `bind ref` SOM expression names, from the object's parent node at
+    /// `parent`: `$record.a.b` (the record is the data's first child), `$data.a`, `$.a` or `a`
+    /// (relative to the parent), `a[2]`, `a[*]` (the object's own instance index), `a..b` (the
+    /// first `b` anywhere under `a`, when the data is at hand). Anything else (`$form`, `..`
+    /// without data, predicates, functions) is `None`.
+    fn resolve_ref(&self, r: &str, parent: &DataPath, index: usize) -> Option<DataPath> {
+        let r = r.trim();
+        let after = |prefix: &str| r.strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('.'));
+        let (mut path, rest) = if let Some(rest) = after("$record") {
+            (vec![(self.record_name()?, 0)], rest)
+        } else if let Some(rest) = after("$data") {
+            (DataPath::new(), rest)
+        } else if let Some(rest) = after("$") {
+            (parent.clone(), rest)
+        } else if r.starts_with('$') || r.starts_with('!') || r.is_empty() {
+            return None;
+        } else {
+            (parent.clone(), r)
+        };
+        let rest = rest.strip_prefix('.').unwrap_or(rest);
+        if rest.is_empty() {
+            return Some(path);
+        }
+        let mut descend = false;
+        for seg in rest.split('.') {
+            let seg = seg.trim();
+            if seg.is_empty() {
+                // `a..b`: the first `b` anywhere under `a`.
+                descend = true;
+                continue;
+            }
+            let (name, idx) = match seg.split_once('[') {
+                Some((n, rest)) => {
+                    let rest = rest.trim_end_matches(']').trim();
+                    (n.trim(), if rest == "*" { index } else { rest.parse::<usize>().ok()? })
+                }
+                None => (seg, 0),
+            };
+            if !name_ok(name) {
+                return None;
+            }
+            if descend {
+                path = self.find_named(&path, name, idx)?;
+                descend = false;
+            } else {
+                path.push((name.to_string(), idx.min(100_000)));
+            }
+            if path.len() > MAX_DEPTH {
+                return None;
+            }
+        }
+        if descend {
+            return None;
+        }
+        Some(path)
+    }
+
+    /// The record's element name: the data's first child, else the root subform's name.
+    fn record_name(&self) -> Option<String> {
+        self.data.and_then(|d| d.children.first()).map(|c| c.name.clone()).or_else(|| self.tpl.root.common.name.clone())
+    }
+}
+
+/// A segment of a `bind ref` this resolver takes as an element name.
+fn name_ok(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| matches!(c, '(' | ')' | '#' | '$' | '!' | '"' | '\'' | '[' | ']' | '/') || c.is_whitespace())
+}
+
+/// Does [`Binder::resolve_ref`] follow this `bind ref` expression (given the data it needs)?
+/// What it doesn't (`$form`, predicates, functions, a trailing `..`) binds by name.
+pub fn ref_is_supported(r: &str) -> bool {
+    let r = r.trim();
+    let after = |prefix: &str| r.strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('.'));
+    let rest = match after("$record").or_else(|| after("$data")).or_else(|| after("$")) {
+        Some(rest) => rest,
+        None if r.starts_with('$') || r.starts_with('!') || r.is_empty() => return false,
+        None => r,
+    };
+    let rest = rest.strip_prefix('.').unwrap_or(rest);
+    if rest.is_empty() {
+        return true;
+    }
+    if rest.ends_with('.') {
+        return false;
+    }
+    rest.split('.').all(|seg| {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            return true;
+        }
+        match seg.split_once('[') {
+            Some((n, idx)) => {
+                let idx = idx.trim_end_matches(']').trim();
+                name_ok(n.trim()) && (idx == "*" || idx.parse::<usize>().is_ok())
+            }
+            None => name_ok(seg),
+        }
+    })
+}
+
+/// Does the data drive how many instances `sf` has? Not when it doesn't repeat, repeats on
+/// no data node (`match="none"`), or on a ref that names one node (no `[*]`).
+pub fn repeats_on_data(sf: &Subform) -> bool {
+    sf.occur.max != Some(1)
+        && match &sf.common.bind {
+            Bind::None => false,
+            Bind::DataRef(r) => r.contains("[*]"),
+            Bind::Once | Bind::Global => true,
+        }
+}
+
+/// [`Binder::instances`] for one call.
+pub fn data_instances(tpl: &Template, data: Option<&DataNode>, parent_som: &str, sf: &Subform) -> usize {
+    Binder::new(tpl, data).instances(parent_som, sf)
+}
+
+enum Found<'a> {
+    /// A subform (its binding, its children).
+    Subform(&'a Common, &'a [Node]),
     /// Contents bind under the area's parent.
     Area(&'a [Node]),
+    /// A page master: its objects bind under its name.
+    PageArea(&'a [Node]),
+    /// A field, a group or a draw: the last data scope.
+    Leaf(&'a Common),
 }
 
 /// The child of `nodes` named `name`, looking through unnamed subforms and areas (which have no
@@ -613,21 +978,27 @@ fn with_template<T>(doc: &Document, tpl: Option<&Template>, f: impl FnOnce(Optio
     }
 }
 
-/// [`data_path`] when the template is known, else [`som_to_path`].
-fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
-    match tpl {
-        Some(t) => data_path(t, som),
-        None => som_to_path(som),
+/// [`Binder::path`] when the template is known, else [`som_to_path`].
+fn path_of(binder: Option<&Binder>, som: &str) -> Option<DataPath> {
+    match binder {
+        Some(b) => b.path(som),
+        None => Some(som_to_path(som)),
     }
 }
 
 /// The values the datasets should hold for `fields`, by data path: dates in each field's data
 /// picture (or ISO), check and radio states, choice values as saved.
+/// Bindings are followed when the template is known (`global`, `dataRef`, `none`).
 fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<Want> {
     let mut out = Vec::new();
+    // The data as it is, for bindings that look it up (`global`, `$record`, `..`); the rest
+    // need none, and the packet is parsed again by the write anyway.
+    let data =
+        if tpl.is_some_and(|t| t.aliasing_binds) { crate::read_packets(doc).ok().flatten().and_then(|p| parse_datasets(&p.xdp)) } else { None };
+    let binder = tpl.map(|t| Binder::new(t, data.as_ref()));
     for f in fields {
         let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+        let Some(path) = path_of(binder.as_ref(), &som) else { continue };
         if path.is_empty() {
             continue;
         }
@@ -1251,6 +1622,11 @@ pub fn write_datasets_with(
     reuse: Option<ObjRef>,
 ) -> Result<DatasetsWrite, XfaError> {
     let wants = with_template(doc, tpl, |t| wanted(doc, fields, t));
+    // Several fields on one data node (two bound to it, or check boxes sharing one): the last
+    // value given for the node is the one written, so a caller puts the field just filled last.
+    let mut seen = std::collections::HashSet::new();
+    let mut wants: Vec<Want> = wants.into_iter().rev().filter(|w| seen.insert(w.path.clone())).collect();
+    wants.reverse();
     rewrite(doc, &[Op::Values(&wants)], reuse)
 }
 
@@ -1760,13 +2136,15 @@ pub fn read_values_with(doc: &Document, tpl: Option<&Template>, fields: &[FieldD
 
 /// The values the document's datasets hold for `fields`, read in each field's data picture and
 /// shown in its own pattern; only fields the data mentions.
+/// Each field's node is resolved as [`wanted`] does, bindings followed.
 fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> Vec<(String, FieldData)> {
     let Ok(Some(p)) = crate::read_packets(doc) else { return Vec::new() };
     let Some(data) = parse_datasets(&p.xdp) else { return Vec::new() };
     let mut out = Vec::new();
+    let binder = tpl.map(|t| Binder::new(t, Some(&data)));
     for f in fields {
         let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+        let Some(path) = path_of(binder.as_ref(), &som) else { continue };
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
-use crate::data::{DataNode, data_path, parse_datasets};
+use crate::data::{Binder, DataNode, data_path, parse_datasets};
 use crate::model::*;
 use crate::{Report, XfaError};
 
@@ -80,12 +80,60 @@ pub struct LiveForm {
 pub struct Overrides {
     pub presence: BTreeMap<String, String>,
     pub access: BTreeMap<String, String>,
+    /// Values of fields bound to no data node (`<bind match="none"/>`), which the datasets
+    /// can't hold: what the user typed or a script set, so scripts read it back.
+    pub values: BTreeMap<String, String>,
 }
 
 impl Overrides {
+    /// Nothing overridden: no presence, access or value.
     pub fn is_empty(&self) -> bool {
-        self.presence.is_empty() && self.access.is_empty()
+        self.presence.is_empty() && self.access.is_empty() && self.values.is_empty()
     }
+
+    /// Instance `index` of the repeating subform `name` under `parent_som` was taken out of
+    /// the data: its overrides go with it, and those on the instances after it are renumbered,
+    /// as the data's siblings shift down by one. Returns whether anything changed.
+    pub fn remove_instance(&mut self, parent_som: &str, name: &str, index: usize) -> bool {
+        let Some(prefix) = child_som(parent_som, Some(name), 0).strip_suffix("[0]").map(|p| format!("{p}[")) else { return false };
+        let mut changed = false;
+        for map in [&mut self.presence, &mut self.access, &mut self.values] {
+            // (instance, what follows its index, key), lowest instance first: moving one down
+            // lands on a key already moved or removed, never on one still to do.
+            let mut keys: Vec<(usize, String, String)> = map
+                .keys()
+                .filter_map(|k| {
+                    let (n, tail) = k.get(prefix.len()..)?.split_once(']')?;
+                    let i = n.parse::<usize>().ok().filter(|_| k.starts_with(&prefix) && (tail.is_empty() || tail.starts_with('.')))?;
+                    (i >= index).then(|| (i, tail.to_string(), k.clone()))
+                })
+                .collect();
+            keys.sort();
+            for (i, tail, key) in keys {
+                let Some(v) = map.remove(&key) else { continue };
+                changed = true;
+                if i > index {
+                    map.insert(format!("{prefix}{}]{tail}", i - 1), v);
+                }
+            }
+        }
+        changed
+    }
+}
+
+/// Most bytes of an unbound field's value kept (a field value's own cap).
+const MAX_OVERRIDE_VALUE: usize = 64 * 1024;
+
+/// `s` within [`MAX_OVERRIDE_VALUE`] bytes, cut at a character boundary.
+pub fn clip_value(s: &str) -> String {
+    if s.len() <= MAX_OVERRIDE_VALUE {
+        return s.to_string();
+    }
+    let mut end = MAX_OVERRIDE_VALUE;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.get(..end).unwrap_or_default().to_string()
 }
 
 fn presence_name(p: Presence) -> &'static str {
@@ -120,13 +168,13 @@ pub fn overrides(doc: &Document) -> Overrides {
     let Some((_, acro)) = acroform(doc) else { return out };
     let Some(o) = acro.get(OVERRIDES_KEY).map(|o| doc.resolve(o)) else { return out };
     let Some(d) = o.as_dict() else { return out };
-    for (which, map) in [(&b"Presence"[..], &mut out.presence), (&b"Access"[..], &mut out.access)] {
+    for (which, map) in [(&b"Presence"[..], &mut out.presence), (&b"Access"[..], &mut out.access), (&b"Values"[..], &mut out.values)] {
         if let Some(m) = d.get(which).map(|m| doc.resolve(m))
             && let Some(m) = m.as_dict()
         {
             for (k, v) in m.iter().take(MAX_OVERRIDES) {
                 if let Some(v) = v.as_string() {
-                    map.insert(String::from_utf8_lossy(k).into_owned(), v.to_text());
+                    map.insert(String::from_utf8_lossy(k).into_owned(), clip_value(&v.to_text()));
                 }
             }
         }
@@ -142,13 +190,13 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
         acro.remove(OVERRIDES_KEY);
     } else {
         let mut d = Dict::new();
-        for (which, map) in [("Presence", &ov.presence), ("Access", &ov.access)] {
+        for (which, map) in [("Presence", &ov.presence), ("Access", &ov.access), ("Values", &ov.values)] {
             if map.is_empty() {
                 continue;
             }
             let mut m = Dict::new();
             for (k, v) in map.iter().take(MAX_OVERRIDES) {
-                m.set(k.as_bytes().to_vec(), Object::String(PdfString::text(v)));
+                m.set(k.as_bytes().to_vec(), Object::String(PdfString::text(&clip_value(v))));
             }
             d.set(which.as_bytes().to_vec(), Object::Dict(m));
         }
@@ -161,7 +209,9 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
     Ok(())
 }
 
-fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
+/// The SOM path of the child `name` at index `index` under `parent` (`parent.name[index]`); a
+/// nameless child is transparent and shares its parent's.
+pub(crate) fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
     match name {
         Some(n) if !parent.is_empty() => format!("{parent}.{n}[{index}]"),
         Some(n) => format!("{n}[{index}]"),
@@ -170,9 +220,9 @@ fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
 }
 
 struct Walker<'a> {
-    /// For data paths (areas are not data scopes).
-    tpl: &'a Template,
     data: Option<&'a DataNode>,
+    /// For data paths (areas are not data scopes, bindings are followed).
+    binder: Binder<'a>,
     ov: &'a Overrides,
     events: Vec<ScriptEvent>,
     /// Bytes of script the events hold.
@@ -244,7 +294,13 @@ impl Walker<'_> {
     /// else empty; elsewhere it is its data value (as saved, as scripts read it) or its template default.
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
-        let data_value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        // A field bound to no data node keeps what was typed or set in the overrides.
+        let data_value = match self.binder.path(&som) {
+            None => self.ov.values.get(&som).cloned(),
+            Some(p) => self.data.and_then(|d| d.value_at(&p)),
+        }
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
         let value = match (radio, data_value) {
             // A radio button's value is its on value when the group picked it.
             (Some(selected), _) => {
@@ -282,7 +338,8 @@ impl Walker<'_> {
     /// What [`Self::field`] gives a field outside an exclusion group: its data value (as saved,
     /// as scripts read it) or its template default.
     fn plain_field_value(tpl: &Template, data: Option<&DataNode>, f: &Field, som: &str) -> String {
-        let data_value = data.and_then(|d| d.value_at(&data_path(tpl, som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let data_value =
+            data.and_then(|d| data_path(tpl, Some(d), som).and_then(|p| d.value_at(&p))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         match data_value {
             Some(v) => f.saved_value(&Walker::as_scripts_read(f, &v)),
             None => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
@@ -305,10 +362,7 @@ impl Walker<'_> {
             let sib = sibs.at(i);
             match n {
                 Node::Subform(sf) => {
-                    let from_data = match (&sf.common.name, self.data) {
-                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-                        _ => 0,
-                    };
+                    let from_data = self.binder.instances(parent_som, sf);
                     let instances = crate::layout::instance_count(&sf.occur, from_data);
                     for k in 0..instances {
                         // The first instance was counted above.
@@ -370,8 +424,11 @@ impl Walker<'_> {
                 }
                 Node::ExclGroup(g) => {
                     let som = child_som(parent_som, g.common.name.as_deref().or(Some("group")), sib);
-                    let selected =
-                        self.data.and_then(|d| d.text_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                    let selected = self
+                        .data
+                        .and_then(|d| self.binder.path(&som).and_then(|p| d.text_at(&p)))
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty());
                     self.push_events(&som, &g.scripts, None, None, None);
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
                     let fsibs = SomIndices::of(&fields);
@@ -406,7 +463,7 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
-    let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
+    let mut w = Walker { data, binder: Binder::new(tpl, data), ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
@@ -459,8 +516,9 @@ pub fn has_scripts(tpl: &Template) -> bool {
     any(&tpl.root.scripts) || walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
 }
 
-/// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
-/// instance of a repeating subform hide them all).
+/// The template with `ov` applied to its objects. A repeating subform's presence is left to
+/// the layout, which applies it per instance ([`crate::layout::layout_with`]): one hidden row
+/// stays hidden while the others show.
 pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
     /// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their descendants,
     /// down to [`MAX_DEPTH`], and the access it gives a field outside an exclusion group. An unnamed
@@ -485,7 +543,9 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
             let access = name.and_then(|_| ov.access.get(&som)).cloned();
             match n {
                 Node::Subform(s) => {
-                    if let Some(p) = presence {
+                    if let Some(p) = presence
+                        && s.occur.max == Some(1)
+                    {
                         s.common.presence = p;
                     }
                     walk(&mut s.children, &som, ov, depth + 1);
@@ -582,7 +642,7 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
     let laid = apply_overrides(tpl, &ov);
-    let form = crate::layout(&laid, data.as_ref())?;
+    let form = crate::layout::layout_with(&laid, data.as_ref(), &ov)?;
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }
@@ -620,6 +680,82 @@ pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
     crate::data::template_field(tpl, som).is_some_and(Field::grows_with_text)
 }
 
+/// The template object the SOM path `som` is an instance of (the root subform's descendants,
+/// by name; indexes are instances of one object). `None` for the root itself, page-set objects
+/// and paths the template doesn't have.
+pub fn template_node<'a>(tpl: &'a Template, som: &str) -> Option<&'a Node> {
+    let path = crate::data::som_to_path(som);
+    let (first, rest) = path.split_first()?;
+    if tpl.root.common.name.as_deref() != Some(first.0.as_str()) {
+        return None;
+    }
+    let mut level: &[Node] = &tpl.root.children;
+    let mut found: Option<&Node> = None;
+    for (name, _) in rest {
+        let next = named_in(level, name, 0)?;
+        level = match next {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => &[],
+        };
+        found = Some(next);
+    }
+    found
+}
+
+/// Give the field at `som` (one bound to no data node) the value `value` in `live`, as
+/// [`form_tree`] would show it from the overrides. `None`: not a plain field the tree holds.
+pub fn set_unbound_value(live: &mut FormNode, tpl: &Template, som: &str, value: &str) -> Option<bool> {
+    /// The node at `som` under `n`, down the one branch whose SOM leads there.
+    fn find<'a>(n: &'a mut FormNode, som: &str, depth: usize) -> Option<&'a mut FormNode> {
+        if n.som == som {
+            return Some(n);
+        }
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        for c in n.children.iter_mut() {
+            // Only down a node whose SOM is a prefix of the target's (transparent containers
+            // share their parent's).
+            let on_the_way = som.strip_prefix(c.som.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'));
+            if on_the_way && let Some(f) = find(c, som, depth + 1) {
+                return Some(f);
+            }
+        }
+        None
+    }
+    let f = crate::data::template_field(tpl, som)?;
+    if value.trim().is_empty() {
+        // The tree shows the template's default then: rebuild rather than guess it here.
+        return None;
+    }
+    let value = f.saved_value(value.trim());
+    let node = find(live, som, 0)?;
+    if node.kind != Some(NodeKind::Field) {
+        return None;
+    }
+    if node.value == value {
+        return Some(false);
+    }
+    node.value = value;
+    Some(true)
+}
+
+/// The child of `nodes` named `name`, looking through unnamed subforms and areas (as data
+/// paths do); exclusion groups are not looked into.
+fn named_in<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    nodes.iter().find(|n| n.common().name.as_deref() == Some(name)).or_else(|| {
+        nodes.iter().find_map(|n| match n {
+            Node::Subform(sf) if sf.common.name.is_none() => named_in(&sf.children, name, depth + 1),
+            Node::Area(a) if a.common.name.is_none() => named_in(&a.children, name, depth + 1),
+            _ => None,
+        })
+    })
+}
+
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a
 /// field inside an area shares its node with one outside, since areas are left out of data
 /// paths), the value [`form_tree`] would give it from `data` now, so a value change needs no
@@ -629,7 +765,11 @@ pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
 /// exclusion group, an object the template doesn't have): rebuild the tree.
 pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode>, som: &str) -> Option<bool> {
     crate::data::template_field(tpl, som)?;
-    let path = data_path(tpl, som);
+    // Objects bound elsewhere are not where the data path says in the tree: rebuild.
+    if tpl.aliasing_binds {
+        return None;
+    }
+    let path = data_path(tpl, data, som)?;
     if path.is_empty() {
         return None;
     }
@@ -648,8 +788,10 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
             return Some(());
         }
         for c in n.children.iter_mut() {
-            // No data segment of their own: looked through.
-            let transparent = matches!(c.kind, Some(NodeKind::Area)) || (matches!(c.kind, Some(NodeKind::Subform)) && c.name.starts_with('#'));
+            // No data segment of their own: looked through (a subform bound to nothing too).
+            let transparent = matches!(c.kind, Some(NodeKind::Area))
+                || (matches!(c.kind, Some(NodeKind::Subform))
+                    && (c.name.starts_with('#') || matches!(template_node(tpl, &c.som), Some(Node::Subform(s)) if s.common.bind == Bind::None)));
             if transparent {
                 walk(c, tpl, data, path, pos, changed, depth + 1)?;
                 continue;

@@ -2610,7 +2610,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 pdfcraft_forms::set_button_icon(doc, name, img, px)?;
                 let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
                 let path = match cx.xfa.as_deref() {
-                    Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
+                    Some(tpl) => pdfcraft_xfa::data_path(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &som)
+                        .ok_or_else(|| EditError::Invalid(format!("{name}: this field is bound to no data, so it keeps no picture")))?,
                     None => pdfcraft_xfa::som_to_path(&som),
                 };
                 let r =
@@ -3180,12 +3181,16 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
 /// `datasets`: the stream this edit already wrote, replaced in place rather than added again
 /// (and set to the one written).
 /// `tpl`: the form's parsed template when the document has one cached (else it is parsed).
+/// `last`: the fields just filled, written after the others. The writer keeps the last value
+/// it is given for a data node several fields share, so theirs wins over the others' stale ones.
 fn xfa_sync_datasets(
     doc: &mut pdfcraft_cos::Document,
     tpl: Option<&pdfcraft_xfa::model::Template>,
     datasets: &mut Option<pdfcraft_cos::ObjRef>,
+    last: &[String],
 ) -> Result<Vec<String>, String> {
-    let data = xfa_field_data(doc);
+    let mut data = xfa_field_data(doc);
+    data.sort_by_key(|f| last.iter().position(|n| *n == f.name).map_or(0, |i| i + 1));
     let r = pdfcraft_xfa::write_datasets_with(doc, tpl, &data, *datasets).map_err(|e| e.to_string())?;
     if r.stream.is_some() {
         *datasets = r.stream;
@@ -3382,9 +3387,38 @@ fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, cal
 /// the names of the fields that changed.
 fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
+    xfa_take_values(doc, None, &data)
+}
+
+/// The fields `changed` were filled and written: the other fields bound to the same data nodes
+/// take the nodes' values (two text fields on one node show the same; check boxes on one node
+/// with different on values are exclusive). The names of the fields changed.
+fn xfa_share_values(doc: &mut pdfcraft_cos::Document, tpl: &pdfcraft_xfa::model::Template, changed: &[String]) -> Result<Vec<String>, String> {
+    let som_by_name: std::collections::HashMap<String, String> =
+        pdfcraft_xfa::fields_by_som(doc).into_iter().map(|(som, name)| (name, som)).collect();
+    let data = pdfcraft_xfa::data_of(doc);
+    let binder = pdfcraft_xfa::Binder::new(tpl, data.as_ref());
+    let path_of = |name: &str| som_by_name.get(name).and_then(|som| binder.path(som));
+    let targets: std::collections::HashSet<pdfcraft_xfa::DataPath> = changed.iter().filter_map(|n| path_of(n)).collect();
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let others: Vec<pdfcraft_xfa::FieldDatum> =
+        xfa_field_data(doc).into_iter().filter(|f| !changed.contains(&f.name) && path_of(&f.name).is_some_and(|p| targets.contains(&p))).collect();
+    drop(binder);
+    xfa_take_values(doc, Some(tpl), &others)
+}
+
+/// Give `fields` the values the datasets hold for them (their nodes resolved with `tpl`, else
+/// the document's template); the names of those whose value changed.
+fn xfa_take_values(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: Option<&pdfcraft_xfa::model::Template>,
+    data: &[pdfcraft_xfa::FieldDatum],
+) -> Result<Vec<String>, String> {
     let fields = pdfcraft_forms::fields(doc);
     let mut changed = Vec::new();
-    for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
+    for (name, value) in pdfcraft_xfa::read_values_with(doc, tpl, data) {
         let Some(f) = fields.iter().find(|f| f.name == name) else { continue };
         let new = match value {
             pdfcraft_xfa::FieldData::Text(t) if matches!(f.kind, pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List) => {
@@ -3887,28 +3921,38 @@ impl Session {
             ),
             _ => edit.label(),
         };
+        // Which fields this edit filled (and whether it reset the form): the value a field was
+        // given wins on a data node it shares with other fields, and the form's scripts answer.
+        fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
+            match e {
+                Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
+                Edit::ResetForm { .. } => *reset = true,
+                Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
+                _ => {}
+            }
+        }
+        let mut changed: Vec<String> = Vec::new();
+        let mut reset = false;
+        collect(&edit, &mut changed, &mut reset);
+        let xfa_form_edit = is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content);
+        // The template the data is written with: the one cached for a form with scripts, else
+        // parsed once here rather than by each write.
+        let data_tpl: Option<Arc<pdfcraft_xfa::model::Template>> = match &cx.xfa {
+            Some(t) => Some(t.clone()),
+            None if xfa_form_edit => pdfcraft_xfa::template_of(&next).ok().map(Arc::new),
+            None => None,
+        };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first.
         if let Some(tpl) = cx.xfa.clone() {
-            if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
+            if xfa_form_edit {
                 let datasets = &mut cx.xfa_datasets;
-                let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets))
+                let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets, &changed))
                     .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
             }
-            fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
-                match e {
-                    Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
-                    Edit::ResetForm { .. } => *reset = true,
-                    Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
-                    _ => {}
-                }
-            }
-            let mut changed: Vec<String> = Vec::new();
-            let mut reset = false;
-            collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
                 let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
                 // Every changed field's scripts, then the calculations once (after a reset,
@@ -3924,13 +3968,26 @@ impl Session {
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
-        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
-            let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
-            xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
+        if xfa_form_edit {
+            let (tpl, datasets) = (data_tpl.as_deref(), &mut cx.xfa_datasets);
+            xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets, &changed))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                 .map_err(EditError::Write)?;
             // Rebuilding from stale data would discard accepted widget values.
             if xfa_notes.is_empty() {
+                // The other fields on a data node a filled field shares take the node's value
+                // (#3885); a form with scripts had them set already, and this finds nothing.
+                if let Some(tpl) = tpl
+                    && tpl.aliasing_binds
+                    && !changed.is_empty()
+                {
+                    let shared = guard(|| xfa_share_values(&mut next, tpl, &changed))
+                        .unwrap_or_else(|m| Err(format!("sharing the XFA data failed unexpectedly ({m})")))
+                        .map_err(EditError::Write)?;
+                    if !shared.is_empty() {
+                        cx.xfa_out.console.push(format!("{} field(s) on the same data node took the value: {}", shared.len(), shared.join(", ")));
+                    }
+                }
                 let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
                     .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
                     .map_err(EditError::Write)?;

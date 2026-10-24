@@ -178,9 +178,90 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `<bind match="…" ref="…"/>` (a `dataRef` keeps its `ref` as written; `scan_binds` says
+/// whether it can be followed).
+fn parse_bind(n: Option<XmlNode>) -> Bind {
+    let Some(b) = n else { return Bind::Once };
+    match b.attribute("match").map(str::trim) {
+        Some("none") => Bind::None,
+        Some("global") => Bind::Global,
+        Some("dataRef") => Bind::DataRef(b.attribute("ref").map(str::trim).unwrap_or_default().chars().take(1024).collect()),
+        _ => Bind::Once,
+    }
+}
+
+/// `<keep intact="…" next="…" previous="…"/>`: `contentArea` or `pageArea` keep, `none` doesn't.
+fn parse_keep(n: Option<XmlNode>) -> Keep {
+    let Some(k) = n else { return Keep::default() };
+    let keeps = |a: &str| matches!(k.attribute(a).map(str::trim), Some("contentArea" | "pageArea"));
+    Keep { intact: keeps("intact"), next: keeps("next"), previous: keeps("previous") }
+}
+
+/// What the template's bindings amount to: (some object binds other than by name, some may
+/// share a node with another). A `dataRef` without a `ref`, or with one that isn't followed,
+/// binds by name and is noted.
+fn scan_binds(sf: &Subform, warnings: &mut Vec<String>) -> (bool, bool) {
+    /// Folds one object's binding into `out`, noting a `dataRef` that binds by name.
+    fn one(c: &Common, out: &mut (bool, bool), warnings: &mut Vec<String>) {
+        match &c.bind {
+            Bind::Once => {}
+            Bind::None => out.0 = true,
+            Bind::Global => *out = (true, true),
+            Bind::DataRef(r) if crate::data::ref_is_supported(r) => *out = (true, true),
+            Bind::DataRef(r) => {
+                out.0 = true;
+                if warnings.len() < 100 {
+                    let what = if r.is_empty() {
+                        "has no ref".to_string()
+                    } else {
+                        format!("has a ref PdfCraft does not follow ({})", r.chars().take(80).collect::<String>())
+                    };
+                    warnings.push(format!("{}: its data binding {what}; it binds by name", c.name.as_deref().unwrap_or("an object")));
+                }
+            }
+        }
+    }
+    /// Folds every object under `ns` into `out`.
+    fn nodes(ns: &[Node], out: &mut (bool, bool), warnings: &mut Vec<String>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for n in ns {
+            match n {
+                Node::Subform(s) => {
+                    one(&s.common, out, warnings);
+                    nodes(&s.children, out, warnings, depth + 1);
+                }
+                Node::Area(a) => nodes(&a.children, out, warnings, depth + 1),
+                Node::Field(f) => one(&f.common, out, warnings),
+                Node::ExclGroup(g) => {
+                    one(&g.common, out, warnings);
+                    for f in &g.fields {
+                        one(&f.common, out, warnings);
+                    }
+                }
+                Node::Draw(_) => {}
+            }
+        }
+    }
+    let mut out = (false, false);
+    one(&sf.common, &mut out, warnings);
+    nodes(&sf.children, &mut out, warnings, 0);
+    if let Some(ps) = &sf.page_set {
+        for a in &ps.areas {
+            nodes(&a.items, &mut out, warnings, 1);
+        }
+    }
+    out
+}
+
+/// What every container, field and draw has: name, presence, position and size, margins,
+/// border, binding and keep.
 fn parse_common(n: XmlNode) -> Common {
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
+        bind: parse_bind(child(n, "bind")),
+        keep: parse_keep(child(n, "keep")),
         id: n.attribute("id").map(str::to_string),
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
@@ -724,7 +805,8 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    let (explicit_binds, aliasing_binds) = scan_binds(&root_sf, &mut warnings);
+    Ok((Template { root: root_sf, page_roles, explicit_binds, aliasing_binds }, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {

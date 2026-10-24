@@ -8,8 +8,8 @@ use crate::data::{
 };
 use crate::data::{add_data_instances, remove_data_instance, write_data_value};
 use crate::fixtures::{
-    TINY_GIF, bound_date_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp, tiny_png,
-    tiny_tiff, unnamed_hidden_template,
+    TINY_GIF, bound_date_template, bound_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp,
+    tiny_png, tiny_tiff, unnamed_hidden_template,
 };
 use crate::layout::Item;
 use crate::layout::WidgetKind;
@@ -1804,7 +1804,7 @@ fn page_area_minimum_adds_pages_after_the_body_only_when_unused() {
 #[test]
 fn data_paths_leave_areas_out() {
     let (tpl, _) = parse(&crate::fixtures::leave_template("")).unwrap();
-    let path = |som: &str| data_path(&tpl, som).into_iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".");
+    let path = |som: &str| data_path(&tpl, None, som).unwrap_or_default().into_iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".");
     // The area `box` (inside an unnamed subform) is dropped; indexes are kept.
     assert_eq!(path("form[0].page[0].box[0].table[0].row[2].days[0]"), "form[0].page[0].table[0].row[2].days[0]");
     assert_eq!(path("form[0].page[0].box[0].rest[0]"), "form[0].page[0].rest[0]");
@@ -1814,7 +1814,7 @@ fn data_paths_leave_areas_out() {
     assert_eq!(path("form[0].page[0].box[0].nothing[0].x[1]"), "form[0].page[0].nothing[0].x[1]");
     assert_eq!(path("form[0].page[0].box[0].rest[0].box[0]"), "form[0].page[0].rest[0].box[0]");
     assert_eq!(path("other[0].box[0].rest[0]"), "other[0].box[0].rest[0]");
-    assert_eq!(data_path(&tpl, ""), Vec::new());
+    assert_eq!(data_path(&tpl, None, ""), Some(Vec::new()));
 }
 
 /// A template nested thousands of elements deep must be refused. roxmltree recurses with the
@@ -2831,4 +2831,392 @@ fn long_names_repeated_by_an_index_are_capped() {
     }];
     let data = build_data(&doc, &fields);
     assert!(data.len() < 2_000_000, "{} bytes of data built", data.len());
+}
+
+/// `<bind match="none|global|dataRef" ref=…>` decides the data node an object reads, writes and
+/// repeats on, for every ref form PdfCraft follows; the ones it does not bind by name and warn.
+#[test]
+fn explicit_bindings_find_their_data_nodes() {
+    let form = layout_xml(&bound_template()).unwrap();
+    let page = &form.pages[0];
+    let value = |n: &str| widgets(page).into_iter().find(|w| w.name == n).unwrap_or_else(|| panic!("no {n}")).value.clone();
+    assert_eq!(value("name").as_deref(), Some("Ann"), "default binding, by name");
+    assert_eq!(value("city").as_deref(), Some("Oslo"), "dataRef from the record");
+    assert_eq!(value("nick").as_deref(), Some("n/a"), "match none keeps the template value");
+    assert_eq!(value("code").as_deref(), Some("Z9"), "global finds the node wherever it is");
+    assert_eq!(value("twin").as_deref(), Some("Ann"), "a relative ref from the parent's node");
+    assert_eq!(value("inner").as_deref(), Some("in"), "a subform bound to nothing is no data scope");
+    let skus: Vec<String> = widgets(page).into_iter().filter(|w| w.name.starts_with("sku")).filter_map(|w| w.value.clone()).collect();
+    assert_eq!(skus, ["A", "B"], "the records at the ref drive the instances");
+    assert_eq!(widgets(page).iter().filter(|w| w.som.contains(".single[")).count(), 1, "a ref naming one node (no [*]) is one instance");
+    assert_eq!(widgets(page).iter().filter(|w| w.som.contains(".visual[")).count(), 1, "a repeater bound to nothing shows its initial count");
+    // The paths themselves, with and without the data at hand.
+    let (tpl, _) = parse(&bound_template()).unwrap();
+    assert!(tpl.explicit_binds);
+    let data = parse_datasets(&bound_template()).unwrap();
+    let path = |som: &str, d: Option<&DataNode>| {
+        data_path(&tpl, d, som).map(|p| p.into_iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join("."))
+    };
+    assert_eq!(path("form[0].page1[0].city[0]", Some(&data)).as_deref(), Some("form[0].address[0].city[0]"));
+    assert_eq!(path("form[0].page1[0].city[0]", None).as_deref(), Some("form[0].address[0].city[0]"), "$record falls back to the root's name");
+    assert_eq!(path("form[0].page1[0].nick[0]", Some(&data)), None);
+    assert_eq!(path("form[0].page1[0].code[0]", Some(&data)).as_deref(), Some("form[0].deep[0].deeper[0].code[0]"));
+    assert_eq!(path("form[0].page1[0].code[0]", None).as_deref(), Some("form[0].page1[0].code[0]"), "global without data binds by name");
+    assert_eq!(path("form[0].page1[0].twin[0]", Some(&data)).as_deref(), Some("form[0].page1[0].name[0]"));
+    assert_eq!(path("form[0].page1[0].wrap[0].inner[0]", Some(&data)).as_deref(), Some("form[0].page1[0].inner[0]"));
+    assert_eq!(path("form[0].page1[0].items[1].sku[0]", Some(&data)).as_deref(), Some("form[0].order[0].line[1].sku[0]"));
+    // Hostile refs bind by name rather than crash or wander: functions, predicates, `$form`,
+    // a descendant search without data, a parent walk off the top.
+    for bad in [
+        "$form.x",
+        "$record.a(1).b",
+        "$record.a[(b)]",
+        "!",
+        "",
+        "$record..nowhere",
+        "$record.a..b.c[9999999999999999999999]",
+        "$recordx.y",
+        "$dataset.q",
+        "$record.a..",
+        "a/b",
+    ] {
+        let xml = bound_template().replace("$record.address.city", bad);
+        let (t, _) = parse(&xml).unwrap();
+        let p = data_path(&t, Some(&data), "form[0].page1[0].city[0]").unwrap();
+        assert_eq!(p.last().map(|(n, _)| n.as_str()), Some("city"), "{bad}: {p:?}");
+    }
+    assert_eq!(path("form[0].page1[0].items[0].sku[0]", None).as_deref(), Some("form[0].order[0].line[0].sku[0]"));
+    // Page masters' objects: bound under the area by name, or to nothing when they say so.
+    let pn = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form"><pageSet><pageArea name="front"><contentArea x="0" y="0" w="8in" h="10in"/><medium short="8.5in" long="11in"/><field name="pn" w="1in" h="0.2in"><ui><textEdit/></ui><bind match="none"/></field><field name="who" w="1in" h="0.2in"><ui><textEdit/></ui></field></pageArea></pageSet><subform name="wrap"><bind match="none"/><field name="a" w="1in" h="0.3in"><ui><textEdit/></ui></field></subform><field name="noref" w="1in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef"/></field><field name="bad" w="1in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$form.x"/></field></subform></template>"##;
+    let (t, warnings) = parse(pn).unwrap();
+    assert!(t.explicit_binds && !t.aliasing_binds, "none and unfollowed refs alias nothing");
+    assert!(warnings.iter().any(|w| w.contains("noref") && w.contains("has no ref")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("bad") && w.contains("does not follow")), "{warnings:?}");
+    assert_eq!(data_path(&t, None, "front[0].pn[0]"), None, "a page number field bound to nothing writes no data");
+    assert_eq!(data_path(&t, None, "front[0].who[0]"), Some(som_to_path("front[0].who[0]")));
+    // A template whose only explicit bindings are "none" still refreshes values in place.
+    let d1 = parse_datasets(
+        "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><a>1</a></form></xfa:data></xfa:datasets>",
+    )
+    .unwrap();
+    let d2 = parse_datasets(
+        "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><a>2</a></form></xfa:data></xfa:datasets>",
+    )
+    .unwrap();
+    let mut live = form_tree(&t, Some(&d1), &Overrides::default());
+    assert_eq!(refresh_value(&mut live.root, &t, Some(&d2), "form[0].wrap[0].a[0]"), Some(true));
+    assert_eq!(live.root.children[0].children[0].value, "2");
+    assert_eq!(
+        refresh_value(&mut form_tree(&tpl, Some(&data), &Overrides::default()).root, &tpl, Some(&data), "form[0].page1[0].name[0]"),
+        None,
+        "aliasing binds rebuild"
+    );
+    // A value for a field bound to nothing lives in the overrides, and the live form shows it.
+    let mut ov = Overrides::default();
+    ov.values.insert("form[0].page1[0].nick[0]".into(), "typed".into());
+    let mut live = form_tree(&tpl, Some(&data), &ov);
+    let nick = |live: &crate::script::LiveForm| live.root.children[0].children.iter().find(|c| c.name == "nick").unwrap().value.clone();
+    assert_eq!(nick(&live), "typed");
+    assert_eq!(crate::script::set_unbound_value(&mut live.root, &tpl, "form[0].page1[0].nick[0]", " later "), Some(true));
+    assert_eq!(nick(&live), "later");
+    assert_eq!(crate::script::set_unbound_value(&mut live.root, &tpl, "form[0].page1[0].nick[0]", ""), None, "an empty value means a rebuild");
+    assert_eq!(crate::script::set_unbound_value(&mut live.root, &tpl, "form[0].page1[0].nowhere[0]", "x"), None);
+    // Writing goes where the binding says: a value for `city` lands under `address`.
+    let mut doc = Document::open(Arc::new(shell(&bound_template()))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields: Vec<FieldDatum> = field_data(&doc)
+        .into_iter()
+        .filter(|f| f.name == "city" || f.name == "nick")
+        .map(|f| FieldDatum { data: FieldData::Text(format!("new {}", f.name)), ..f })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    write_datasets_with(&mut doc, Some(&tpl), &fields, None).unwrap();
+    let d = crate::script::data_of(&doc).unwrap();
+    assert_eq!(d.text_at(&som_to_path("form[0].address[0].city[0]")), Some("new city"));
+    assert_eq!(d.text_at(&som_to_path("form[0].page1[0].nick[0]")), Some("ignored"), "a field bound to nothing writes nothing");
+    assert_eq!(
+        read_values_with(&doc, Some(&tpl), &fields).iter().find(|(n, _)| n == "city").map(|(_, v)| v.clone()),
+        Some(FieldData::Text("new city".into()))
+    );
+}
+
+/// `keep next`/`previous` move a heading to the next content area with what it is kept with,
+/// and `keep intact` moves a subform whole rather than splitting it.
+#[test]
+fn keep_rules_hold_a_heading_with_what_follows_and_a_subform_whole() {
+    let page_set = r##"<pageSet><pageArea name="p"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>"##;
+    let form = |filler: &str, heading_keep: &str, block_keep: &str| {
+        let xml = format!(
+            r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">{page_set}
+ <draw name="filler" w="7in" h="{filler}"><value><text>filler</text></value></draw>
+ <draw name="heading" w="7in" h="0.3in">{heading_keep}<value><text>Heading</text></value></draw>
+ <subform name="block" layout="tb">{block_keep}
+  <draw name="l1" w="7in" h="0.3in"><value><text>line one</text></value></draw>
+  <draw name="l2" w="7in" h="0.3in"><value><text>line two</text></value></draw>
+ </subform>
+</subform></template>"##
+        );
+        let f = layout_xml(&xml).unwrap();
+        f.pages.iter().map(texts).collect::<Vec<_>>()
+    };
+    // Without keep: the heading fits on the first page, the block starts on the second.
+    assert_eq!(form("9.6in", "", ""), [vec!["filler", "Heading"], vec!["line one", "line two"]]);
+    // keep next on the heading, or keep previous on the block: the heading goes with it.
+    let kept = [vec!["filler"], vec!["Heading", "line one", "line two"]];
+    assert_eq!(form("9.6in", r#"<keep next="contentArea"/>"#, ""), kept);
+    assert_eq!(form("9.6in", "", r#"<keep previous="contentArea"/>"#), kept);
+    // keep next="none" is the default.
+    assert_eq!(form("9.6in", r#"<keep next="none"/>"#, "")[0], ["filler", "Heading"]);
+    // Without keep intact, the block splits between its lines; with it, it moves whole.
+    assert_eq!(form("9.3in", "", ""), [vec!["filler", "Heading", "line one"], vec!["line two"]]);
+    assert_eq!(form("9.3in", "", r#"<keep intact="contentArea"/>"#), [vec!["filler", "Heading"], vec!["line one", "line two"]]);
+    // A block taller than a page can't be kept intact: it still splits rather than vanishing.
+    let tall = format!(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">{page_set}
+ <subform name="block" layout="tb"><keep intact="contentArea"/>{}</subform></subform></template>"##,
+        (0..40).map(|i| format!(r##"<draw name="l{i}" w="7in" h="0.3in"><value><text>line {i}</text></value></draw>"##)).collect::<String>()
+    );
+    let f = layout_xml(&tall).unwrap();
+    assert_eq!(f.pages.len(), 2);
+    assert_eq!(f.pages.iter().map(|p| texts(p).len()).sum::<usize>(), 40);
+    // A table's repeated header is drawn when a keep moved rows to the next page too.
+    let rows: String = (0..20)
+        .map(|i| format!(r##"<subform name="r{i}" layout="row"><draw h="0.45in"><value><text>row {i}</text></value></draw><draw h="0.45in"><value><text>.</text></value></draw></subform>"##))
+        .collect();
+    let table = format!(
+        r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">{page_set}<subform name="table" layout="table" columnWidths="3in 3in"><overflow leader="header"/><subform name="header" layout="row"><draw h="0.3in"><value><text>From</text></value></draw><draw h="0.3in"><value><text>To</text></value></draw></subform>{rows}<subform name="pair1" layout="row"><keep next="contentArea"/><draw h="0.5in"><value><text>pair one</text></value></draw></subform><subform name="pair2" layout="row"><draw h="0.5in"><value><text>pair two</text></value></draw></subform></subform></subform></template>"##
+    );
+    let f = layout_xml(&table).unwrap();
+    assert_eq!(f.pages.len(), 2);
+    assert_eq!(texts(&f.pages[1]), ["From", "To", "pair one", "pair two"], "{:?}", texts(&f.pages[1]));
+}
+
+/// A script hiding `row[1]` hides that instance alone: the template's row stays visible for
+/// the others, an invisible instance keeps its space, and a template-hidden repeater is shown
+/// instance by instance.
+#[test]
+fn hiding_one_instance_of_a_repeating_subform_hides_only_that_one() {
+    let data = "<form><page1><table><row><amount>1</amount></row><row><amount>2</amount></row><row><amount>3</amount></row></table></page1></form>";
+    let xml = scripted_template().replace(
+        "</template>",
+        &format!("</template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>"),
+    );
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    render_into(&mut doc).unwrap();
+    let rows = |doc: &Document| {
+        let mut soms: Vec<String> = fields_by_som(doc).into_keys().filter(|s| s.ends_with(".amount[0]")).collect();
+        soms.sort();
+        soms
+    };
+    assert_eq!(rows(&doc).len(), 3);
+    let (tpl, _) = parse(&scripted_template()).unwrap();
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].page1[0].table[0].row[1]".into(), "hidden".into());
+    set_overrides(&mut doc, &ov).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    assert_eq!(rows(&doc), ["form[0].page1[0].table[0].row[0].amount[0]", "form[0].page1[0].table[0].row[2].amount[0]"]);
+    // The template's row is untouched: the other instances keep their fields.
+    let laid = apply_overrides(&tpl, &ov);
+    let Node::Subform(page) = &laid.root.children[0] else { panic!() };
+    let Node::Subform(table) = page.children.iter().find(|c| c.common().name.as_deref() == Some("table")).unwrap() else { panic!() };
+    assert_eq!(table.children[0].common().presence, Presence::Visible);
+    // The live form says the same, per instance.
+    let live = form_tree(&tpl, crate::script::data_of(&doc).as_ref(), &ov);
+    let table = &live.root.children[0].children.iter().find(|c| c.name == "table").unwrap().children;
+    assert_eq!(table.iter().map(|r| r.presence.as_str()).collect::<Vec<_>>(), ["visible", "hidden", "visible"]);
+    // Hiding the first instance hides that one, not the row for all.
+    ov.presence.insert("form[0].page1[0].table[0].row[0]".into(), "hidden".into());
+    set_overrides(&mut doc, &ov).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    assert_eq!(rows(&doc), ["form[0].page1[0].table[0].row[2].amount[0]"]);
+    // An invisible instance keeps its space but shows no field.
+    ov.presence.clear();
+    ov.presence.insert("form[0].page1[0].table[0].row[1]".into(), "invisible".into());
+    set_overrides(&mut doc, &ov).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    assert_eq!(rows(&doc).len(), 2);
+    let form = crate::layout::layout_with(&tpl, crate::script::data_of(&doc).as_ref(), &ov).unwrap();
+    let amounts: Vec<f64> = widgets(&form.pages[0]).into_iter().filter(|w| w.som.ends_with(".amount[0]")).map(|w| w.rect.y).collect();
+    assert!((amounts[1] - amounts[0] - 2.0 * 0.3 * 72.0).abs() < 0.5, "the invisible row's space stays between them: {amounts:?}");
+    // A repeating subform the template hides is shown instance by instance when a script says so.
+    let hidden = xml.replace(r#"<subform name="row" layout="row">"#, r#"<subform name="row" layout="row" presence="hidden">"#);
+    assert!(hidden.contains("presence=\"hidden\"><occur"), "the fixture was reshaped");
+    let (tpl, _) = parse(&hidden).unwrap();
+    let data = parse_datasets(&hidden).unwrap();
+    assert!(
+        crate::layout::layout_with(&tpl, Some(&data), &Overrides::default()).unwrap().pages[0]
+            .items
+            .iter()
+            .all(|i| !matches!(i, Item::Widget(w) if w.som.contains(".row[")))
+    );
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].page1[0].table[0].row[0]".into(), "visible".into());
+    ov.presence.insert("form[0].page1[0].table[0].row[2]".into(), "visible".into());
+    let form = crate::layout::layout_with(&tpl, Some(&data), &ov).unwrap();
+    let shown: Vec<String> = widgets(&form.pages[0]).into_iter().filter(|w| w.som.ends_with(".amount[0]")).map(|w| w.som.clone()).collect();
+    assert_eq!(shown, ["form[0].page1[0].table[0].row[0].amount[0]", "form[0].page1[0].table[0].row[2].amount[0]"]);
+}
+
+/// A repeating subform that is not split across pages (positioned, or with a fixed height) is
+/// laid out once per shown instance like a splittable one: the template's `hidden` hides every
+/// instance until a script shows one, every data instance of a visible one is drawn, and an
+/// invisible instance keeps its space.
+#[test]
+fn repeating_subforms_laid_out_as_blocks_are_shown_instance_by_instance() {
+    let xml = scripted_template()
+        .replace(
+            r#"<subform name="details" layout="tb" presence="hidden">"#,
+            r#"<subform name="opt" layout="position" presence="hidden" w="4in" h="0.5in"><occur min="1" max="-1"/>
+   <field name="f" x="0in" y="0in" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="fixed" layout="tb" h="0.5in"><occur min="1" max="-1"/>
+   <field name="g" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="details" layout="tb" presence="hidden">"#,
+        )
+        .replace(
+            "</template>",
+            r#"</template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><page1><opt/><opt/><fixed/><fixed/></page1></form></xfa:data></xfa:datasets>"#,
+        );
+    assert!(xml.contains(r#"name="opt""#) && xml.contains("<opt/><opt/>"), "the fixture was reshaped");
+    let (tpl, _) = parse(&xml).unwrap();
+    let data = parse_datasets(&xml).unwrap();
+    let soms = |ov: &Overrides, field: &str| -> Vec<String> {
+        let form = crate::layout::layout_with(&tpl, Some(&data), ov).unwrap();
+        widgets(&form.pages[0]).into_iter().filter(|w| w.som.ends_with(field)).map(|w| w.som.clone()).collect()
+    };
+    let y_of = |ov: &Overrides, field: &str| -> f64 {
+        let form = crate::layout::layout_with(&tpl, Some(&data), ov).unwrap();
+        widgets(&form.pages[0]).into_iter().find(|w| w.som.ends_with(field)).map(|w| w.rect.y).unwrap()
+    };
+    let none = Overrides::default();
+    // The template hides `opt`: none of its instances is drawn, nor takes space.
+    assert_eq!(soms(&none, ".f[0]"), Vec::<String>::new());
+    // Both data instances of `fixed` are drawn, one below the other.
+    assert_eq!(soms(&none, ".g[0]"), ["form[0].page1[0].fixed[0].g[0]", "form[0].page1[0].fixed[1].g[0]"]);
+    let g0 = y_of(&none, "fixed[0].g[0]");
+    assert!((y_of(&none, "fixed[1].g[0]") - g0 - 0.5 * 72.0).abs() < 0.5);
+    // What follows sits right after the two instances: the flow agrees with the measure.
+    let grand = y_of(&none, ".grand[0]");
+    // A script shows one instance of the hidden subform; the others stay hidden.
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].page1[0].opt[1]".into(), "visible".into());
+    assert_eq!(soms(&ov, ".f[0]"), ["form[0].page1[0].opt[1].f[0]"]);
+    assert!((y_of(&ov, ".grand[0]") - grand - 0.5 * 72.0).abs() < 0.5, "the shown instance pushes what follows down");
+    // Hiding one instance of the visible subform removes that one; making it invisible keeps its space.
+    ov.presence.clear();
+    ov.presence.insert("form[0].page1[0].fixed[0]".into(), "hidden".into());
+    assert_eq!(soms(&ov, ".g[0]"), ["form[0].page1[0].fixed[1].g[0]"]);
+    assert!((y_of(&ov, ".grand[0]") - grand + 0.5 * 72.0).abs() < 0.5);
+    ov.presence.insert("form[0].page1[0].fixed[0]".into(), "invisible".into());
+    assert_eq!(soms(&ov, ".g[0]"), ["form[0].page1[0].fixed[1].g[0]"]);
+    assert!((y_of(&ov, "fixed[1].g[0]") - g0 - 0.5 * 72.0).abs() < 0.5, "the invisible instance's space stays");
+    assert!((y_of(&ov, ".grand[0]") - grand).abs() < 0.5);
+}
+
+/// Taking an instance out of a repeating subform drops its overrides and renumbers the ones on
+/// the instances after it, in every map, leaving other subforms' alone.
+#[test]
+fn removing_an_instance_renumbers_the_overrides_after_it() {
+    let mut ov = Overrides::default();
+    for (i, p) in ["visible", "hidden", "invisible", "visible"].iter().enumerate() {
+        ov.presence.insert(format!("form[0].t[0].row[{i}]"), p.to_string());
+    }
+    ov.access.insert("form[0].t[0].row[2].amount[0]".into(), "readOnly".into());
+    ov.values.insert("form[0].t[0].row[10].note[0]".into(), "ten".into());
+    ov.values.insert("form[0].t[0].rows[1]".into(), "another subform".into());
+    ov.presence.insert("form[0].u[0].row[1]".into(), "hidden".into());
+    assert!(ov.remove_instance("form[0].t[0]", "row", 1));
+    let p = |ov: &Overrides, k: &str| ov.presence.get(k).cloned();
+    assert_eq!(p(&ov, "form[0].t[0].row[0]").as_deref(), Some("visible"));
+    assert_eq!(p(&ov, "form[0].t[0].row[1]").as_deref(), Some("invisible"), "{ov:?}");
+    assert_eq!(p(&ov, "form[0].t[0].row[2]").as_deref(), Some("visible"));
+    assert_eq!(p(&ov, "form[0].t[0].row[3]"), None);
+    assert_eq!(ov.access.get("form[0].t[0].row[1].amount[0]").map(String::as_str), Some("readOnly"));
+    assert_eq!(ov.access.len(), 1);
+    assert_eq!(ov.values.get("form[0].t[0].row[9].note[0]").map(String::as_str), Some("ten"));
+    assert_eq!(ov.values.get("form[0].t[0].rows[1]").map(String::as_str), Some("another subform"));
+    assert_eq!(p(&ov, "form[0].u[0].row[1]").as_deref(), Some("hidden"));
+    // Past the last instance with an override there is nothing to do; before it, the rest move.
+    assert!(!ov.remove_instance("form[0].t[0]", "row", 20));
+    assert!(ov.remove_instance("form[0].t[0]", "row", 7));
+    assert_eq!(ov.values.get("form[0].t[0].row[8].note[0]").map(String::as_str), Some("ten"));
+    assert!(!ov.remove_instance("x", "y", 0));
+}
+
+/// The name index clones every ancestor's name into each entry, so a small packet with a deep
+/// chain of long names would multiply into gigabytes: the index stops at its byte budget, and a
+/// `global` binding past it still finds its node by walking.
+#[test]
+fn the_name_index_stops_at_its_byte_budget_and_bindings_still_resolve() {
+    // 16 ancestors of 20 000 bytes each, then 300 leaves: 320 KB of path per leaf entry.
+    let names: Vec<String> = (0..16).map(|i| format!("a{i}{}", "x".repeat(20_000))).collect();
+    let mut data = String::from("<form>");
+    for n in &names {
+        data.push_str(&format!("<{n}>"));
+    }
+    for i in 0..300 {
+        data.push_str(&format!("<leaf{i}>v{i}</leaf{i}>"));
+    }
+    // A node the budget skips, and a later one of its name the index would hold.
+    data.push_str("<target>early</target>");
+    for n in names.iter().rev() {
+        data.push_str(&format!("</{n}>"));
+    }
+    data.push_str("<target>late</target></form>");
+    let xml = template_with_data(1, &data);
+    let parsed = parse_datasets(&xml).unwrap();
+    let idx = crate::data::NameIndex::build(&parsed);
+    let entries: usize = idx.by_name.values().map(Vec::len).sum();
+    assert!(!idx.complete, "the index took every node: {entries} entries");
+    assert!(entries < 150, "{entries} entries indexed");
+    // A field bound `global` to the last leaf finds it past the index.
+    let tpl_xml = template(1).replace(
+        r#"<field name="familyName""#,
+        r#"<field name="leaf299" w="1in" h="0.3in"><ui><textEdit/></ui><bind match="global"/></field><field name="familyName""#,
+    );
+    assert!(tpl_xml.contains("leaf299"), "the fixture was reshaped");
+    let (tpl, _) = parse(&tpl_xml).unwrap();
+    let path = crate::data::Binder::new(&tpl, Some(&parsed)).path("form[0].head[0].leaf299[0]").expect("resolves");
+    assert_eq!(path.len(), 18, "{path:?}");
+    assert_eq!(path.last().map(|(n, i)| (n.as_str(), *i)), Some(("leaf299", 0)));
+    assert_eq!(parsed.text_at(&path), Some("v299"));
+    // `global` binds the first node of the name in document order: the one the index skipped,
+    // not the later one it holds.
+    let tpl_xml = tpl_xml.replace(
+        r#"<field name="leaf299""#,
+        r#"<field name="target" w="1in" h="0.3in"><ui><textEdit/></ui><bind match="global"/></field><field name="leaf299""#,
+    );
+    let (tpl, _) = parse(&tpl_xml).unwrap();
+    let path = crate::data::Binder::new(&tpl, Some(&parsed)).path("form[0].head[0].target[0]").expect("resolves");
+    assert_eq!(parsed.text_at(&path), Some("early"), "{path:?}");
+}
+
+/// One `Binder` per layout: many fields bound `global` cost one walk of the data between
+/// them, not one each.
+#[test]
+fn global_bindings_do_not_walk_the_data_once_per_field() {
+    // 1500 fields bound globally over 20000 data nodes: one index of the data, not a walk per
+    // field (which would be the form times the data).
+    let fields: String =
+        (0..1500).map(|i| format!(r##"<field name="g{i}" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="global"/></field>"##)).collect();
+    let noise: String = (0..20000).map(|j| format!("<n{j}>v</n{j}>")).collect();
+    let values: String = (0..1500).map(|i| format!("<g{i}>val{i}</g{i}>")).collect();
+    let xml = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><pageSet><pageArea name="p"><occur max="-1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><subform name="page1" layout="tb">{fields}</subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><deep><deeper>{noise}<here>{values}</here></deeper></deep></form></xfa:data></xfa:datasets></xdp:xdp>"##
+    );
+    let started = std::time::Instant::now();
+    let form = layout_xml(&xml).unwrap();
+    let elapsed = started.elapsed();
+    let all: Vec<&Widget> = form.pages.iter().flat_map(widgets).collect();
+    assert_eq!(all.iter().find(|w| w.name == "g0").unwrap().value.as_deref(), Some("val0"));
+    assert_eq!(all.iter().find(|w| w.name == "g1499").unwrap().value.as_deref(), Some("val1499"));
+    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+    // The live form and a datasets write go through the same index.
+    let (tpl, _) = parse(&xml).unwrap();
+    let data = parse_datasets(&xml).unwrap();
+    let started = std::time::Instant::now();
+    let live = form_tree(&tpl, Some(&data), &Overrides::default());
+    assert_eq!(live.root.children[0].children[7].value, "val7");
+    assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
 }

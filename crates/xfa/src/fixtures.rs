@@ -658,3 +658,46 @@ if (this.rawValue == "1") {
 "##
     .to_string()
 }
+
+/// A form whose objects say where their data is (explicit `<bind>` elements): a field bound to a node elsewhere, one bound
+/// to the first node of its name anywhere, one bound to nothing, a subform that is no data
+/// scope, and a repeating subform bound to the records at a path.
+pub fn bound_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="name" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="city" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$record.address.city"/></field>
+  <field name="nick" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="none"/><value><text>n/a</text></value></field>
+  <field name="code" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="global"/></field>
+  <field name="twin" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$.name"/></field>
+  <field name="echo" w="2in" h="0.3in" access="readOnly"><ui><textEdit/></ui><bind match="none"/><calculate><script contentType="application/x-javascript">city.rawValue</script></calculate></field>
+  <field name="rename" w="1in" h="0.3in"><ui><button/></ui><caption><value><text>Rename</text></value></caption><event activity="click"><script contentType="application/x-javascript">name.rawValue = "Bo";</script></event></field>
+  <field name="readEcho" w="1in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">xfa.host.messageBox("echo=" + echo.rawValue);</script></event></field>
+  <field name="readNick" w="1in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">xfa.host.messageBox("nick=" + nick.rawValue);</script></event></field>
+  <subform name="visual" layout="tb"><occur max="-1"/><bind match="none"/>
+   <field name="v" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+  <field name="addVisual" w="1in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">_visual.addInstance(1);</script></event></field>
+  <subform name="single" layout="tb"><occur max="-1"/><bind match="dataRef" ref="$record.order.line"/>
+   <field name="one" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wrap" layout="tb"><bind match="none"/>
+   <field name="inner" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="items" layout="tb"><occur max="-1"/><bind match="dataRef" ref="$record.order.line[*]"/>
+   <field name="sku" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data>
+<form><page1><name>Ann</name><inner>in</inner><nick>ignored</nick></page1><address><city>Oslo</city></address><deep><deeper><code>Z9</code></deeper></deep><order><line><sku>A</sku></line><line><sku>B</sku></line></order></form>
+</xfa:data></xfa:datasets>
+</xdp:xdp>
+"##
+    .to_string()
+}

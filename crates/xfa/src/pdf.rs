@@ -1004,8 +1004,10 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
 fn unbound_data(doc: &Document) -> Option<usize> {
     let data = crate::script::data_of(doc)?;
     let tpl = crate::script::template_of(doc).ok()?;
-    let bound: std::collections::HashSet<crate::data::DataPath> =
-        crate::script::fields_by_som(doc).keys().map(|som| crate::data::data_path(&tpl, som)).collect();
+    let bound: std::collections::HashSet<crate::data::DataPath> = {
+        let binder = crate::data::Binder::new(&tpl, Some(&data));
+        crate::script::fields_by_som(doc).keys().filter_map(|som| binder.path(som)).collect()
+    };
     fn walk(
         n: &crate::data::DataNode,
         path: &mut crate::data::DataPath,
