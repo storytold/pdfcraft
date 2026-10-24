@@ -1829,6 +1829,30 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
     }
 }
 
+/// The `(major, minor)` of a version name such as `/1.7`; `None` for anything else.
+fn version_number(name: &[u8]) -> Option<(u32, u32)> {
+    let (major, minor) = std::str::from_utf8(name).ok()?.split_once('.')?;
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+/// Whether the catalog `d` keeps the signed catalog `b`'s `/Version` or raises it. The entry
+/// exists so a writer can lift the version in an incremental update (ISO 32000-2 §7.7.2), as PAdES
+/// LTV writers do when they add the DSS. A signed version may not drop or go back. Only a name that
+/// reads as a version on both sides is compared by number; any other signed value, a string or an
+/// integer say, may not change in any way.
+fn version_not_lowered(d: &Dict, b: &Dict) -> bool {
+    let Some(signed) = b.get(b"Version") else { return true };
+    match (b.name(b"Version"), d.name(b"Version")) {
+        (Some(was), Some(now)) => match (version_number(was), version_number(now)) {
+            (Some(was), Some(now)) => now >= was,
+            _ => now == was,
+        },
+        _ => d.get(b"Version") == Some(signed),
+    }
+}
+
+/// The kind of change the dictionary `d` is after signing. `before` is the dictionary it replaces in
+/// the signed revision, or `None` for an object added since.
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature
@@ -1847,13 +1871,16 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
         Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
         Some(b"Catalog") => {
-            let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
+            let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions", b"Version"];
             return match before {
                 Some(b) if without(d, keys) != without(b, keys) => kind::STRUCTURE,
                 // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A
                 // writer adding a /DSS also declares the ESIC extension it belongs to, so a
                 // declaration may be added, but none that was signed may change or go.
                 Some(b) if !extensions_kept(doc, old, d, b) => kind::STRUCTURE,
+                // The version a writer lifts with the same update (ISO 32000-2 §7.7.2) only says
+                // what the file uses: it may rise, but a signed one may not fall or go.
+                Some(b) if !version_not_lowered(d, b) => kind::STRUCTURE,
                 Some(b) => {
                     if d.get(b"AcroForm") != b.get(b"AcroForm") {
                         // Compare the forms themselves, inline or not.
