@@ -674,6 +674,18 @@ evidence = ["crates/ui-egui/tests/it/ui.rs::dropping_a_pdf_on_the_window_opens_i
 notes = "desktop: the dropped file opens in a tab (by path, or its bytes); web: read asynchronously; a drop with a filesystem path matching an open document focuses that tab (#1620); pathless bytes have nothing to match and open another tab"
 
 [[feature]]
+id = "core.paste-open"
+title = "Open copied files by pasting"
+area = "A"
+tier = "P2"
+milestone = "M3"
+status = "shipped"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/tests/it/ui.rs::pasting_a_copied_pdf_file_on_home_opens_it", "crates/ui-egui/tests/it/ui.rs::pasting_copied_files_on_the_combine_tab_adds_them"]
+notes = "Beyond Acrobat (#1289): ⌘V / Ctrl+V with files copied in Explorer, Finder or a file manager does what dropping them does. On Home each opens in a tab (a file that is open already comes to the front); on the Combine files tab files and folders join the list. A document showing keeps ⌘V for its own pastes (pictures, pages, fields, text). Missing: the web build (browsers hand pages no copied file paths); a Wayland session without XWayland (arboard is built without its wlr data-control support) and file names that aren't UTF-8 on Linux paste nothing; pasting copied image files onto a page"
+
+[[feature]]
 id = "core.recent-files"
 title = "Local recent-files list"
 area = "A"
