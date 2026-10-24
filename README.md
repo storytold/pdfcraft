@@ -409,6 +409,48 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 ```
 
+## Build dan instalasi
+
+Bagian ini untuk membuat paket lokal. Hasil dengan tanda tangan ad-hoc hanya cocok untuk pengujian di Mac pembuatnya; gunakan sertifikat pengembang sendiri sebelum membagikannya.
+
+### macOS
+
+Gunakan macOS 11 atau lebih baru, Xcode Command Line Tools, dan Rust stable. Untuk membuat DMG universal yang mendukung Apple silicon serta Intel, pasang kedua target Rust lalu jalankan skrip paket:
+
+```sh
+xcode-select --install
+rustup toolchain install stable
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+git clone https://github.com/storytold/pdfcraft
+cd pdfcraft
+./packaging/macos/package.sh --arch universal
+```
+
+Skrip mengunduh model OCR yang diperlukan dan menghasilkan `dist/release/pdfcraft-<versi>-macos-universal.dmg` serta ZIP CLI. Gunakan `--arch aarch64` untuk Apple silicon atau `--arch x86_64` untuk Intel. Untuk memasang DMG, buka berkasnya, seret `PdfCraft.app` ke folder `Applications`, lalu keluarkan disk image.
+
+Secara default paket lokal ditandatangani ad-hoc. Untuk rilis yang dapat dipasang di Mac lain, atur `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, serta `APPLE_TEAM_ID` agar skrip melakukan signing dan notarization.
+
+### Windows: MSI installer
+
+Bangun paket pada komputer Windows yang memiliki Visual Studio Build Tools dengan workload **Desktop development with C++**, Windows SDK, Rust stable MSVC, PowerShell 7, .NET SDK, `curl`, serta akses internet untuk model OCR. Pasang WiX 5 dan buat MSI:
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc
+dotnet tool install --global wix --version 5.0.2
+git clone https://github.com/storytold/pdfcraft
+Set-Location pdfcraft
+pwsh ./packaging/windows/package.ps1 -Arch x64
+```
+
+Hasilnya berada di `dist/release/`: `pdfcraft-<versi>-windows-x64.msi` dan ZIP portabel yang sudah membawa model OCR. Jalankan MSI dengan klik dua kali atau dari PowerShell Administrator:
+
+```powershell
+msiexec /i ".\dist\release\pdfcraft-<versi>-windows-x64.msi"
+```
+
+Gunakan `-Arch arm64` atau `-Arch x86` setelah target Rust dan build tools arsitektur tersebut dipasang. Paket tetap dibuat tanpa sertifikat, tetapi tidak ditandatangani; konfigurasi signing ada di `packaging/windows/sign.ps1`.
+
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
 Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
 [Downloads](#downloads). On Gentoo, the community [::snakebyte
@@ -440,6 +482,16 @@ PdfCraft is young and moving fast. The aim is a workbench where you can view, or
 The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension and area is in [docs/target-app-parity.md](docs/target-app-parity.md), the ranked gaps in [docs/gaps.md](docs/gaps.md), and the milestones in [docs/roadmap.md](docs/roadmap.md).
 
 ---
+
+## AI Studio lokal — RoboDhan
+
+Klik toggle **AI Studio** untuk menampilkan atau menyembunyikan panel. Prompt dan proses yang sedang berjalan tetap tersimpan selama aplikasi terbuka, walaupun panel disembunyikan.
+
+Ringkas PDF aktif, tinjau hasil, lalu **Simpan & buka di WordCraft…**. Ringkasan disimpan sebagai teks UTF-8 dan dibuka di WordCraft. Di macOS, letakkan WordCraft.app dalam folder yang sama dengan PdfCraft.app, atau pasang WordCraft di Applications; di Windows/Linux sediakan executable pada PATH. PDF scan perlu OCR terlebih dahulu. Pembatasan penyalinan dokumen tetap dihormati.
+
+Jalankan RoboDhan versi integrasi Craft, aktifkan API lokal pada port **1234**, lalu muat model chat lokal di Preferences. Editor berkomunikasi langsung ke `http://127.0.0.1:1234/v1/craft/tasks` dengan tugas `pdf.summary`; tidak ada bridge Python terpisah. PhotoCraft/VectorCraft tetap memakai endpoint chat/gambar yang sudah ada. Fitur AI Studio tersedia pada aplikasi desktop; browser tidak mengakses API loopback ini.
+
+Pemrosesan dimulai hanya saat tombol proses ditekan. Teks sumber dan instruksi dikirim ke model lokal RoboDhan. Sumber maksimal 240 KB; teks panjang untuk ringkasan/terjemahan dibagi menjadi bagian agar tidak terpotong diam-diam. Hasil model tetap perlu ditinjau. Jika server tidak aktif, panel menampilkan kesalahan tanpa mengubah dokumen.
 
 ## Downloads
 

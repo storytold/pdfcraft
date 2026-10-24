@@ -41,6 +41,8 @@ unicode-bidi = "0.3"
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3.4.2", default-features = false }
+
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
