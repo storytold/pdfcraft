@@ -927,11 +927,14 @@ fn interpret_window<'a>(
                 let cache = context.interpreter_cache.object_cache.clone();
                 // PdfCraft patch (60): an inline image naming a resource colour space that is a
                 // malformed Indexed space is skipped with a warning, as `ImageXObject::new` does
-                // for one given in place.
+                // for one given in place. A device space name (or its inline abbreviation) never
+                // refers to a resource (ISO 32000-2 §8.6.8), and `ImageXObject::new` takes it
+                // first, so a resource of that name is not consulted.
                 let inline_dict = i.0.dict();
                 if inline_dict
                     .get::<hayro_syntax::object::Name<'_>>(hayro_syntax::object::dict::keys::CS)
                     .or_else(|| inline_dict.get::<hayro_syntax::object::Name<'_>>(hayro_syntax::object::dict::keys::COLORSPACE))
+                    .filter(|name| ColorSpace::new_from_name(name).is_none())
                     .and_then(|name| resources.get_color_space(&name))
                     .is_some_and(|cs| crate::color::is_malformed_indexed(&cs, &cache))
                 {

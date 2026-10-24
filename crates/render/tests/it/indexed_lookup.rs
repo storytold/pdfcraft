@@ -10,12 +10,17 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RenderWarning, 
 /// A 200 × 200 page whose `/Im` image is two samples wide (indices 0 and 1) and covers the page,
 /// with `/P` naming `colour_space` as a resource. `extra` objects are numbered from 6.
 fn pdf(colour_space: &str, content: &str, extra: &[&[u8]]) -> Vec<u8> {
+    pdf_with_resource("P", colour_space, content, extra)
+}
+
+/// As `pdf`, with the colour space resource named `resource` rather than `/P`.
+fn pdf_with_resource(resource: &str, colour_space: &str, content: &str, extra: &[&[u8]]) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         format!(
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R \
-             /Resources << /XObject << /Im 5 0 R >> /ColorSpace << /P {colour_space} >> >> >>"
+             /Resources << /XObject << /Im 5 0 R >> /ColorSpace << /{resource} {colour_space} >> >> >>"
         )
         .into_bytes(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
@@ -145,6 +150,19 @@ fn inline_images_with_a_short_lookup_are_skipped_too() {
     let page = render(pdf("[/Indexed /DeviceRGB 1 <FF0000 00FF00>]", &inline("/P"), &[]));
     assert_eq!(halves(&page), RED_GREEN);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+}
+
+#[test]
+fn an_inline_device_space_name_ignores_a_resource_of_the_same_name() {
+    // ISO 32000-2 §8.6.8 (the CS operator): the device colour space names never refer to resources in the
+    // ColorSpace subdictionary, so a malformed Indexed resource that shares the name (here the
+    // inline abbreviation `/RGB`, and `/DeviceRGB`) does not stop the image from drawing.
+    for (resource, cs) in [("RGB", "/RGB"), ("DeviceRGB", "/DeviceRGB")] {
+        let content = format!("q 200 0 0 200 0 0 cm BI /W 2 /H 1 /BPC 8 /CS {cs} /F /AHx ID FF000000FF00> EI Q");
+        let page = render(pdf_with_resource(resource, "[/Indexed /DeviceRGB 7 <FF0000 00FF00>]", &content, &[]));
+        assert_eq!(halves(&page), RED_GREEN, "{cs}: the device space draws");
+        assert!(page.warnings.is_empty(), "{cs}: {:?}", page.warnings);
+    }
 }
 
 #[test]
