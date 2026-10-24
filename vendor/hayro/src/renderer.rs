@@ -236,6 +236,69 @@ fn nearest_premultiplied_rgba(
     Some(out)
 }
 
+/// PdfCraft patch (#1700): area-averages a 1-bit source (an `/ImageMask`, a
+/// `/BitsPerComponent 1` image or a Type 3 glyph mask) and its same-sized mask straight into
+/// premultiplied RGBA of `target` size. Minified, picking one source sample drops a one-pixel
+/// stroke whenever the picking grid misses it; averaging keeps the stroke as the mid-tone Acrobat
+/// and poppler draw. Colour and mask are summed premultiplied over the target pixel's box.
+fn average_premultiplied_rgba(
+    color: &ImageData,
+    alpha: Option<&[u8]>,
+    source: (u32, u32),
+    target: (u32, u32),
+) -> Option<Vec<u8>> {
+    let (samples, channels) = match color {
+        ImageData::Luma(luma) => (luma.data.as_slice(), 1),
+        ImageData::Rgb(rgb) => (rgb.data.as_slice(), 3),
+    };
+    let source_pixels = usize::try_from(u64::from(source.0) * u64::from(source.1)).ok()?;
+    if samples.len() != source_pixels * channels || alpha.is_some_and(|a| a.len() != source_pixels) {
+        return None;
+    }
+    let mut out = image_buffer(image_byte_len(target.0, target.1, 4, MAX_IMAGE_PIXELS)?)?;
+    let (sw, sh) = (f64::from(source.0), f64::from(source.1));
+    let sx = sw / f64::from(target.0);
+    let sy = sh / f64::from(target.1);
+    // PdfCraft patch (#1700), review: the far end of the last target box, `(t + 1) * (s / t)` in
+    // f64, can round a hair above the source dimension — 22 × (25 / 22) = 25.000000000000004 —
+    // so `ceil` takes the row or column just past the last one; that read returns `None` and
+    // drops the whole image to the nearest-picking fallback. Clamp both far ends to the source.
+    for ty in 0..target.1 {
+        let (y0, y1) = (f64::from(ty) * sy, (f64::from(ty + 1) * sy).min(sh));
+        for tx in 0..target.0 {
+            let (x0, x1) = (f64::from(tx) * sx, (f64::from(tx + 1) * sx).min(sw));
+            // The target pixel's box exactly tiles the source, so the covered fractions of the
+            // source pixels sum to one. Sum premultiplied colour × fraction over the box.
+            let mut premultiplied = [0.0f64; 4];
+            for row in (y0.floor() as usize)..(y1.ceil() as usize) {
+                let cover_y = y1.min(row as f64 + 1.0) - y0.max(row as f64);
+                for col in (x0.floor() as usize)..(x1.ceil() as usize) {
+                    let cover_x = x1.min(col as f64 + 1.0) - x0.max(col as f64);
+                    let weight = cover_x * cover_y / (sx * sy);
+                    let index = row * source.0 as usize + col;
+                    let a = match alpha {
+                        Some(alpha) => f64::from(*alpha.get(index)?) / 255.0,
+                        None => 1.0,
+                    };
+                    let value = |channel: usize| -> Option<f64> {
+                        let byte = *samples.get(index * channels + channel)?;
+                        Some(f64::from(byte) / 255.0 * a * weight)
+                    };
+                    premultiplied[0] += value(0)?;
+                    premultiplied[1] += value(usize::from(channels > 1))?;
+                    premultiplied[2] += value(channels - 1)?;
+                    premultiplied[3] += weight * a;
+                }
+            }
+            for value in premultiplied {
+                let byte = (value * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                out.push(byte);
+            }
+        }
+    }
+    Some(out)
+}
+
 /// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
 /// dash, so a pattern that is tiny next to its path asks for billions: a fuzzed `/D [[11] 0]` on
 /// a line from x = 92234775807 allocated over 5 GB, and `[0.000001] 0 d` on a 20 pt line over
@@ -613,6 +676,7 @@ impl Renderer {
                 width: alpha_data.width,
                 height: alpha_data.height,
                 interpolate: alpha_data.interpolate,
+                one_bit: alpha_data.one_bit,
                 scale_factors: alpha_data.scale_factors,
             });
             renderer.ctx.set_transform(transform);
@@ -894,17 +958,34 @@ impl Renderer {
         let (new_width, new_height) = snapped.map_or((new_width, new_height), |s| (s.0, s.1));
         let needs_resize = (new_width, new_height) != (source_width, source_height);
 
+        // PdfCraft patch (#1700): a 1-bit source shrunk below its own resolution is line art;
+        // picking single samples drops one-pixel strokes (image-mask glyphs, fax-era and OCR
+        // fonts) whenever the picking grid misses them. Average the source pixels each device
+        // pixel covers instead, whatever `/Interpolate` says. Interpolated sources keep the
+        // resampling path and the crisp-screenshot rule of #624 stays for continuous-tone images.
+        let averaged = !interpolate
+            && needs_resize
+            && (image_data.one_bit() || alpha_data.as_ref().is_some_and(|a| a.one_bit));
         // PdfCraft patch (#624): a minified image with a soft mask that is not interpolated is
         // nearest-sampled straight into premultiplied target RGBA. That skips the full-resolution
         // RGBA copy below and the premultiply pass after it.
-        let direct = match &alpha_data {
-            Some(alpha) if needs_resize && !interpolate => nearest_premultiplied_rgba(
+        let direct = if averaged {
+            average_premultiplied_rgba(
                 &image_data,
-                &alpha.data,
+                alpha_data.as_ref().map(|a| a.data.as_slice()),
                 (source_width, source_height),
                 (new_width, new_height),
-            ),
-            _ => None,
+            )
+        } else {
+            match &alpha_data {
+                Some(alpha) if needs_resize && !interpolate => nearest_premultiplied_rgba(
+                    &image_data,
+                    &alpha.data,
+                    (source_width, source_height),
+                    (new_width, new_height),
+                ),
+                _ => None,
+            }
         };
         let premultiplied = direct.is_some();
         // Preserve the single-channel/RGB fast paths. With alpha, expand directly to RGBA;
@@ -1576,6 +1657,7 @@ impl<'a> Device<'a> for Renderer {
                                     width: stencil.width,
                                     height: stencil.height,
                                     interpolate: stencil.interpolate,
+                                    one_bit: stencil.one_bit,
                                     scale_factors: stencil.scale_factors,
                                 });
                                 self.draw_image(rgb_data, Some(stencil));
@@ -1605,6 +1687,7 @@ impl<'a> Device<'a> for Renderer {
                                         width: stencil.width,
                                         height: stencil.height,
                                         interpolate: stencil.interpolate,
+                                        one_bit: stencil.one_bit,
                                         scale_factors: stencil.scale_factors,
                                     });
                                     let mut sub_renderer = Self {
