@@ -3066,6 +3066,51 @@ fn a_line_split_across_content_streams_is_listed_and_edited() {
 }
 
 #[test]
+fn mixed_script_paragraph_keeps_source_fonts_through_tools_and_reopen() {
+    if pdfcraft_fonts::document_japanese_font().is_none() {
+        eprintln!("skipping mixed-script fallback: build with CRAFT_FONTS_DIR");
+        return;
+    }
+    let dir = workdir("mixed-script-paragraph");
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    cos.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |d| {
+        d.set(b"MediaBox".to_vec(), pdfcraft_cos::Object::Array([0, 0, 612, 792].map(pdfcraft_cos::Object::Int).to_vec()));
+    })
+    .unwrap();
+    let body =
+        b"BT /F1 12 Tf 14.4 TL 72 700 Td (The quick brown fox jumps over the lazy dog) Tj T* (and keeps running through the long field.) Tj ET";
+    cos.set(pdfcraft_cos::ObjRef::new(5, 0), pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), body)));
+    std::fs::write(dir.join("mixed.pdf"), pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"mixed.pdf"}))["doc"].as_u64().unwrap();
+    let draft = "The quick brown fox jumps over the lazy dog шалом and keeps running through the long field.";
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":draft}));
+    let check = |a: &mut Automation, doc, expected: &str| {
+        let listed = ok(a, "text_lines", json!({"doc":doc,"page":1}));
+        let lines = listed["lines"].as_array().unwrap();
+        assert!(lines.iter().any(|l| l["font"] == "Helvetica" && l["text"].as_str().unwrap().contains("The quick brown fox")), "{listed}");
+        for line in lines.iter().filter(|l| l["text"].as_str().unwrap().chars().any(|c| c.is_ascii_alphabetic())) {
+            assert_eq!(line["font"], "Helvetica", "{line}");
+        }
+        let text = page_text(a, doc).join(" ");
+        assert_eq!(text.split_whitespace().collect::<Vec<_>>(), expected.split_whitespace().collect::<Vec<_>>());
+    };
+    check(&mut a, doc, draft);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert!(!page_text(&mut a, doc).join(" ").contains("шалом"));
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    check(&mut a, doc, draft);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let doc = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    check(&mut a, doc, draft);
+    let extended = format!("{draft} More Latin.");
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":extended}));
+    check(&mut a, doc, &extended);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn paragraph_bold_without_font_keeps_the_source_family() {
     let dir = workdir("paragraph-bold");
     let mut a = auto(&dir);

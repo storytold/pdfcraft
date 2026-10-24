@@ -44,6 +44,14 @@ this works only when that build input actually contains the full face. This chan
 add a font binary or change the release font pin. Fonts shared by releases belong in
 `storytold/craft-fonts` under the repository's asset rules.
 
+With **Keep source fonts**, an upright single-style paragraph can combine its source font
+with a fallback even when the replacement has no explicit line break (#2750). Characters
+the source can draw keep that font and its advances; only missing characters enter the
+generated Type 3 fonts, in batches. Wrapping and alignment measure both faces, including
+character spacing and horizontal scaling. Explicit family/weight changes and the existing
+turned, right-to-left and visual-order paths retain their selection rules. The separate
+styled-path font-per-character limitation (#2592) is not fixed by this change.
+
 Rewrapped Chinese and Japanese text, which has no spaces between words, may break between any
 two characters. A row never begins with closing punctuation, a closing bracket or quote, a small
 kana or the prolonged sound mark, and never ends with an opening bracket or quote or a currency

@@ -1477,6 +1477,218 @@ fn japanese_fallback_reports_the_face_after_save_and_reopen() {
 }
 
 #[test]
+#[ignore = "manual mixed-script rewrite timing probe; run with --ignored --nocapture"]
+fn mixed_script_paragraph_rewrite_timing_probe() {
+    assert!(pdfcraft_fonts::document_japanese_font().is_some(), "the timing probe requires the release-pinned craft-fonts input");
+    for (repeats, width) in [(32, 480.0), (512, 480.0), (2048, 480.0), (512, 14_400.0)] {
+        let draft = "The quick brown fox шалом ".repeat(repeats);
+        let mut samples = Vec::new();
+        for _ in 0..3 {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (The quick brown fox) Tj ET");
+            let style = text::BlockStyle {
+                width: Some(width),
+                align: Some(added::Align::Center),
+                underline: Some(true),
+                char_spacing: Some(1.25),
+                scale: Some(80.0),
+                ..Default::default()
+            };
+            let start = std::time::Instant::now();
+            text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+            samples.push(start.elapsed().as_micros());
+            assert!(text::text_lines(&doc, 0).unwrap().iter().any(|line| line.base_font == "Helvetica"));
+            std::hint::black_box(doc);
+        }
+        samples.sort_unstable();
+        eprintln!("mixed-script-rewrite bytes={} width={width} median_us={} samples_us={samples:?}", draft.len(), samples[1]);
+    }
+}
+
+#[test]
+fn mixed_script_source_measurements_are_bounded_by_distinct_characters() {
+    if without_craft_fonts("mixed_script_source_measurements_are_bounded_by_distinct_characters") {
+        return;
+    }
+    for resource in ["F1", "F2"] {
+        for repeats in [1, 256] {
+            for width in [80.0, 14_400.0] {
+                let draft = "ab шалом ab ".repeat(repeats);
+                let distinct = draft.chars().collect::<std::collections::HashSet<_>>().len();
+                let mut doc = text_page(&format!("BT /{resource} 12 Tf 72 700 Td (ab) Tj ET"));
+                let style = text::BlockStyle { width: Some(width), align: Some(added::Align::Justify), underline: Some(true), ..Default::default() };
+                text::take_source_character_measurements();
+                text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+                let measured = text::take_source_character_measurements();
+                assert_eq!(measured, distinct, "{resource}, {repeats} repeats, width {width}: measure each distinct source candidate once");
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_script_cached_widths_follow_each_rewrite_state() {
+    if without_craft_fonts("mixed_script_cached_widths_follow_each_rewrite_state") {
+        return;
+    }
+    let draft = "ab шалом ab шалом ab шалом ab";
+    for (resource, size, spacing, scale) in [("F2", 12.0, 0.0, 100.0), ("F1", 18.0, 1.25, 80.0), ("F2", 18.0, 1.25, 80.0), ("F1", 12.0, 0.0, 100.0)] {
+        let mut doc = text_page(&format!("BT /{resource} 12 Tf 5 Tw 72 700 Td (ab) Tj ET"));
+        let original_font = doc.get(pdfcraft_cos::ObjRef::new(if resource == "F1" { 5 } else { 6 }, 0)).as_ref().clone();
+        let style = text::BlockStyle {
+            size: Some(size),
+            width: Some(120.0),
+            align: Some(added::Align::Center),
+            underline: Some(true),
+            char_spacing: Some(spacing),
+            scale: Some(scale),
+            ..Default::default()
+        };
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(if resource == "F1" { 5 } else { 6 }, 0)).as_ref(), &original_font);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text.split_whitespace().collect::<Vec<_>>(), draft.split_whitespace().collect::<Vec<_>>());
+        let page = pdfcraft_model::pages(&doc).remove(0);
+        let fonts = doc.dict(doc.dict(page.dict.get(b"Resources").unwrap()).unwrap().get(b"Font").unwrap()).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let underlines: Vec<_> = ops.iter().filter(|op| op.is("m") || op.is("l")).collect();
+        let rows: Vec<_> = lines.chunk_by(|a, b| (a.origin_baseline() - b.origin_baseline()).abs() < 0.001).collect();
+        assert!(rows.len() > 1, "the cache must also be used while wrapping");
+        assert_eq!(underlines.len(), rows.len() * 2);
+        for (row, underline) in rows.into_iter().zip(underlines.as_chunks::<2>().0) {
+            // Recompute from the saved fonts, independently of the rewrite's cache.
+            let widths: Vec<_> = row
+                .iter()
+                .map(|line| {
+                    if line.text.chars().any(|ch| ch.is_ascii_alphabetic()) {
+                        assert_eq!(line.font, resource);
+                    }
+                    let m = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &doc.dict(fonts.get(line.font.as_bytes()).unwrap()).unwrap());
+                    let bytes = m.encode(&line.text).unwrap_or_else(|| panic!("saved font {} cannot encode {line:?}", m.base_font));
+                    m.codes(&bytes).iter().map(|(code, _)| m.width(*code) * size + spacing).sum::<f64>() * scale / 100.0
+                })
+                .collect();
+            let total: f64 = widths.iter().sum();
+            let left = (120.0 - total).max(0.0) / 2.0;
+            let mut x = 72.0 + left;
+            for (line, advance) in row.iter().zip(widths) {
+                assert!((line.baseline()[0] - x).abs() < 0.02, "{resource}, size {size}: {line:?}, expected {x}");
+                x += advance;
+            }
+            assert!((underline[0].operands[0].as_f64().unwrap() - left).abs() < 0.02);
+            assert!((underline[1].operands[0].as_f64().unwrap() - left - total).abs() < 0.02);
+        }
+    }
+}
+
+#[test]
+fn mixed_script_paragraph_keeps_the_source_font_without_an_explicit_line_break() {
+    if without_craft_fonts("mixed_script_paragraph_keeps_the_source_font_without_an_explicit_line_break") {
+        return;
+    }
+    let original = "The quick brown fox jumps over the lazy dog";
+    let ending = "and keeps running through the long field.";
+    let draft = format!("{original} шалом {ending}");
+    let mut doc = text_page(&format!("BT /F1 12 Tf 14.4 TL 72 700 Td ({original}) Tj T* ({ending}) Tj ET"));
+    let font = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_ref().clone();
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_ref(), &font);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().any(|l| l.base_font == "Helvetica" && l.text.contains("The quick brown fox")), "{lines:#?}");
+    for line in &lines {
+        if line.text.chars().any(|ch| ch.is_ascii_alphabetic()) {
+            assert_eq!(line.base_font, "Helvetica", "Latin must retain its source font: {line:?}");
+        }
+    }
+    assert!(lines.iter().any(|l| l.text.contains("шалом") && l.base_font != "Helvetica"));
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text.split_whitespace().collect::<Vec<_>>(), draft.split_whitespace().collect::<Vec<_>>());
+    let fallback = page_font_programs(&doc).into_iter().filter(|(subtype, _)| subtype == b"Type3").count();
+    assert_eq!(fallback, 1, "the new letters share one fallback font");
+}
+
+#[test]
+fn mixed_script_subset_spaces_remain_extractable_after_saving() {
+    if without_craft_fonts("mixed_script_subset_spaces_remain_extractable_after_saving") {
+        return;
+    }
+    for (resource, draft) in [("F2", "ab шалом ab"), ("F2", "шалом ab"), ("F2", "ab шалом"), ("F1", "ab шалом ab")] {
+        for align in [added::Align::Left, added::Align::Center, added::Align::Right] {
+            let mut doc = text_page(&format!("BT /{resource} 12 Tf 72 700 Td (ab) Tj ET"));
+            let font_id = pdfcraft_cos::ObjRef::new(if resource == "F2" { 6 } else { 5 }, 0);
+            let original_font = doc.get(font_id).as_ref().clone();
+            let style =
+                text::BlockStyle { width: Some(300.0), align: Some(align), char_spacing: Some(1.25), scale: Some(80.0), ..Default::default() };
+            text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+            for bytes in [write_full(&doc, &Default::default()).unwrap(), pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap()] {
+                let saved = Document::open(Arc::new(bytes)).unwrap();
+                let lines = text::text_lines(&saved, 0).unwrap();
+                let decoded: String = lines.iter().map(|line| line.text.as_str()).collect();
+                assert_eq!(decoded, draft, "{resource}: edge spaces of source runs must be real extractable glyphs");
+                assert_eq!(text::text_blocks(&saved, 0).unwrap()[0].text, draft);
+                assert_eq!(saved.get(font_id).as_ref(), &original_font);
+                for line in lines.iter().filter(|line| line.text.chars().any(|ch| ch.is_ascii_alphabetic())) {
+                    assert_eq!(line.font, resource, "the Latin letters retain their source font: {line:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_script_runs_use_source_and_fallback_advances_for_alignment() {
+    if without_craft_fonts("mixed_script_runs_use_source_and_fallback_advances_for_alignment") {
+        return;
+    }
+    for (resource, prefix, suffix) in [("F1", "abc", "def"), ("F2", "ab", "ab"), ("F1", "abc ", "def")] {
+        // Rewriting normalizes Tw; measuring a source space must use that same state.
+        let mut doc = text_page(&format!("BT /{resource} 12 Tf 5 Tw 72 700 Td ({prefix}) Tj ET"));
+        let draft = format!("{prefix}шалом{suffix}");
+        let style = text::BlockStyle {
+            width: Some(300.0),
+            align: Some(added::Align::Center),
+            char_spacing: Some(1.25),
+            scale: Some(80.0),
+            ..Default::default()
+        };
+        text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, draft);
+        assert_eq!((lines[0].font.as_str(), lines[2].font.as_str()), (resource, resource));
+        let page = pdfcraft_model::pages(&doc).remove(0);
+        let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+        let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+        let advances: Vec<f64> = lines
+            .iter()
+            .zip([prefix, "шалом", suffix])
+            .map(|(line, part)| {
+                let font = doc.dict(fonts.get(line.font.as_bytes()).unwrap()).unwrap();
+                let m = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+                let bytes = m.encode(part).unwrap();
+                (m.codes(&bytes).iter().map(|(c, _)| m.width(*c) * 12.0).sum::<f64>() + part.chars().count() as f64 * 1.25) * 0.8
+            })
+            .collect();
+        let mut x = 72.0 + (300.0 - advances.iter().sum::<f64>()) / 2.0;
+        for (line, width) in lines.iter().zip(advances) {
+            assert!((line.baseline()[0] - x).abs() < 0.01, "{resource}: {line:?}, expected {x}");
+            x += width;
+        }
+    }
+}
+
+#[test]
+fn mixed_script_paragraph_batches_only_missing_glyphs_and_refuses_atomically() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Latin text) Tj ET");
+    // Cyrillic also uses bundled Inter in builds without craft-fonts.
+    text::rewrite_block_with_limit(&mut doc, 0, 0, Some("Latin шалом text"), &Default::default(), 2).unwrap();
+    assert_eq!(page_font_programs(&doc).iter().filter(|(subtype, _)| subtype == b"Type3").count(), 3);
+    let before = write_full(&doc, &Default::default()).unwrap();
+    assert!(text::replace_block(&mut doc, 0, 0, "Latin \u{FDFD} text").is_err());
+    assert_eq!(write_full(&doc, &Default::default()).unwrap(), before);
+}
+
+#[test]
 fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
     if without_craft_fonts("cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it") {
         return;
@@ -1494,7 +1706,13 @@ fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
         } else {
             text::replace_line(&mut doc, 0, 0, replacement).unwrap();
         }
-        assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, replacement);
+        let doc = reopen(&doc);
+        if paragraph {
+            assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, replacement);
+            assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text.contains("world") && l.base_font == "Times-Roman"));
+        } else {
+            assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, replacement);
+        }
     }
 }
 
@@ -1511,9 +1729,22 @@ fn uzbek_and_kazakh_cyrillic_use_the_bundled_latin_face() {
             assert_eq!(edit.substituted.as_deref(), Some("Inter Type3"), "{replacement}: {edit:?}");
             let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
             assert!(content.contains("/PCLat"), "{replacement}: {content}");
-            let lines = text::text_lines(&reopen(&doc), 0).unwrap();
-            assert_eq!(lines[0].text, replacement);
-            assert_eq!(lines[0].base_font, "Inter-Regular", "the generated font reports the face it drew");
+            let reopened = reopen(&doc);
+            let lines = text::text_lines(&reopened, 0).unwrap();
+            if paragraph {
+                assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+                for ch in ['a', 'b'].into_iter().filter(|ch| replacement.contains(*ch)) {
+                    assert!(lines.iter().any(|line| line.text.contains(ch) && line.base_font == "ABCDEF+Arial"), "{lines:?}");
+                }
+            } else {
+                assert_eq!(lines[0].text, replacement);
+            }
+            for ch in replacement.chars().filter(|ch| !ch.is_ascii()) {
+                assert!(
+                    lines.iter().any(|line| line.text.contains(ch) && line.base_font == "Inter-Regular"),
+                    "the generated Inter face draws {ch}: {lines:?}"
+                );
+            }
         }
     }
 }
