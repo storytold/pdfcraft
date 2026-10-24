@@ -8424,3 +8424,76 @@ fn bookmark_list_reports_colour_and_style() {
     let re = ok(&mut b, "doc_open", json!({ "path": "restyled.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }
+
+#[test]
+fn link_javascript_tool_returns_menu_choice_navigation_and_permission_requests() {
+    let dir = workdir("link-javascript");
+    let script = "var c=app.popUpMenuEx.apply(app,[{cName:'Next',cReturn:'next'},{cName:'URL',cReturn:'url'},{cName:'File',cReturn:'file'}]); if(c==='next')this.pageNum=0; if(c==='url')app.launchURL('https://example.org'); if(c==='file')app.openDoc('other.pdf');";
+    let original = String::from_utf8(remote_link_pdf(script, None)).unwrap();
+    let start = original.split("startxref\n").nth(1).unwrap().lines().next().unwrap().parse::<usize>().unwrap();
+    let text = original.replace("/S /GoToR /F", "/S /JavaScript /JS");
+    let delta = text.len() - original.len();
+    let bytes = text.replace(&format!("startxref\n{start}\n"), &format!("startxref\n{}\n", start + delta)).into_bytes();
+    std::fs::write(dir.join("js.pdf"), &bytes).unwrap();
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"js.pdf"}))["doc"].clone();
+    let canceled = ok(&mut a, "link_run_javascript", json!({"doc":id,"page":1,"index":1}));
+    assert_eq!(canceled["error"], Value::Null);
+    assert_eq!(canceled["requests"], json!([]));
+    assert_eq!(canceled["menus"][0][0]["return"], "next");
+    for choice in ["next", "url", "file"] {
+        let out = ok(&mut a, "link_run_javascript", json!({"doc":id,"page":1,"index":1,"menu_choices":[choice]}));
+        assert_eq!(out["error"], Value::Null);
+        assert_eq!(out["requests"].as_array().unwrap().len(), 1);
+    }
+    let invalid = ok(&mut a, "link_run_javascript", json!({"doc":id,"page":1,"index":1,"menu_choices":["forged"]}));
+    assert!(invalid["error"].is_string());
+    assert_eq!(invalid["requests"], json!([]));
+    assert_eq!(std::fs::read(dir.join("js.pdf")).unwrap(), bytes);
+    ok(&mut a, "js_enabled", json!({"enabled":false}));
+    assert!(a.call("link_run_javascript", &json!({"doc":id,"page":1,"index":1})).is_err());
+}
+
+#[test]
+#[cfg(feature = "mcp")]
+fn remediation_reset_is_destructive_in_mcp_tools_list() {
+    let dir = workdir("post-cr01");
+    let mut a = auto(&dir);
+    let original = String::from_utf8(remote_link_pdf("this.resetForm();", None)).unwrap();
+    let start = original.split("startxref\n").nth(1).unwrap().lines().next().unwrap().parse::<usize>().unwrap();
+    let text = original.replace("/S /GoToR /F", "/S /JavaScript /JS");
+    let delta = text.len() - original.len();
+    let bytes = text.replace(&format!("startxref\n{start}\n"), &format!("startxref\n{}\n", start + delta)).into_bytes();
+    std::fs::write(dir.join("reset.pdf"), &bytes).unwrap();
+    let id = ok(&mut a, "doc_open", json!({"path":"reset.pdf"}))["doc"].clone();
+    let name = ok(&mut a, "form_add_field", json!({"doc":id,"page":1,"type":"text","rect":[20,100,160,130]}))["field"].as_str().unwrap().to_owned();
+    ok(&mut a, "form_fill", json!({"doc":id,"values":{name.clone():"99"}}));
+    let before = ok(&mut a, "form_fields", json!({"doc":id}));
+    let out = ok(&mut a, "link_run_javascript", json!({"doc":id,"page":1,"index":1}));
+    let after = ok(&mut a, "form_fields", json!({"doc":id}));
+    ok(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc":id}))["fields"][0]["value"], json!("99"));
+    let table = tools();
+    let link = table.iter().find(|t| t.name == "link_run_javascript").unwrap();
+    let reset = table.iter().find(|t| t.name == "form_reset").unwrap();
+    println!(
+        "CR01 before={} after={} output={} link_read_only={} link_destructive={} reset_destructive={}",
+        before, after, out, link.read_only, link.destructive, reset.destructive
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(before["fields"][0]["value"], json!("99"));
+    assert_ne!(after["fields"][0]["value"], before["fields"][0]["value"]);
+    assert!(!link.read_only);
+    assert!(reset.destructive);
+    let list = rpc(&mut McpServer::new(Automation::new()), 1, "tools/list", json!({}));
+    let published = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "link_run_javascript").unwrap();
+    println!("CR01_MCP annotations={}", published["annotations"]);
+    assert_eq!(published["annotations"]["destructiveHint"], true);
+    assert_eq!(published["annotations"]["readOnlyHint"], false);
+    assert!(link.destructive);
+    let no_host = ok(&mut a, "js_run", json!({"doc":id,"script":"console.println(app.popUpMenuEx({cName:'A'})===null)"}));
+    println!("AUTOMATION_NO_HOST {no_host}");
+    assert_eq!(no_host["console"], json!(["true"]));
+    assert_eq!(no_host["error"], Value::Null);
+    assert_eq!(std::fs::read(dir.join("reset.pdf")).unwrap(), bytes);
+}

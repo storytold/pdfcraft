@@ -56,6 +56,7 @@ mod credits;
 mod crop;
 mod drag_pointer;
 mod export_ui;
+mod js_menu;
 mod js_ui;
 #[cfg(target_os = "macos")]
 mod macos_association;
@@ -694,6 +695,8 @@ pub struct PdfCraftApp {
     pub compare: Option<compare_ui::CompareState>,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) link_script: js_menu::LinkMenus,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
     pub(crate) tags_state: tags_ui::State,
@@ -1049,6 +1052,8 @@ impl PdfCraftApp {
             compare_old: None,
             compare: None,
             js_console: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            link_script: Default::default(),
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
@@ -2996,6 +3001,9 @@ impl PdfCraftApp {
         if self.modal_open() {
             return;
         }
+        if self.link_script_owns_key(ctx) {
+            return;
+        }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
@@ -3267,6 +3275,7 @@ impl eframe::App for PdfCraftApp {
             control.tick(ctx, self);
             self.control = Some(control);
         }
+        self.poll_link_script(ctx);
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         craft_quit::on_close_request(ctx);
@@ -3322,6 +3331,7 @@ impl eframe::App for PdfCraftApp {
             ctx.request_repaint();
             return;
         }
+        self.show_link_script(&ctx);
         for view in &mut self.views {
             view.begin_render_frame();
         }

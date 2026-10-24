@@ -7438,3 +7438,280 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     assert!(pages[0].images.is_empty(), "the picture is past the budget");
     assert_eq!(truncated, [0]);
 }
+
+pub(crate) fn javascript_link_fixture() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::Name(b"JavaScript".to_vec()));
+    action.set(b"JS".to_vec(), Object::String(PdfString::text("choose();")));
+    let action = cos.add(action);
+    let mut ann = Dict::new();
+    ann.set(b"Type".to_vec(), Object::Name(b"Annot".to_vec()));
+    ann.set(b"Subtype".to_vec(), Object::Name(b"Link".to_vec()));
+    ann.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(10), Object::Int(10), Object::Int(100), Object::Int(100)]));
+    ann.set(b"A".to_vec(), Object::Ref(action));
+    let ann = cos.add(ann);
+    let page = pdfcraft_model::pages(&cos).remove(0);
+    let mut d = page.dict;
+    d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(ann)]));
+    cos.set(page.obj, d);
+    pdfcraft_forms::set_document_script(&mut cos, "init", Some("function choose(){console.println(event.type + ':' + event.name);this.pageNum=1;}"))
+        .unwrap();
+    pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap()
+}
+
+#[test]
+fn link_javascript_uses_document_scripts_preserves_actions_and_checks_staleness() {
+    let bytes = Arc::new(javascript_link_fixture());
+    let mut s = Session::new();
+    let id = s.open("interactive.pdf", None, bytes.clone(), None).unwrap();
+    let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+    let out = input.run();
+    let out = s.finish_link_javascript(&input, out).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.console, ["Link:Mouse Up"]);
+    assert_eq!(out.requests, [js::Request::GoToPage(1)]);
+    assert!(!s.get(id).unwrap().dirty);
+    let saved = s.save_bytes(id).unwrap();
+    let reloaded = s.open("saved.pdf", None, saved, None).unwrap();
+    let restored = s.prepare_link_javascript(reloaded, 0, 0).unwrap();
+    let result = restored.run();
+    assert_eq!(result.error, None);
+    assert_eq!(result.console, ["Link:Mouse Up"]);
+    s.set_javascript(false);
+    assert!(s.prepare_link_javascript(id, 0, 0).is_err());
+    assert!(s.finish_link_javascript(&input, input.run()).is_err());
+    s.set_javascript(true);
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(s.finish_link_javascript(&input, input.run()).is_err());
+}
+
+#[test]
+fn link_javascript_runs_for_a_read_only_document() {
+    let mut s = Session::new();
+    let id = s.open("interactive.pdf", None, Arc::new(javascript_link_fixture()), None).unwrap();
+    s.docs.iter_mut().find(|d| d.id == id).unwrap().editor = None;
+    let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+    assert_eq!(s.finish_link_javascript(&input, input.run()).unwrap().error, None);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "requires PDFCRAFT_JS_READONLY_PDF, an external read-only compatibility fixture"]
+fn external_pdf_javascript_actions_read_only() {
+    let path = std::env::var("PDFCRAFT_JS_READONLY_PDF").unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut s = Session::new();
+    let id = s.open("external.pdf", Some(path.clone()), Arc::new(before.clone()), None).unwrap();
+    let links: Vec<_> = s
+        .get(id)
+        .unwrap()
+        .info
+        .links
+        .iter()
+        .filter(|l| matches!(l.target, pdfcraft_render::LinkTarget::JavaScript(_)))
+        .map(|l| (l.page, l.index))
+        .collect();
+    assert!(!links.is_empty());
+    let mut menus = 0;
+    for (page, index) in links.iter().take(10) {
+        let input = s.prepare_link_javascript(id, *page, *index).unwrap();
+        let rx = input.start().unwrap();
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+                js::InteractiveEvent::Menu(items, reply) => {
+                    assert!(!items.is_empty());
+                    menus += 1;
+                    reply.send(None).unwrap();
+                }
+                js::InteractiveEvent::Complete(out) => {
+                    assert_eq!(out.error, None);
+                    let out = s.finish_link_javascript(&input, out).unwrap();
+                    assert!(out.requests.is_empty());
+                    break;
+                }
+            }
+        }
+    }
+    assert!(menus > 0);
+    assert!(!s.get(id).unwrap().dirty);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    eprintln!("external read-only fixture: {} JavaScript links, {} menus exercised", links.len(), menus);
+}
+
+#[cfg(windows)]
+#[test]
+fn javascript_document_paths_normalize_only_local_drive_paths() {
+    for raw in ["/C/folder/file.pdf", "/C:/folder/file.pdf", "C:/folder/file.pdf"] {
+        assert_eq!(js::resolve_javascript_document_path(None, raw).unwrap(), std::path::PathBuf::from("C:/folder/file.pdf"));
+    }
+    for raw in ["//server/share/file.pdf", "file:///C:/folder/file.pdf", "https://example.org/file.pdf"] {
+        assert!(js::resolve_javascript_document_path(None, raw).is_err());
+    }
+}
+
+#[test]
+fn remediation_initialization_refusal_diagnostic_is_visible_to_host() {
+    use pdfcraft_forms::Scripts;
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(javascript_link_fixture())).unwrap();
+    pdfcraft_forms::add_field(&mut cos, 0, [110.0, 110.0, 200.0, 130.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("price"))
+        .unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let f = fields.iter().find(|f| f.name == "price").unwrap();
+    for scripts in [vec![String::new(); 1025], vec![format!("/*{}*/", "x".repeat(249996)); 5]] {
+        let mut runner = js::JsRunner::new(&cos, "synthetic.pdf");
+        runner.doc_scripts = scripts;
+        let out = runner.run(pdfcraft_forms::FieldEvent::Validate, "console.println('ran');event.value='changed'", f, "17", &fields);
+        println!("INIT_HOST count={} result={out:?} diagnostics={:?}", runner.doc_scripts.len(), runner.output);
+        assert_eq!(out.value, "17");
+        assert!(out.rc);
+        assert!(out.changes.is_empty());
+        assert!(out.message.is_none());
+        assert_eq!(runner.output.errors, ["document JavaScript initialization exceeds its limit"]);
+        assert!(runner.output.console.is_empty());
+    }
+}
+
+#[test]
+fn remediation_console_initialization_preserves_saved_fields() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(javascript_link_fixture())).unwrap();
+    pdfcraft_forms::add_field(&mut cos, 0, [110.0, 110.0, 200.0, 130.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("price"))
+        .unwrap();
+    pdfcraft_forms::set_value(&mut cos, "price", &pdfcraft_forms::FieldValue::Text("17".into())).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "init", Some("if(event.name==='Open')getField('price').value='0';")).unwrap();
+    let mut s = Session::new();
+    let id = s.open("init.pdf", None, Arc::new(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap()), None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["17"], "opening alone leaves saved value intact");
+    for _ in 0..2 {
+        let out = s.run_javascript(id, "console.println('noop')", None).unwrap();
+        let value = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+        println!("INIT_REAL_DOCUMENT value={value:?} console={:?} error={:?}", out.console, out.error);
+        assert_eq!(out.error, None);
+        assert_eq!(value, ["17"]);
+        s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("17".into()) }).unwrap();
+    }
+}
+
+#[test]
+fn remediation_readonly_requests_and_permission_boundary() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(javascript_link_fixture())).unwrap();
+    let action = pdfcraft_forms::document_scripts_named(&cos);
+    assert_eq!(action.len(), 1);
+    pdfcraft_forms::set_document_script(
+        &mut cos,
+        "init",
+        Some("function choose(){app.openDoc('C:/synthetic/other.pdf');app.launchURL('https://example.org');this.print();}"),
+    )
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("synthetic.pdf", None, bytes, None).unwrap();
+    assert!(s.take_js_output(id).requests.is_empty(), "opening alone must not execute the link");
+    let d = s.docs.iter_mut().find(|d| d.id == id).unwrap();
+    d.editor = None;
+    assert!(s.run_javascript(id, "app.launchURL('https://example.org')", None).is_err());
+    let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+    let o = s.finish_link_javascript(&input, input.run()).unwrap();
+    println!("READONLY explicit_activation_requests={:?}", o.requests);
+    assert_eq!(o.error, None);
+    assert_eq!(o.requests.len(), 3);
+    let unsupported = pdfcraft_js::run(
+        "app.execMenuItem('SaveAs')",
+        &pdfcraft_js::Event::doc("Console"),
+        &pdfcraft_js::DocInfo::default(),
+        &[],
+        &[],
+        Default::default(),
+    );
+    println!("SAVEAS_NON_XFA error={:?}", unsupported.error);
+    assert!(unsupported.error.is_some());
+    assert!(unsupported.requests.is_empty());
+    assert!(s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).is_err());
+    let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+    s.close(id);
+    assert!(s.finish_link_javascript(&input, input.run()).is_err(), "closed source cannot accept completion");
+}
+#[test]
+fn remediation_encrypted_and_signed_link_permissions() {
+    for reset in [false, true] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(javascript_link_fixture())).unwrap();
+        pdfcraft_forms::add_field(&mut cos, 0, [110.0, 110.0, 200.0, 130.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("price"))
+            .unwrap();
+        pdfcraft_forms::set_value(&mut cos, "price", &FieldValue::Text("17".into())).unwrap();
+        let script = if reset {
+            "function choose(){app.launchURL('https://example.org');this.resetForm();}"
+        } else {
+            "function choose(){app.launchURL('https://example.org');this.getField('price').value='99';}"
+        };
+        pdfcraft_forms::set_document_script(&mut cos, "init", Some(script)).unwrap();
+        let clear = Arc::new(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap());
+        let mut encrypted = cos.clone();
+        encrypted
+            .set_encryption(&pdfcraft_cos::NewEncryption {
+                algorithm: pdfcraft_cos::Algorithm::Aes256,
+                user_password: "user",
+                owner_password: "owner",
+                permissions: -3904,
+                encrypt_metadata: true,
+                seed: [7; 32],
+            })
+            .unwrap();
+        let enc = Arc::new(pdfcraft_cos::write_full(&encrypted, &Default::default()).unwrap());
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+        let mut signing = Session::new().with_clock(|| 1_800_000_000);
+        let sid = signing.open("sign.pdf", None, clear, None).unwrap();
+        let signed = signing.sign(sid, &digital_id, SignOptions { page: 0, rect: None, ..Default::default() }).unwrap();
+        for (name, bytes, password) in [("encrypted", enc, Some("user")), ("signed", signed, None)] {
+            let mut s = Session::new().with_clock(|| 1_800_000_000);
+            let id = s.open(name, None, bytes, password).unwrap();
+            let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+            let out = input.run();
+            assert_eq!(out.requests.len(), if reset { 2 } else { 1 });
+            assert_eq!(out.changed.len(), usize::from(!reset));
+            let result = s.finish_link_javascript(&input, out);
+            println!("PERMISSION {name} reset={reset} finish={result:?}");
+            if name == "encrypted" {
+                assert!(result.is_err());
+                assert!(!s.get(id).unwrap().dirty);
+            } else {
+                assert!(result.is_ok(), "an ordinary approval signature is not a no-fill policy");
+            }
+            let value = &s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value;
+            if name == "encrypted" {
+                assert_eq!(value, &["17"]);
+            } else if reset {
+                assert!(value.is_empty());
+            } else {
+                assert_eq!(value, &["99"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn remediation_link_initialization_once_and_error_request_policy() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(javascript_link_fixture())).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "init", Some("console.println('init');function choose(){console.println('action');}")).unwrap();
+    let mut s = Session::new();
+    let id = s.open("once.pdf", None, Arc::new(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap()), None).unwrap();
+    let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+    let rx = input.start().unwrap();
+    let js::InteractiveEvent::Complete(out) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("completion expected") };
+    assert_eq!(out.console, ["init", "action"]);
+    println!("LINK_INIT console={:?}", out.console);
+    let failed = s.run_javascript(id, "app.launchURL('https://example.org');throw Error('synthetic')", None).unwrap();
+    assert!(failed.error.is_some());
+    assert_eq!(failed.requests.len(), 1);
+    pdfcraft_forms::set_document_script(&mut cos, "init", Some("function choose(){app.launchURL('https://example.org');throw Error('synthetic');}"))
+        .unwrap();
+    let broken = s.open("broken.pdf", None, Arc::new(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap()), None).unwrap();
+    let broken_input = s.prepare_link_javascript(broken, 0, 0).unwrap();
+    let proposed = broken_input.run();
+    assert!(proposed.error.is_some());
+    assert_eq!(proposed.requests.len(), 1);
+    let link_failed = s.finish_link_javascript(&broken_input, proposed).unwrap();
+    assert!(link_failed.requests.is_empty());
+    println!("ERROR_POLICY synchronous_requests=1 link_requests=0");
+}

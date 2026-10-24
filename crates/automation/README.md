@@ -229,3 +229,11 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+## JavaScript link actions
+
+`link_run_javascript {doc, page, index, menu_choices?}` executes a PDF link with its document
+scripts and Link/Mouse Up event. Menus cancel unless `menu_choices` provides validated return
+strings (or null) in order. It returns menus, diagnostics and viewer requests and performs no
+external access. See [JavaScript link actions](../../docs/javascript-link-actions.md) for
+limits, native UI behavior, file-opening consent and compatibility boundaries.

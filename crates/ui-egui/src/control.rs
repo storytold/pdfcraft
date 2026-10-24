@@ -280,7 +280,8 @@ impl Control {
             "ui.state" => {
                 let mut state = host.state();
                 let size = ctx.input(|i| i.viewport_rect().size());
-                state["window"] = json!({ "width": size.x, "height": size.y, "pixels_per_point": ctx.pixels_per_point() });
+                state["window"] =
+                    json!({ "width": size.x, "height": size.y, "pixels_per_point": ctx.pixels_per_point(), "focused": ctx.input(|i| i.focused) });
                 Ok(Handled::Now(Ok(state)))
             }
             "ui.commands" => Ok(Handled::Now(Ok(host.commands()))),
@@ -669,7 +670,12 @@ impl Host for crate::PdfCraftApp {
             self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let javascript_menu = self.link_script.inspect();
+        #[cfg(target_arch = "wasm32")]
+        let javascript_menu = serde_json::Value::Null;
         json!({
+            "javascript_menu": javascript_menu,
             "docking": self.docking,
             "documents": docs,
             "pending_opens": pending_opens,

@@ -2612,6 +2612,7 @@ fn page_scroll<R>(
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let javascript_interaction = app.link_script_interaction_active();
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
     // The Search panel closed: its search moves to the find bar.
@@ -3054,7 +3055,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         _ => None,
     };
     let mut open_signature = false;
-    let mut hover_text: Option<(Pos2, String)> = None;
+    let mut hover_text: Option<(Pos2, String, bool)> = None;
     let mut badge_hover: Option<(Pos2, String)> = None;
     // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
     // windows, so a comment under the pointer would otherwise float over the dialog.
@@ -3066,6 +3067,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         || app.pending_remote_link.is_some()
         || app.updates.open;
     let mut clicked_link: Option<LinkTarget> = None;
+    let mut javascript_link = None;
+    let mut clicked_annotation = None;
     let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;
     let mut canvas_action: Option<comments::CanvasAction> = None;
     let mut field_menu: Option<FieldMenu> = None;
@@ -3795,11 +3798,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             LinkTarget::Uri(u) => u.clone(),
                             LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
                             LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+                            LinkTarget::JavaScript(_) => "JavaScript".to_string(),
                             LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
                         };
-                        hover_text = Some((p, label));
+                        hover_text = Some((p, label, matches!(&l.target, LinkTarget::JavaScript(_))));
                         if resp.clicked() && tool == QuickTool::Select && !consumed {
                             clicked_link = Some(l.target.clone());
+                            clicked_annotation = Some((l.page, l.index));
                         }
                     }
                 }
@@ -3822,7 +3827,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         .filter_map(|a| annotation_hover_text(a).map(|text| (a.index, text)))
                         .max_by_key(|(index, _)| *index)
                 {
-                    hover_text = Some((p, text));
+                    hover_text = Some((p, text, false));
                 }
             }
             for (mp, mr, mc) in &view.compare_marks {
@@ -3876,7 +3881,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Overlapping widgets paint in order, so the topmost badge owns the hover; an
             // earlier link or annotation hover still wins over any badge.
             if hover_text.is_none() {
-                hover_text = badge_hover.take();
+                // A validation verdict is an ordinary tip, including during JavaScript menus.
+                hover_text = badge_hover.take().map(|(pos, text)| (pos, text, false));
             }
         }
         if calc_order {
@@ -4185,13 +4191,21 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.frame_queue = queue;
     view.frame_visible = visible_now.iter().copied().collect();
 
-    if let Some((pos, text)) = hover_text {
-        egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(320.0);
-                ui.label(text);
-            });
-        });
+    // The action starts below, after painting. Suppress its tip in the activation frame too,
+    // then throughout the interaction: Tooltip is above the menu's Foreground layer.
+    let javascript_activating = matches!(&clicked_link, Some(LinkTarget::JavaScript(_)));
+    if let Some((pos, text, javascript)) = hover_text
+        && !(javascript && (javascript_interaction || javascript_activating))
+    {
+        egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 16.0)).show(
+            ui.ctx(),
+            |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(320.0);
+                    ui.label(text);
+                });
+            },
+        );
     }
     find_bar(view, info.pages.len(), avail, ui, &t);
     page_size_hint(view, info, units, avail, unobstructed, ui, &t);
@@ -4285,6 +4299,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
         Some(LinkTarget::RemoteGoTo { file, destination, .. }) => remote_open = Some((view.id, file, destination)),
+        Some(LinkTarget::JavaScript(_)) => {
+            javascript_link =
+                clicked_annotation.map(|(page, index)| (view.id, page, index, ui.ctx().input(|i| i.pointer.interact_pos()).unwrap_or(avail.center())))
+        }
         Some(LinkTarget::Other(s)) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
         None => {}
     }
@@ -4405,6 +4423,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if let Some((id, page, annotation, point)) = javascript_link {
+        app.run_link_script_at(id, page, annotation, point, Some(ui.ctx().cumulative_frame_nr()));
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.

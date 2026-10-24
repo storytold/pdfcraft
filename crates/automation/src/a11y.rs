@@ -650,7 +650,7 @@ impl Automation {
     }
 }
 
-fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
+pub(crate) fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     use pdfcraft_engine::js::Request as R;
     match r {
         R::Reset(n) => json!({ "reset": n }),
@@ -661,6 +661,7 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Focus(f) => json!({ "focus": f }),
         R::Beep => json!({ "beep": true }),
         R::SaveAs => json!({ "save_as": true }),
+        R::OpenDoc(path) => json!({ "open_doc": path, "requires_permission": true }),
     }
 }
 

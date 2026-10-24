@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last updated:** 2026-10-24 · **Change:** minor (PR #2081 running-action lifecycle hardening; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
@@ -191,6 +192,13 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-24 (M6, PR #2081 running lifecycle):** Preserve running link-script completions through focus, view and outside interactions before their first menu; keep document invalidation and normal menu cancellation. Reproduce lost results and errors before correcting both UI passes. Estimates unchanged.
+
+- **2026-10-24 (M6, PR #2081 final review):** Reserve waiting-menu keys before document shortcuts, including the first arrow and Escape in full screen; retain outside command shortcuts. Synthetic regressions reproduce the first-arrow page change before the fix. Estimates unchanged.
+
+- **2026-10-24 (M6, PR #2081 local remediation):** Preserve accepted menu completions while retaining document invalidation; isolate Link initialization from existing events; correct MCP destructive metadata and cache rejected stream decodes. Add discriminating menu and lifecycle regressions. Estimates unchanged.
+
+- **2026-10-23 (M6, PR #2081):** Rebased JavaScript link actions and native menus onto main `aea5e78e`, retaining upstream script guards, form snapshot sharing, annotation budgets and viewer interactions. See [JavaScript link actions](docs/javascript-link-actions.md). All 2,698 targeted tests pass; estimates unchanged.
 - **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
@@ -640,6 +648,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | M6, PR #2081 local audit remediation: accepted menu results, event compatibility, MCP metadata and bounded rejection cache. Estimates unchanged. |
 | 2026-10-22 | minor | M4, #3916 partial: document edits and Undo/Redo cancel Organize drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |

@@ -255,7 +255,18 @@ impl Session {
             None => pdfcraft_js::Event::doc("Console"),
         };
         let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
-        let changes = changes(&states, &o.changed);
+        self.apply_javascript_outcome(id, &states, &fields, &mut o)?;
+        Ok(o)
+    }
+
+    fn apply_javascript_outcome(
+        &mut self,
+        id: DocId,
+        states: &[pdfcraft_js::FieldState],
+        fields: &[Field],
+        o: &mut Outcome,
+    ) -> Result<(), EditError> {
+        let changes = changes(states, &o.changed);
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -278,7 +289,7 @@ impl Session {
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
-        Ok(o)
+        Ok(())
     }
 }
 
@@ -421,6 +432,122 @@ impl Session {
         self.apply(id, Edit::Batch { label: "Detect form fields".into(), edits })?;
         Ok(names)
     }
+}
+
+pub use pdfcraft_js::{InteractiveEvent, MenuItem};
+
+/// Immutable input for an annotation action. No files or UI are accessed by the worker.
+pub struct LinkScript {
+    id: DocId,
+    script: String,
+    event: pdfcraft_js::Event,
+    doc: pdfcraft_js::DocInfo,
+    fields: Vec<pdfcraft_js::FieldState>,
+    document_scripts: Vec<String>,
+    generation: u64,
+    form: Vec<Field>,
+}
+
+impl LinkScript {
+    /// The source document captured at preparation, independent of the current UI view.
+    pub fn document_id(&self) -> DocId {
+        self.id
+    }
+    /// Start a fresh worker from this snapshot; no document effects are applied here.
+    /// Reply to each menu (or drop its reply sender), then pass completion to
+    /// [`Session::finish_link_javascript`]. Closing the channel does not terminate the VM.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start(&self) -> Result<std::sync::mpsc::Receiver<InteractiveEvent>, String> {
+        pdfcraft_js::interactive(self.script.clone(), self.event.clone(), self.doc.clone(), self.fields.clone(), self.document_scripts.clone())
+    }
+
+    /// Headless execution cancels menus by default; requests are returned, never carried out.
+    pub fn run(&self) -> Outcome {
+        pdfcraft_js::run(&self.script, &self.event, &self.doc, &self.fields, &self.document_scripts, Limits::default())
+    }
+}
+
+impl Session {
+    /// Resolve a link by its zero-based page and raw annotation index.
+    /// Capture fields, source identity and generation without running any script.
+    pub fn prepare_link_javascript(&self, id: DocId, page: usize, index: usize) -> Result<LinkScript, EditError> {
+        if !self.javascript() {
+            return Err(EditError::Invalid("JavaScript is turned off".into()));
+        }
+        let d = self.get(id).ok_or(EditError::NoDocument)?;
+        let link = d.info.links.iter().find(|l| l.page == page && l.index == index).ok_or_else(|| EditError::Invalid("link not found".into()))?;
+        let pdfcraft_render::LinkTarget::JavaScript(script) = &link.target else {
+            return Err(EditError::Invalid("link has no supported JavaScript action".into()));
+        };
+        let cos = match &d.editor {
+            Some(editor) => editor.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(d.bytes.clone(), d.password.as_deref()).map_err(|e| EditError::Invalid(e.to_string()))?
+            }
+        };
+        let runner = JsRunner::new(&cos, &d.name);
+        let form = pdfcraft_forms::fields(&cos);
+        let fields = form.iter().map(|f| field_state(&cos, f)).collect();
+        let mut doc = runner.doc;
+        doc.page = page;
+        Ok(LinkScript {
+            id,
+            script: script.clone(),
+            event: pdfcraft_js::Event { kind: "Link".into(), ..pdfcraft_js::Event::doc("Mouse Up") },
+            doc,
+            fields,
+            document_scripts: runner.doc_scripts,
+            generation: d.generation,
+            form,
+        })
+    }
+
+    /// Whether this session still has the unchanged source document with JavaScript enabled.
+    /// Frontends separately check which document is active; view geometry is not engine state.
+    pub fn link_javascript_is_current(&self, input: &LinkScript) -> bool {
+        self.javascript() && self.get(input.id).is_some_and(|doc| doc.generation == input.generation)
+    }
+
+    /// Commit only to the unchanged source document and only while JavaScript is enabled.
+    /// Successful edits use the common permission-checked Undo batch. Failed scripts keep
+    /// their diagnostics but commit no edits or requests; callers dispatch returned requests.
+    pub fn finish_link_javascript(&mut self, input: &LinkScript, mut out: Outcome) -> Result<Outcome, EditError> {
+        if !self.javascript() {
+            return Err(EditError::Invalid("JavaScript is turned off".into()));
+        }
+        let d = self.get(input.id).ok_or(EditError::NoDocument)?;
+        if d.generation != input.generation {
+            return Err(EditError::Invalid("document changed while JavaScript was running".into()));
+        }
+        if out.error.is_none() {
+            self.apply_javascript_outcome(input.id, &input.fields, &input.form, &mut out)?;
+        } else {
+            out.requests.clear();
+        }
+        Ok(out)
+    }
+}
+
+/// Resolve Acrobat device-independent paths through the existing local-PDF policy. No I/O.
+pub fn resolve_javascript_document_path(source: Option<&std::path::Path>, raw: &str) -> Result<std::path::PathBuf, crate::RemoteDocumentPathError> {
+    #[cfg(windows)]
+    let normalized = {
+        let b = raw.as_bytes();
+        if b.first() == Some(&b'/') && b.get(1).is_some_and(u8::is_ascii_alphabetic) {
+            if b.get(2) == Some(&b'/') {
+                Some(format!("{}:{}", char::from(*b.get(1).unwrap_or(&b'C')), raw.get(2..).unwrap_or_default()))
+            } else if b.get(2) == Some(&b':') && b.get(3) == Some(&b'/') {
+                raw.get(1..).map(str::to_string)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    #[cfg(windows)]
+    let raw = normalized.as_deref().unwrap_or(raw);
+    crate::resolve_remote_document_path(source, raw)
 }
 
 #[cfg(test)]
