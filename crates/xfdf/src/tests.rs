@@ -1933,3 +1933,23 @@ fn annots_of(doc: &Document) -> Vec<Dict> {
         .filter(|d| d.get(b"Subtype") != Some(&Object::name("Widget")))
         .collect()
 }
+
+/// An empty text field exports as a `<field>` with no `<value>`, and the import skipped such a
+/// field, so importing the data left the target's old text in place. FDF, XML, CSV and text
+/// carry the same empty value and clear the field.
+#[test]
+fn an_empty_field_in_xfdf_clears_the_field_it_is_imported_into() {
+    let src = one_field();
+    assert_eq!(values(&src), vec![("Name".to_string(), Vec::<String>::new())]);
+    let exports = [
+        ("xfdf", export_xfdf(&src, false, true, "form.pdf").into_bytes()),
+        ("fdf", export_fdf(&src, false, true, "form.pdf").unwrap()),
+        ("xml", export_data(&src, Format::Xml).into_bytes()),
+    ];
+    for (format, data) in exports {
+        let mut dst = one_field();
+        set_value(&mut dst, "Name", &FieldValue::Text("Ada".into())).unwrap();
+        let report = import(&mut dst, &data);
+        assert_eq!(values(&dst), values(&src), "{format}: {report:?}: {}", String::from_utf8_lossy(&data));
+    }
+}

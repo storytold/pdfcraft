@@ -1276,7 +1276,9 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
             // Comments and processing instructions can split a value into several text nodes.
             .map(|v| v.children().filter(|n| n.is_text()).filter_map(|n| n.text()).collect())
             .collect();
-        if !vals.is_empty() {
+        // A leaf with no `<value>` is an empty field (the export writes one that way), so it
+        // clears the field like FDF's `/V ()`; a field with kids only names their parent.
+        if !vals.is_empty() || !f.children().any(|c| c.has_tag_name("field")) {
             out.push((full.clone(), vals));
         }
         walk_xfdf(f, &full, out, depth + 1)?;
