@@ -76,10 +76,17 @@ impl TranslationPopup {
         self.copied = false;
         self.rx = Some(rx);
 
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
             let res = service::fetch_translation(&query, &sl, &tl);
             let _ = tx.send(res);
         });
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let res = service::fetch_translation(&query, &sl, &tl);
+            let _ = tx.send(res);
+        }
     }
 
     /// Render the floating pop-up. Returns `false` when the user closes or dismisses the popup.
@@ -117,7 +124,7 @@ impl TranslationPopup {
 
         let mut keep_open = true;
 
-        egui::Area::new(Id::new("doc-translation-popup")).order(Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
+        let area_res = egui::Area::new(Id::new("doc-translation-popup")).order(Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(Margin::same(12)).corner_radius(CornerRadius::same(10)).show(ui, |ui| {
                 ui.set_width(popup_width);
 
@@ -210,7 +217,12 @@ impl TranslationPopup {
                                 ui.ctx().copy_text(result.clone());
                                 self.copied = true;
                                 self.copied_at = ui.input(|i| i.time);
+                                ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
                             }
+
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(RichText::new("Google Translate").weak().size(11.0));
+                            });
                         });
                     }
                     Status::Error(err) => {
@@ -224,6 +236,24 @@ impl TranslationPopup {
             });
         });
 
+        // Dismiss on clicks outside the popup
+        if area_res.response.clicked_elsewhere() {
+            keep_open = false;
+        }
+
+        if ui.input(|i| i.pointer.any_pressed())
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let rect = area_res.response.rect;
+            if !rect.contains(pos) {
+                let on_subpopup =
+                    ui.ctx().layer_id_at(pos).is_some_and(|lid| lid.order == egui::Order::Foreground || lid.order == egui::Order::Tooltip);
+                if !on_subpopup {
+                    keep_open = false;
+                }
+            }
+        }
+
         keep_open
     }
 }
@@ -231,6 +261,9 @@ impl TranslationPopup {
 /// Helper to get native display name of a language code.
 fn lang_name(code: &str) -> &'static str {
     let base = code.split(['-', '_']).next().unwrap_or(code);
+    if base.eq_ignore_ascii_case("zh") {
+        return "中文 (简体)";
+    }
     for &(c, name) in POPULAR_LANGUAGES {
         if c.eq_ignore_ascii_case(code) || c.eq_ignore_ascii_case(base) {
             return name;
@@ -242,11 +275,19 @@ fn lang_name(code: &str) -> &'static str {
 /// Detect default target language based on system locale or app language.
 fn default_target_lang() -> String {
     // 1. Check system locale
-    if let Some(locale) = sys_locale::get_locale() {
+    #[cfg(target_os = "windows")]
+    let sys_opt = sys_locale::get_locale();
+    #[cfg(not(target_os = "windows"))]
+    let sys_opt: Option<String> = None;
+
+    if let Some(locale) = sys_opt {
         let base = locale.split(['-', '_']).next().unwrap_or("").to_lowercase();
+        if base == "zh" {
+            return "zh-CN".to_string();
+        }
         if !base.is_empty() {
             for &(code, _) in POPULAR_LANGUAGES {
-                if code.eq_ignore_ascii_case(&base) {
+                if code.eq_ignore_ascii_case(&base) || code.eq_ignore_ascii_case(&locale) {
                     return code.to_string();
                 }
             }
@@ -256,9 +297,12 @@ fn default_target_lang() -> String {
     // 2. Check current app language
     let app_lang = crate::i18n::current().code();
     let base = app_lang.split(['-', '_']).next().unwrap_or("").to_lowercase();
+    if base == "zh" {
+        return "zh-CN".to_string();
+    }
     if !base.is_empty() {
         for &(code, _) in POPULAR_LANGUAGES {
-            if code.eq_ignore_ascii_case(&base) {
+            if code.eq_ignore_ascii_case(&base) || code.eq_ignore_ascii_case(app_lang) {
                 return code.to_string();
             }
         }
