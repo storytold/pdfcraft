@@ -374,6 +374,31 @@ mod tests {
     }
 
     #[test]
+    fn korean_text_round_trips_through_the_korean_craft_face() {
+        // Needs a craft-fonts checkout with a Kore face; skips like the other craft tests without one.
+        let Some(face) = crate::document_korean_font() else {
+            eprintln!("built without a Korean craft face (set CRAFT_FONTS_DIR to run this)");
+            return;
+        };
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        let name = embed(&mut doc, &mut fonts, face.bytes, "Hakgyoansim Namu").unwrap();
+        let font = doc.dict(fonts.get(name.as_bytes()).unwrap()).unwrap();
+        let m = Metrics::from_dict(&doc, &font);
+        // The modern syllable block lives in the BMP, so UCS-2 CIDs cover it.
+        let text = "한국어 테스트 · Namu 0123";
+        let codes = m.encode(text).unwrap();
+        assert_eq!(m.decode(&codes), text);
+        assert_eq!(crate::pdf::embedded_sfnt(&doc, &font).unwrap(), face.bytes);
+        // None of the leading syllables of every initial may fall through to .notdef.
+        for c in "가나다라마바사아자차카타파하".chars() {
+            let s = c.to_string();
+            let codes = m.encode(&s).unwrap();
+            assert_eq!(m.decode(&codes), s, "{c}");
+        }
+    }
+
+    #[test]
     fn embedding_the_same_text_again_reuses_its_resource_and_program() {
         let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         let face = FontRef::new(bytes).unwrap();

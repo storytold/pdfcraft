@@ -9,6 +9,7 @@ const MAX_STYLED_FALLBACK_BATCHES: usize = 64;
 
 struct FallbackGroup {
     face: &'static CraftFont,
+    script: Script,
     seen: std::collections::HashSet<char>,
     glyphs: Vec<Type3Glyph>,
     positions: Vec<usize>,
@@ -638,12 +639,12 @@ pub(super) fn rewrite_styled_block(
                         // Keep the old per-character face choice: a serif Japanese character
                         // and a Cyrillic character may need different faces even in one style.
                         // Hebrew uses the separate RTL path before reaching this writer.
-                        let (faces, _) = type3_faces(&s, family, source.bold)?;
+                        let (faces, script) = type3_faces(&s, family, source.bold)?;
                         let face =
                             fallback_face(&faces, &[ch], |face, ch| japanese_glyph_from(face, ch).is_ok()).ok_or_else(|| no_fallback_font(&s))?;
                         let index = fallback_groups.iter().position(|group| std::ptr::eq(group.face, face)).unwrap_or_else(|| {
                             let index = fallback_groups.len();
-                            fallback_groups.push(FallbackGroup { face, seen: Default::default(), glyphs: Vec::new(), positions: Vec::new() });
+                            fallback_groups.push(FallbackGroup { face, script, seen: Default::default(), glyphs: Vec::new(), positions: Vec::new() });
                             index
                         });
                         fallback_names.insert(key, index);
@@ -685,7 +686,7 @@ pub(super) fn rewrite_styled_block(
     // All fallback outlines have now succeeded. Batch by actual face, preserving source
     // style indices; the existing writer then coalesces adjacent equal-font/style characters.
     for group in fallback_groups {
-        let fallback = write_type3_glyphs(doc, &mut fonts, group.face, false, group.glyphs, per_font);
+        let fallback = write_type3_glyphs(doc, &mut fonts, group.face, group.script, group.glyphs, per_font);
         for name in &fallback.names {
             let font = fonts
                 .get(name.as_bytes())

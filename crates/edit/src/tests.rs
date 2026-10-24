@@ -1594,6 +1594,41 @@ fn japanese_paragraph_uses_unicode_type3_fallback() {
     assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
 }
 
+/// Korean replacement text keeps its craft face (Hakgyoansim Namu): Hangul and the Latin inside
+/// the line draw from it, the resource is `PCKo`-prefixed, and both openings report the face.
+#[test]
+fn korean_replacement_text_uses_the_korean_face() {
+    if pdfcraft_fonts::document_korean_font().is_none() {
+        eprintln!("skipping korean_replacement_text_uses_the_korean_face: no Kore face in this build (set CRAFT_FONTS_DIR to a checkout with one)");
+        return;
+    }
+    let replacement = "한국어 테스트 Namu 문서";
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+    for d in [&doc, &reopen(&doc)] {
+        let lines = text::text_lines(d, 0).unwrap();
+        assert_eq!(lines[0].text, replacement);
+        assert!(lines[0].base_font.contains("Hakgyoansim"), "{} should report the Korean face", lines[0].base_font);
+    }
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let ko: Vec<Vec<u8>> = fonts.as_dict().unwrap().iter().filter(|(n, _)| n.starts_with(b"PCKo")).map(|(n, _)| n.clone()).collect();
+    assert!(!ko.is_empty(), "the Korean fallback is generated as a PCKo font");
+}
+
+/// Without a Korean face the refusal names Korean and says how to get one; nothing is drawn.
+#[test]
+fn korean_replacement_without_a_korean_face_says_so() {
+    if pdfcraft_fonts::document_korean_font().is_some() {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let err = text::replace_line(&mut doc, 0, 0, "한국어 테스트").unwrap_err().to_string();
+    assert!(err.contains("Korean") && err.contains("CRAFT_FONTS_DIR"), "{err}");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab", "the line is untouched");
+}
+
 /// The first `n` Japanese characters, in code point order, that every craft-fonts face can draw, so
 /// whichever face an edit picks has them all. Without craft-fonts there are no faces, every character
 /// passes, and the text is still long.
@@ -3625,6 +3660,37 @@ fn hebrew_letters_the_page_font_lacks_use_the_hebrew_face() {
     let mut doc = hebrew_page("BT /F1 12 Tf 300 700 Td (EDCBA) Tj ET");
     assert_eq!(text::replace_block(&mut doc, 0, 0, "עברית מלאה").unwrap().substituted.as_deref(), Some("Noto Sans Hebrew Type3"));
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "עברית מלאה");
+}
+
+/// A replacement mixing Hebrew and Hangul draws both scripts' faces, rather than refusing the
+/// Hangul because the Japanese faces lack it (CodeRabbit review on the Korean branch).
+#[test]
+fn mixed_hebrew_korean_replacement_uses_both_faces() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() || pdfcraft_fonts::document_korean_font().is_none() {
+        eprintln!("skipping mixed_hebrew_korean_replacement_uses_both_faces: needs craft-fonts Hebrew and Kore faces (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let mut doc = hebrew_page("BT /F1 12 Tf 300 700 Td (EDCBA) Tj ET");
+    let typed = "שלום 한글 12";
+    let r = text::replace_line(&mut doc, 0, 0, typed).unwrap();
+    assert_eq!(r.substituted.as_deref(), Some("Noto Sans Hebrew Type3"), "the Hebrew face still leads the line");
+    assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("/PCHe"), "one PCHe Type 3 font carries the line");
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, typed, "Hebrew and Hangul both round-trip");
+}
+
+/// The same mixed line without a Korean face must ask for the Korean face, not just report the
+/// missing Hangul glyph: runs only in a checkout that has Hebrew but no `Kore` face.
+#[test]
+fn mixed_hebrew_korean_without_the_korean_face_names_korean() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() || pdfcraft_fonts::document_korean_font().is_some() {
+        eprintln!(
+            "skipping mixed_hebrew_korean_without_the_korean_face_names_korean: needs a craft-fonts checkout with a Hebrew face but no Kore face"
+        );
+        return;
+    }
+    let mut doc = hebrew_page("BT /F1 12 Tf 300 700 Td (EDCBA) Tj ET");
+    let err = text::replace_line(&mut doc, 0, 0, "שלום 한글").unwrap_err().to_string();
+    assert!(err.contains("Korean") && err.contains("CRAFT_FONTS_DIR"), "{err}");
 }
 
 /// #2013: the dialog asks `first_undrawable` before offering OK, so it must refuse exactly what

@@ -59,6 +59,10 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   and shaped Thai Add Text content. Harfrust positions stacked vowel/tone marks and decomposes
   Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
   embeds outlines, so reopening does not depend on installed fonts.
+- `ui_korean_fonts` / `document_korean_font`: the `Kore` faces (학교안심 나무 / Hakgyoansim Namu,
+  KERIS, OFL-1.1) for Korean interface text, and the face `pdfcraft-render` substitutes for
+  non-embedded Adobe-Korea1 CID fonts, while `fallback` reports it as the `ScriptFace` for
+  `Korea1`/`KR` orderings. `[]`/`None` without a craft-fonts input that has a Korean face.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
@@ -69,7 +73,7 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
+wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr`, `Thai` or `Kore` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
 committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).

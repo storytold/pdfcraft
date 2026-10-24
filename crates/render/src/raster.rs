@@ -79,7 +79,7 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| korean_fallback(query)).or_else(|| standard(query))),
             ..InterpreterSettings::default()
         }
     }
@@ -88,8 +88,9 @@ impl RenderConfig {
 /// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
 /// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
 /// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
-/// font, and when PdfCraft was built without craft-fonts. Only Japanese: no other CJK face is
-/// embedded whole.
+/// font, and when PdfCraft was built without craft-fonts. Korean is handled by
+/// [`korean_fallback`]; no other registered CJK ordering has a fallback because no other CJK
+/// face is embedded whole.
 fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
     let FontQuery::Fallback(f) = query else { return None };
     if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
@@ -109,6 +110,26 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
             faces.iter().find(|c| c.family == "BIZ UDPGothic" && c.style == style).or(faces.first()).copied()
         }
     }?;
+    Some((Arc::new(face.bytes), 0))
+}
+
+/// A Korean face from craft-fonts for a CID font of the Adobe-Korea1 collection that the PDF
+/// doesn't embed (`HYSMyeongJo-Medium`, `HYGothic-Medium`, …). 학교안심 나무 is one handwritten-style
+/// text design, so serif and bold requests all draw it. `None` for every other font, and when
+/// PdfCraft was built without a Korean craft face.
+fn korean_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    // A non-embedded font may declare the predefined Adobe-Korea1 collection or the bare Adobe/KR
+    // registry-ordering pair, which parses as a custom family; both are Korean.
+    let is_korean = match &f.character_collection.as_ref()?.family {
+        CidFamily::AdobeKorea1 => true,
+        CidFamily::Custom { registry, ordering } => registry.as_slice() == b"Adobe" && ordering.as_slice() == b"KR",
+        _ => false,
+    };
+    if !is_korean {
+        return None;
+    }
+    let face = pdfcraft_fonts::document_korean_font()?;
     Some((Arc::new(face.bytes), 0))
 }
 
@@ -7809,6 +7830,64 @@ trailer << /Root 1 0 R >>
             let glyphs: String = text.text.unwrap().glyphs.iter().map(|glyph| glyph.text.as_str()).collect();
             assert_eq!(glyphs, "日\u{2002}\u{2002}本", "glyph substitution must not rewrite Unicode");
         }
+    }
+
+    /// The same for Korean: a non-embedded Adobe-Korea1 CID font (`HYSMyeongJo-Medium`,
+    /// `HYGothic-Medium`) is drawn with the craft-fonts Korean face when the build has one.
+    #[test]
+    fn non_embedded_korean_cid_fonts_draw_with_a_craft_fonts_face() {
+        for base_font in ["HYSMyeongJo-Medium", "HYGothic-Medium"] {
+            korean_cid_substitute_draws(base_font, "Korea1");
+        }
+    }
+
+    /// The same for a non-embedded Type0 font whose descendant declares the bare Adobe/KR
+    /// registry-ordering pair instead of the predefined /Ordering (Korea1): it parses as a custom
+    /// CID family, and the Korean craft fallback must reach it all the same.
+    #[test]
+    fn non_embedded_adobe_kr_cid_fonts_draw_with_a_craft_fonts_face() {
+        for base_font in ["HYSMyeongJo-Medium", "HYGothic-Medium"] {
+            korean_cid_substitute_draws(base_font, "KR");
+        }
+    }
+
+    /// A one-page PDF with a non-embedded Korean Type0 font whose descendant declares Adobe
+    /// `/Ordering ({ordering})`, showing 한국 (`<AC00AD6D>` in UniKS-UCS2-H).
+    fn korean_cid_pdf(base_font: &str, ordering: &str) -> Vec<u8> {
+        let content = "BT /F1 40 Tf 5 15 Td <AC00AD6D> Tj ET";
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /UniKS-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 0 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 900 /Descent -200 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        )
+        .into_bytes()
+    }
+
+    /// The body both substitute tests share: the page draws 한국 through the craft Korean face.
+    /// `KR` is not a predefined collection: it parses as a custom CID family, and the fallback
+    /// reaches it the same way. Skipped when the build has no Korean face.
+    fn korean_cid_substitute_draws(base_font: &str, ordering: &str) {
+        let mut r = PageRenderer::new(Arc::new(korean_cid_pdf(base_font, ordering)), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{base_font} ({ordering}): {:?}", p.error);
+        let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+        if pdfcraft_fonts::document_korean_font().is_none() {
+            eprintln!("built without a Korean craft face (CRAFT_FONTS_DIR checkout has none): nothing to check");
+            return;
+        }
+        // 한국 at 40 pt in the display-weight Namu covers well over a few hundred dark pixels.
+        assert!(inked > 300, "{base_font} ({ordering}): 한국 is drawn ({inked} dark pixels)");
     }
 
     /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
