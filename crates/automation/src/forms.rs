@@ -417,6 +417,7 @@ impl Automation {
         Ok(out)
     }
 
+    /// Set properties on one `field` or on several `fields` at once, as one undoable edit.
     pub(crate) fn form_set_props(&mut self, a: &Args) -> Result<Value> {
         if a.get("widget").is_some() && a.get("caption").is_none() {
             return Err(bad("widget requires caption"));
@@ -485,6 +486,8 @@ impl Automation {
         Ok(out)
     }
 
+    /// The properties a tool call sets on field `name`, read from its arguments (a position is in
+    /// top-left-origin points on the page as shown).
     fn field_props_arg(&self, a: &Args, name: &str) -> Result<FieldProps> {
         let doc = self.doc(a)?;
         let f = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
@@ -585,6 +588,8 @@ impl Automation {
         })
     }
 
+    /// Set the tab order of `pages` (every page by default) to an `order`, or move one `field` a place
+    /// earlier or later on its page, and report the order that results.
     pub(crate) fn form_tab_order(&mut self, a: &Args) -> Result<Value> {
         let n = self.doc(a)?.info.pages.len();
         let pages = match a.opt_ints("pages")? {
@@ -614,6 +619,8 @@ impl Automation {
         Ok(out)
     }
 
+    /// Report the form's calculation order, its issues and whether it can be fixed, after at most one
+    /// change: a new `order`, a `field` moved one place (`move`: earlier or later), or `fix`.
     pub(crate) fn form_calculation_order(&mut self, a: &Args) -> Result<Value> {
         let current = self.doc(a)?.calculation_order();
         let fix = a.opt_bool("fix")?.unwrap_or(false);
@@ -662,10 +669,12 @@ impl Automation {
         Ok(out)
     }
 
+    /// The fields in the document's tab order, each once. Widgets with no place in it (not on a
+    /// page, or a protected XFA field's) are left out.
     fn tab_sequence(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut seq: Vec<(usize, &str)> =
-            doc.form.iter().flat_map(|f| f.widgets.iter().filter(|w| w.page.is_some()).map(move |w| (w.tab, f.name.as_str()))).collect();
+            doc.form.iter().flat_map(|f| f.widgets.iter().filter(|w| w.tab != usize::MAX).map(move |w| (w.tab, f.name.as_str()))).collect();
         seq.sort();
         seq.dedup_by(|x, y| x.1 == y.1);
         Ok(json!(seq.iter().map(|x| x.1).collect::<Vec<_>>()))

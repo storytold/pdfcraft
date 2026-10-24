@@ -158,6 +158,9 @@ pub struct Widget {
     pub multiline: bool,
     pub max_chars: Option<usize>,
     pub read_only: bool,
+    /// Tab stops on it: every field but a protected one. XFA puts a read-only field in the
+    /// tab order and leaves a protected one out, though neither can be changed.
+    pub tab_stop: bool,
     pub border: WidgetBorder,
     /// The field's value: saved (bound) values for choice lists, newline-separated when several.
     pub value: Option<String>,
@@ -2081,6 +2084,7 @@ impl Layouter<'_> {
             multiline: f.multiline,
             max_chars: f.max_chars,
             read_only,
+            tab_stop: f.access != Access::Protected,
             border,
             value,
             default: template_default,

@@ -1793,6 +1793,8 @@ fn two_fields_with_one_name_keep_their_places_in_the_order() {
     assert_eq!(set_calculation_order(&mut doc, &thrice), Err(FormError::Invalid("dup is in the order twice".into())));
 }
 
+/// New text and date fields size their text to fit: 12 pt where there is room, smaller in a short
+/// box, and an explicit size still wins (#1888).
 #[test]
 fn new_text_fields_fit_their_box() {
     // #1888: a fixed 12 pt was clipped in a short box. New text and date fields take Acrobat's
@@ -1821,6 +1823,8 @@ fn new_text_fields_fit_their_box() {
     assert_eq!(tf_size(&ap(&doc, &field(&fields(&doc), "short").widgets[0])), 12.0);
 }
 
+/// Border, fill, width, style, text color and font set on a field restyle its widget, survive a
+/// save, and an underline style draws a line instead of a box.
 #[test]
 fn appearance_properties_restyle_every_widget() {
     let mut doc = one_page();
@@ -1850,6 +1854,8 @@ fn appearance_properties_restyle_every_widget() {
     assert!(!a.contains(" re S") && a.contains(" l S"), "underline only: {a}");
 }
 
+/// The tab order follows the page's `/Tabs`: annotation order when unset, then rows, then columns,
+/// which a save keeps; a page that doesn't exist is refused.
 #[test]
 fn tab_order_follows_the_page_setting() {
     let mut doc = one_page();
@@ -1875,6 +1881,38 @@ fn tab_order_follows_the_page_setting() {
     assert!(set_tab_order(&mut doc.clone(), &[3], TabOrder::Row).is_err());
 }
 
+/// A widget PdfCraft laid out for a protected XFA field (`/PCXfaNoTab true`) has no place in the
+/// tab order, and the fields after it close up; a read-only field keeps its place.
+#[test]
+fn a_widget_marked_as_no_tab_stop_has_no_place_in_the_tab_order() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (name, y) in [("A", 700.0), ("B", 650.0), ("C", 600.0), ("D", 550.0)] {
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let widget = |doc: &Document, name: &str| fields(doc).into_iter().find(|f| f.name == name).unwrap().widgets[0].obj;
+    let (b, c) = (widget(&doc, "B"), widget(&doc, "C"));
+    doc.update_dict(b, |d| {
+        d.set(b"Ff".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    doc.update_dict(c, |d| {
+        d.set(b"Ff".to_vec(), Object::Int(1));
+        d.set(b"PCXfaNoTab".to_vec(), Object::Bool(true));
+    })
+    .unwrap();
+    let tabs = |doc: &Document| -> Vec<(String, usize)> { fields(doc).into_iter().map(|f| (f.name, f.widgets[0].tab)).collect() };
+    assert_eq!(tabs(&doc), [("A".into(), 0), ("B".into(), 1), ("C".into(), usize::MAX), ("D".into(), 2)]);
+    // Only `true` marks it: anything else under the key is ignored.
+    doc.update_dict(c, |d| {
+        d.set(b"PCXfaNoTab".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    assert_eq!(tabs(&doc)[2], ("C".into(), 2));
+}
+
+/// The Options flags, alignment and defaults: a comb needs a limit, a reset restores the default,
+/// sorting orders a combo box's items, and a check box can be checked by default.
 #[test]
 fn options_tab_flags_alignment_and_defaults() {
     let mut doc = one_page();

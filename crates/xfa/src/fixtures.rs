@@ -608,6 +608,33 @@ function AddDays(dateObj, daysOffset) {
     .to_string()
 }
 
+/// One field of each access a filler meets, top to bottom: `first` (open), `locked` (read-only,
+/// "Fixed"), `guarded` (protected, "Kept"), the exclusion group `pick` with an open button `a` and
+/// a protected button `b`, and `last` (open). XFA puts a read-only field in the tab order and
+/// leaves a protected one out of it, and another viewer tabs a probe form that way.
+pub fn access_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="7.5in" h="10in">
+  <field name="first" x="0in" y="0in" w="2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="locked" x="0in" y="0.5in" w="2in" h="0.35in" access="readOnly"><ui><textEdit/></ui><value><text>Fixed</text></value></field>
+  <field name="guarded" x="0in" y="1in" w="2in" h="0.35in" access="protected"><ui><textEdit/></ui><value><text>Kept</text></value></field>
+  <exclGroup name="pick" x="0in" y="1.5in" w="2in" h="0.35in" layout="lr-tb">
+   <field name="a" w="0.5in" h="0.35in"><ui><checkButton/></ui><items><text>A</text></items></field>
+   <field name="b" w="0.5in" h="0.35in" access="protected"><ui><checkButton/></ui><items><text>B</text></items></field>
+  </exclGroup>
+  <field name="last" x="0in" y="2in" w="2in" h="0.35in"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
 pub fn shell(xdp: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![

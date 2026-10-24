@@ -17,6 +17,9 @@ pub const SOM_KEY: &[u8] = b"PCSom";
 /// Private key on the AcroForm: what laying the form out produced, so a reopened file is not
 /// laid out again.
 pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
+/// Private key on the widgets of protected fields (`/PCXfaNoTab true`): read-only like those of
+/// read-only fields, but out of the tab order, as XFA says of `access="protected"`.
+pub const NO_TAB_KEY: &[u8] = b"PCXfaNoTab";
 /// Private key on generated push buttons whose template has a click script: the button has no
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
@@ -322,12 +325,14 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
 }
 
 impl Emitter<'_> {
+    /// The default appearance (`/DA`) for text in `face`: its font resource, size and color.
     fn da(face: &Face) -> Vec<u8> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
-    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
-    /// its border, background and kind, and return the annotation's object.
+    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation, with its border,
+    /// background and kind: a field of its own, or a kid of its radio group's field. Returns the
+    /// annotation's object.
     fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
         let r = w.rect;
         let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
@@ -361,6 +366,10 @@ impl Emitter<'_> {
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
+        }
+        // On the widget, so a protected button of an exclusion group is passed over on its own.
+        if !w.tab_stop {
+            d.set(NO_TAB_KEY.to_vec(), Object::Bool(true));
         }
         let mut top_level = true;
         match &w.kind {
@@ -1174,7 +1183,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
             out.image_fields += 1;
         }
         let private: Vec<Vec<u8>> =
-            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
+            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, NO_TAB_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
         if !private.is_empty() {
             out.field_keys += private.len();
             doc.update_dict(r, |d| {

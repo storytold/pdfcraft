@@ -103,7 +103,9 @@ pub struct Widget {
     /// The current appearance state (`/AS`).
     pub state: Option<String>,
     /// Position in the document's tab order (pages in order; within a page by its `/Tabs`:
-    /// rows, columns, or annotation/structure order). `usize::MAX` when not on a page.
+    /// rows, columns, or annotation/structure order). `usize::MAX` when not on a page, or when
+    /// the widget is no Tab stop (one PdfCraft laid out for a protected XFA field,
+    /// `/PCXfaNoTab true`).
     pub tab: usize,
     /// The widget's Locked flag (`/F` bit 8): its properties can't be changed.
     pub locked: bool,
@@ -692,12 +694,22 @@ impl TabOrder {
 /// A widget on a page for tab ordering: (page, field, widget, rect, annotation index).
 type TabItem = (usize, usize, usize, [f64; 4], usize);
 
-/// Every widget's place in the tab order.
+/// Whether the widget at `r` is one PdfCraft laid out for a protected XFA field
+/// (`/PCXfaNoTab true`). XFA leaves a protected field out of the tab order, while a
+/// read-only one keeps its place, though both are read-only here.
+fn no_tab_stop(doc: &Document, r: ObjRef) -> bool {
+    doc.get(r).as_dict().is_some_and(|d| matches!(d.get(b"PCXfaNoTab").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))))
+}
+
+/// Every widget's place in the tab order. A widget that is no Tab stop ([`no_tab_stop`]) gets
+/// none, and the widgets after it close up.
 fn rank_tabs(doc: &Document, pages: &[ObjRef], annot_index: &std::collections::HashMap<ObjRef, usize>, out: &mut [Field]) {
     let mut items: Vec<TabItem> = Vec::new();
     for (fi, f) in out.iter().enumerate() {
         for (wi, w) in f.widgets.iter().enumerate() {
-            if let Some(p) = w.page {
+            if let Some(p) = w.page
+                && !no_tab_stop(doc, w.obj)
+            {
                 items.push((p, fi, wi, w.rect, annot_index.get(&w.obj).copied().unwrap_or(usize::MAX)));
             }
         }

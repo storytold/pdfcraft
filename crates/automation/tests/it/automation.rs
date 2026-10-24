@@ -4818,6 +4818,8 @@ fn the_calculation_order_is_read_fixed_and_set() {
     assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "undone with the values it recalculated");
 }
 
+/// The tab order by rows, by columns and moved by hand, then a field's appearance and value,
+/// through the tools.
 #[test]
 fn tab_order_and_field_appearance_through_tools() {
     let dir = workdir("taborder");
@@ -4848,6 +4850,20 @@ fn tab_order_and_field_appearance_through_tools() {
     ));
 }
 
+/// The tab order the tools report leaves out what Tab passes over: a laid-out XFA form's
+/// protected field and protected button, which have no place in it, but not its read-only field.
+#[test]
+fn the_reported_tab_order_leaves_out_protected_xfa_fields() {
+    let dir = workdir("xfataborder");
+    std::fs::write(dir.join("access.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::access_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "access.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "row" }));
+    assert_eq!(r["tab_order"], json!(["first", "locked", "pick", "last"]));
+}
+
+/// Comments and field values export as XFDF and text, and importing the XFDF puts back a deleted
+/// comment and a reset field.
 #[test]
 fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
     let dir = workdir("xfdf");

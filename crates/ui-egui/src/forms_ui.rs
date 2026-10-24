@@ -5,7 +5,8 @@
 //! Space once Tab or a click has focused them. List boxes are directly selectable in-place on the
 //! page (clicking picks an option; Ctrl-click toggles on multi-select lists). Combo boxes open a
 //! list of their options; an editable one (Edit flag) also takes typed text in a box over the
-//! field. Every change is one undoable engine edit.
+//! field. Every change is one undoable engine edit. Read-only fields are Tab stops too: they take
+//! the focus, but typing, Space and the arrows change nothing in them.
 
 use std::collections::HashSet;
 
@@ -82,10 +83,12 @@ pub enum FormNotice {
     NoAction(String),
 }
 
+/// Where a widget's `/Rect` (user space) is on screen, on page `page` as `xf` draws it.
 fn widget_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     xf.user_rect(info, page, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
 }
 
+/// Whether `f` can be filled in: it isn't read-only, a push button or a signature.
 fn fillable(f: &FormField) -> bool {
     !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
@@ -108,6 +111,14 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+/// Whether Tab stops on widget `w` of field `f`: one shown on a page, of any field but a push
+/// button or a signature. Read-only fields are stops, as XFA's read-only fields are in another
+/// viewer; a widget with no place in the tab order (a protected XFA field's) is not.
+fn tab_stop(f: &FormField, w: &FormWidget) -> bool {
+    w.page.is_some() && !w.hidden && w.tab != usize::MAX && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
+}
+
+/// The focus on widget `widget` of field `f`: its value as the draft, asking for the keyboard.
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
@@ -634,11 +645,13 @@ pub(crate) fn overlay(
     };
     let w = f.widgets.get(focus.widget)?;
     let page = w.page?;
+    // A read-only field (or radio button) Tab stopped on: focused, but nothing changes it.
+    let locked = f.read_only() || w.read_only;
     let Some(xf) = view.page_xform(page) else {
-        // A check box or radio button scrolled out of view lets go (it has no draft to keep):
-        // taking the keyboard back when its page returns would turn scrolling arrows into
-        // choices, or pull the keyboard from wherever the user went meanwhile.
-        if matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) {
+        // A check box, radio button or read-only field scrolled out of view lets go (it has no
+        // draft to keep): taking the keyboard back when its page returns would turn scrolling
+        // arrows into choices, or pull the keyboard from wherever the user went meanwhile.
+        if locked || matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) {
             view.forms.focus = None;
         }
         return None;
@@ -650,7 +663,7 @@ pub(crate) fn overlay(
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
     match f.kind {
-        FormFieldKind::Text => {
+        FormFieldKind::Text if !locked => {
             let multiline = f.has(field_flags::MULTILINE);
             // Shown at once, like the paragraph editor: a fade-in shows the field's value through it.
             // Over the page, so only where the document shows: a field scrolled under the mode bar
@@ -761,7 +774,7 @@ pub(crate) fn overlay(
                 return view.pending_edit.take();
             }
         }
-        FormFieldKind::Combo => {
+        FormFieldKind::Combo if !locked => {
             // An editable combo box has a text box over the field as well as its list (ISO
             // 32000-2 Table 233, Edit).
             if editable_combo(f) {
@@ -798,7 +811,7 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::List => {
+        FormFieldKind::List if !locked => {
             let (up, down, esc, tab, shift) = ctx.input_mut(|i| {
                 (
                     // Consumed, so the arrows move the selection without also scrolling the page.
@@ -826,9 +839,10 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::CheckBox | FormFieldKind::Radio => {
+        kind if locked || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
-            // Space, Tab and the arrows come here instead of turning or scrolling the page.
+            // Space, Tab and the arrows come here instead of turning or scrolling the page. A
+            // read-only field of any kind is held the same way, with nothing to change.
             let id = egui::Id::new(("form-field", view.id.0, &f.name, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
@@ -844,10 +858,10 @@ pub(crate) fn overlay(
                 ui.memory_mut(|m| m.set_focus_lock_filter(id, filter));
                 has_focus = r.has_focus();
             });
-            view.forms.keys = Some((id, f.kind == FormFieldKind::Radio));
+            view.forms.keys = Some((id, f.kind == FormFieldKind::Radio && !locked));
             let (esc, tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift));
             let space = has_focus && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
-            let arrow = has_focus && f.kind == FormFieldKind::Radio;
+            let arrow = has_focus && f.kind == FormFieldKind::Radio && !locked;
             let step = ctx.input(|i| {
                 if !arrow {
                     None
@@ -864,6 +878,9 @@ pub(crate) fn overlay(
                 close = true;
             } else if tab {
                 next = Some(!shift);
+            } else if locked {
+                // Space was taken so it doesn't scroll the page; it, a click and the arrows
+                // change nothing here.
             } else if toggle && view.pending_edit.is_some() {
                 view.forms.toggle = true;
             } else if toggle {
@@ -873,8 +890,10 @@ pub(crate) fn overlay(
                 // turns the selected button off.
                 edit = if f.kind == FormFieldKind::Radio { select_edit(f, w) } else { toggle_edit(f, w) };
             } else if let Some(forward) = step {
-                // The arrows move to the group's next or previous button and select it, wrapping.
-                let stops: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(|(i, _)| i).collect();
+                // The arrows move to the group's next or previous button that Tab stops at and
+                // that can be chosen (never a protected or read-only one) and select it, wrapping.
+                // A read-only button stays a Tab stop.
+                let stops: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| tab_stop(f, w) && !w.read_only).map(|(i, _)| i).collect();
                 if let Some(pos) = stops.iter().position(|&i| i == focus.widget) {
                     let k = if forward { (pos + 1) % stops.len() } else { (pos + stops.len() - 1) % stops.len() };
                     if let Some((wi, target)) = stops.get(k).and_then(|&wi| Some((wi, f.widgets.get(wi)?))) {
@@ -897,13 +916,10 @@ pub(crate) fn overlay(
     if let Some(forward) = next {
         commit(view, form);
         let pending = view.pending_edit.take();
-        // The next field that can be filled in, check boxes and radio buttons included (#2223), in
+        // The next Tab stop, check boxes, radio buttons (#2223) and read-only fields included, in
         // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
-        let mut order: Vec<(usize, &FormField, usize)> = form
-            .iter()
-            .filter(|x| fillable(x))
-            .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
-            .collect();
+        let mut order: Vec<(usize, &FormField, usize)> =
+            form.iter().flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| tab_stop(x, w)).map(move |(wi, w)| (w.tab, x, wi))).collect();
         order.sort_by_key(|o| o.0);
         if let Some(pos) = order
             .iter()
