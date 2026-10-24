@@ -1026,8 +1026,8 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64, color:
 }
 
 /// How a check box or radio button widget `w` of field `f` looks in state on (`on`) or Off when
-/// the file has no appearance for that state: its `/MK` background and border ([`frame`]), and
-/// when on, its caption `/MK /CA` (ISO 32000-2 Table 192: the normal caption, which check boxes
+/// the file has no appearance for that state, or leaves its appearances to the viewer
+/// (`/NeedAppearances`): its `/MK` background and border ([`frame`]), and when on, its caption `/MK /CA` (ISO 32000-2 Table 192: the normal caption, which check boxes
 /// and radio buttons may use too) as a ZapfDingbats character, as in the check box example of
 /// 12.7.5.2.3: `4` (a check mark) by default, `l` (a dot) for a radio button. The character is
 /// drawn in the `/DA` colour, at the `/DA` size or, for an automatic size (`0 Tf`), filling most

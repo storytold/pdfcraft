@@ -58,7 +58,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   drawing while the objects it was drawn from are the same (`FieldAppearanceCache`), so typing in
   one field redraws that field, not the form. Check boxes and radio buttons with no appearance for
   their state are drawn from `/MK` (border, background, and when on the `/MK /CA` ZapfDingbats
-  symbol in the `/DA` colour), and push buttons with none from `/MK`, `/BS` and their caption.
+  symbol in the `/DA` colour), and with `/NeedAppearances` so is every one that has an `/MK`,
+  over the appearance the file carries; push buttons with none are drawn from `/MK`, `/BS` and
+  their caption.
 - Check boxes and radio buttons switch `/V` and each widget's `/AS`. Widgets with no appearances
   get PdfCraft's own (a drawn check mark or dot; no symbol font needed).
 - Imported `/MaxLen 0` is treated as unlimited (also clearing an inherited limit), while the

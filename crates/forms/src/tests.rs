@@ -4274,3 +4274,79 @@ fn comb_fields_show_their_cells() {
     let plain = saved_look(&doc, "d");
     assert!(!plain.contains(" m ") && plain.contains("(A) Tj"), "{plain}");
 }
+
+/// Check boxes and radio buttons with an `/MK` look and appearances of their own, in a form that
+/// sets `/NeedAppearances` (`need`) or not.
+fn mk_buttons(need: bool) -> Document {
+    let flag = if need { "/NeedAppearances true " } else { "" };
+    let widget = |n: &str, rest: &str| format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({n}) /F 4 /P 3 0 R {rest} >>");
+    let states = |on: &str| format!("/AP << /N << /{on} 15 0 R /Off 16 0 R >> >>");
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>".into(),
+        format!(
+            "<< /Fields [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] {flag}/DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>"
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        widget("check", &format!("/V /Yes /AS /Yes /DA (/Helv 0 Tf 0 g) /MK << /BC [0 0 0] /CA (4) >> /Rect [50 700 74 724] {}", states("Yes"))), // 6
+        widget("cross", &format!("/V /Yes /AS /Yes /DA (/ZaDb 0 Tf 1 0 0 rg) /MK << /CA (8) >> /Rect [100 700 124 724] {}", states("Yes"))),
+        widget("diamond", &format!("/V /Yes /AS /Yes /MK << /CA (u) /BG [1 1 0] >> /Rect [150 700 174 724] {}", states("Yes"))),
+        widget("square", &format!("/V /Yes /AS /Yes /MK << /CA (n) >> /Rect [200 700 224 724] {}", states("Yes"))),
+        widget("star", &format!("/V /Yes /AS /Yes /MK << /CA (H) >> /Rect [250 700 274 724] {}", states("Yes"))), // 10
+        widget("off", &format!("/V /Off /AS /Off /MK << /BC [0 0 0] /CA (4) >> /Rect [300 700 324 724] {}", states("Yes"))),
+        widget("radio", &format!("/Ff 32768 /V /B /MK << /BC [0 0 1] /CA (l) >> /Rect [350 700 374 724] {}", states("B"))),
+        widget("plain", &format!("/V /Yes /AS /Yes /Rect [400 700 424 724] {}", states("Yes"))),
+        widget(
+            "odd",
+            &format!(
+                "/V /Yes /AS /Yes /DA (/ZaDb nan Tf 1 x rg) /MK << /CA 42 /BC [(no) /Name] /BG 7 >> /BS << /W -3 >> /Rect [450 700 474 724] {}",
+                states("Yes")
+            ),
+        ),
+        "<< /Length 24 >>\nstream\n0 g 4 4 16 16 re f\nendstream".into(), // 15: a filled square
+        "<< /Length 4 >>\nstream\nq\nQ\nendstream".into(),
+    ])
+}
+
+/// ISO 32000-2 Table 224 (`/NeedAppearances`) and Table 192 (`/MK /CA`): a form that leaves its
+/// appearances to the viewer shows each check box and radio button with an `/MK` drawn from it,
+/// over the appearance the file carries: the caption's ZapfDingbats symbol in the `/DA` colour
+/// when on, only the border when off. A widget with no `/MK` keeps its own; the file is untouched.
+#[test]
+fn need_appearances_draws_check_boxes_and_radio_buttons_from_their_captions() {
+    let doc = mk_buttons(true);
+    let copy = with_field_appearances(&doc).expect("buttons to draw");
+    let all = fields(&copy);
+    for (name, state, symbol, colour) in [
+        ("check", "Yes", "(4) Tj", "0 g"),
+        ("cross", "Yes", "(8) Tj", "1 0 0 rg"),
+        ("diamond", "Yes", "(u) Tj", "0 g"),
+        ("square", "Yes", "(n) Tj", "0 g"),
+        ("star", "Yes", "(H) Tj", "0 g"),
+        ("radio", "B", "(l) Tj", "0 g"),
+    ] {
+        let shown = state_ap(&copy, &field(&all, name).widgets[0], state);
+        assert!(shown.contains(symbol) && shown.contains(&format!("{colour}\n")), "{name}: {shown}");
+        assert!(!shown.contains("4 4 16 16 re f"), "{name} is not the file's filled square: {shown}");
+    }
+    let check = state_ap(&copy, &field(&all, "check").widgets[0], "Yes");
+    assert!(check.contains("0 0 0 RG\n1 w\n0.5 0.5 23 23 re S"), "the /BC border: {check}");
+    assert!(state_ap(&copy, &field(&all, "diamond").widgets[0], "Yes").contains("1 1 0 rg\n0 0 24 24 re f"), "the /BG background");
+    assert!(state_ap(&copy, &field(&all, "radio").widgets[0], "B").contains("0 0 1 RG"), "the radio's own border");
+    let off = state_ap(&copy, &field(&all, "off").widgets[0], "Off");
+    assert!(off.contains("re S") && !off.contains("Tj"), "off: only the border: {off}");
+    // Nonsense in /MK, /DA and /BS: the default check, no border, and no panic.
+    let odd = state_ap(&copy, &field(&all, "odd").widgets[0], "Yes");
+    assert!(odd.contains("(4) Tj") && !odd.contains("re S"), "{odd}");
+    let own = |d: &Document, name: &str| d.get(field(&fields(d), name).widgets[0].obj).as_dict().and_then(|w| w.get(b"AP").cloned());
+    assert_eq!(own(&copy, "plain"), own(&doc, "plain"), "a box without /MK keeps its own look");
+    assert_eq!(state_ap(&doc, &field(&fields(&doc), "check").widgets[0], "Yes").trim_end(), "0 g 4 4 16 16 re f", "the file is untouched");
+}
+
+/// Without `/NeedAppearances` the file's own check box and radio button appearances are shown
+/// as they are, `/MK` or not: no copy is needed.
+#[test]
+fn without_need_appearances_buttons_keep_their_own_appearances() {
+    assert!(with_field_appearances(&mk_buttons(false)).is_none());
+}

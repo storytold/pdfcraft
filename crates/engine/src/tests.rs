@@ -8288,3 +8288,70 @@ fn pdf_with_annots(annots: &[&[u8]]) -> Vec<u8> {
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     bytes
 }
+
+/// ISO 32000-2 Table 224 (`/NeedAppearances`) and Table 192 (`/MK /CA`): a form that leaves its
+/// appearances to the viewer shows its check boxes and radio buttons drawn from `/MK`, over the
+/// filled squares the file carries: a checked box its check mark (ZapfDingbats `4`), an unchecked
+/// one its empty border, a radio button its dot (`l`), on screen and printed as an image. Without
+/// `/NeedAppearances` the file's own squares show. Saving writes the file as it was.
+#[test]
+fn need_appearances_buttons_are_displayed_from_their_captions() {
+    let pdf = |need: bool| {
+        let flag = if need { "/NeedAppearances true " } else { "" };
+        format!(
+            "%PDF-1.7\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] /Annots [6 0 R 7 0 R 8 0 R] >> endobj\n\
+             4 0 obj << /Fields [6 0 R 7 0 R 8 0 R] {flag}/DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> endobj\n\
+             5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (on) /V /Yes /AS /Yes /DA (/Helv 0 Tf 0 g) /MK << /BC [0 0 0] /CA (4) >> /Rect [20 100 60 140] /F 4 /P 3 0 R /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >> endobj\n\
+             7 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (off) /V /Off /AS /Off /DA (/Helv 0 Tf 0 g) /MK << /BC [0 0 0] /CA (4) >> /Rect [100 100 140 140] /F 4 /P 3 0 R /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >> endobj\n\
+             8 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 32768 /T (radio) /V /B /AS /B /DA (/Helv 0 Tf 0 g) /MK << /BC [0 0 0] /CA (l) >> /Rect [180 100 220 140] /F 4 /P 3 0 R /AP << /N << /B 9 0 R /Off 9 0 R >> >> >> endobj\n\
+             9 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length 18 >> stream\n0 g 4 4 32 32 re f\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF"
+        )
+        .into_bytes()
+    };
+    let render = |bytes: Arc<Vec<u8>>| {
+        let mut r = pdfcraft_render::PageRenderer::new(bytes, pdfcraft_render::RenderConfig::default());
+        r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() })
+    };
+    // Dark pixels of the page (drawn at scale 1, 400 x 200) in the user-space box x0..x1, y0..y1.
+    let ink = |page: &pdfcraft_render::RenderedPage, (x0, y0, x1, y1): (u32, u32, u32, u32)| {
+        let (px, _) = page.rgba.as_chunks::<4>();
+        (200 - y1..200 - y0)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| px.get((y * page.width + x) as usize).is_some_and(|p| p[0] < 128 && p[1] < 128 && p[2] < 128))
+            .count()
+    };
+    // In a widget whose lower-left corner is (x, y): its whole inside, the top-left of its inside
+    // (where a check mark leaves the box empty), and the lower-left corner (outside a dot).
+    let inside = |x: u32, y: u32| (x + 6, y + 6, x + 34, y + 34);
+    let top_left = |x: u32, y: u32| (x + 6, y + 26, x + 14, y + 34);
+    let corner = |x: u32, y: u32| (x + 5, y + 5, x + 9, y + 9);
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdf(true)), None).unwrap();
+    let shown = render(s.get(id).unwrap().display.clone());
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
+    let printed = render(Arc::new(pictures));
+    for (page, how) in [(&shown, "shown"), (&printed, "printed")] {
+        let (check, check_corner) = (ink(page, inside(20, 100)), ink(page, top_left(20, 100)));
+        assert!(check > 100 && check < 600, "{how}: a check mark, not the 28 x 28 square: {check}");
+        assert_eq!(check_corner, 0, "{how}: the check mark leaves the top left empty");
+        assert_eq!(ink(page, inside(100, 100)), 0, "{how}: the unchecked box is empty");
+        assert!(ink(page, (100, 100, 140, 102)) > 30, "{how}: and keeps its border");
+        let dot = ink(page, (188, 108, 212, 132));
+        assert!(dot > 300 && ink(page, corner(180, 100)) == 0, "{how}: the radio button's dot: {dot}");
+    }
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.windows(18).any(|w| w == b"0 g 4 4 32 32 re f"), "the file keeps its own appearances");
+
+    // Without /NeedAppearances the file's filled squares are shown.
+    let id = s.open("plain.pdf", None, Arc::new(pdf(false)), None).unwrap();
+    let shown = render(s.get(id).unwrap().display.clone());
+    for x in [20, 100, 180] {
+        assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
+    }
+}

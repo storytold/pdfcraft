@@ -1448,8 +1448,9 @@ pub fn need_appearances(doc: &Document) -> bool {
 /// writer left the appearances to the viewer), and otherwise each widget without a normal
 /// appearance (`/AP /N`), as typing the value would draw it (#3470). Check boxes and radio buttons
 /// with no normal appearance for their state (`/AS`) are drawn from their `/MK` background, border
-/// and caption, and push buttons with none from their `/MK` and `/BS` (Table 192). `doc` is not
-/// changed: saving writes the file as it was.
+/// and caption, and with `/NeedAppearances` every one that has an `/MK` is, over its own
+/// appearance; push buttons with none are drawn from their `/MK` and `/BS` (Table 192). `doc` is
+/// not changed: saving writes the file as it was.
 pub fn with_field_appearances(doc: &Document) -> Option<Document> {
     with_field_appearances_cached(doc, &mut FieldAppearanceCache::default())
 }
@@ -1467,19 +1468,25 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 .and_then(|d| d.get(b"AP"))
                 .and_then(|ap| doc.resolve(ap).as_dict().and_then(|ap| ap.get(b"N").map(|n| doc.resolve(n))));
             // A check box or radio button shows the appearance of its state (12.7.5.2.3): `/AS`,
-            // else a check box's value, else Off. An Off state may go without one (it shows
-            // nothing); an on state needs one.
+            // else the value when it names this widget's on state (any check box value when the
+            // widget names none), else Off. An Off state may go without one (it shows nothing);
+            // an on state needs one.
             let state = match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio => {
-                    let value = f.value.first().filter(|v| f.kind == FieldKind::CheckBox && !v.is_empty() && v.as_str() != "Off");
+                    let mine = |v: &&String| w.on_state.as_ref().map_or(f.kind == FieldKind::CheckBox, |on| on == *v);
+                    let value = f.value.first().filter(|v| !v.is_empty() && v.as_str() != "Off").filter(mine);
                     Some(w.state.clone().or_else(|| value.cloned()).unwrap_or_else(|| "Off".into()))
                 }
                 _ => None,
             };
+            // With /NeedAppearances a check box or radio button that describes its look in /MK is
+            // drawn from it (Table 192), its own appearance or not; one without /MK keeps its own.
+            let described = || widget.as_dict().and_then(|d| d.get(b"MK")).is_some_and(|mk| doc.resolve(mk).as_dict().is_some());
             let missing = match f.kind {
                 FieldKind::Text | FieldKind::Combo | FieldKind::List => normal.is_none() || all,
                 FieldKind::PushButton => normal.is_none(),
                 FieldKind::CheckBox | FieldKind::Radio => match (normal.as_deref(), state.as_deref()) {
+                    _ if all && described() => true,
                     (None, _) => true,
                     (Some(Object::Dict(states)), Some(s)) => s != "Off" && !states.contains(&name_bytes(s)),
                     _ => false,
