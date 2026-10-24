@@ -688,9 +688,7 @@ impl crate::PdfCraftApp {
             Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => read(self, p.into()),
             Some(_) => {}
             None => {
-                let dialog = rfd::AsyncFileDialog::new()
-                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title(title);
+                let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Images"), crate::files::IMAGE_EXTENSIONS).set_title(title);
                 let target = self.active_ids().map(|(_, id)| id);
                 self.ask_one(crate::pickers::Ask::File(dialog), target, read);
             }
@@ -840,8 +838,13 @@ impl crate::PdfCraftApp {
 
     /// Place image `bytes` in the middle of the current page and select it.
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
+        let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return };
+        self.add_image_on_page(view.current, name, bytes);
+    }
+
+    /// The shared insertion path, also used for a drop whose bytes arrive asynchronously.
+    pub(crate) fn add_image_on_page(&mut self, page: usize, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
-        let page = self.views[i].current;
         let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
             self.views[i].content.select_added = Some((page, before));

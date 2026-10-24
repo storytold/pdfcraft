@@ -3477,6 +3477,7 @@ impl eframe::App for PdfCraftApp {
         let dropped = self.drop_on_signature_pad(dropped);
         #[cfg(not(target_arch = "wasm32"))]
         let dropped = self.drop_on_grid(dropped, ctx);
+        let dropped = self.drop_images(dropped, ctx);
         for f in dropped {
             // Files dropped on the Combine files tab join its list instead of opening.
             if self.combine_showing() {
