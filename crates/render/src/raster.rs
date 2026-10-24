@@ -5964,6 +5964,222 @@ trailer << /Root 1 0 R >>
         page
     }
 
+    /// Draws a 10×1 `/BitsPerComponent 1` source with a one-pixel stroke in column 1 across a
+    /// 6-pixel-wide page (1.67:1): as an `/ImageMask` stencil, or as a DeviceGray image.
+    fn draw_one_bit_stroke(mask: bool) -> RenderedPage {
+        // Column 1 holds the only ink: for the mask a 0 sample paints (its default decode),
+        // for DeviceGray a 0 sample is black.
+        let bytes: [u8; 2] = [0xBF, 0xFF];
+        let data = hex(&bytes);
+        let (mask_dict, space) = if mask { ("/ImageMask true ", "") } else { ("", "/ColorSpace /DeviceGray ") };
+        let content = "q 6 0 0 1 0 0 cm /Im0 Do Q";
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 6 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 10 /Height 1 {space}{mask_dict}/BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            data.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (6, 1));
+        page
+    }
+
+    /// Issue #1700: a 1-bit source shrunk by between 1:1 and 2:1 was drawn by picking single
+    /// source pixels, so a one-pixel stroke (Type 3 image-mask glyphs, fax-era and OCR fonts)
+    /// vanished. The stroke in source column 1 of 10 covers 0.4 of device pixel 0 and must draw
+    /// as a mid-tone, as poppler and Acrobat average it.
+    #[test]
+    fn one_bit_sources_average_when_minified_between_one_and_two_to_one() {
+        for mask in [true, false] {
+            let page = draw_one_bit_stroke(mask);
+            let gray: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+            assert!((64..=191).contains(&gray[0]), "mask={mask}: the stroke is lost: {gray:?}");
+            assert_eq!(gray[5], 255, "mask={mask}: the far end stays white: {gray:?}");
+        }
+    }
+
+    /// Draws a `width`×1 `/BitsPerComponent 1` `/ImageMask` with its only ink in `ink` (a 0
+    /// sample, which paints under the mask's default decode) across a `device`-pixel-wide page.
+    fn draw_one_bit_mask_row(width: usize, ink: usize, device: u32) -> RenderedPage {
+        let mut bytes = vec![0xFFu8; width.div_ceil(8)];
+        bytes[ink / 8] &= !(1u8 << (7 - ink % 8));
+        let data = hex(&bytes);
+        let content = format!("q {device} 0 0 1 0 0 cm /Im0 Do Q");
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {device} 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height 1 /ImageMask true /BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            data.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (device, 1));
+        page
+    }
+
+    /// Issue #1700, floating-point epsilon: the far end of the last target pixel's box,
+    /// `(tx + 1) * sx` with `sx = sw / tw`, can round a hair above the source width —
+    /// 22 × (25 / 22) = 25.000000000000004 — so `ceil` took column `sw`, one past the last
+    /// source column. That read returned `None` and the whole image silently fell back to
+    /// nearest picking, which missed the stroke. The box ends are clamped to the source.
+    #[test]
+    fn one_bit_minification_clamps_the_last_box_to_the_source() {
+        // The smallest case from the review: a 25×1 mask inked only in column 4 drawn 22 px
+        // wide. Nearest picking reads columns 0, 1, 2, 3, 5, …, never 4: before the fix the row
+        // was white.
+        let page = draw_one_bit_mask_row(25, 4, 22);
+        let gray: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert_eq!(gray[0], 255, "the columns before the stroke stay white: {gray:?}");
+        assert!((64..=191).contains(&gray[3]), "the stroke is lost: {gray:?}");
+        assert_eq!(gray[21], 255, "the columns after the stroke stay white: {gray:?}");
+
+        // A 300 dpi A4 scan (2480 px) shown as a 300 px thumbnail: the same epsilon at a real
+        // size (300 × (2480 / 300) = 2480.0000000000005).
+        let page = draw_one_bit_mask_row(2480, 5, 300);
+        let gray: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert!(gray[0] < 255, "the stroke is lost: {gray:?}");
+    }
+
+    /// Draws a `width`×1 `/ImageMask` with its only ink in column `ink`, `device` points (= pixels
+    /// at scale 1) wide and one high, its left edge at x = `offset`: as an image XObject on the
+    /// page, or inside a Type 3 glyph (`type3`). Returns the gray of each device pixel.
+    fn draw_one_bit_stroke_at(width: usize, ink: usize, device: f64, offset: f64, type3: bool) -> Vec<u8> {
+        let mut bytes = vec![0xFFu8; width.div_ceil(8)];
+        bytes[ink / 8] &= !(1u8 << (7 - ink % 8));
+        let data = hex(&bytes);
+        let page_width = (offset + device).ceil();
+        let image = format!(
+            "<< /Type /XObject /Subtype /Image /Width {width} /Height 1 /ImageMask true /BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream",
+            data.len() + 1
+        );
+        let pdf = if type3 {
+            let content = format!("BT /F1 1 Tf {offset} 0 Td (A) Tj ET");
+            let glyph = format!("{device} 0 0 0 {device} 1 d1 q {device} 0 0 1 0 0 cm /Im0 Do Q");
+            format!(
+                "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} 1] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 {device} 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [{device}] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+                 6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+                 7 0 obj {image} endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n",
+                content.len(),
+                glyph.len()
+            )
+        } else {
+            let content = format!("q {device} 0 0 1 {offset} 0 cm /Im0 Do Q");
+            format!(
+                "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj {image} endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n",
+                content.len()
+            )
+        };
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (page_width as u32, 1));
+        page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect()
+    }
+
+    /// Issue #1700, follow-up to the averaging: the averaged raster of a shrunk 1-bit source is
+    /// `ceil(s × scale)` pixels wide, and drawing it `s × scale` pixels wide nearest-sampled it a
+    /// second time, so a whole averaged column could fall between two pixel centres. An 18×1
+    /// mask drawn 8.1 px wide (an 18 px Type 3 glyph at 9 pt and 96 dpi) was averaged to 9 px and
+    /// lost the strokes in source columns 8 and 9. It is now averaged straight into its snapped
+    /// device rectangle (8 px) and drawn 1:1, as interpolated images are: every device pixel is
+    /// the exact area average of the source pixels it covers. Drawn 17.1 or 17.6 px wide, the
+    /// shrink is less than one pixel and no resize is planned (`ceil` gives 18): nearest sampling
+    /// dropped one column at 17.1 px; now the source is drawn 1:1 at the snapped corner. Each
+    /// case is checked as an image and inside a Type 3 glyph at a fractional offset (whose
+    /// two-pixel transparent frame must not shift it).
+    #[test]
+    fn one_bit_minification_averages_into_the_snapped_device_rectangle() {
+        const SOURCE: usize = 18;
+        // (drawn width, width on the device): 0.0..8.1 and 0.3..8.4 both round to columns 0..8;
+        // the shrinks below one pixel keep the 18 source columns, drawn from column 0.
+        for (device, drawn) in [(8.1, 8usize), (17.1, SOURCE), (17.6, SOURCE)] {
+            let expected = |ink: usize, page_width: usize| -> Vec<u8> {
+                let step = SOURCE as f64 / drawn as f64;
+                let mut gray: Vec<u8> = (0..drawn)
+                    .map(|k| {
+                        let (lo, hi) = (k as f64 * step, (k + 1) as f64 * step);
+                        let cover = (hi.min(ink as f64 + 1.0) - lo.max(ink as f64)).max(0.0) / step;
+                        255 - (cover * 255.0).round() as u8
+                    })
+                    .collect();
+                gray.resize(page_width, 255); // Page pixels past the drawn rectangle stay white.
+                gray
+            };
+            for (type3, offset) in [(false, 0.0), (true, 0.3)] {
+                let rows: Vec<Vec<u8>> = (0..SOURCE).map(|ink| draw_one_bit_stroke_at(SOURCE, ink, device, offset, type3)).collect();
+                // First the visible failure: before the fix, these strokes drew nothing at all
+                // (columns 8 and 9 at 8.1 px).
+                let lost: Vec<usize> = (0..SOURCE).filter(|&ink| rows[ink].iter().all(|&g| g > 230)).collect();
+                assert!(lost.is_empty(), "type3={type3}, {device} px: the strokes in source columns {lost:?} are lost");
+                for (ink, gray) in rows.iter().enumerate() {
+                    let want = expected(ink, gray.len());
+                    for (x, (&got, &want_px)) in gray.iter().zip(&want).enumerate() {
+                        assert!(got.abs_diff(want_px) <= 2, "type3={type3}, {device} px, ink column {ink}, pixel {x}: got {gray:?}, want {want:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Issue #1700, follow-up: a 1-bit source shrunk by less than one pixel must not be averaged
+    /// into one pixel fewer. A 6000×2 mask with a stroke in every seventh column drawn 5999.6 px
+    /// wide at x = 0.6 snaps to columns 1..6000; averaged into those 5999 columns, the two grids
+    /// beat and hundreds of strokes turned into two 50 % grey pixels. Drawn 1:1 from column 1,
+    /// every stroke stays one solid black pixel and nothing else is grey.
+    #[test]
+    fn one_bit_shrink_below_one_pixel_draws_the_source_one_to_one() {
+        const WIDTH: usize = 6000;
+        let mut row = vec![0xFFu8; WIDTH / 8];
+        for c in (0..WIDTH).step_by(7) {
+            row[c / 8] &= !(1u8 << (7 - c % 8));
+        }
+        let data = hex(&[row.clone(), row].concat());
+        let content = "q 5999.6 0 0 2 0.6 1 cm /Im0 Do Q";
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 6002 4] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width {WIDTH} /Height 2 /ImageMask true /BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            data.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (6002, 4));
+        let gray = |x: usize, y: usize| page.rgba[(y * 6002 + x) * 4];
+        // The image covers device rows 1 and 2 (y = 1..3 on a 4 pt page).
+        for y in 1..3 {
+            let grey: Vec<usize> = (0..6002).filter(|&x| !matches!(gray(x, y), 0 | 255)).collect();
+            assert!(grey.is_empty(), "row {y}: {} grey pixels, first at columns {:?}", grey.len(), &grey[..grey.len().min(8)]);
+            let faded: Vec<usize> = (0..WIDTH).step_by(7).filter(|&c| gray(c + 1, y) != 0).collect();
+            assert!(faded.is_empty(), "row {y}: {} strokes not solid black, first in source columns {:?}", faded.len(), &faded[..faded.len().min(8)]);
+        }
+    }
+
     /// Issue #624: an image drawn below its source resolution was pre-resampled with Catmull-Rom
     /// even when `/Interpolate` was false (or absent, whose PDF default is false). That blends
     /// neighboring samples before the renderer's later non-interpolating image sampler sees them,
