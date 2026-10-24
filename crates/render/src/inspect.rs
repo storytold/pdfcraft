@@ -3954,6 +3954,112 @@ trailer << /Root 1 0 R >>
         assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
         assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
     }
+
+    #[test]
+    fn huge_mediabox_and_user_unit_open_with_one_page() {
+        use crate::raster::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
+
+        for page_attrs in [
+            "/MediaBox [0 0 1e30 1e30]",
+            "/MediaBox [0 0 1000000000000000000000000000000 1000000000000000000000000000000]",
+            "/MediaBox [0 0 612 792] /UserUnit 1e20",
+            "/MediaBox [0 0 1e30 1e30] /UserUnit 1e20",
+            "/MediaBox [0 0 1e30 1e30] /UserUnit 1e20 /Rotate 90",
+            "/MediaBox [0 0 1E+40 1E+40] /UserUnit 1e400",
+            "/MediaBox [-2e38 -2e38 2e38 2e38] /UserUnit 75000",
+            "/MediaBox [0 0 1.5e3 2.5E+3] /UserUnit 2e0",
+        ] {
+            let content = "q 1 0 0 1 1000000000000000000000000000000 0 cm Q 1 0 0 rg 0 0 100 100 re f BT /F1 12 Tf 10 20 Td (Hello) Tj ET";
+            let pdf = format!(
+                "%PDF-1.7\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R {page_attrs} /Annots [6 0 R] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n\
+                 6 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1e40 1e40] /Contents (Huge rect) >> endobj\n\
+                 trailer << /Size 7 /Root 1 0 R >>\n%%EOF",
+                content.len()
+            )
+            .into_bytes();
+            let bytes = std::sync::Arc::new(pdf);
+            let hayro_pdf = hayro::hayro_interpret::hayro_syntax::Pdf::new(bytes.clone()).unwrap_or_else(|e| panic!("{page_attrs} hayro: {e:?}"));
+            let coeffs = hayro_pdf.pages()[0].initial_transform(true).as_coeffs();
+            assert!(coeffs.iter().all(|c| c.is_finite()), "{page_attrs}: initial_transform={coeffs:?}");
+
+            let info = inspect(bytes.clone(), None).unwrap_or_else(|e| panic!("{page_attrs} failed to open: {e}"));
+            assert_eq!(info.pages.len(), 1, "{page_attrs}");
+            assert!(info.warnings.is_empty(), "{page_attrs}: {:?}", info.warnings);
+            let p = &info.pages[0];
+            assert!(p.width.is_finite() && p.width >= 1.0, "{page_attrs}: width={}", p.width);
+            assert!(p.height.is_finite() && p.height >= 1.0, "{page_attrs}: height={}", p.height);
+            assert!(p.crop.iter().all(|c| c.is_finite()), "{page_attrs}: crop={:?}", p.crop);
+            assert_eq!(info.annotations.len(), 1, "{page_attrs} annotations");
+            assert!(info.annotations[0].rect.iter().all(|c| c.is_finite()), "{page_attrs}: annot rect={:?}", info.annotations[0].rect);
+
+            let mut renderer = PageRenderer::new(bytes.clone(), RenderConfig::default());
+            let px = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+            assert!(px.error.is_none(), "{page_attrs}: render error {:?}", px.error);
+            assert!(px.width > 100 && px.height > 100, "{page_attrs}: {}x{}", px.width, px.height);
+            let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+            assert!(text.error.is_none(), "{page_attrs}: text error {:?}", text.error);
+
+            let lopdf_doc = lopdf::Document::load_mem(&bytes).unwrap_or_else(|e| panic!("{page_attrs} lopdf load: {e}"));
+            let lopdf_pages = lopdf_doc.get_pages();
+            let (&first_num, &page_id) = lopdf_pages.iter().next().expect("1 lopdf page");
+            assert_eq!(first_num, 1);
+            let raw_content = lopdf_doc.get_page_content(page_id);
+            let decoded = lopdf::content::Content::decode(&raw_content).unwrap_or_else(|e| panic!("{page_attrs} lopdf decode: {e}"));
+            assert!(!decoded.operations.is_empty(), "{page_attrs} lopdf operations");
+
+            // Opening and rendering overflow remain supported, but a full rewrite must not
+            // silently replace the overflowing UserUnit with zero.
+            let cos_doc = pdfcraft_cos::Document::open(bytes).unwrap_or_else(|e| panic!("{page_attrs} cos open: {e}"));
+            let rewritten = pdfcraft_cos::write_full(&cos_doc, &pdfcraft_cos::SaveOptions::default());
+            if page_attrs.contains("1e400") {
+                assert!(matches!(rewritten, Err(pdfcraft_cos::CosError::NonFiniteNumber)), "{page_attrs}: {rewritten:?}");
+                continue;
+            }
+            // Finite values still round-trip (1e30 becomes a 31-digit plain decimal), and
+            // LazyStructure inspection keeps their coordinates finite.
+            let rewritten = rewritten.unwrap_or_else(|e| panic!("{page_attrs} write_full: {e}"));
+            let reopened = inspect(std::sync::Arc::new(rewritten), None).unwrap_or_else(|e| panic!("{page_attrs} rewritten open: {e}"));
+            assert_eq!(reopened.pages.len(), 1, "{page_attrs} rewritten");
+            assert!(reopened.warnings.is_empty(), "{page_attrs} rewritten: {:?}", reopened.warnings);
+            assert_eq!(reopened.annotations.len(), 1, "{page_attrs} rewritten annotations");
+            assert!(
+                reopened.annotations[0].rect.iter().all(|c| c.is_finite()),
+                "{page_attrs} rewritten annot rect={:?}",
+                reopened.annotations[0].rect
+            );
+        }
+
+        // A 1:2 page whose scaled dimensions exceed f32::MAX keeps its 1:2 aspect ratio and
+        // draws upper-half content (y in 1e38..2e38) in the upper half of the rendered page.
+        let upper_content = "1 0 0 rg 0 1e38 1e38 1e38 re f";
+        let upper_pdf = format!(
+            "%PDF-1.7\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 1e38 2e38] /UserUnit 75000 /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{upper_content}\nendstream endobj\n\
+             trailer << /Size 5 /Root 1 0 R >>\n%%EOF",
+            upper_content.len()
+        )
+        .into_bytes();
+        let upper_bytes = std::sync::Arc::new(upper_pdf);
+        let upper_info = inspect(upper_bytes.clone(), None).expect("1:2 huge page opens");
+        let up = &upper_info.pages[0];
+        assert!((up.height / up.width - 2.0).abs() < 1e-5, "expected 1:2 aspect ratio, got {}x{}", up.width, up.height);
+        let mut renderer = PageRenderer::new(upper_bytes, RenderConfig::default());
+        let px = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 64.0 / f32::MAX, ..Default::default() });
+        assert!(px.error.is_none(), "{:?}", px.error);
+        assert_eq!((px.width, px.height), (32, 64));
+        let top_pixel = &px.rgba[((16 * px.width + 16) * 4) as usize..][..4];
+        let bottom_pixel = &px.rgba[((48 * px.width + 16) * 4) as usize..][..4];
+        assert_eq!(top_pixel, &[255, 0, 0, 255], "upper half must render red");
+        assert_eq!(bottom_pixel, &[255, 255, 255, 255], "lower half must remain white");
+    }
 }
 
 /// "1.7" from the parser's version name ("Pdf17", "V1_7", …).

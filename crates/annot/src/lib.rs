@@ -2320,7 +2320,16 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let nums = |k: &[u8]| -> Vec<f32> {
                 d.get(k)
                     .map(|o| doc.resolve(o))
-                    .and_then(|o| o.as_array().map(|a| a.iter().map(|x| doc.resolve(x).as_f64().unwrap_or(0.0) as f32).collect()))
+                    .and_then(|o| {
+                        o.as_array().map(|a| {
+                            a.iter()
+                                .map(|x| {
+                                    let v = doc.resolve(x).as_f64().unwrap_or(0.0);
+                                    if v.is_nan() { 0.0 } else { v.clamp(f32::MIN as f64, f32::MAX as f64) as f32 }
+                                })
+                                .collect()
+                        })
+                    })
                     .unwrap_or_default()
             };
             let r = nums(b"Rect");

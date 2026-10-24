@@ -22,6 +22,8 @@
 //! 3. **A write/delete sequence equals a plain map**, checked after every step and again once saved and
 //!    reopened. A deleted key must stay gone — not return its old value, not read as null either.
 //!    Deletes are generated against keys that were just written, so the delete path cannot be skipped.
+//! 4. **Non-finite values are refused without losing edits or source bytes**, by full and incremental
+//!    saves in both output styles. Correcting the invalid value makes the remaining edits saveable.
 //!
 //! ## Scope, stated honestly
 //! Generated values are pure data — no streams and no indirect references — so this says nothing about
@@ -29,17 +31,18 @@
 //! so literal ↔ hexadecimal re-emission is not treated as a change (§7.3.6); the *choice* of spelling
 //! is therefore not asserted, and `PdfString.hex` is not pinned here. Dictionary keys at the catalog
 //! level *are* compared in order, so reversing them fails; nested dictionary order inside a value is
-//! sorted away by [`canon`] and is not pinned. Generated reals stay within ±1e6: `write_real`
-//! (`src/writer.rs:46`) turns a non-finite real into `0` and an integral real below 1e15 into integer
-//! syntax, so [`canon`] applies the writer's documented normalisation to **both** sides rather than
-//! forgiving a mismatch afterwards.
+//! sorted away by [`canon`] and is not pinned. Successful-roundtrip reals stay finite and within ±1e6.
+//! An integral real within ±i32::MAX is emitted in integer syntax, so [`canon`] applies that documented
+//! normalisation to **both** sides rather than forgiving a mismatch afterwards. The separate refusal
+//! property generates NaN and both infinities at bounded nesting depths; their exact bits are compared
+//! in memory, never normalised to zero or accepted as successful saves.
 
 use std::sync::Arc;
 
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
 
-use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, write_full, write_incremental};
+use pdfcraft_cos::{CosError, Dict, Document, Object, PdfString, SaveOptions, write_full, write_incremental};
 
 /// The prefix every generated key carries. `Document::new_empty` puts `/Type` and `/Pages` in the
 /// catalog; property 1 asserts those two structurally rather than ignoring them.
@@ -62,8 +65,8 @@ fn canon(o: &Object) -> String {
         Object::Int(i) => format!("i{i}"),
         Object::Real(r) => {
             if !r.is_finite() {
-                "i0".into()
-            } else if r.fract() == 0.0 && r.abs() < 1e15 {
+                format!("nonfinite:{:016x}", r.to_bits())
+            } else if r.fract() == 0.0 && r.abs() <= f64::from(i32::MAX) {
                 format!("i{}", *r as i64)
             } else {
                 format!("r{r}")
@@ -96,10 +99,6 @@ fn leaf() -> impl Strategy<Value = Object> {
         any::<bool>().prop_map(Object::Bool),
         (-1_000_000i64..1_000_000i64).prop_map(Object::Int),
         (-1e6f64..1e6f64).prop_map(Object::Real),
-        // Non-finite reals, drawn explicitly. `write_real` (`src/writer.rs:46`) replaces them with
-        // `0`, and [`canon`] spells both sides that way, so this is what makes the normalisation
-        // described in the module header actually exercised rather than merely asserted in prose.
-        prop::sample::select(vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY]).prop_map(Object::Real),
         // Raw bytes, including ones a literal string must escape and the NUL byte.
         prop::collection::vec(any::<u8>(), 0..12).prop_map(|b| Object::String(PdfString::literal(b))),
         "[A-Za-z][A-Za-z0-9]{0,6}".prop_map(|s| Object::name(&s)),
@@ -120,6 +119,28 @@ fn value(depth: usize) -> BoxedStrategy<Object> {
                 for (k, v) in m {
                     d.set(k.into_bytes(), v);
                 }
+                Object::Dict(d)
+            })
+            .boxed(),
+    ]
+    .boxed()
+}
+
+/// Guaranteed non-finite data, including nested containers with finite siblings. Keeping this
+/// separate leaves all successful-save cases exercising round trips rather than early refusal.
+fn nonfinite_value(depth: usize) -> BoxedStrategy<Object> {
+    let bad = prop::sample::select(vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY]).prop_map(Object::Real).boxed();
+    if depth == 0 {
+        return bad;
+    }
+    prop_oneof![
+        bad,
+        (value(depth - 1), nonfinite_value(depth - 1)).prop_map(|(good, bad)| Object::Array(vec![good, bad])).boxed(),
+        (value(depth - 1), nonfinite_value(depth - 1))
+            .prop_map(|(good, bad)| {
+                let mut d = Dict::new();
+                d.set(b"Finite".to_vec(), good);
+                d.set(b"Invalid".to_vec(), bad);
                 Object::Dict(d)
             })
             .boxed(),
@@ -458,6 +479,56 @@ proptest! {
             let key = format!("{KEY}{i}");
             if !model.iter().any(|(k, _)| k == &key) {
                 prop_assert!(!got.iter().any(|(g, _)| *g == key), "a deleted key came back after save+reopen: {}", key);
+            }
+        }
+    }
+
+    /// 4. Refusal is not a successful zero-normalising save: invalid nested values and every other
+    /// unsaved edit survive intact, and the original file is untouched until the caller corrects them.
+    #[test]
+    fn nonfinite_saves_preserve_source_and_edits(
+        kept in value(2),
+        invalid in nonfinite_value(3),
+        marker in -1_000_000i64..1_000_000i64,
+    ) {
+        for object_streams in [true, false] {
+            let opts = SaveOptions { object_streams, ..SaveOptions::default() };
+            let mut seed = Document::new_empty();
+            let root = seed.root().expect("an empty document has a catalog");
+            seed.update_dict(root, |d| d.set(b"pxKeep".to_vec(), kept.clone())).unwrap();
+            let base = write_full(&seed, &opts).map_err(|e| TestCaseError::fail(format!("finite base save failed: {e}")))?;
+            let mut doc = Document::open(Arc::new(base.clone())).unwrap();
+            let root = doc.root().expect("the reopened document has a catalog");
+            doc.update_dict(root, |d| {
+                d.set(b"pxInvalid".to_vec(), invalid.clone());
+                d.set(b"pxMark".to_vec(), Object::Int(marker));
+            }).unwrap();
+            let expected = saved(&doc)?;
+            let order = catalog_keys(&doc);
+
+            for incremental in [false, true] {
+                let result = if incremental { write_incremental(&doc, &opts) } else { write_full(&doc, &opts) };
+                prop_assert!(matches!(&result, Err(CosError::NonFiniteNumber)), "object_streams={}, incremental={}: {:?}", object_streams, incremental, result);
+                prop_assert_eq!(saved(&doc)?, expected.clone(), "refusal changed a value or lost an edit");
+                prop_assert_eq!(catalog_keys(&doc), order.clone(), "refusal reordered the catalog");
+                let source = doc.bytes();
+                prop_assert_eq!(source.as_slice(), base.as_slice(), "refusal changed the original file");
+                prop_assert!(doc.is_edited(root.num), "refusal discarded the unsaved catalog edit");
+            }
+
+            doc.update_dict(root, |d| { d.remove(b"pxInvalid"); }).unwrap();
+            let corrected = vec![("pxKeep".into(), canon(&kept)), ("pxMark".into(), canon(&Object::Int(marker)))];
+            for incremental in [false, true] {
+                let bytes = if incremental { write_incremental(&doc, &opts) } else { write_full(&doc, &opts) }
+                    .map_err(|e| TestCaseError::fail(format!("corrected save failed: {e}")))?;
+                if incremental {
+                    prop_assert!(bytes.len() > base.len(), "the corrected incremental save must append");
+                    prop_assert_eq!(bytes.get(..base.len()), Some(base.as_slice()), "correction rewrote the original file");
+                }
+                let reopened = Document::open(Arc::new(bytes)).unwrap();
+                prop_assert_eq!(saved(&reopened)?, corrected.clone(), "correcting the invalid value must keep every other edit");
+                prop_assert!(reopened.repair_log().is_empty(), "corrected output needs repair");
+                assert_catalog_structure(&reopened, "corrected")?;
             }
         }
     }
