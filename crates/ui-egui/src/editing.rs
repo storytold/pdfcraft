@@ -537,17 +537,38 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        let typing = self
-            .views
-            .get(i)
-            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
+        let typing = self.views.get(i).is_some_and(|v| {
+            v.pending_edit.is_some()
+                || v.forms.focus.is_some()
+                || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+                || v.comments.inline.as_ref().is_some_and(|t| t.text != t.original)
+        });
         if self.active != Some(i) {
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id)
+        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_inline_text(id)
+    }
+
+    /// A text box being typed into on the page keeps its text on click-away. Save does that
+    /// first, so the text is in the file instead of being left on the screen.
+    fn commit_open_inline_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let Some(it) = self.views[i].comments.inline.clone() else { return true };
+        let Some(edit) = self.session.get(id).and_then(|d| crate::comments::inline_edit(&it, &d.info, &self.comment_prefs)) else {
+            self.views[i].comments.inline = None;
+            return true;
+        };
+        if self.apply_edit(edit) {
+            if let Some(view) = self.views.get_mut(i) {
+                view.comments.inline = None;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
@@ -605,6 +626,7 @@ impl PdfCraftApp {
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+            || v.comments.inline.as_ref().is_some_and(|t| t.text != t.original)
             || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
     }
 

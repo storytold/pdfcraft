@@ -430,7 +430,7 @@ fn new(page: usize, shape: Shape, contents: String, author: &str) -> Edit {
 /// A typewriter annotation sized to its text, its displayed top-left at `at` on a page turned by
 /// `rotation` (its `/Rotate`).
 pub fn typed(page: usize, at: [f64; 2], text: &str, size: f64, rotation: i64, author: &str) -> Edit {
-    let rect = crate::comments::text_box_rect(at, text, size, rotation);
+    let rect = crate::comments::text_box_rect(at, text, size, 0.0, rotation);
     new(page, Shape::Typewriter { rect, font_size: size }, text.to_string(), author)
 }
 

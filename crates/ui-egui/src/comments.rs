@@ -425,6 +425,46 @@ pub struct Composer {
     pub focus: bool,
 }
 
+/// A text box typed into on the page itself, as Acrobat edits one: a new box whose top-left
+/// corner is `at`, or the text box at `index` on `page`. Clicking away or ⌘/Ctrl+Enter keeps the
+/// text; Escape drops the change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineText {
+    pub page: usize,
+    /// `None`: a new text box.
+    pub index: Option<usize>,
+    /// A new box's top-left corner, in user space.
+    pub at: [f64; 2],
+    /// A new box dragged out to this displayed width and height (see [`ComposerKind::TextBox`]);
+    /// `None`: the box fits its text.
+    pub size: Option<[f64; 2]>,
+    pub text: String,
+    /// The text it had (empty for a new box): nothing to do when it is unchanged.
+    pub original: String,
+    pub focus: bool,
+}
+
+/// Whether `a` is typed into on the page (an upright text box or typewriter text on a page
+/// shown unturned) rather than in the composer card: a callout's box sits inside its rectangle,
+/// and turned text runs another way than the editor.
+pub(crate) fn edits_in_place(a: &Annotation, info: &DocInfo, view_rotation: u16) -> bool {
+    a.subtype == "FreeText"
+        && a.intent.as_deref() != Some("FreeTextCallout")
+        && view_rotation.is_multiple_of(360)
+        && info.pages.get(a.page).is_some_and(|p| p.rotation.is_multiple_of(360))
+}
+
+/// Edit the text of comment `a`: on the page for a text box (see [`edits_in_place`]), else in
+/// the composer card.
+pub(crate) fn start_editing(cv: &mut CommentView, a: &Annotation, info: &DocInfo, view_rotation: u16) {
+    let text = a.contents.clone().unwrap_or_default();
+    if edits_in_place(a, info, view_rotation) {
+        cv.inline = Some(InlineText { page: a.page, index: Some(a.index), at: [0.0; 2], size: None, original: text.clone(), text, focus: true });
+    } else {
+        cv.composer = Some(Composer { page: a.page, at: [a.rect[2] as f64, a.rect[3] as f64], kind: ComposerKind::Edit(a.index), text, focus: true });
+    }
+}
+
 /// A released drawing gesture waiting for the page raster to show its annotation.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Settling {
@@ -492,6 +532,8 @@ pub struct CommentView {
     /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
     cancelled_drag: bool,
     pub composer: Option<Composer>,
+    /// A text box being typed into on the page itself.
+    pub inline: Option<InlineText>,
     /// Reply being typed under the selected card.
     pub reply: String,
     /// Inline edit of a card's text in the Comments panel: (page, index, text).
@@ -1029,9 +1071,11 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
             // text wraps inside it (#2669).
+            let upright = cx.xf.rot.is_multiple_of(360) && cx.info.pages.get(cx.page).is_some_and(|pg| pg.rotation.is_multiple_of(360));
             if tool == CommentTool::TextBox {
                 if resp.drag_started()
                     && pressed_here
+                    && cv.inline.is_none()
                     && let Some(o) = origin
                 {
                     cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
@@ -1055,16 +1099,29 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                         let drawn =
                             (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
                         let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
-                        cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                        if upright {
+                            cv.inline = Some(InlineText { page, index: None, at, size, text: String::new(), original: String::new(), focus: true });
+                        } else {
+                            cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                        }
                     }
                 }
             }
+            // A click while a text box is being typed into only ends that (its editor loses the
+            // focus and keeps the text); the next click starts another.
             if resp.clicked()
                 && over_page
+                && cv.inline.is_none()
                 && let Some(p) = pointer
             {
-                let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-                cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+                if tool == CommentTool::TextBox && upright {
+                    let at = cx.to_user(p);
+                    cv.inline =
+                        Some(InlineText { page: cx.page, index: None, at, size: None, text: String::new(), original: String::new(), focus: true });
+                } else {
+                    let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
+                    cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+                }
                 cv.selected = None;
             }
             true
@@ -1276,13 +1333,7 @@ fn select_input(
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
     {
         cv.selected = Some((cx.page, a.index));
-        cv.composer = Some(Composer {
-            page: cx.page,
-            at: [a.rect[2] as f64, a.rect[3] as f64],
-            kind: ComposerKind::Edit(a.index),
-            text: a.contents.clone().unwrap_or_default(),
-            focus: true,
-        });
+        start_editing(cv, a, cx.info, cx.xf.rot);
         consumed = true;
     }
     consumed
@@ -1341,6 +1392,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
     }
     if let Some((page, index)) = cv.selected
         && page == cx.page
+        && cv.inline.as_ref().is_none_or(|it| (it.page, it.index) != (page, Some(index)))
         && let Some(a) = cx.get(index)
     {
         if is_markup(&a.subtype) && !a.quads.is_empty() {
@@ -1643,14 +1695,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             let border = prefs.style(CommentTool::TextBox).width;
             let rect = match (size, info.pages.get(page)) {
                 (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
-                _ => text_box_rect(c.at, &text, 12.0, rotation),
+                _ => text_box_rect(c.at, &text, 12.0, border, rotation),
             };
             Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
-            let rect = text_box_rect(c.at, &text, 10.0, 0);
+            let rect = text_box_rect(c.at, &text, 10.0, prefs.style(CommentTool::Callout).width, 0);
             let side = if point[0] < rect[0] {
                 rect[0]
             } else if point[0] > rect[2] {
@@ -1680,6 +1732,143 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             Some(new_comment(&cx, CommentTool::Caret, Shape::Caret { rect: [x - half, y - size, x + half, y] }, text))
         }
     }
+}
+
+/// What keeping the text typed into a text box on the page does: the new box (sized to its text,
+/// or to the box dragged out, as the composer makes one), or the changed text (the engine fits
+/// the box to it). `None` when nothing changed, or a new box has no text.
+pub(crate) fn inline_edit(it: &InlineText, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+    let text = it.text.trim_end().to_string();
+    match it.index {
+        Some(index) => (text != it.original.trim_end()).then_some(Edit::SetAnnotationContents { page: it.page, index, text }),
+        None if text.trim().is_empty() => None,
+        None => {
+            let style = prefs.style(CommentTool::TextBox);
+            let rect = match (it.size, info.pages.get(it.page)) {
+                (Some(size), Some(p)) => drawn_text_box_rect(p, it.at, size, &text, 12.0, style.width),
+                _ => text_box_rect(it.at, &text, 12.0, style.width, 0),
+            };
+            Some(Edit::AddAnnotation(NewAnnotation {
+                page: it.page,
+                shape: Shape::TextBox { rect, font_size: 12.0 },
+                style,
+                contents: text,
+                author: prefs.author.clone(),
+            }))
+        }
+    }
+}
+
+/// The text box being typed into on the page (see [`InlineText`]): an editor over the box in its
+/// font size, colour and fill at the page's zoom, which grows with the text as the box will and
+/// covers the box's old drawing while it is open. Returns the edit once the text is kept.
+pub(crate) fn inline_text(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
+    prefs: &CommentPrefs,
+) -> Option<Edit> {
+    let it = view.comments.inline.clone()?;
+    // Scrolled away: the text waits until the page is back. egui drops the focus of a widget
+    // that isn't drawn, so the editor asks for the keyboard again when it is drawn again (or a
+    // click away could never keep the text, and new text boxes would wait for it).
+    let Some(xf) = view.page_xform(it.page) else {
+        if let Some(t) = view.comments.inline.as_mut() {
+            t.focus = true;
+        }
+        return None;
+    };
+    let page = info.pages.get(it.page)?;
+    let zoom = xf.rect.width() / xf.pw.max(1.0);
+    // The box's look: its own, or the text box tool's for a new one.
+    let look = match it.index {
+        Some(index) => {
+            let a = info.annotations.iter().find(|a| a.page == it.page && a.index == index && a.in_reply_to.is_none());
+            match (a, doc.comment_props(it.page, index)) {
+                (Some(a), Some(p)) => {
+                    Some((p.color.unwrap_or([0.0; 3]), p.font_size.unwrap_or(12.0), p.fill, Some(xf.user_rect(info, it.page, a.rect))))
+                }
+                _ => None,
+            }
+        }
+        None => {
+            let style = prefs.style(CommentTool::TextBox);
+            // A box dragged out shows at its drawn size, and its text wraps inside it.
+            let drawn = it.size.map(|[w, h]| {
+                let v = page.user_to_view(it.at[0] as f32, it.at[1] as f32);
+                Rect::from_min_size(xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph), vec2(w as f32 * zoom, h as f32 * zoom))
+            });
+            Some((style.color, 12.0, style.fill, drawn))
+        }
+    };
+    // The comment is gone (undone, deleted elsewhere): nothing left to type into.
+    let Some((color, size, fill, old)) = look else {
+        view.comments.inline = None;
+        return None;
+    };
+    let anchor = old.map_or_else(
+        || {
+            let v = page.user_to_view(it.at[0] as f32, it.at[1] as f32);
+            xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph)
+        },
+        |r| r.left_top(),
+    );
+    let font = egui::FontId::proportional((size as f32 * zoom).max(8.0));
+    let pad = 2.0 * zoom;
+    let text_color = color32(color);
+    let back = fill.map_or(Color32::WHITE, color32);
+    // As wide as the longest line, at least the box's own width, wrapping past the widest a box
+    // is sized to (or past the box, when it is wider).
+    let longest = ctx.fonts_mut(|f| f.layout_no_wrap(it.text.clone(), font.clone(), text_color).size().x);
+    let floor = old.map_or(size as f32 * zoom, |r| (r.width() - 2.0 * pad).max(1.0));
+    let ceiling = if it.size.is_some() { floor } else { (pdfcraft_engine::annot_text::TEXT_BOX_MAX_WIDTH as f32 * zoom - 2.0 * pad).max(floor) };
+    let width = (longest + font.size * 0.5).clamp(floor, ceiling);
+    let (mut keep, mut cancel) = (false, false);
+    egui::Area::new(egui::Id::new(("comment-inline-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
+        let Some(t) = view.comments.inline.as_mut() else { return };
+        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(back);
+        // The area's max rect is last frame's size, which caps the editor's width; widen it so
+        // the box grows as text is typed.
+        ui.set_min_width(width + 2.0 * pad);
+        let cover = ui.painter().add(egui::Shape::Noop);
+        let r = ui.add(
+            egui::TextEdit::multiline(&mut t.text)
+                .font(font.clone())
+                .text_color(text_color)
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(pad.round().clamp(0.0, 100.0) as i8)))
+                .desired_width(width)
+                .desired_rows(1)
+                .hint_text(tl!("Type text"))
+                .id_salt(("comment-inline-edit", t.page, t.index)),
+        );
+        // The box's old drawing stays under the editor until the text is kept.
+        let area = old.map_or(r.rect, |o| o.union(r.rect));
+        ui.painter().set(cover, egui::Shape::rect_filled(area, CornerRadius::ZERO, back));
+        ui.painter().rect_stroke(area.expand(1.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Outside);
+        if t.focus {
+            r.request_focus();
+            t.focus = false;
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        } else if submit_key(ui, &r, false) || r.lost_focus() {
+            keep = true;
+        }
+    });
+    if cancel {
+        view.comments.inline = None;
+        return None;
+    }
+    if !keep {
+        return None;
+    }
+    let it = view.comments.inline.take()?;
+    if it.index.is_none() {
+        // A one-shot tool, as with the composer: back to Select unless pinned.
+        view.comments.tool_done = true;
+    }
+    inline_edit(&it, info, prefs)
 }
 
 /// Submit only from the focused comment editor. Match each key event's modifiers exactly,
@@ -1755,15 +1944,14 @@ pub(crate) fn caret_snap(text: &PageText, vx: f32, vy: f32) -> Option<([f32; 2],
 }
 
 /// A text box sized to its text (at most 300 pt wide), hanging from its top-left corner.
-/// The box for `text` at `size` with its displayed top-left corner at `at`, on a page turned by
-/// `rotation` (its `/Rotate`): on a quarter-turned page it is taller than wide in user space.
-pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64; 4] {
-    use pdfcraft_engine::annot_text::{text_width, wrap};
-    let pad = 2.0;
-    let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
-    let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
-    let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
-    let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
+/// The box for `text` at `size` inside a border `border` wide, with its displayed top-left
+/// corner at `at`, on a page turned by `rotation` (its `/Rotate`): on a quarter-turned page it is
+/// taller than wide in user space. The text sits 2 pt inside the border on every side.
+pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, border: f64, rotation: i64) -> [f64; 4] {
+    use pdfcraft_engine::annot_text::{text_box_height, text_box_width, wrap};
+    let pad = 2.0 + border.max(0.0);
+    let w = text_box_width(text, size, pad);
+    let h = text_box_height(wrap(text, size, w - 2.0 * pad).len(), size, pad);
     pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
 }
 
@@ -1849,13 +2037,8 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
             if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
-                view.comments.composer = Some(Composer {
-                    page,
-                    at: [a.rect[2] as f64, a.rect[3] as f64],
-                    kind: ComposerKind::Edit(index),
-                    text: a.contents.clone().unwrap_or_default(),
-                    focus: true,
-                });
+                let rotation = view.page_xform(page).map_or(0, |xf| xf.rot);
+                start_editing(&mut view.comments, a, info, rotation);
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Reply"))).clicked() {
@@ -2500,10 +2683,10 @@ mod tests {
 
     #[test]
     fn text_boxes_fit_their_text() {
-        let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
+        let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0.0, 0);
         assert_eq!((r[0], r[3]), (100.0, 500.0));
         assert!(r[2] - r[0] < 60.0);
-        let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
+        let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0.0, 0);
         assert_eq!(long[2], 300.0);
         assert!(long[3] - long[1] > 50.0);
     }

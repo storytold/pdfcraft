@@ -3680,8 +3680,8 @@ milestone = "M5"
 status = "partial"
 commands = ["comment.freetext"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn"]
-notes = "Helvetica text with colour, size and alignment; /RC (XHTML) and /DS are written and kept in step with edits; per-run formatting (bold/italic spans) is not yet"
+evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/ui-egui/tests/it/comments.rs::text_boxes_are_typed_into_on_the_page", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::a_text_box_that_fits_its_text_keeps_fitting_it", "crates/ui-egui/tests/it/comments.rs::a_text_box_is_sized_by_dragging"]
+notes = "Helvetica text with colour, size and alignment; /RC (XHTML) and /DS are written and kept in step with edits. Typed on the page itself: the tool's click opens an editor where the box goes (in its colour, size and fill at the page's zoom), and a drag opens it at the size dragged out, the text wrapping inside it (#2669); clicking away or ⌘/Ctrl+Enter keeps the text, Escape drops it; on a turned page or view the composer card is used. A new box is sized to its text (at most 300 pt wide, then lines wrap); a box that fits its text keeps fitting it when the text or font size changes, narrower and shorter too, while a box sized by hand keeps its width. Per-run formatting (bold/italic spans) is not yet"
 
 [[feature]]
 id = "comment.callout"
@@ -3992,8 +3992,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line"]
-notes = "double-click a comment or card, or Edit in the menus; Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines)"
+evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line", "crates/ui-egui/tests/it/comments.rs::text_boxes_are_typed_into_on_the_page", "crates/annot/src/tests.rs::a_text_box_that_fits_its_text_keeps_fitting_it"]
+notes = "double-click a comment or card, or Edit in the menus; a text box (and typewriter text) is edited on the page itself, other comments in the composer card; Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (top edge stays, the height fits the wrapped lines; a box that fit its old text fits the new one's width too, one sized by hand keeps its wrap width)"
 
 [[feature]]
 id = "comment.copy-comment-text"
