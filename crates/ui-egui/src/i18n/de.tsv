@@ -2482,6 +2482,21 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Dienste
+	Hide PdfCraft	PdfCraft ausblenden
+	Hide Others	Andere ausblenden
+	Show All	Alle einblenden
+	Quit PdfCraft	PdfCraft beenden
+	Window	Fenster
+	Enter Full Screen	Vollbildmodus aktivieren
+	Bring All to Front	Alle nach vorne bringen
+	Go	Gehe zu
+	First page	Erste Seite
+	Last page	Letzte Seite
+	Close Window	Fenster schließen
+	Paste	Einsetzen
 	Font	Schrift
 	Bulleted list	Aufzählung
 	Numbered list	Nummerierte Liste
@@ -2516,3 +2531,5 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Menüs in der macOS-Menüleiste anzeigen

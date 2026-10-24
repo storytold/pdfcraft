@@ -2477,6 +2477,21 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Servisler
+	Hide PdfCraft	PdfCraft’i Gizle
+	Hide Others	Diğerlerini Gizle
+	Show All	Tümünü Göster
+	Quit PdfCraft	PdfCraft’ten Çık
+	Window	Pencere
+	Enter Full Screen	Tam Ekrana Geç
+	Bring All to Front	Tümünü Öne Getir
+	Go	Git
+	First page	İlk sayfa
+	Last page	Son sayfa
+	Close Window	Pencereyi Kapat
+	Paste	Yapıştır
 	Font	Yazı tipi
 	Bulleted list	Madde işaretli liste
 	Numbered list	Numaralı liste
@@ -2511,3 +2526,5 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Menüleri macOS menü çubuğunda göster

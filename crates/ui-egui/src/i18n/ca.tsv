@@ -2774,3 +2774,19 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Serveis
+	Hide PdfCraft	Amaga el PdfCraft
+	Hide Others	Amaga els altres
+	Show All	Mostra-ho tot
+	Quit PdfCraft	Surt del PdfCraft
+	Window	Finestra
+	Enter Full Screen	Entra a pantalla completa
+	Bring All to Front	Porta-ho tot al davant
+	Go	Vés
+	First page	Primera pàgina
+	Last page	Última pàgina
+	Close Window	Tanca la finestra
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Mostra els menús a la barra de menús del macOS

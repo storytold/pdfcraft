@@ -1742,8 +1742,17 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::the_pages_menu_comes_from_the_registry"]
-notes = ""
+evidence = [
+    "crates/ui-egui/tests/it/commands.rs::the_pages_menu_comes_from_the_registry",
+    "crates/ui-egui/src/native_menu_tests.rs::every_registry_menu_command_is_somewhere_in_the_bar",
+    "crates/ui-egui/src/native_menu_tests.rs::no_two_items_share_a_key_and_none_takes_a_system_key",
+    "crates/ui-egui/src/native_menu_tests.rs::under_a_dialog_only_text_editing_and_quit_stay_available",
+    "crates/ui-egui/src/native_menu_tests.rs::check_marks_follow_the_app",
+    "crates/ui-egui/src/native_menu_tests.rs::a_clicked_command_waits_for_a_form_field_being_typed_in",
+    "crates/ui-egui/src/native_menu_tests.rs::menus_in_the_window_leave_the_app_and_window_menus_in_the_bar",
+    "crates/ui-egui/src/native_menu_tests.rs::the_menu_bar_preference_moves_the_menus_and_is_remembered",
+]
+notes = "The in-window Menu and, on macOS, the system menu bar (#80) both come from the registry. The menu bar (src/menu_bar.rs, shown by src/native_menu.rs) has PdfCraft, File, Edit, View, Go, Pages, Window and Help with live labels, enablement and check marks, Open Recent, Check for updates in the app menu, and the registry's shortcuts as key equivalents; a key equivalent is replayed into egui as the key it was, so text fields, form fields and the ⌘W rule (#869) behave as without the bar, and Quit asks about unsaved changes (#1136). While the bar shows, the window's Menu button is hidden and Home takes its place. Preferences ▸ Show the menus in the macOS menu bar (on by default) puts them back behind the window's Menu button at once; the app menu (Quit still asks) and the Window menu stay in the system bar. Checked by hand on macOS 27 (Apple Silicon): a disabled item's key still reaches a text field, a key equivalent acts once, and AppKit's check marks follow the app after a click. Missing: Acrobat's own menu wording and order (not observed), a Help search over commands, and a test against real AppKit (the bar's model is tested on every platform; the muda layer only by hand)."
 
 [[feature]]
 id = "view.about-dialog"

@@ -2758,6 +2758,20 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+
+# macOS native menu bar: items only the system menu shows.
+	Services	الخدمات
+	Hide PdfCraft	إخفاء PdfCraft
+	Hide Others	إخفاء الآخرين
+	Show All	إظهار الكل
+	Quit PdfCraft	إنهاء PdfCraft
+	Window	نافذة
+	Enter Full Screen	الدخول إلى ملء الشاشة
+	Bring All to Front	إحضار الكل إلى الأمام
+	Go	انتقال
+	First page	الصفحة الأولى
+	Last page	الصفحة الأخيرة
+	Close Window	إغلاق النافذة
 	Bulleted list	قائمة نقطية
 	Numbered list	قائمة مرقمة
 	Alignment	المحاذاة
@@ -2791,3 +2805,5 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	إظهار القوائم في شريط قوائم macOS

@@ -2487,6 +2487,21 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Υπηρεσίες
+	Hide PdfCraft	Απόκρυψη PdfCraft
+	Hide Others	Απόκρυψη άλλων
+	Show All	Εμφάνιση όλων
+	Quit PdfCraft	Τερματισμός PdfCraft
+	Window	Παράθυρο
+	Enter Full Screen	Είσοδος σε πλήρη οθόνη
+	Bring All to Front	Μεταφορά όλων μπροστά
+	Go	Μετάβαση
+	First page	Πρώτη σελίδα
+	Last page	Τελευταία σελίδα
+	Close Window	Κλείσιμο παραθύρου
+	Paste	Επικόλληση
 	Font	Γραμματοσειρά
 	Bulleted list	Λίστα με κουκκίδες
 	Numbered list	Αριθμημένη λίστα
@@ -2521,3 +2536,5 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Εμφάνιση των μενού στη γραμμή μενού του macOS

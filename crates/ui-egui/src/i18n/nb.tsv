@@ -2694,3 +2694,19 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Tjenester
+	Hide PdfCraft	Skjul PdfCraft
+	Hide Others	Skjul andre
+	Show All	Vis alle
+	Quit PdfCraft	Avslutt PdfCraft
+	Window	Vindu
+	Enter Full Screen	Gå til fullskjerm
+	Bring All to Front	Legg alle øverst
+	Go	Gå
+	First page	Første side
+	Last page	Siste side
+	Close Window	Lukk vindu
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Vis menyene i menylinjen i macOS

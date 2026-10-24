@@ -2555,6 +2555,20 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Služby
+	Hide PdfCraft	Skrýt PdfCraft
+	Hide Others	Skrýt ostatní
+	Show All	Zobrazit vše
+	Quit PdfCraft	Ukončit PdfCraft
+	Window	Okno
+	Enter Full Screen	Přejít na celou obrazovku
+	Bring All to Front	Převést vše do popředí
+	Go	Přejít
+	First page	První stránka
+	Last page	Poslední stránka
+	Close Window	Zavřít okno
 	Font	Písmo
 	Bulleted list	Odrážkový seznam
 	Numbered list	Číslovaný seznam
@@ -2822,3 +2836,5 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Zobrazovat nabídky v řádku nabídek macOS

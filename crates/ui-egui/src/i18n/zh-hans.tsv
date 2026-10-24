@@ -2445,6 +2445,21 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+
+# macOS native menu bar: items only the system menu shows.
+	Services	服务
+	Hide PdfCraft	隐藏 PdfCraft
+	Hide Others	隐藏其他
+	Show All	全部显示
+	Quit PdfCraft	退出 PdfCraft
+	Window	窗口
+	Enter Full Screen	进入全屏幕
+	Bring All to Front	前置全部窗口
+	Go	前往
+	First page	第一页
+	Last page	最后一页
+	Close Window	关闭窗口
+	Paste	粘贴
 	Font	字体
 	Bulleted list	项目符号列表
 	Numbered list	编号列表
@@ -2479,3 +2494,5 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	在 macOS 菜单栏中显示菜单

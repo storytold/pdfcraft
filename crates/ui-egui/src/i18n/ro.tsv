@@ -2774,3 +2774,19 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Servicii
+	Hide PdfCraft	Ascundere PdfCraft
+	Hide Others	Ascundere celelalte
+	Show All	Afișare toate
+	Quit PdfCraft	Ieșire din PdfCraft
+	Window	Fereastră
+	Enter Full Screen	Intrare în ecran complet
+	Bring All to Front	Aducere toate în față
+	Go	Salt
+	First page	Prima pagină
+	Last page	Ultima pagină
+	Close Window	Închidere fereastră
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Afișare meniuri în bara de meniu macOS

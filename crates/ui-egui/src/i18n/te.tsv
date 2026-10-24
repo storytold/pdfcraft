@@ -2390,6 +2390,21 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+
+# macOS native menu bar: items only the system menu shows.
+	Services	సేవలు
+	Hide PdfCraft	PdfCraftను దాచు
+	Hide Others	ఇతరాలను దాచు
+	Show All	అన్నీ చూపు
+	Quit PdfCraft	PdfCraft నుండి నిష్క్రమించు
+	Window	విండో
+	Enter Full Screen	పూర్తి స్క్రీన్‌లోకి వెళ్లు
+	Bring All to Front	అన్నింటినీ ముందుకు తీసుకురా
+	Go	వెళ్లు
+	First page	మొదటి పేజీ
+	Last page	చివరి పేజీ
+	Close Window	విండోను మూసివేయి
+	Paste	అతికించు
 	Font	ఫాంట్
 	Bulleted list	బుల్లెట్ జాబితా
 	Numbered list	సంఖ్యల జాబితా
@@ -2424,3 +2439,5 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	మెనూలను macOS మెనూ బార్‌లో చూపించు

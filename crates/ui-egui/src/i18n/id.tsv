@@ -2751,3 +2751,19 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Layanan
+	Hide PdfCraft	Sembunyikan PdfCraft
+	Hide Others	Sembunyikan Lainnya
+	Show All	Tampilkan Semua
+	Quit PdfCraft	Keluar dari PdfCraft
+	Window	Jendela
+	Enter Full Screen	Masuk Layar Penuh
+	Bring All to Front	Bawa Semua ke Depan
+	Go	Buka
+	First page	Halaman pertama
+	Last page	Halaman terakhir
+	Close Window	Tutup Jendela
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Tampilkan menu di bilah menu macOS

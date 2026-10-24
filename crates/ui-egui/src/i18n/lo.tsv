@@ -2429,3 +2429,20 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+
+# macOS native menu bar: items only the system menu shows.
+	Services	ບໍລິການ
+	Hide PdfCraft	ເຊື່ອງ PdfCraft
+	Hide Others	ເຊື່ອງອັນອື່ນ
+	Show All	ສະແດງທັງໝົດ
+	Quit PdfCraft	ອອກຈາກ PdfCraft
+	Window	ໜ້າຕ່າງ
+	Enter Full Screen	ເຂົ້າສູ່ໂໝດເຕັມຈໍ
+	Bring All to Front	ນຳທັງໝົດມາໄວ້ດ້ານໜ້າ
+	Go	ໄປ
+	First page	ໜ້າທຳອິດ
+	Last page	ໜ້າສຸດທ້າຍ
+	Close Window	ປິດໜ້າຕ່າງ
+	Paste	ວາງ
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	ສະແດງເມນູໃນແຖບເມນູຂອງ macOS

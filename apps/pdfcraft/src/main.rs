@@ -408,6 +408,8 @@ fn app_creator<'a>(
         }
         app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
         app.integrated_titlebar = integrated;
+        // File, Edit, View, Go… in the macOS menu bar as well as in the window.
+        app.native_menu_bar = cfg!(target_os = "macos");
         app.window_controls = window_controls;
         app.system_text_scale = text_scale::system();
         // Windows' Animation effects setting, which Preferences ▸ Animation effects follows unless
@@ -422,9 +424,12 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
-            // winit's Quit (⌘Q) ends the process without asking about unsaved changes (#1136). This
-            // menu's Quit closes the window instead, so `guard_quit` asks, as for the close button.
-            if let Err(e) = craft_quit::install_app_menu(&cc.egui_ctx, "PdfCraft") {
+            // winit's Quit (⌘Q) ends the process without asking about unsaved changes (#1136). The
+            // native menu bar's Quit closes the window instead, so `guard_quit` asks; craft-quit's
+            // app menu is only the fallback without it (both take muda's one global event handler).
+            if !app.native_menu_bar
+                && let Err(e) = craft_quit::install_app_menu(&cc.egui_ctx, "PdfCraft")
+            {
                 log::warn!("couldn't install the app menu, so ⌘Q quits without asking to save: {e}");
             }
         }

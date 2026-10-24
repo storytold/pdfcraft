@@ -2681,3 +2681,19 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+
+# macOS native menu bar: items only the system menu shows.
+	Services	บริการ
+	Hide PdfCraft	ซ่อน PdfCraft
+	Hide Others	ซ่อนรายการอื่น
+	Show All	แสดงทั้งหมด
+	Quit PdfCraft	ออกจาก PdfCraft
+	Window	หน้าต่าง
+	Enter Full Screen	เข้าสู่โหมดเต็มหน้าจอ
+	Bring All to Front	นำทั้งหมดมาไว้ด้านหน้า
+	Go	ไป
+	First page	หน้าแรก
+	Last page	หน้าสุดท้าย
+	Close Window	ปิดหน้าต่าง
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	แสดงเมนูในแถบเมนูของ macOS

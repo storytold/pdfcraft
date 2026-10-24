@@ -2713,3 +2713,19 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+
+# macOS native menu bar: items only the system menu shows.
+	Services	خزمەتگوزارییەکان
+	Hide PdfCraft	شاردنەوەی PdfCraft
+	Hide Others	شاردنەوەی ئەوانی تر
+	Show All	پیشاندانی هەموو
+	Quit PdfCraft	دەرچوون لە PdfCraft
+	Window	پەنجەرە
+	Enter Full Screen	چوونە ناو پڕشاشە
+	Bring All to Front	هێنانی هەموو بۆ پێشەوە
+	Go	بڕۆ
+	First page	یەکەم پەڕە
+	Last page	دوایین پەڕە
+	Close Window	داخستنی پەنجەرە
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	پیشاندانی لیستەکان لە شریتی لیستی macOS

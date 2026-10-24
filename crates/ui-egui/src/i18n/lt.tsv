@@ -2739,6 +2739,20 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Paslaugos
+	Hide PdfCraft	Slėpti PdfCraft
+	Hide Others	Slėpti kitas
+	Show All	Rodyti viską
+	Quit PdfCraft	Išeiti iš PdfCraft
+	Window	Langas
+	Enter Full Screen	Įjungti viso ekrano režimą
+	Bring All to Front	Viską perkelti į priekį
+	Go	Eiti
+	First page	Pirmas puslapis
+	Last page	Paskutinis puslapis
+	Close Window	Uždaryti langą
 	Bulleted list	Sąrašas su ženkleliais
 	Numbered list	Numeruotas sąrašas
 	Alignment	Lygiuotė
@@ -2776,3 +2790,5 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Rodyti meniu macOS meniu juostoje

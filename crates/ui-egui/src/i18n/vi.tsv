@@ -2748,6 +2748,20 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Dịch vụ
+	Hide PdfCraft	Ẩn PdfCraft
+	Hide Others	Ẩn mục khác
+	Show All	Hiện tất cả
+	Quit PdfCraft	Thoát PdfCraft
+	Window	Cửa sổ
+	Enter Full Screen	Vào chế độ toàn màn hình
+	Bring All to Front	Đưa tất cả ra trước
+	Go	Đi tới
+	First page	Trang đầu
+	Last page	Trang cuối
+	Close Window	Đóng cửa sổ
 	Thumbnail size	Kích thước hình thu nhỏ
 	Smaller thumbnails	Giảm kích thước hình thu nhỏ
 	Larger thumbnails	Tăng kích thước hình thu nhỏ
@@ -2780,3 +2794,5 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Hiển thị menu trên thanh menu của macOS

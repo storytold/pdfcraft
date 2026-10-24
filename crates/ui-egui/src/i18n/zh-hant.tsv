@@ -2431,6 +2431,21 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+
+# macOS native menu bar: items only the system menu shows.
+	Services	服務
+	Hide PdfCraft	隱藏 PdfCraft
+	Hide Others	隱藏其他
+	Show All	顯示全部
+	Quit PdfCraft	結束 PdfCraft
+	Window	視窗
+	Enter Full Screen	進入全螢幕
+	Bring All to Front	全部移至最前
+	Go	前往
+	First page	第一頁
+	Last page	最後一頁
+	Close Window	關閉視窗
+	Paste	貼上
 	Font	字型
 	Bulleted list	項目符號清單
 	Numbered list	編號清單
@@ -2465,3 +2480,5 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	在 macOS 選單列中顯示選單

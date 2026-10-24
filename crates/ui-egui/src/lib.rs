@@ -99,7 +99,14 @@ mod home;
 mod icon_data;
 pub mod icons;
 pub mod last_session;
+// Only macOS shows it; every platform's tests check it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod menu_bar;
 pub mod motion;
+#[cfg(target_os = "macos")]
+mod native_menu;
+#[cfg(test)]
+mod native_menu_tests;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -584,6 +591,17 @@ pub struct PdfCraftApp {
     pub recent: Vec<RecentFile>,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
+    /// Show the commands in the macOS menu bar too (File, Edit, View, Go…). The desktop app
+    /// turns it on; tests and other hosts leave it off.
+    pub native_menu_bar: bool,
+    /// Preferences (macOS): the menus in the system menu bar, or behind the window's Menu
+    /// button. Read only where `native_menu_bar` is on; the app and Window menus stay in the
+    /// system bar either way (`menu_bar::system_only`).
+    pub system_menu_bar: bool,
+    #[cfg(target_os = "macos")]
+    native_menu: Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")]
+    native_actions: Vec<menu_bar::Action>,
     /// The files open when PdfCraft last closed, read from the settings for
     /// [`PdfCraftApp::reopen_last_files`].
     pub last_session: last_session::LastSession,
@@ -985,6 +1003,12 @@ impl PdfCraftApp {
             all_tools_expanded: false,
             recent: Vec::new(),
             reopen_last_session: false,
+            native_menu_bar: false,
+            system_menu_bar: true,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
+            #[cfg(target_os = "macos")]
+            native_actions: Vec::new(),
             last_session: Default::default(),
             quit_session: None,
             reload_changed_files: true,
@@ -2425,6 +2449,8 @@ impl PdfCraftApp {
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
         });
+        // Set apart, like the keys below: the `json!` above is at serde_json's recursion limit.
+        v["system_menu_bar"] = serde_json::Value::Bool(self.system_menu_bar);
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["redact_prefs"] = self.redact_defaults.to_json();
@@ -2467,6 +2493,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["reopen_last_session"].as_bool() {
             self.reopen_last_session = on;
+        }
+        if let Some(on) = v["system_menu_bar"].as_bool() {
+            self.system_menu_bar = on;
         }
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         if let Some(on) = v["system_title_bar"].as_bool() {
@@ -3125,6 +3154,8 @@ impl eframe::App for PdfCraftApp {
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        #[cfg(target_os = "macos")]
+        self.poll_native_menu(ctx, raw);
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
@@ -3154,6 +3185,8 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        #[cfg(target_os = "macos")]
+        self.native_menu_frame(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(worker) = &self.open_worker {

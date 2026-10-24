@@ -2444,6 +2444,21 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Услуги
+	Hide PdfCraft	Скрий PdfCraft
+	Hide Others	Скрий другите
+	Show All	Покажи всички
+	Quit PdfCraft	Изход от PdfCraft
+	Window	Прозорец
+	Enter Full Screen	Цял екран
+	Bring All to Front	Изведи всички отпред
+	Go	Отиди
+	First page	Първа страница
+	Last page	Последна страница
+	Close Window	Затвори прозореца
+	Paste	Постави
 	Font	Шрифт
 	Bulleted list	Списък с водещи символи
 	Numbered list	Номериран списък
@@ -2478,3 +2493,5 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Показване на менютата в лентата с менюта на macOS

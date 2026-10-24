@@ -62,7 +62,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
-                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
+                // With the macOS menu bar, Home sits where the in-window Menu was, clear of the
+                // traffic lights.
+                if !app.menus_in_system_bar()
+                    && icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked()
+                {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
@@ -496,7 +500,16 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                main_menu(app, ui);
+                // On macOS the menu bar has these menus (#80); the window doesn't repeat them, and
+                // Home takes the Menu's place.
+                if app.menus_in_system_bar() {
+                    if widgets::ghost_button(ui, "house", tl!("Home")).clicked() {
+                        app.active = None;
+                        app.combine_tab.focused = false;
+                    }
+                } else {
+                    main_menu(app, ui);
+                }
                 ui.add_space(6.0);
                 ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
                 ui.add_space(10.0);

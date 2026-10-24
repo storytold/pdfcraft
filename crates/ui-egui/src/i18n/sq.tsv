@@ -2500,3 +2500,20 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Shërbime
+	Hide PdfCraft	Fshih PdfCraft
+	Hide Others	Fshih të tjerat
+	Show All	Shfaq të gjitha
+	Quit PdfCraft	Dil nga PdfCraft
+	Window	Dritare
+	Enter Full Screen	Kalo në ekran të plotë
+	Bring All to Front	Sill të gjitha përpara
+	Go	Shko
+	First page	Faqja e parë
+	Last page	Faqja e fundit
+	Close Window	Mbyll dritaren
+	Paste	Ngjit
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Shfaq menytë në shiritin e menyve të macOS

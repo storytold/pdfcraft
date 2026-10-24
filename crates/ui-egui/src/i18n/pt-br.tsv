@@ -2496,6 +2496,19 @@ animation effects	Off	Desativados
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
 
+# macOS native menu bar: items only the system menu shows.
+	Services	Serviços
+	Hide PdfCraft	Ocultar PdfCraft
+	Hide Others	Ocultar Outros
+	Show All	Mostrar Tudo
+	Quit PdfCraft	Encerrar PdfCraft
+	Window	Janela
+	Enter Full Screen	Usar Tela Cheia
+	Bring All to Front	Trazer Todas para a Frente
+	Go	Ir
+	First page	Primeira página
+	Last page	Última página
+	Close Window	Fechar Janela
 # Remaining keys from the current catalog union, translated from their English meaning (2026-10-21).
 	 on page {label}	 na página {label}
 	A font isn't embedded	Uma fonte não está incorporada
@@ -2800,3 +2813,5 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Mostrar os menus na barra de menus do macOS

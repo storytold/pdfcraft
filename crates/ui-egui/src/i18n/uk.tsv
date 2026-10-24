@@ -2503,6 +2503,21 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Служби
+	Hide PdfCraft	Сховати PdfCraft
+	Hide Others	Сховати інші
+	Show All	Показати всі
+	Quit PdfCraft	Вийти з PdfCraft
+	Window	Вікно
+	Enter Full Screen	Увімкнути повноекранний режим
+	Bring All to Front	Усі на передній план
+	Go	Перейти
+	First page	Перша сторінка
+	Last page	Остання сторінка
+	Close Window	Закрити вікно
+	Paste	Вставити
 	Font	Шрифт
 	Bulleted list	Маркований список
 	Numbered list	Нумерований список
@@ -2537,3 +2552,5 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Показувати меню в рядку меню macOS

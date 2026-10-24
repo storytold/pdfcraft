@@ -2480,6 +2480,21 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Szolgáltatások
+	Hide PdfCraft	PdfCraft elrejtése
+	Hide Others	Többi elrejtése
+	Show All	Az összes megjelenítése
+	Quit PdfCraft	Kilépés a PdfCraftból
+	Window	Ablak
+	Enter Full Screen	Teljes képernyős mód
+	Bring All to Front	Az összes előrehozása
+	Go	Ugrás
+	First page	Első oldal
+	Last page	Utolsó oldal
+	Close Window	Ablak bezárása
+	Paste	Beillesztés
 	Font	Betűtípus
 	Bulleted list	Felsorolás
 	Numbered list	Számozott lista
@@ -2514,3 +2529,5 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	A menük megjelenítése a macOS menüsorában

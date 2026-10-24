@@ -2576,6 +2576,17 @@ animation effects	Off	Desactivados
 	This document is trying to open a local file:	Este documento intenta abrir un archivo local:
 	Move tag earlier	Mover etiqueta antes
 	Move tag later	Mover etiqueta después
+	Services	Servicios
+	Hide PdfCraft	Ocultar PdfCraft
+	Hide Others	Ocultar otros
+	Show All	Mostrar todo
+	Quit PdfCraft	Salir de PdfCraft
+	Window	Ventana
+	Enter Full Screen	Entrar en pantalla completa
+	Bring All to Front	Traer todo al frente
+	Go	Ir
+	First page	Primera página
+	Last page	Última página
 	Turn upside down (180°)	Girar boca abajo (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Etiqueta 4 × 6 in (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Recorta cada página a su área impresa, la endereza y la ajusta a la hoja sin deformarla. Una etiqueta por hoja.
@@ -2637,6 +2648,9 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+
+# macOS native menu bar: items only the system menu shows.
+	Close Window	Cerrar ventana
 	Thumbnail size	Tamaño de las miniaturas
 	Smaller thumbnails	Miniaturas más pequeñas
 	Larger thumbnails	Miniaturas más grandes
@@ -2838,3 +2852,5 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Mostrar los menús en la barra de menús de macOS

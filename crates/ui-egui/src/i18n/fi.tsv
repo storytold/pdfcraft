@@ -2783,3 +2783,19 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Palvelut
+	Hide PdfCraft	Kätke PdfCraft
+	Hide Others	Kätke muut
+	Show All	Näytä kaikki
+	Quit PdfCraft	Lopeta PdfCraft
+	Window	Ikkuna
+	Enter Full Screen	Siirry koko näytön tilaan
+	Bring All to Front	Tuo kaikki eteen
+	Go	Siirry
+	First page	Ensimmäinen sivu
+	Last page	Viimeinen sivu
+	Close Window	Sulje ikkuna
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Näytä valikot macOSin valikkorivillä

@@ -2750,3 +2750,19 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# macOS native menu bar: items only the system menu shows.
+	Services	서비스
+	Hide PdfCraft	PdfCraft 가리기
+	Hide Others	기타 가리기
+	Show All	모두 표시
+	Quit PdfCraft	PdfCraft 종료
+	Window	윈도우
+	Enter Full Screen	전체 화면 시작
+	Bring All to Front	모두 앞으로 가져오기
+	Go	이동
+	First page	첫 페이지
+	Last page	마지막 페이지
+	Close Window	윈도우 닫기
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	macOS 메뉴 막대에 메뉴 표시

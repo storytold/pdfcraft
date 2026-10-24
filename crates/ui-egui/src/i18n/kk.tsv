@@ -2479,6 +2479,21 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+
+# macOS native menu bar: items only the system menu shows.
+	Services	Қызметтер
+	Hide PdfCraft	PdfCraft жасыру
+	Hide Others	Басқаларын жасыру
+	Show All	Барлығын көрсету
+	Quit PdfCraft	PdfCraft-тан шығу
+	Window	Терезе
+	Enter Full Screen	Толық экранға өту
+	Bring All to Front	Барлығын алдыға шығару
+	Go	Өту
+	First page	Бірінші бет
+	Last page	Соңғы бет
+	Close Window	Терезені жабу
+	Paste	Қою
 	Font	Қаріп
 	Bulleted list	Таңбалауыш тізім
 	Numbered list	Нөмірленген тізім
@@ -2513,3 +2528,5 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+# Preferences: where the menus go on macOS (#80).
+	Show the menus in the macOS menu bar	Мәзірлерді macOS мәзір жолағында көрсету
