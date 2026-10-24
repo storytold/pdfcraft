@@ -68,6 +68,10 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// View ▸ Invert colors: inverts all rendered page pixels.
+    pub invert_colors: bool,
+    /// The colours of the inverted page (paper and ink); only used while `invert_colors` is on.
+    pub invert_palette: crate::InvertPalette,
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
@@ -181,6 +185,12 @@ pub const PRINT_TAG: u64 = 1 << 60;
 /// document's setting and render with reading colours off.
 fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors {
     if req.tag & PRINT_TAG != 0 { ReadingColors::default() } else { config.reading_colors }
+}
+
+/// The color inversion setting a request renders with: print previews ([`PRINT_TAG`]) ignore the
+/// document's setting and render with inversion off.
+fn request_invert(config: &RenderConfig, req: &RenderRequest) -> Option<crate::InvertPalette> {
+    if req.tag & PRINT_TAG != 0 || !config.invert_colors { None } else { Some(config.invert_palette) }
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not
@@ -313,6 +323,7 @@ fn render_page<'a>(
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
     let reading = request_reading(config, &req);
+    let invert = request_invert(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
             Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
@@ -383,6 +394,9 @@ fn render_page<'a>(
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
+        if let Some(palette) = invert {
+            pixels.recolor(palette);
+        }
         Ok((w.into(), h.into(), pixels, None))
     }));
     match result {
@@ -7252,6 +7266,32 @@ trailer << /Root 1 0 R >>
         // white (its luminance is 7.2%, so 255·(1−0.0722) ≈ 237).
         assert_eq!(&full.rgba[..4], &[0, 0, 0, 255]);
         assert_eq!(&full.rgba[((60 * full.width + 50) * 4) as usize..][..4], &[237, 237, 237, 255]);
+    }
+
+    /// Color inversion flips all rendered pixels in place:
+    /// white page clears to black, and print previews ignore the setting to match paper.
+    #[test]
+    fn invert_colors_inverts_rendered_page_and_leaves_print_preview() {
+        let pdf = Arc::new(ONE_PAGE.to_vec());
+        let req = |tag| RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag, preview: false };
+        let mut normal = PageRenderer::new(pdf.clone(), RenderConfig::default());
+        let truth = normal.render(req(0));
+        assert!(truth.error.is_none());
+        assert_eq!(&truth.rgba[..4], &[255, 255, 255, 255], "default is white page background");
+
+        let mut inverted = PageRenderer::new(pdf.clone(), RenderConfig { invert_colors: true, ..Default::default() });
+        let out = inverted.render(req(0));
+        assert!(out.error.is_none());
+        assert_eq!(&out.rgba[..4], &[0, 0, 0, 255], "inverted background is pitch black");
+        // Check that inverted pixels roundtrip exactly
+        let mut check = out.rgba.clone();
+        check.invert();
+        assert_eq!(check, truth.rgba, "inverting inverted render recovers original");
+
+        // Print preview request ([PRINT_TAG]) ignores invert_colors and renders original
+        let preview = inverted.render(req(PRINT_TAG));
+        assert!(preview.error.is_none());
+        assert_eq!(preview.rgba, truth.rgba, "print preview ignores invert_colors");
     }
 
     // A tile seam must not change the raster when large-page work is stitched back together.

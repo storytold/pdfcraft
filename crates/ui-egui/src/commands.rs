@@ -283,6 +283,7 @@ impl PdfCraftApp {
                     None => self.apply_full_screen(on),
                 }
             }
+            "view.invert_colors" => self.set_invert_colors(!self.invert_colors),
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {

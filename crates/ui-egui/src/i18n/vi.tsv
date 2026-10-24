@@ -2798,3 +2798,11 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+	Invert colors	Đảo ngược màu
+	Inverted page background	Nền trang đã đảo màu
+	Inverted text	Văn bản đã đảo màu
+	Reset	Đặt lại
+	Soft dark gray	Xám đậm dịu
+	Sepia night	Nâu đỏ ban đêm
+	Invert everything	Đảo ngược tất cả
+	Text only, keep images	Chỉ văn bản, giữ nguyên hình ảnh

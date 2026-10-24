@@ -961,6 +961,7 @@ impl Automation {
             "comments_hide" => self.comments_hide(&a)?,
             "layer_set" => self.layer_set(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,
+            "view_invert_colors" => self.view_invert_colors(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,

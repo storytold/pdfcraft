@@ -9,7 +9,7 @@
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
 //!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
 //!  --page-gaps on|off  --default-page-gaps on|off
-//!  --combine-view grid|list  --combine-zoom 60..200`
+//!  --combine-view grid|list  --combine-zoom 60..200  --invert-colors`
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
@@ -228,6 +228,9 @@ fn main() -> eframe::Result {
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
             "--new-window" => new_window = true,
+            "--invert-colors" | "-invert-colors" | "--invert_colors" => {
+                options.push(("invert-colors".to_string(), "true".to_string()));
+            }
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));

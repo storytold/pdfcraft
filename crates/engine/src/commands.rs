@@ -231,6 +231,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron-left"),
     c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron-right"),
     c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
+    c("view.invert_colors", "Invert colors", VIEW, Some(Shortcut::cmd("I")), Document, "contrast"),
     c("ui.dock.reset", "Reset panel layout", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),

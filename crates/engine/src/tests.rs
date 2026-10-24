@@ -3749,6 +3749,21 @@ fn reading_colors_set_and_invalidated() {
 }
 
 #[test]
+fn invert_colors_set_and_invalidated() {
+    let (mut s, id) = session_with(1);
+    // Every open document holds a value; default is false (off).
+    assert_eq!(s.invert_colors(id), Some(false));
+    assert!(s.set_invert_colors(id, true));
+    assert_eq!(s.invert_colors(id), Some(true));
+    assert!(!s.set_invert_colors(id, true), "unchanged");
+    assert!(s.set_invert_colors(id, false), "back to off");
+    assert_eq!(s.invert_colors(id), Some(false));
+    // No such document.
+    assert_eq!(s.invert_colors(DocId(u64::MAX)), None);
+    assert!(!s.set_invert_colors(DocId(u64::MAX), true));
+}
+
+#[test]
 fn signing_saving_trusting_and_commenting_afterwards() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();

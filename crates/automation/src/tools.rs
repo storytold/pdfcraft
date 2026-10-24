@@ -861,6 +861,15 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
+        t("view_invert_colors", "Invert colors", "Toggle or set color inversion for open document pages (inverting all rendered pixels). A view setting: the file doesn't change. When invert is omitted, the setting is toggled. Returns the resulting invert_colors state.")
+            .cmd("view.invert_colors")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "invert": { "type": "boolean", "description": "When omitted, the current setting is toggled." },
+                }),
+                &["doc"],
+            )),
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(

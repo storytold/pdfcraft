@@ -2694,3 +2694,11 @@ theme	Appearance	ลักษณะที่ปรากฏ
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
+	Invert colors	สลับสี
+	Inverted page background	พื้นหลังหน้าที่สลับสี
+	Inverted text	ข้อความที่สลับสี
+	Reset	รีเซ็ต
+	Soft dark gray	เทาเข้มนุ่ม
+	Sepia night	ซีเปียกลางคืน
+	Invert everything	สลับทั้งหมด
+	Text only, keep images	เฉพาะข้อความ คงรูปภาพไว้

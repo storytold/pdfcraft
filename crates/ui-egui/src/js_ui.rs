@@ -498,6 +498,42 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
     }
     ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
+    let mut invert = app.invert_colors;
+    if ui.add(widgets::checkbox(&mut invert, tl!("Invert colors"))).changed() {
+        app.set_invert_colors(invert);
+    }
+    ui.horizontal(|ui| {
+        for (keep, label) in [(false, "Invert everything"), (true, "Text only, keep images")] {
+            if ui.selectable_label(app.invert_keep_images == keep, tl!(label)).clicked() {
+                app.set_invert_keep_images(keep);
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        for (palette, label) in [
+            (pdfcraft_render::InvertPalette::SOFT_DARK, "Soft dark gray"),
+            (pdfcraft_render::InvertPalette::PURE, "Black and white"),
+            (pdfcraft_render::InvertPalette::SEPIA, "Sepia night"),
+        ] {
+            if ui.selectable_label(app.invert_palette == palette, tl!(label)).clicked() {
+                app.set_invert_palette(palette);
+            }
+        }
+    });
+    // The colours of the inverted page: the dark paper and the light ink (default black and white).
+    ui.horizontal(|ui| {
+        let mut palette = app.invert_palette;
+        let paper = ui.label(tl!("Inverted page background"));
+        let a = ui.color_edit_button_srgb(&mut palette.paper).labelled_by(paper.id).changed();
+        let ink = ui.label(tl!("Inverted text"));
+        let b = ui.color_edit_button_srgb(&mut palette.ink).labelled_by(ink.id).changed();
+        if a || b {
+            app.set_invert_palette(palette);
+        }
+        if ui.button(tl!("Reset")).clicked() {
+            app.set_invert_palette(pdfcraft_render::InvertPalette::default());
+        }
+    });
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));

@@ -3303,6 +3303,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if view.show_page_gaps {
                 painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
             }
+            // The reading-colours background (`paper`, above), or the inverted palette's paper.
+            let paper = if app.invert_colors {
+                Color32::from_rgb(app.invert_palette.paper[0], app.invert_palette.paper[1], app.invert_palette.paper[2])
+            } else {
+                paper
+            };
             painter.rect_filled(r, CornerRadius::ZERO, paper);
             if let Some(err) = view.errors.get(&i) {
                 painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));

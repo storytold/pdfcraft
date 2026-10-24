@@ -33,4 +33,18 @@ impl Automation {
             "line_art": colors.params.is_some_and(|p| p.line_art),
         }))
     }
+
+    /// Toggle or set color inversion on the document.
+    pub(crate) fn view_invert_colors(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let current = self.session.invert_colors(id).unwrap_or(false);
+        let next = a.opt_bool("invert")?.unwrap_or(!current);
+        if self.session.set_invert_colors(id, next) {
+            self.renderers.remove(&id);
+        }
+        Ok(json!({
+            "doc": id.0,
+            "invert": next,
+        }))
+    }
 }

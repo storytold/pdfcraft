@@ -9184,6 +9184,18 @@ evidence = ["crates/automation/tests/it/automation.rs::reading_colors_through_to
 notes = "View only, off by default: Preferences ▸ Reading colours holds the app-wide preference, seeded into every document as it opens (including created ones), and view_reading_colors reads and sets it per document (Acrobat's Replace Document Colors). Solid text paints and, by default, line-art paints (including stencil-mask image paints) are remapped by luminance — each lerps between the preset's text and background colour by how dark or light the original paint is — while images, shadings and tiling patterns pass through untouched. Annotations keep the colours they were given (both /AP appearances and the no-/AP Highlight fallback), so a Multiply highlight over a dark background shows the marked-up words in the highlight's colour instead of a flat bar that hides them (#1548). Presets: black on white, white on black, yellow on black, green on black, or a custom #RRGGBB pair; only_black limits the mapping to near-black paints (a 10% luminance threshold — our choice; Acrobat's was not observed). Display only: the document is not changed and print and export are unaffected; print previews and view snapshots render with the document's true colours (a preview matches the uncoloured printout, and a snapshot is an export surface), so reading colours apply to the reading view only. Pending canvas pages use the configured reading background before their raster arrives (#2059). Closes #897 (duplicate #488)."
 
 [[feature]]
+id = "a11y.invert-page-colors"
+title = "Invert page colours (night reading)"
+area = "M"
+tier = "P3"
+milestone = "M12"
+status = "shipped"
+commands = ["view.invert_colors"]
+tools = ["view_invert_colors"]
+evidence = ["crates/render/src/pixels.rs::recolor_maps_white_to_paper_and_black_to_ink", "crates/render/src/pixels.rs::invert_pixels_preserves_alpha_and_round_trips", "crates/render/src/raster.rs::invert_colors_inverts_rendered_page_and_leaves_print_preview", "crates/engine/src/tests.rs::invert_colors_set_and_invalidated", "crates/automation/tests/it/automation.rs::invert_colors_through_tools", "crates/ui-egui/tests/invert_colors.rs::invert_colors_preference_round_trips", "crates/ui-egui/tests/invert_colors.rs::invert_keeping_images_maps_text_not_pixels"]
+notes = "A PdfCraft view option with no Acrobat counterpart (Acrobat's own is Replace Document Colors, a11y.replace-page-colors). View ▸ Invert colors (Ctrl+I, the title-bar contrast button, --invert-colors) with a palette for the dark paper and light ink: soft dark gray, black and white, sepia, or a custom pair in Preferences ▸ Reading colours. Two modes: text only, which keeps pictures (the default; it renders through the reading-colours mapping, so images, shadings and patterns are untouched and, while it is on, it replaces the Reading colours preference instead of stacking on it), and invert everything, which inverts every rendered pixel, so photographs become negatives. App-wide and saved with the preferences; display only, and print previews ignore it. Missing: no per-document override from the UI (view_invert_colors sets one headlessly for the every-pixel mode), and in text-only mode large coloured fills follow the reading-colours rules, not a true inversion."
+
+[[feature]]
 id = "a11y.reflow-tagged"
 title = "Reflow tagged content"
 area = "M"
