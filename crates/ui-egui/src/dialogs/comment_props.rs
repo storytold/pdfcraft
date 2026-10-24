@@ -262,9 +262,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     // text, border and fill, a shape's line and fill. The rows stay put; a part
                     // not drawn (no fill, no border) is greyed.
                     let percent = |ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: bool| {
-                        ui.add_enabled(enabled, egui::Label::new(label));
+                        let name = ui.add_enabled(enabled, egui::Label::new(label));
                         let mut pct = *value * 100.0;
-                        if ui.add_enabled(enabled, egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
+                        if ui.add_enabled(enabled, egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).labelled_by(name.id).changed() {
                             *value = pct / 100.0;
                         }
                         ui.end_row();
@@ -273,10 +273,22 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     let border = has_border(e);
                     match (e.text_opacity.is_some(), e.fill_opacity.is_some()) {
                         (true, _) => {
-                            // With neither a border nor a fill, the text is the whole comment.
+                            // With neither a border nor a fill, the text is the whole comment:
+                            // shown at the opacity it is drawn at, a change sets the whole
+                            // comment's (which its parts then take).
                             match e.text_opacity.as_mut() {
                                 Some(t) if text => percent(ui, tl!("Text opacity"), t, true),
-                                _ => percent(ui, tl!("Text opacity"), &mut e.opacity, true),
+                                drawn => {
+                                    let mut shown = drawn.as_deref().copied().unwrap_or(e.opacity);
+                                    let before = shown;
+                                    percent(ui, tl!("Text opacity"), &mut shown, true);
+                                    if shown != before {
+                                        e.opacity = shown;
+                                        if let Some(t) = drawn {
+                                            *t = shown;
+                                        }
+                                    }
+                                }
                             }
                             if text {
                                 percent(ui, tl!("Border opacity"), &mut e.opacity, border);
