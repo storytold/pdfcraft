@@ -7129,8 +7129,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.text"]
 tools = ["doc_export_text", "text_extract"]
-evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools"]
-notes = "plain reading-order text; accessible text (tags) comes with M12"
+evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools", "crates/ui-egui/src/export_ui.rs::native_worker_panic_completes_export_and_allows_exact_text_retry"]
+notes = "plain reading-order text; accessible text (tags) comes with M12. Worker panics and launch failures report an error and allow retry without changing the source."
 
 [[feature]]
 id = "create.export-accessible-text"
@@ -9257,8 +9257,8 @@ milestone = "M13"
 status = "shipped"
 commands = ["actions.wizard"]
 tools = ["action_list", "action_run"]
-evidence = ["crates/ui-egui/tests/it/actions.rs::desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs", "crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/it/automation.rs::actions_through_tools", "crates/ui-egui/tests/it/actions.rs::run_and_create_actions"]
-notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress."
+evidence = ["crates/ui-egui/tests/it/actions.rs::desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs", "crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/it/automation.rs::actions_through_tools", "crates/ui-egui/tests/it/actions.rs::run_and_create_actions", "crates/ui-egui/src/actions_ui.rs::native_panic_preserves_partial_results_sources_and_collision_names"]
+notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress. Worker panics and launch failures report an error; completed files and occupied names survive retry."
 
 [[feature]]
 id = "misc.action-wizard-create"

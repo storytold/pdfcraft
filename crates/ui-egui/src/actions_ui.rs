@@ -75,18 +75,43 @@ impl PdfCraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         match self.export_dir_override.clone() {
-            Some(d) => self.run_action_into(action, files, d.into()),
+            Some(d) => self.run_action_into(
+                action,
+                files,
+                d.into(),
+                #[cfg(test)]
+                Default::default(),
+            ),
             None => {
                 let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the results").to_string());
-                self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.run_action_into(action, files, dir));
+                self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| {
+                    app.run_action_into(
+                        action,
+                        files,
+                        dir,
+                        #[cfg(test)]
+                        Default::default(),
+                    )
+                });
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.run_action_into(action, files);
+        self.run_action_into(
+            action,
+            files,
+            #[cfg(test)]
+            Default::default(),
+        );
     }
 
     /// [`Self::run_action_on`] once the folder for the results is known.
-    fn run_action_into(&mut self, action: Action, files: Vec<(String, Vec<u8>)>, #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf) {
+    fn run_action_into(
+        &mut self,
+        action: Action,
+        files: Vec<(String, Vec<u8>)>,
+        #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf,
+        #[cfg(test)] fault: tests::Fault,
+    ) {
         // Another run may have started while the folder picker was open.
         if self.action_run.is_some() {
             self.notify_tr("An action is already running");
@@ -96,41 +121,65 @@ impl PdfCraftApp {
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
+        #[cfg(not(target_arch = "wasm32"))]
+        let label = action.name.clone();
         let work = move || {
             crate::i18n::set_current(lang);
-            let (mut ok, mut failed) = (0, Vec::new());
-            for (i, (name, bytes)) in files.into_iter().enumerate() {
-                if let Ok(mut s) = p.lock() {
-                    s.done = i;
+            let msg = pdfcraft_engine::guard(|| {
+                #[cfg(test)]
+                if fault.poison {
+                    let _held = p.lock().unwrap();
+                    panic!("action worker fault");
                 }
-                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
-                    #[cfg(target_arch = "wasm32")]
-                    crate::editing::download(&name, &r.bytes)?;
-                    Ok(())
-                });
-                match r {
-                    Ok(()) => ok += 1,
-                    Err(e) => failed.push(format!("{name}: {}", e)),
+                let (mut ok, mut failed) = (0, Vec::new());
+                for (i, (name, bytes)) in files.into_iter().enumerate() {
+                    #[cfg(test)]
+                    if fault.panic_at == Some(i) {
+                        panic!("action worker fault");
+                    }
+                    p.lock().unwrap_or_else(std::sync::PoisonError::into_inner).done = i;
+                    let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
+                        #[cfg(target_arch = "wasm32")]
+                        crate::editing::download(&name, &r.bytes)?;
+                        Ok(())
+                    });
+                    match r {
+                        Ok(()) => ok += 1,
+                        Err(e) => failed.push(format!("{name}: {}", e)),
+                    }
                 }
-            }
-            let done =
-                if ok == 1 { crate::i18n::fmt(tl!("1 file done"), &[]) } else { crate::i18n::fmt(tl!("{n} files done"), &[("n", &ok.to_string())]) };
-            let mut msg = format!("{}: {done}", action.name);
-            if !failed.is_empty() {
-                msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
-            }
-            if let Ok(mut s) = p.lock() {
-                s.done = s.total;
-                s.message = Some(msg);
-            }
+                let done = if ok == 1 {
+                    crate::i18n::fmt(tl!("1 file done"), &[])
+                } else {
+                    crate::i18n::fmt(tl!("{n} files done"), &[("n", &ok.to_string())])
+                };
+                let mut msg = format!("{}: {done}", action.name);
+                if !failed.is_empty() {
+                    msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
+                }
+                msg
+            })
+            .unwrap_or_else(|e| crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", &action.name), ("e", &e)]));
+            // Completion must survive an unwind, including a poisoned progress lock.
+            let mut s = p.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.done = s.total;
+            s.message = Some(msg);
         };
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-action".into()).spawn(work).ok();
+        } else if let Err(e) = launch(
+            work,
+            #[cfg(test)]
+            fault.spawn,
+            #[cfg(test)]
+            fault.finished,
+        ) {
+            let mut s = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.done = s.total;
+            s.message = Some(crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", &label), ("e", &e.to_string())]));
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -141,13 +190,16 @@ impl PdfCraftApp {
     /// Show the running action's progress, and its summary when done.
     pub(crate) fn poll_action(&mut self) {
         let Some(p) = self.action_run.clone() else { return };
-        let state = p.lock().ok().map(|mut s| s.message.take().ok_or((s.done, s.total)));
+        let state = {
+            let mut s = p.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.message.take().ok_or((s.done, s.total))
+        };
         match state {
-            Some(Ok(m)) => {
+            Ok(m) => {
                 self.action_run = None;
                 self.notify(m);
             }
-            Some(Err((done, total))) => {
+            Err((done, total)) => {
                 let m = crate::i18n::fmt(
                     tl!("Running action… file {d} of {t}"),
                     &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
@@ -159,7 +211,6 @@ impl PdfCraftApp {
                     ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 }
             }
-            None => self.action_run = None,
         }
     }
 
@@ -383,4 +434,250 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         app.wizard.selected = Some(name);
     }
     false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn launch(
+    work: impl FnOnce() + Send + 'static,
+    #[cfg(test)] fail: bool,
+    #[cfg(test)] finished: Option<std::sync::mpsc::Sender<bool>>,
+) -> std::io::Result<()> {
+    #[cfg(test)]
+    if fail {
+        return Err(std::io::Error::other("action launch fault"));
+    }
+    #[cfg(test)]
+    let work = tests::observe(work, finished);
+    std::thread::Builder::new().name("pdfcraft-action".into()).spawn(work).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::{self, Sender};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    pub(super) struct Fault {
+        pub panic_at: Option<usize>,
+        pub poison: bool,
+        pub spawn: bool,
+        pub finished: Option<Sender<bool>>,
+    }
+
+    pub(super) fn observe(work: impl FnOnce(), finished: Option<Sender<bool>>) -> impl FnOnce() {
+        move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+            if let Some(finished) = finished {
+                let _ = finished.send(result.is_ok());
+            }
+            if let Err(payload) = result {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
+    struct Folder(std::path::PathBuf, crate::i18n::Lang);
+    impl Folder {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("pdfcraft-action-worker-{name}-{}", std::process::id()));
+            std::fs::create_dir(&path).unwrap();
+            let previous = crate::i18n::current();
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+            Self(path, previous)
+        }
+    }
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            crate::i18n::set_current(self.1);
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    fn app() -> (PdfCraftApp, Vec<u8>) {
+        let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 1).unwrap().to_vec();
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = false;
+        app.open_bytes("source.pdf", None, bytes.clone()).unwrap();
+        (app, bytes)
+    }
+
+    fn action() -> Action {
+        Action { name: "Set report title".into(), description: String::new(), steps: vec![Step::SetTitle("Finished report".into())], builtin: false }
+    }
+
+    fn assert_title(path: &std::path::Path) {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open_new("result.pdf", Arc::new(std::fs::read(path).unwrap())).unwrap();
+        assert_eq!(session.get(id).unwrap().info_value("Title").as_deref(), Some("Finished report"));
+    }
+
+    fn has_completion(app: &PdfCraftApp) -> bool {
+        app.action_run.as_ref().is_none_or(|p| p.lock().unwrap_or_else(std::sync::PoisonError::into_inner).message.is_some())
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct SourceState {
+        bytes: Arc<Vec<u8>>,
+        dirty: bool,
+        undo: Option<String>,
+        redo: Option<String>,
+    }
+
+    fn source_state(app: &PdfCraftApp) -> SourceState {
+        let (_, id) = app.active_ids().unwrap();
+        let doc = app.session.get(id).unwrap();
+        SourceState { bytes: doc.bytes.clone(), dirty: doc.dirty, undo: doc.can_undo().map(str::to_owned), redo: doc.can_redo().map(str::to_owned) }
+    }
+
+    #[test]
+    fn native_launch_failure_completes_action() {
+        let dir = Folder::new("launch");
+        let (mut app, source) = app();
+        let before_state = source_state(&app);
+        let (_, id) = app.active_ids().unwrap();
+        app.run_action_into(action(), vec![("source.pdf".into(), source.clone())], dir.0.clone(), Fault { spawn: true, ..Default::default() });
+        assert!(has_completion(&app), "launch error leaves action active without completion");
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title failed: action launch fault");
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+        assert_eq!(&*app.session.get(id).unwrap().bytes, &source);
+        assert_eq!(source_state(&app), before_state);
+    }
+
+    #[test]
+    fn native_worker_panic_completes_action_and_allows_title_retry() {
+        let dir = Folder::new("panic");
+        let (mut app, source) = app();
+        let before_state = source_state(&app);
+        let (_, id) = app.active_ids().unwrap();
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(
+            action(),
+            vec![("source.pdf".into(), source.clone())],
+            dir.0.clone(),
+            Fault { panic_at: Some(0), finished: Some(tx), ..Default::default() },
+        );
+        let contained = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(has_completion(&app), "native worker finished (contained={contained}) without publishing action completion");
+        assert!(contained);
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title failed: action worker fault");
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+        assert_eq!(&*app.session.get(id).unwrap().bytes, &source);
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(action(), vec![("source.pdf".into(), source.clone())], dir.0.clone(), Fault { finished: Some(tx), ..Default::default() });
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title: 1 file done");
+        assert_title(&dir.0.join("source.pdf"));
+        assert_eq!(&*app.session.get(id).unwrap().bytes, &source);
+        assert_eq!(source_state(&app), before_state);
+    }
+
+    #[test]
+    fn native_panic_preserves_partial_results_sources_and_collision_names() {
+        let dir = Folder::new("partial");
+        let out = dir.0.join("out");
+        std::fs::create_dir(&out).unwrap();
+        let (mut app, first) = app();
+        let before_state = source_state(&app);
+        let second = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 2).unwrap().to_vec();
+        std::fs::write(dir.0.join("first.pdf"), &first).unwrap();
+        std::fs::write(dir.0.join("second.pdf"), &second).unwrap();
+        let collision = b"keep this earlier output";
+        std::fs::write(out.join("report.pdf"), collision).unwrap();
+        let files = vec![("report.pdf".into(), first.clone()), ("report.pdf".into(), second.clone())];
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(action(), files.clone(), out.clone(), Fault { panic_at: Some(1), finished: Some(tx), ..Default::default() });
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title failed: action worker fault");
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 2);
+        assert_eq!(std::fs::read(out.join("report.pdf")).unwrap(), collision);
+        assert_title(&out.join("report (2).pdf"));
+        let completed = std::fs::read(out.join("report (2).pdf")).unwrap();
+        assert!(!out.join("report (3).pdf").exists());
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(action(), files, out.clone(), Fault { finished: Some(tx), ..Default::default() });
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title: 2 files done");
+        assert_title(&out.join("report (3).pdf"));
+        assert_title(&out.join("report (4).pdf"));
+        let mut reopened = pdfcraft_engine::Session::new();
+        for (name, pages) in [("report (3).pdf", 1), ("report (4).pdf", 2)] {
+            let id = reopened.open_new(name, Arc::new(std::fs::read(out.join(name)).unwrap())).unwrap();
+            assert_eq!(reopened.get(id).unwrap().info.pages.len(), pages);
+        }
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 4);
+        assert_eq!(std::fs::read(out.join("report.pdf")).unwrap(), collision);
+        assert_eq!(std::fs::read(out.join("report (2).pdf")).unwrap(), completed);
+        assert_eq!(std::fs::read(dir.0.join("first.pdf")).unwrap(), first);
+        assert_eq!(std::fs::read(dir.0.join("second.pdf")).unwrap(), second);
+        let (_, id) = app.active_ids().unwrap();
+        assert_eq!(&*app.session.get(id).unwrap().bytes, &first);
+        assert_eq!(source_state(&app), before_state);
+    }
+
+    #[test]
+    fn native_action_reports_returned_errors_and_empty_batches() {
+        let dir = Folder::new("normal-errors");
+        let (mut app, source) = app();
+        let before_state = source_state(&app);
+        let bad_name = "missing/report.pdf";
+        // A regular file cannot be the results directory. The PDF action itself still succeeds.
+        let blocked = dir.0.join("blocked");
+        std::fs::write(&blocked, b"keep destination").unwrap();
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(action(), vec![(bad_name.into(), source.clone())], blocked.clone(), Fault { finished: Some(tx), ..Default::default() });
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        let error = std::fs::symlink_metadata(blocked.join("report.pdf")).unwrap_err().to_string();
+        assert_eq!(app.toast.as_ref().unwrap().0, format!("Set report title: 0 files done; failed: {bad_name}: {error}"));
+        assert_eq!(std::fs::read(&blocked).unwrap(), b"keep destination");
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(action(), vec![], dir.0.clone(), Fault { finished: Some(tx), ..Default::default() });
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title: 0 files done");
+        let (_, id) = app.active_ids().unwrap();
+        assert_eq!(&*app.session.get(id).unwrap().bytes, &source);
+        assert_eq!(source_state(&app), before_state);
+    }
+
+    #[test]
+    fn native_panic_recovers_poisoned_action_progress() {
+        let dir = Folder::new("poison");
+        let (mut app, source) = app();
+        let before_state = source_state(&app);
+        let (tx, rx) = mpsc::channel();
+        app.run_action_into(
+            action(),
+            vec![("source.pdf".into(), source.clone())],
+            dir.0.clone(),
+            Fault { poison: true, finished: Some(tx), ..Default::default() },
+        );
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        // The starter can poll an already completed worker before returning.
+        if let Some(progress) = &app.action_run {
+            assert!(progress.is_poisoned());
+        }
+        assert!(has_completion(&app));
+        app.poll_action();
+        assert!(app.action_run.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().0, "Set report title failed: action worker fault");
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+        let (_, id) = app.active_ids().unwrap();
+        assert_eq!(&*app.session.get(id).unwrap().bytes, &source);
+        assert_eq!(source_state(&app), before_state);
+    }
 }
