@@ -1182,6 +1182,18 @@ evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find
 notes = "Per-tab page history: explicit search-result jumps, page navigation, bookmarks and links; no continuous-scroll history or restart persistence; existing page-step history is retained. Rail buttons, View ▸ Page navigation and Ctrl/⌘[ / Ctrl/⌘]. UI control ui.command exposes view.previous_view / view.next_view; standalone engine sessions have no viewport history. Restores page tops, not exact scroll/zoom positions."
 
 [[feature]]
+id = "view.text-links"
+title = "Open web and email addresses written as page text"
+area = "B"
+tier = "P1"
+milestone = "M3"
+status = "shipped"
+commands = []
+tools = ["link_list"]
+evidence = ["crates/engine/src/text_links.rs::web_and_email_addresses_in_text_are_found", "crates/engine/src/text_links.rs::sentence_punctuation_and_brackets_are_not_part_of_the_address", "crates/engine/src/text_links.rs::a_link_annotation_over_the_address_covers_it", "crates/automation/tests/it/automation.rs::addresses_written_as_page_text_are_listed_with_text_links", "crates/ui-egui/tests/it/document_links.rs::addresses_written_in_the_page_text_open_like_links"]
+notes = "With the Select tool, http(s)://, www. (opened as https://) and email (mailto:) addresses written as plain page text show the link cursor and their address on hover, and a click asks first and opens through the same check as link annotations (#4207). Found once per page text layer with the Create links from URLs detector (sentence punctuation and brackets left out, at most 512 per page, none on a page of more than 200,000 glyphs); text under a link annotation follows the annotation. Preferences: Open web and email addresses written in the page text (default on; control key text-links). link_list text_links: true lists them. Missing: addresses broken across lines or hyphenated, and following one under a highlight comment."
+
+[[feature]]
 id = "view.follow-links"
 title = "Follow links and destinations"
 area = "B"

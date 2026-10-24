@@ -9,6 +9,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
+use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
@@ -462,6 +463,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
+    text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -782,6 +785,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            text_links: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -1199,6 +1203,28 @@ impl DocView {
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
         self.texts.get(&page).cloned()
+    }
+
+    /// The address written as plain text on `page` under the view-space point `(x, y)` (#4207),
+    /// unless a link annotation lies over it: the annotation is what the document asks for there.
+    /// The addresses are found once per text layer, and only once the page's text is known.
+    pub(crate) fn text_link_at(&mut self, info: &DocInfo, page: usize, x: f32, y: f32) -> Option<String> {
+        let text = self.texts.get(&page)?.clone();
+        // Forget the addresses of text layers that were dropped or replaced.
+        let texts = &self.texts;
+        self.text_links.retain(|p, (t, _)| texts.get(p).is_some_and(|current| Arc::ptr_eq(current, t)));
+        let links = match self.text_links.get(&page) {
+            Some((_, links)) => links.clone(),
+            None => {
+                let found: Arc<[TextLink]> = pdfcraft_engine::text_links::find_text_links(&text).into();
+                self.text_links.insert(page, (text, found.clone()));
+                found
+            }
+        };
+        let page_info = info.pages.get(page)?;
+        let hit = links.iter().find(|l| l.contains(x, y))?;
+        let covered = info.links.iter().any(|l| l.page == page && hit.covered_by(page_info, l.rect));
+        (!covered).then(|| hit.uri.clone())
     }
 
     pub(crate) fn clear_selection(&mut self) {
@@ -3135,6 +3161,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::Snapshot => false,
     };
     let prefs = &app.comment_prefs;
+    let text_links_on = app.text_links;
     let redact_mark = (app.redact_prefs.hover_fill, app.redact_prefs.opacity);
     let units = app.units;
     let allowed = doc.allows_annotation();
@@ -3698,7 +3725,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 {
                     let (vx, vy) = xf.screen_to_view(p);
                     let over_text = text.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]);
-                    let over_link = info.links.iter().any(|l| l.page == i && xf.user_rect(info, i, l.rect).contains(p));
+                    let over_link = info.links.iter().any(|l| l.page == i && xf.user_rect(info, i, l.rect).contains(p))
+                        || (text_links_on && view.text_link_at(info, i, vx, vy).is_some());
                     // Column select (#740): the Column select tool, or Alt (Option on macOS) held
                     // while a drag starts, as in Acrobat.
                     let column = tool == QuickTool::ColumnSelect || ui.input(|inp| inp.modifiers.alt);
@@ -3920,6 +3948,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         if resp.clicked() && tool == QuickTool::Select && !consumed {
                             clicked_link = Some(l.target.clone());
                         }
+                    }
+                }
+                // A web or email address written as plain text (#4207): the same cursor, label
+                // and click as a link annotation, and the same check and confirmation on opening.
+                if hover_text.is_none() && text_links_on {
+                    let (vx, vy) = xf.screen_to_view(p);
+                    if let Some(uri) = view.text_link_at(info, i, vx, vy) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        if resp.clicked() && tool == QuickTool::Select && !consumed && clicked_link.is_none() {
+                            clicked_link = Some(LinkTarget::Uri(uri.clone()));
+                        }
+                        hover_text = Some((p, uri));
                     }
                 }
                 // Annotation hover shows the comment, as Acrobat's popups do; not while drawing

@@ -760,3 +760,90 @@ fn highlighted_link_can_be_requested_again_after_cancel() {
         assert_eq!(h.state().last_opened_url, None);
     }
 }
+
+/// One 300×400 page of plain text, no link annotations except over the fourth line: a web
+/// address, a `www.` address, an email address, an address under a link annotation, and text
+/// with no address (#4207). Each line starts at x 40, 14 points high, at the y given.
+fn text_links_fixture() -> Vec<u8> {
+    let content = [
+        (350, "https://example.com/plain-text-url."),
+        (300, "www.example.com/no-scheme"),
+        (250, "someone@example.com"),
+        (200, "https://example.org/covered"),
+        (150, "Nothing to open here"),
+    ]
+    .iter()
+    .map(|(y, s)| format!("BT /F1 14 Tf 40 {y} Td ({s}) Tj ET\n"))
+    .collect::<String>();
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R] >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        format!("<< /Type /Annot /Subtype /Link /Rect [30 195 290 215] /Border [0 0 0] /A << /S /URI /URI ({LINK_URL}) >> >>"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Click the text line whose baseline is at `y` until the page's text has arrived and the click
+/// asks to open something, or 30 seconds pass.
+fn click_text_until_pending(h: &mut Harness<'static, PdfCraftApp>, y: f32) -> bool {
+    support::step_until(h, |h| {
+        click_link_at(h, y + 4.0);
+        h.state().pending_link.is_some()
+    })
+}
+
+/// Web, `www.` and email addresses written as plain page text open like links (#4207): the same
+/// confirmation, `https://` for `www.` and `mailto:` for email; a link annotation over an address
+/// wins, text without an address opens nothing, and the setting turns it off.
+#[test]
+fn addresses_written_in_the_page_text_open_like_links() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text-links.pdf", None, text_links_fixture()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(8);
+    for (y, url) in [
+        (350.0, "https://example.com/plain-text-url"),
+        (300.0, "https://www.example.com/no-scheme"),
+        (250.0, "mailto:someone@example.com"),
+        (200.0, LINK_URL),
+    ] {
+        assert!(click_text_until_pending(&mut h, y), "a click on the line at {y} asked to open nothing");
+        assert_eq!(h.state().pending_link, pending(url, LinkOrigin::Link), "line at {y}");
+        assert_eq!(h.state().last_opened_url, None, "nothing opens before the user answers");
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        assert_eq!(h.state().pending_link, None);
+    }
+    // The page's text is known by now: plain text with no address opens nothing.
+    click_link_at(&mut h, 154.0);
+    assert_eq!(h.state().pending_link, None, "text without an address");
+    // Preferences can turn it off; the link annotation still works.
+    h.state_mut().set_option("text-links", "false").unwrap();
+    h.run_steps(2);
+    click_link_at(&mut h, 354.0);
+    assert_eq!(h.state().pending_link, None, "turned off");
+    click_link_at(&mut h, 204.0);
+    assert_eq!(h.state().pending_link, pending(LINK_URL, LinkOrigin::Link), "a link annotation is unaffected");
+}
