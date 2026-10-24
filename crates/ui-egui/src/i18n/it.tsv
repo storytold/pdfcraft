@@ -2747,3 +2747,4 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	Spotlight di macOS può intercettare {key}. Modifica la sua scorciatoia in Impostazioni di Sistema → Tastiera → Abbreviazioni da tastiera → Spotlight.

@@ -1022,8 +1022,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.marquee_zoom"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot"]
-notes = "drag to fill the window with an area; click to zoom in"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/it/viewer.rs::temporary_marquee_zoom_restores_the_selected_tool", "crates/ui-egui/tests/it/viewer.rs::temporary_marquee_zoom_drags_without_editing_the_document"]
+notes = "drag to fill the window with an area; click to zoom in; hold Ctrl/⌘+Space for temporary Marquee Zoom, preserving the original tool across plain Space's temporary Hand"
 
 [[feature]]
 id = "view.dynamic-zoom"

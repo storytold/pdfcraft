@@ -1110,8 +1110,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
                 use crate::commands::{
-                    ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN,
-                    ZOOM_OUT,
+                    ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, MARQUEE_ZOOM, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW,
+                    SELECT_ALL, ZOOM_IN, ZOOM_OUT,
                 };
                 // Registered commands first (always in sync with the real bindings), then the
                 // keys the document view handles itself.
@@ -1143,6 +1143,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
                     (named("V"), tl!("Select (V)").to_string()),
                     (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
+                    (crate::i18n::fmt(&named("{key} (hold)"), &[("key", &key(MARQUEE_ZOOM))]), tl!("Marquee zoom").to_string()),
                     (crate::i18n::key_name("Delete").to_string(), tl!("Delete selected pages (Organize)").to_string()),
                     (key(SELECT_ALL), tl!("Select all pages (Organize)").to_string()),
                 ] {
@@ -1157,6 +1158,17 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         }
                     });
                 });
+                if crate::commands::mac_shortcuts(ui.ctx()) {
+                    ui.add_space(8.0);
+                    let note = crate::commands::key_tip(
+                        ui.ctx(),
+                        tl!(
+                            "macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight."
+                        ),
+                        MARQUEE_ZOOM,
+                    );
+                    ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_muted)).wrap());
+                }
             }
             Dialog::About => {
                 // Tabs About · Contributors · Models (craftrules standards/contributors.md).

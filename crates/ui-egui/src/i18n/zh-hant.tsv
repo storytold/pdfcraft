@@ -2465,3 +2465,4 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	macOS 的 Spotlight 可能會攔截 {key}。請在系統設定 → 鍵盤 → 鍵盤快速鍵 → Spotlight 中更改其快速鍵。

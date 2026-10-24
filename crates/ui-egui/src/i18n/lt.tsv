@@ -2776,3 +2776,5 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+# AI-assisted Spotlight help addition (2026-10-19), not separately native-reviewed.
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	„macOS“ sistemos „Spotlight“ gali perimti {key}. Pakeiskite jo spartųjį klavišą skiltyje Sistemos nuostatos → Klaviatūra → Spartieji klavišai → Spotlight.

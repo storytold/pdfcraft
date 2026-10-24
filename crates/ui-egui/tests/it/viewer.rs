@@ -797,11 +797,12 @@ fn marquee_zoom_and_snapshot() {
     assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
     // Marquee zoom on a small area zooms in, centred on it.
     let before = h.state().views[i].zoom;
-    h.state_mut().set_option("quick", "marquee-zoom").unwrap();
+    assert!(h.state_mut().execute("view.marquee_zoom"));
     drag(&mut h, at(20.0, 160.0), at(60.0, 140.0));
     h.run_steps(4);
     let after = h.state().views[i].zoom;
     assert!(after > before * 2.0, "{before} → {after}");
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::MarqueeZoom, "manual selection stays selected");
 }
 
 #[test]
@@ -1250,6 +1251,10 @@ fn v_h_and_space_pick_the_quick_tools() {
     h.key_down(Key::Space);
     h.run_steps(4);
     assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space held");
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "adding Shift keeps the temporary Hand");
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.key_up(Key::Space);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space released");
@@ -1267,6 +1272,551 @@ fn v_h_and_space_pick_the_quick_tools() {
     h.key_up(Key::Space);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "typing a space in the find bar");
+}
+
+#[test]
+fn temporary_marquee_zoom_restores_the_selected_tool() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    // Native Ctrl and native Cmd both expose egui's logical command modifier.
+    for modifiers in [Modifiers::CTRL | Modifiers::COMMAND, Modifiers::MAC_CMD | Modifiers::COMMAND] {
+        let mut h = harness();
+        for previous in [QuickTool::Select, QuickTool::Hand, QuickTool::Crop, QuickTool::MarqueeZoom] {
+            h.state_mut().quick_tool = previous;
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, previous, "command alone");
+            h.key_down(Key::Space);
+            h.run_steps(4);
+            assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom, "command then Space: {modifiers:?}");
+            h.key_up(Key::Space);
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, previous, "Space released: {modifiers:?}");
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, previous, "both released");
+        }
+        // A deliberate tool choice made during an override still belongs to the user.
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.key_down(Key::Space);
+        h.run_steps(2);
+        h.state_mut().quick_tool = QuickTool::Crop;
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Crop, "manual change while held");
+        h.key_up(Key::Space);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Crop, "release preserves the manual change");
+    }
+}
+
+#[test]
+fn temporary_marquee_zoom_command_preserves_persistent_tool_choices() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    for command in [Modifiers::CTRL | Modifiers::COMMAND, Modifiers::MAC_CMD | Modifiers::COMMAND] {
+        for release_command_first in [false, true] {
+            for choose_snapshot_afterwards in [false, true] {
+                let mut h = harness();
+                assert_eq!(h.state().quick_tool, QuickTool::Select);
+                h.event(egui::Event::ModifiersChanged(command));
+                h.key_down(Key::Space);
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+                // The View menu uses this same public command dispatch.
+                assert!(h.state_mut().execute("view.marquee_zoom"));
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+                let persistent = if choose_snapshot_afterwards {
+                    assert!(h.state_mut().execute("edit.snapshot"));
+                    h.run_steps(2);
+                    assert_eq!(h.state().quick_tool, QuickTool::Snapshot, "held keys must not override a later deliberate choice");
+                    QuickTool::Snapshot
+                } else {
+                    QuickTool::MarqueeZoom
+                };
+                if release_command_first {
+                    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+                    h.run_steps(2);
+                    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space still temporarily pans");
+                    h.key_up(Key::Space);
+                } else {
+                    h.key_up(Key::Space);
+                    h.run_steps(2);
+                    assert_eq!(h.state().quick_tool, persistent, "Space release preserves the explicit command selection");
+                    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+                }
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, persistent, "the deliberate persistent tool survives shortcut release");
+            }
+        }
+    }
+}
+
+#[test]
+fn space_then_command_preserves_the_original_tool() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL | Modifiers::COMMAND));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom, "Space then command");
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "plain Space still pans");
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "restore the original, not the temporary Hand");
+}
+
+#[test]
+fn temporary_marquee_zoom_drags_without_editing_the_document() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().quick_tool = QuickTool::Hand;
+    let r = h.state().views[i].page_screen_rect(0).unwrap();
+    let before = h.state().views[i].zoom;
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    drag(&mut h, r.center(), r.center() + egui::vec2(40.0, 30.0));
+    assert!(h.state().views[i].zoom > before * 2.0);
+    assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom, "still held after the drag");
+    h.key_up(Key::Space);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    assert!(!h.state().session.get(h.state().views[i].id).unwrap().dirty);
+}
+
+#[test]
+fn temporary_marquee_zoom_release_during_a_drag() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    for release_together in [false, true] {
+        let mut h = harness();
+        let i = h.state().active.unwrap();
+        h.state_mut().quick_tool = QuickTool::Hand;
+        let r = h.state().views[i].page_screen_rect(0).unwrap();
+        let before = h.state().views[i].zoom;
+        let end = r.center() + egui::vec2(40.0, 30.0);
+        h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+        h.key_down(Key::Space);
+        h.hover_at(r.center());
+        h.drag_at(r.center());
+        h.run_steps(2);
+        h.hover_at(end);
+        h.run_steps(2);
+        assert!(h.state().views[i].marquee.is_some());
+        // Harness::event runs each queued event in its own frame. Raw input exercises releases
+        // that arrive together in one native frame.
+        h.input_mut().events.extend([
+            egui::Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+        ]);
+        if release_together {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().quick_tool, QuickTool::Hand);
+        assert!(h.state().views[i].marquee.is_none(), "no abandoned rectangle");
+        if release_together {
+            assert!(h.state().views[i].zoom > before * 2.0, "finish the released drag before restoring the tool");
+        } else {
+            h.drop_at(end);
+            h.run_steps(2);
+            assert_eq!(h.state().views[i].zoom, before, "releasing the shortcut mid-drag cancels the rectangle");
+        }
+    }
+}
+
+#[test]
+fn temporary_marquee_zoom_respects_keyboard_ownership() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+    h.state_mut().dialog = Some(Dialog::About);
+    h.key_up(Key::Space);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "release works while a modal is open");
+    h.state_mut().dialog = None;
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+    h.input_mut().focused = false;
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "egui clears the held shortcut on blur");
+    // Explicit control-channel keys remain usable while the native window is unfocused.
+    h.key_press(Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.input_mut().focused = true;
+    h.event(egui::Event::WindowFocused(true));
+    h.state_mut().quick_tool = QuickTool::Crop;
+    let i = h.state().active.unwrap();
+    h.state_mut().views[i].open_find();
+    h.run_steps(4);
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "the find field owns the keyboard");
+    h.state_mut().active = None;
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "no active document");
+}
+
+#[test]
+fn temporary_marquee_zoom_click_release_zooms_once() {
+    use egui::{Event, Key, Modifiers, PointerButton};
+    use pdfcraft_ui_egui::QuickTool;
+    for release_together in [false, true] {
+        let mut h = harness();
+        let i = h.state().active.unwrap();
+        let at = h.state().views[i].page_screen_rect(0).unwrap().center();
+        let before = h.state().views[i].zoom;
+        h.event(Event::ModifiersChanged(Modifiers::CTRL | Modifiers::COMMAND));
+        h.key_down(Key::Space);
+        h.hover_at(at);
+        h.drag_at(at);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+        assert!(h.state().views[i].marquee.is_none(), "a press without motion is not a rectangle");
+        h.input_mut().events.push(Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::CTRL | Modifiers::COMMAND,
+        });
+        if !release_together {
+            h.run_steps(2);
+            assert_eq!(h.state().views[i].zoom, before * 1.5, "ordinary click-to-zoom");
+        }
+        h.input_mut().events.extend([
+            Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+            Event::ModifiersChanged(Modifiers::NONE),
+        ]);
+        h.run_steps(3);
+        assert_eq!(h.state().views[i].zoom, before * 1.5, "one click, one zoom step; simultaneous release: {release_together}");
+        assert_eq!(h.state().quick_tool, QuickTool::Select);
+        assert!(h.state().views[i].marquee.is_none());
+        h.key_down(Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Hand, "plain Space still works after clicking");
+        h.key_up(Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Select);
+        assert_eq!(h.state().views[i].zoom, before * 1.5, "releasing keys does not zoom again");
+        assert!(!h.state().session.get(h.state().views[i].id).unwrap().dirty);
+    }
+}
+
+#[test]
+fn temporary_marquee_zoom_tool_change_cancels_the_old_gesture() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().system_clipboard = false;
+    let i = h.state().active.unwrap();
+    let start = h.state().views[i].page_screen_rect(0).unwrap().center();
+    let end = start + egui::vec2(40.0, 30.0);
+    let before = h.state().views[i].zoom;
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.hover_at(start);
+    h.drag_at(start);
+    h.run_steps(2);
+    h.hover_at(end);
+    h.run_steps(2);
+    assert!(h.state().views[i].marquee.is_some());
+    // The public command path can select a different tool while the pointer is still down.
+    assert!(h.state_mut().execute("edit.snapshot"));
+    h.run_steps(2);
+    h.drop_at(end);
+    h.run_steps(2);
+    assert!(h.state().last_snapshot.is_none(), "a zoom gesture must not become a clipboard snapshot after a tool switch");
+    assert!(h.state().views[i].marquee.is_none(), "the abandoned rectangle is gone");
+    assert_eq!(h.state().views[i].zoom, before);
+    drag(&mut h, start, end);
+    assert!(h.state().last_snapshot.is_some(), "fresh Snapshot gestures work even while the old shortcut is held");
+    h.key_up(Key::Space);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Snapshot, "the explicit selection wins on release");
+    assert!(h.state().views[i].marquee.is_none());
+    assert!(!h.state().session.get(h.state().views[i].id).unwrap().dirty);
+}
+
+#[test]
+fn temporary_marquee_zoom_tab_change_cancels_the_old_gesture() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    for command in [Modifiers::CTRL | Modifiers::COMMAND, Modifiers::MAC_CMD | Modifiers::COMMAND] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("view.previous_tab"));
+        h.state_mut().quick_tool = QuickTool::Crop;
+        h.run_steps(2);
+        assert_eq!(h.state().active, Some(0), "document A");
+        let start = h.state().views[0].page_screen_rect(0).unwrap().center();
+        let end = start + egui::vec2(40.0, 30.0);
+        let before = h.state().views[0].zoom;
+        let other_before = h.state().views[1].zoom;
+        h.event(Event::ModifiersChanged(command));
+        h.key_down(Key::Space);
+        h.hover_at(start);
+        h.drag_at(start);
+        h.run_steps(2);
+        h.hover_at(end);
+        h.run_steps(2);
+        assert!(h.state().views[0].marquee.is_some(), "A owns a real in-progress drag");
+        // Switch tabs before releasing the pointer; A never receives the drag-stop event.
+        assert!(h.state_mut().execute("view.next_tab"));
+        h.run_steps(2);
+        assert_eq!(h.state().active, Some(1), "document B");
+        assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom, "the shortcut stays held across the tab change");
+        let cleared_when_inactive = h.state().views[0].marquee.is_none() && h.state().views[0].marquee_done.is_none();
+        h.drop_at(egui::pos2(1.0, 1.0));
+        h.run_steps(2);
+        assert!(h.state_mut().execute("view.previous_tab"));
+        h.hover_at(end + egui::vec2(30.0, 20.0));
+        h.run_steps(2);
+        assert_eq!(h.state().active, Some(0), "back to A with the shortcut still held");
+        assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+        assert!(h.state().views[0].marquee.is_none(), "returning to A must not redraw its abandoned rectangle");
+        assert!(h.state().views[0].marquee_done.is_none());
+        assert!(cleared_when_inactive, "the drag is cancelled as soon as A loses input ownership");
+        assert_eq!(h.state().views[0].zoom, before, "the abandoned drag must not zoom A");
+        assert_eq!(h.state().views[1].zoom, other_before, "A's drag must not zoom B");
+        let at = h.state().views[0].page_screen_rect(0).unwrap().center();
+        h.hover_at(at);
+        h.drag_at(at);
+        h.run_steps(2);
+        h.drop_at(at);
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].zoom, before * 1.5, "a fresh click still zooms exactly once");
+        assert!(h.state().views[0].marquee.is_none(), "a later click leaves no stale rectangle");
+        assert!(h.state().views[0].marquee_done.is_none());
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Hand, "releasing command first returns to temporary Hand");
+        h.key_up(Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space-up restores the persistent tool");
+        assert!(h.state().views.iter().all(|v| v.marquee.is_none() && v.marquee_done.is_none()));
+    }
+}
+
+fn marquee_compare_harness() -> Harness<'static, PdfCraftApp> {
+    use pdfcraft_ui_egui::{QuickTool, canvas::Fit};
+    let mut h = harness();
+    h.state_mut().compare_old = Some(h.state().views[0].id);
+    h.state_mut().run_compare();
+    for view in &mut h.state_mut().views {
+        view.fit = Fit::Page;
+    }
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.run_steps(4);
+    assert!(h.state().compare.as_ref().unwrap().side_by_side);
+    assert_eq!(h.state().active, Some(1), "the new file remains the active document");
+    h
+}
+
+#[test]
+fn temporary_marquee_zoom_compare_partner_keeps_the_drag() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = marquee_compare_harness();
+    let partner = 0;
+    let view = &h.state().views[partner];
+    assert!(view.viewport_rect().right() < h.state().views[1].viewport_rect().left());
+    let start = view.page_screen_rect(0).unwrap().intersect(view.viewport_rect()).center();
+    let end = start + egui::vec2(40.0, 30.0);
+    let before = view.zoom;
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.hover_at(start);
+    h.drag_at(start);
+    h.run_steps(2);
+    h.hover_at(end);
+    h.run_steps(1);
+    let origin = h.state().views[partner].marquee.expect("the compare partner starts a real drag");
+    h.run_steps(2);
+    assert_eq!(h.state().views[partner].marquee, Some(origin), "normal logic passes must keep the interactive partner's drag origin");
+    h.hover_at(end + egui::vec2(10.0, 10.0));
+    h.run_steps(2);
+    h.drop_at(end + egui::vec2(10.0, 10.0));
+    h.run_steps(3);
+    assert!(h.state().views[partner].zoom > before * 2.0, "the partner completes rectangle zoom");
+    assert!(h.state().views[partner].marquee.is_none());
+    assert_eq!(h.state().active, Some(1), "interacting with the old pane does not change tabs");
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    assert!(h.state().views.iter().all(|v| !h.state().session.get(v.id).unwrap().dirty));
+}
+
+#[test]
+fn temporary_marquee_zoom_compare_partner_release_together() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = marquee_compare_harness();
+    let view = &h.state().views[0];
+    let start = view.page_screen_rect(0).unwrap().intersect(view.viewport_rect()).center();
+    let end = start + egui::vec2(40.0, 30.0);
+    let before = view.zoom;
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.hover_at(start);
+    h.drag_at(start);
+    h.run_steps(2);
+    h.hover_at(end);
+    h.run_steps(2);
+    assert!(h.state().views[0].marquee.is_some());
+    h.input_mut().events.extend([
+        Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND },
+        Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        Event::ModifiersChanged(Modifiers::NONE),
+    ]);
+    h.run_steps(3);
+    assert!(h.state().views[0].zoom > before * 2.0, "the completed partner drag must zoom before shortcut restoration");
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    assert!(h.state().views.iter().all(|v| v.marquee.is_none() && v.marquee_done.is_none()));
+}
+
+#[test]
+fn marquee_zoom_blocked_compare_partner_cancels_the_drag() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    for (temporary, blocker) in [false, true].into_iter().flat_map(|temporary| (0..3).map(move |blocker| (temporary, blocker))) {
+        let mut h = marquee_compare_harness();
+        let view = &h.state().views[0];
+        let start = view.page_screen_rect(0).unwrap().intersect(view.viewport_rect()).center();
+        let end = start + egui::vec2(40.0, 30.0);
+        let before = view.zoom;
+        if temporary {
+            h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+            h.key_down(Key::Space);
+        } else {
+            // Manual Marquee has no temporary-tool cleanup to mask a missing blocked check.
+            assert!(h.state_mut().execute("view.marquee_zoom"));
+        }
+        h.hover_at(start);
+        h.drag_at(start);
+        h.run_steps(2);
+        h.hover_at(end);
+        h.run_steps(1);
+        assert!(h.state().views[0].marquee.is_some());
+        match blocker {
+            0 => h.state_mut().dialog = Some(Dialog::About),
+            1 => h.state_mut().palette_open = true,
+            _ => {
+                h.input_mut().focused = false;
+                h.event(Event::WindowFocused(false));
+            }
+        }
+        h.run_steps(2);
+        assert!(h.state().views[0].marquee.is_none(), "a blocked compare pane loses its gesture");
+        assert_eq!(h.state().quick_tool, if temporary { QuickTool::Crop } else { QuickTool::MarqueeZoom });
+        h.drop_at(end);
+        h.key_up(Key::Space);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        h.state_mut().palette_open = false;
+        h.state_mut().dialog = None;
+        h.input_mut().focused = true;
+        h.event(Event::WindowFocused(true));
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].zoom, before, "unblocking does not finish the abandoned rectangle");
+        assert!(h.state().views.iter().all(|v| v.marquee.is_none() && v.marquee_done.is_none()));
+    }
+}
+
+#[test]
+fn temporary_marquee_zoom_closing_all_documents_restores_the_tool() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().set_option("quick", "crop").unwrap();
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+    assert!(h.state_mut().execute("file.close_all"));
+    h.run_steps(2);
+    assert!(h.state().views.is_empty());
+    assert_eq!(h.state().active, None);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "closing the last document ends the override even before key-up");
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space alone does not activate Hand with no document");
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    h.state_mut().open_bytes("reopened.pdf", None, fixture(1)).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "the next document inherits the persistent tool");
+    assert!(h.state().views.iter().all(|v| v.marquee.is_none()));
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
+#[test]
+fn temporary_marquee_zoom_repeated_cycles_keep_the_persistent_tool() {
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().set_option("quick", "crop").unwrap();
+    let i = h.state().active.unwrap();
+    let before = h.state().views[i].zoom;
+    for command in [Modifiers::CTRL | Modifiers::COMMAND, Modifiers::MAC_CMD | Modifiers::COMMAND] {
+        h.event(Event::ModifiersChanged(command));
+        for _ in 0..3 {
+            h.key_down(Key::Space);
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+            // Repeatedly switch the temporary tool without lifting Space.
+            for _ in 0..2 {
+                h.event(Event::ModifiersChanged(Modifiers::NONE));
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, QuickTool::Hand);
+                h.event(Event::ModifiersChanged(command));
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+            }
+            h.key_up(Key::Space);
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space-up restores the persistent tool with command still held");
+        }
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.key_down(Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Hand);
+        h.key_up(Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Crop, "plain Space restores the same tool after repeated zoom overrides");
+    }
+    assert_eq!(h.state().views[i].zoom, before, "keys alone do not zoom");
+    assert!(!h.state().session.get(h.state().views[i].id).unwrap().dirty);
 }
 
 /// Like [`fixture`], with each page's size given.

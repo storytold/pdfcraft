@@ -2537,3 +2537,4 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	Spotlight у macOS може перехоплювати {key}. Змініть його сполучення клавіш у Системні параметри → Клавіатура → Клавіатурні скорочення → Spotlight.

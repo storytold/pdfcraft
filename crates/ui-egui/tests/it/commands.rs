@@ -410,15 +410,39 @@ fn the_shortcuts_dialog_lists_the_real_bindings() {
     // visible (a registered command) is listed once.
     h.get_by_label("Ctrl+1");
     h.get_by_label("Ctrl+3");
+    h.get_by_label("Ctrl+Space (hold)");
+    h.get_by_label("Marquee zoom");
     h.get_by_label("Ctrl+G / Ctrl+Shift+G");
     h.get_by_label("← / →, Ctrl+← / Ctrl+→");
     h.get_by_label("Zoom in / out (also pinch or Ctrl-scroll)");
     assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
+    h.ctx.set_os(OperatingSystem::Windows);
+    h.run_steps(2);
+    h.get_by_label("Ctrl+Space (hold)");
     h.ctx.set_os(OperatingSystem::Mac);
     h.run_steps(2);
     h.get_by_label("⇧⌘S");
     h.get_by_label("⌘1");
+    h.get_by_label("⌘Space (hold)");
+    assert_eq!(h.query_all_by_label("Marquee zoom").count(), 1, "the held tool is listed once");
     h.get_by_label("Zoom in / out (also pinch or ⌘-scroll)");
+}
+
+#[test]
+fn the_shortcuts_dialog_explains_the_macos_spotlight_conflict() {
+    let mut h = harness();
+    h.state_mut().execute("help.shortcuts");
+    for os in [OperatingSystem::Mac, OperatingSystem::Windows, OperatingSystem::Nix] {
+        h.ctx.set_os(os);
+        h.run_steps(3);
+        if os == OperatingSystem::Mac {
+            h.get_by_label(
+                "macOS Spotlight may intercept ⌘Space. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.",
+            );
+        } else {
+            assert_eq!(h.query_all_by_label_contains("Spotlight").count(), 0, "Spotlight help is specific to macOS");
+        }
+    }
 }
 
 #[test]
@@ -466,6 +490,7 @@ fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
 
 #[test]
 fn view_menu_and_tooltips_write_shortcuts_for_the_platform() {
+    assert!(pdfcraft_engine::commands::command("view.marquee_zoom").unwrap().shortcut.is_none(), "the held binding is display-only");
     // On Linux, View ▸ Zoom and Page navigation showed ⌘1, ⌘[ … (hard-coded) while the
     // registered items under them showed Ctrl+K; tooltips showed ⌘ too.
     let h = view_menu(OperatingSystem::Nix);
@@ -479,10 +504,15 @@ fn view_menu_and_tooltips_write_shortcuts_for_the_platform() {
     assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
     assert_eq!(h.query_all_by_label_contains("Fit visible").count(), 1, "View lists Fit visible once");
     h.get_by_label("Fit visible Ctrl+3");
+    h.get_by_label("Marquee zoom Ctrl+Space");
+
+    let h = view_menu(OperatingSystem::Windows);
+    h.get_by_label("Marquee zoom Ctrl+Space");
 
     let h = view_menu(OperatingSystem::Mac);
     h.get_by_label("Actual size ⌘1");
     h.get_by_label("Fit visible ⌘3");
+    h.get_by_label("Marquee zoom ⌘Space");
     h.get_by_label("Rotate view clockwise (⇧⌘+)");
     assert_eq!(h.query_all_by_label_contains("Ctrl+").count(), 0, "no Ctrl+ on macOS");
 }

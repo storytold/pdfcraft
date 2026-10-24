@@ -31,6 +31,9 @@ pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
 
+/// Display only: `PdfCraftApp::tool_keys` owns this held shortcut and restores the prior tool.
+pub(crate) const MARQUEE_ZOOM: Shortcut = Shortcut::cmd("Space");
+
 /// Whether shortcuts are written the macOS way (`⇧⌘S`) rather than `Ctrl+Shift+S`. egui knows the
 /// platform from the build target, and on the web from the browser's user agent.
 pub(crate) fn mac_shortcuts(ctx: &egui::Context) -> bool {
@@ -540,7 +543,7 @@ impl PdfCraftApp {
                     self.notify_fmt("Couldn't fit the visible content: {e}", &[("e", &e.to_string())]);
                 }
             }
-            "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.marquee_zoom" => self.select_marquee_zoom(),
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;
@@ -818,7 +821,16 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
             }
             continue;
         }
-        let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
+        // Display-only hints for bindings handled outside `registry_shortcuts`.
+        let shortcut = spec
+            .shortcut
+            .or(match spec.id {
+                "edit.copy" => Some(COPY),
+                "view.marquee_zoom" => Some(MARQUEE_ZOOM),
+                _ => None,
+            })
+            .map(|s| shortcut_label(ui.ctx(), s))
+            .unwrap_or_default();
         let enabled = app.command_enabled(spec);
         let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
         if resp.clicked() {

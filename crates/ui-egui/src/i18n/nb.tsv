@@ -2694,3 +2694,5 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+# AI-assisted Spotlight help addition (2026-10-22), not separately native-reviewed.
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	Spotlight på macOS kan fange opp {key}. Endre snarveien i Systeminnstillinger → Tastatur → Tastatursnarveier → Spotlight.

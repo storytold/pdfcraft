@@ -89,6 +89,48 @@ fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, pa
 }
 
 #[test]
+fn ui_set_marquee_zoom_preserves_persistent_tool_choices() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    for command in [Modifiers::CTRL | Modifiers::COMMAND, Modifiers::MAC_CMD | Modifiers::COMMAND] {
+        for release_command_first in [false, true] {
+            for choose_snapshot_afterwards in [false, true] {
+                let (mut h, c) = harness();
+                assert_eq!(h.state().quick_tool, QuickTool::Select);
+                h.event(egui::Event::ModifiersChanged(command));
+                h.key_down(Key::Space);
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+                ok(&mut h, &c, "ui.set", json!({"key": "quick", "value": "marquee-zoom"}));
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, QuickTool::MarqueeZoom);
+                let persistent = if choose_snapshot_afterwards {
+                    ok(&mut h, &c, "ui.set", json!({"key": "quick", "value": "snapshot"}));
+                    h.run_steps(2);
+                    assert_eq!(h.state().quick_tool, QuickTool::Snapshot, "held keys must not override a later deliberate choice");
+                    QuickTool::Snapshot
+                } else {
+                    QuickTool::MarqueeZoom
+                };
+                if release_command_first {
+                    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+                    h.run_steps(2);
+                    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space still temporarily pans");
+                    h.key_up(Key::Space);
+                } else {
+                    h.key_up(Key::Space);
+                    h.run_steps(2);
+                    assert_eq!(h.state().quick_tool, persistent, "Space release preserves the explicit ui.set selection");
+                    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+                }
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, persistent, "the deliberate persistent tool survives shortcut release");
+            }
+        }
+    }
+}
+
+#[test]
 fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "pages"}));

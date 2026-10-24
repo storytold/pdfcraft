@@ -2516,3 +2516,4 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	Spotlight unter macOS kann {key} abfangen. Ändere den Kurzbefehl unter Systemeinstellungen → Tastatur → Tastaturkurzbefehle → Spotlight.

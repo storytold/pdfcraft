@@ -2521,3 +2521,4 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	Το Spotlight στο macOS μπορεί να δεσμεύει το {key}. Αλλάξτε τη συντόμευσή του στις Ρυθμίσεις συστήματος → Πληκτρολόγιο → Συντομεύσεις πληκτρολογίου → Spotlight.

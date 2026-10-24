@@ -2520,3 +2520,4 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	macOS Spotlight may intercept {key}. Change its shortcut in System Settings → Keyboard → Keyboard Shortcuts → Spotlight.	Spotlight v sistemu macOS lahko prestreže {key}. Bližnjico spremenite v Sistemske nastavitve → Tipkovnica → Bližnjice na tipkovnici → Spotlight.
