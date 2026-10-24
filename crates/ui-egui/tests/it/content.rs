@@ -609,6 +609,39 @@ fn dragged_text_follows_the_pointer_before_release() {
     assert_ne!(added(&h)[0].content.rect(), rect, "releasing moves it");
 }
 
+/// #4464: what a dragged text box covered in its first place stays there; only the text follows
+/// the pointer. The page has a red square under the text's first place and nothing elsewhere.
+#[test]
+fn dragged_text_leaves_what_it_covered_behind() {
+    let _gpu = gpu();
+    let content = "1 0 0 rg 20 60 240 70 re f";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let mut h = harness_bytes(pdf.into_bytes());
+    let (rect, from, to, end) = drag_added_text(&mut h);
+    assert!(rect[0] > 20.0 && rect[2] < 260.0 && rect[1] > 60.0 && rect[3] < 130.0, "the text starts on the red square: {rect:?}");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/added-text-drag-over-red.png")).unwrap();
+    }
+    let pixels = h.render().unwrap();
+    let red = |r: egui::Rect| {
+        let (x0, y0, x1, y1) = (r.left().max(0.0) as u32, r.top().max(0.0) as u32, r.right() as u32, r.bottom() as u32);
+        (y0..y1.min(pixels.height()))
+            .flat_map(|y| (x0..x1.min(pixels.width())).map(move |x| (x, y)))
+            .filter(|(x, y)| matches!(pixels.get_pixel(*x, *y).0, [r, g, b, _] if r > 200 && g < 80 && b < 80))
+            .count()
+    };
+    let (old, new) = ink_at(&mut h, from, to);
+    assert!(new > 20 && old == 0, "the text follows the pointer ({old} old, {new} new)");
+    assert!(red(from) > 100, "the red square stays where the text was ({} red pixels)", red(from));
+    assert_eq!(red(to), 0, "and doesn't come along with the text");
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_ne!(added(&h)[0].content.rect(), rect, "releasing moves it");
+}
+
 /// After release the text stays in its new place while the page is re-rendered with the move,
 /// instead of jumping back to where it was for those frames.
 #[test]
