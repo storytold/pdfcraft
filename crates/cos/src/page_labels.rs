@@ -65,9 +65,84 @@ pub fn alpha(n: u64, max_bytes: usize) -> Option<String> {
     Some(std::iter::repeat_n(letter, count).collect())
 }
 
+/// One `/PageLabels` range: pages from `start` on show `prefix` followed by `style`
+/// numbering from `first` (ISO 32000-2 §12.4.2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LabelRange {
+    /// 0-based first page the range covers.
+    pub start: usize,
+    /// The number the range starts from (`/St`, default 1).
+    pub first: u64,
+    /// The literal prefix (`/P`).
+    pub prefix: String,
+    /// The numbering style (`/S`): `D`, `R`, `r`, `A` or `a`; `None` is prefix-only.
+    pub style: Option<u8>,
+}
+
+/// The label `/PageLabels` gives 0-based `page` under `range` (`range.start <= page`):
+/// `None` when the label is empty or the number is too long to show — callers keep the
+/// physical page number. An unknown style byte counts as prefix-only.
+pub fn label_for_page(range: &LabelRange, page: usize) -> Option<String> {
+    let offset = u64::try_from(page.checked_sub(range.start)?).ok()?;
+    let n = if matches!(range.style, Some(b'D' | b'R' | b'r' | b'A' | b'a')) {
+        range.first.checked_add(offset)?
+    } else {
+        0 // /St is unused when the label consists only of its prefix.
+    };
+    let remaining = MAX_LABEL_BYTES.saturating_sub(range.prefix.len());
+    let number = match range.style {
+        Some(b'D') => Some(n.to_string()),
+        Some(b'R' | b'r') => roman(n, remaining),
+        Some(b'A' | b'a') => alpha(n, remaining),
+        _ => Some(String::new()),
+    }
+    .filter(|number| number.len() <= remaining)?;
+    let mut number = number;
+    if matches!(range.style, Some(b'R' | b'A')) {
+        number.make_ascii_uppercase();
+    }
+    let mut label = range.prefix.clone();
+    label.push_str(&number);
+    (!label.is_empty()).then_some(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn label_for_page_styles_prefixes_and_offsets() {
+        let range = |start, first, prefix: &str, style| LabelRange { start, first, prefix: prefix.to_string(), style };
+        // Decimal numbering.
+        let decimal = range(0, 1, "", Some(b'D'));
+        assert_eq!(label_for_page(&decimal, 0).as_deref(), Some("1"));
+        assert_eq!(label_for_page(&decimal, 4).as_deref(), Some("5"));
+        // Roman and alpha styles, lower- and uppercase.
+        assert_eq!(label_for_page(&range(0, 4, "", Some(b'r')), 0).as_deref(), Some("iv"));
+        assert_eq!(label_for_page(&range(0, 1994, "", Some(b'R')), 0).as_deref(), Some("MCMXCIV"));
+        assert_eq!(label_for_page(&range(0, 26, "", Some(b'a')), 0).as_deref(), Some("z"));
+        assert_eq!(label_for_page(&range(0, 27, "", Some(b'A')), 0).as_deref(), Some("AA"));
+        // A prefix joins its number; `/St` offsets the range.
+        assert_eq!(label_for_page(&range(0, 1, "A-", Some(b'D')), 0).as_deref(), Some("A-1"));
+        assert_eq!(label_for_page(&range(2, 5, "", Some(b'D')), 3).as_deref(), Some("6"));
+        // Prefix-only ranges repeat their prefix; an empty one falls back to physical.
+        assert_eq!(label_for_page(&range(0, 1, "Appendix", None), 7).as_deref(), Some("Appendix"));
+        assert_eq!(label_for_page(&range(0, 1, "", None), 2), None);
+        // An unknown style is prefix-only, and a number too long to show falls back.
+        assert_eq!(label_for_page(&range(0, 1, "A-", Some(b'X')), 0).as_deref(), Some("A-"));
+        assert_eq!(label_for_page(&range(0, 1_025_000, "", Some(b'r')), 0), None);
+        // The #2834 bundle: front matter `i, ii`, then body pages `1, 2, 3`.
+        let front = range(0, 1, "", Some(b'r'));
+        let body = range(2, 1, "", Some(b'D'));
+        let ranges = [&front, &body];
+        let labels: Vec<String> = (0..5)
+            .map(|p| {
+                let r = ranges.iter().rev().find(|r| r.start <= p).copied().unwrap();
+                label_for_page(r, p).unwrap()
+            })
+            .collect();
+        assert_eq!(labels, ["i", "ii", "1", "2", "3"]);
+    }
 
     #[test]
     fn bounded_page_labels_follow_pdf_numbering() {
