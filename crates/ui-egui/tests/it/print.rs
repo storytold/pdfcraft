@@ -23,6 +23,109 @@ fn harness_with_settings(settings: Option<String>) -> Harness<'static, PdfCraftA
     h
 }
 
+/// A large synthetic fleet, independent of the host's installed printers.
+fn harness_with_printers() -> (Harness<'static, PdfCraftApp>, String) {
+    use pdfcraft_engine::print::spool::Printer;
+    let mut h = harness();
+    let last = "München Satellite 119 - Engineering floor 4 (network queue) - colour duplex device, Building North".to_string();
+    let mut printers: Vec<_> = (0..119)
+        .map(|i| Printer { name: format!("Office {i:03} - Engineering floor 4 (network queue)"), default: i == 0, two_sided: None })
+        .collect();
+    printers.push(Printer { name: last.clone(), default: false, two_sided: None });
+    h.state_mut().printer_source = Some(std::sync::Arc::new(move || printers.clone()));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.printers_loading);
+    h.run_steps(3);
+    (h, last)
+}
+
+/// Searching folds names without selecting a device, and reopening restores the fleet.
+#[test]
+fn printer_picker_filters_a_large_fleet_without_changing_the_selection() {
+    let (mut h, last) = harness_with_printers();
+    let initial = h.state().print_draft.printer.clone();
+    h.get_by_value(initial.as_deref().unwrap()).click();
+    h.run_steps(3);
+    let search = h.get_by_role_and_label(Role::TextInput, "Search printers");
+    assert!(search.rect().width() > 350.0, "room for long device names");
+    search.type_text("  MÜNCHEN satellite  ");
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.printer, initial, "typing is not a printer choice");
+    assert!(!h.state().print_draft.printer_picked);
+    assert!(h.query_by_label("Office 001 - Engineering floor 4 (network queue)").is_none());
+    h.get_by_label(&last).click();
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some(last.as_str()));
+    assert!(h.state().print_draft.printer_picked);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Search printers").is_none(), "choosing closes the popup");
+
+    // A fresh opening shows the whole fleet again, including a choice outside the old filter.
+    h.get_by_value(&last).click();
+    h.run_steps(3);
+    h.get_by_label("Office 001 - Engineering floor 4 (network queue)").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Office 001 - Engineering floor 4 (network queue)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office 001 - Engineering floor 4 (network queue)"));
+}
+
+/// PDF remains an explicit destination even when no physical device matches the search.
+#[test]
+fn printer_picker_keeps_save_as_pdf_available_when_the_filter_matches_nothing() {
+    let (mut h, _) = harness_with_printers();
+    let initial = h.state().print_draft.printer.clone();
+    h.get_by_value(initial.as_deref().unwrap()).click();
+    h.run_steps(3);
+    // Clicking in the filter must not close the popup, unlike choosing a device.
+    h.get_by_role_and_label(Role::TextInput, "Search printers").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Search printers").type_text("no-such-printer");
+    h.run_steps(3);
+    h.get_by_label("No printers match.");
+    assert_eq!(h.state().print_draft.printer, initial);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.printer, None);
+    assert!(h.state().print_draft.printer_picked);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Search printers").is_none());
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "selecting PDF must not submit the job");
+}
+
+/// Scrolling and wrapped names must leave the pinned footer physically clickable.
+#[test]
+fn printer_picker_scrolls_long_names_without_losing_the_search_or_pdf_choice() {
+    let (mut h, last) = harness_with_printers();
+    let size = egui::vec2(1024.0, 768.0);
+    h.set_size(size);
+    h.run_steps(4);
+    let initial = h.state().print_draft.printer.clone();
+    h.get_by_value(initial.as_deref().unwrap()).click();
+    h.run_steps(3);
+    let search = h.get_by_role_and_label(Role::TextInput, "Search printers").rect();
+    let pdf = h.get_by_label("Save as PDF").rect();
+    assert!(pdf.top() - search.bottom() > 200.0, "show more than a few device rows");
+    h.get_by_label(&last).scroll_to_me();
+    h.run_steps(5);
+    let row = h.get_by_label(&last).rect();
+    assert!(row.left() >= 0.0 && row.right() <= size.x, "long names wrap within the viewport: {row:?}");
+    let search = h.get_by_role_and_label(Role::TextInput, "Search printers").rect();
+    let pdf = h.get_by_label("Save as PDF").rect();
+    assert!(search.top() >= 0.0 && pdf.bottom() <= size.y, "search and PDF stay on screen");
+    h.get_by_label(&last).click();
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some(last.as_str()));
+    h.get_by_value(&last).click();
+    h.run_steps(3);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.printer, None, "the PDF row must be clickable with the full fleet shown");
+}
+
 #[test]
 fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     // Five distinct painted pages, labelled i, ii, iii, 1, 2.
