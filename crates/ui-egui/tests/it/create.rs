@@ -361,3 +361,72 @@ fn multiple_files_past_a_thousand_are_all_used() {
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
+
+/// Verify inserting pages from clipboard with images, text, internal copied pages, and undo/redo.
+#[test]
+fn insert_from_clipboard_image_text_and_copied_pages() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.system_clipboard = false;
+
+    // 1. Without an open document, trying to insert reports an error toast.
+    app.insert_from_clipboard();
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Open a document first"));
+    app.toast = None;
+
+    // Create a 2-page document to work with.
+    let pdf = app.session.create_from_text("base", "Page 1\u{c}Page 2").unwrap();
+    app.open_bytes("base.pdf", None, pdf.to_vec()).unwrap();
+    assert_eq!(app.session.docs()[0].info.pages.len(), 2);
+
+    // 2. When the clipboard has neither image nor text, trying to insert reports a toast.
+    app.clipboard_override = None;
+    app.page_clipboard = None;
+    app.insert_from_clipboard();
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("The clipboard has no image or text"));
+    app.toast = None;
+
+    // 3. Insert Clip::Image via clipboard_override and execute("page.insert_clipboard").
+    app.views[0].select_pages(&[1]);
+    let img_clip = pdfcraft_ui_egui::Clip::Image { width: 16, height: 16, rgba: [200u8, 50, 50, 255].repeat(16 * 16) };
+    app.clipboard_override = Some(img_clip);
+    assert!(app.execute("page.insert_clipboard"));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 3);
+    assert_eq!(app.views[0].target_pages(), vec![2]);
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Insert pages from Clipboard"));
+
+    // 4. Insert Clip::Text at specific gap (gap 0 = before the first page).
+    let text_clip = pdfcraft_ui_egui::Clip::Text("Prepended page from text".into());
+    app.insert_from_clip(text_clip, Some(0)).unwrap();
+    assert_eq!(app.session.docs()[0].info.pages.len(), 4);
+    assert_eq!(app.views[0].target_pages(), vec![0]);
+
+    // 5. Insert copied pages from internal page_clipboard.
+    app.views[0].select_pages(&[0]);
+    app.copy_pages(false);
+    assert!(app.page_clipboard.is_some());
+    app.clipboard_override = None;
+    app.insert_from_clipboard_at(Some(2));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 5);
+    assert_eq!(app.views[0].target_pages(), vec![2]);
+
+    // 6. Test Undo & Redo.
+    assert!(app.execute("edit.undo"));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 4);
+    assert!(app.execute("edit.redo"));
+    assert_eq!(app.session.docs()[0].info.pages.len(), 5);
+
+    // 7. Negative case: malformed or empty image returns clean Err.
+    let bad_img = pdfcraft_ui_egui::Clip::Image { width: 0, height: 0, rgba: vec![] };
+    assert!(app.insert_from_clip(bad_img, None).is_err());
+
+    // 8. Turkish localization check for all new strings.
+    let tr = pdfcraft_ui_egui::i18n::Lang::from_code("tr").unwrap();
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(tr, "Insert pages from clipboard"), "Panodan sayfaları ekle");
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(tr, "Insert pages from the clipboard"), "Panodan sayfaları ekle");
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(tr, "Insert from clipboard"), "Panodan ekle");
+    assert_eq!(
+        pdfcraft_ui_egui::i18n::fmt(pdfcraft_ui_egui::i18n::tr(tr, "Couldn't insert from clipboard: {e}"), &[("e", "hata")]),
+        "Panodan eklenemedi: hata"
+    );
+}

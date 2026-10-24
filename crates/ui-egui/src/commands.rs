@@ -370,6 +370,7 @@ impl PdfCraftApp {
                 }
             }
             "page.insert" => self.insert_from_file_dialog(),
+            "page.insert_clipboard" => self.insert_from_clipboard(),
             "page.replace" => self.replace_pages_dialog(),
             "edit.header_footer"
             | "edit.watermark"

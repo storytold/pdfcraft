@@ -371,6 +371,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.crop", "Crop pages", PAGES, None, Assembly, "crop"),
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
+    c("page.insert_clipboard", "Insert pages from clipboard", PAGES, None, Assembly, "clipboard-paste"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
     c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
     c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),

@@ -105,8 +105,9 @@ impl FilePurpose {
 /// (see [`PdfCraftApp::still_pick_target`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PickTarget {
-    doc: DocId,
+    pub(crate) doc: DocId,
     generation: Option<u64>,
+    pub(crate) gap: Option<usize>,
 }
 
 /// Files picked asynchronously in a browser, waiting for the next frame (see
@@ -311,9 +312,7 @@ impl PdfCraftApp {
                 for h in handles {
                     files.push((h.file_name(), h.read().await));
                 }
-                if !files.is_empty()
-                    && let Ok(mut q) = requests.lock()
-                {
+                if let Ok(mut q) = requests.lock() {
                     q.push(FileRequest { files, ..request });
                 }
                 // The read may finish while the app is idle: wake it to use the files.
@@ -442,7 +441,8 @@ impl PdfCraftApp {
 
     /// `doc` as it is now, for a pick that will edit it.
     pub(crate) fn pick_target(&self, doc: Option<DocId>) -> Option<PickTarget> {
-        doc.map(|doc| PickTarget { doc, generation: self.session.get(doc).map(|d| d.edit_generation()) })
+        let gap = doc.and_then(|id| self.views.iter().find(|v| v.id == id).and_then(|v| v.insert_at));
+        doc.map(|doc| PickTarget { doc, generation: self.session.get(doc).map(|d| d.edit_generation()), gap })
     }
 
     /// Whether a pick for `target` may still be used: the document is still the active one and
@@ -462,6 +462,15 @@ impl PdfCraftApp {
     pub(crate) fn process_file_requests(&mut self) {
         let pending: Vec<_> = self.requests.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for FileRequest { purpose, target, files } in pending {
+            if files.is_empty() {
+                if let Some(target) = target
+                    && let Some(view) = self.views.iter_mut().find(|v| v.id == target.doc)
+                    && view.insert_at == target.gap
+                {
+                    view.insert_at = None;
+                }
+                continue;
+            }
             if !self.still_pick_target(target) {
                 continue;
             }
