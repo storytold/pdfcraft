@@ -48,8 +48,9 @@ mod text_scale;
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
 
-/// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
-const APP_ID: &str = pdfcraft_ui_egui::windows::APP_ID;
+/// Freedesktop app id: the `.desktop` file name and the hicolor icon name (the macOS bundle id
+/// too, which `xtask` checks against this line). The windows torn off a tab carry the same.
+const APP_ID: &str = "ai.storyteller.pdfcraft";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
 /// transparent margin; Windows and Linux get the full-bleed tile.
