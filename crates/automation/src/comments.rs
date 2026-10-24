@@ -187,14 +187,18 @@ impl Automation {
                 "rect": crate::view_rect(&doc.info, c.page, c.rect),
                 "color": c.color.map(hex),
             });
-            // A line's ends, or the corners of connected lines, a polygon or a cloud, as
-            // comment_edit's `points` takes them.
+            // A line's ends, the corners of connected lines, a polygon or a cloud, or a callout's
+            // arrow point and knee, as comment_edit's `points` takes them.
             // Unchanged on a page the viewer could not read, as `rect` is.
             if !c.points.is_empty() {
                 let round = |v: f32| (v * 100.0).round() / 100.0;
                 let page = doc.info.pages.get(c.page);
                 v["points"] =
                     json!(c.points.iter().map(|q| page.map_or([q[0], q[1]], |p| p.user_to_view(q[0], q[1])).map(round)).collect::<Vec<_>>());
+            }
+            // A callout's text box, as comment_edit's `rect` takes it (`rect` also holds the line).
+            if let Some(tb) = c.text_box {
+                v["text_box"] = json!(crate::view_rect(&doc.info, c.page, tb));
             }
             v
         };
@@ -359,18 +363,8 @@ impl Automation {
                     let point = to_user(&info, t[0], t[1]);
                     let knee = match a.nums::<2>("knee")? {
                         Some(k) => to_user(&info, k[0], k[1]),
-                        // Halfway between the point and the box, level with the box's middle.
-                        None => {
-                            let mid = (rect[1] + rect[3]) / 2.0;
-                            let side = if point[0] < rect[0] {
-                                rect[0]
-                            } else if point[0] > rect[2] {
-                                rect[2]
-                            } else {
-                                (rect[0] + rect[2]) / 2.0
-                            };
-                            [(point[0] + side) / 2.0, mid]
-                        }
+                        // Acrobat's: 12 pt out from the middle of the side facing the point.
+                        None => pdfcraft_engine::callout_knee(rect, point),
                     };
                     Shape::Callout {
                         rect,

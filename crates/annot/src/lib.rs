@@ -1112,14 +1112,86 @@ fn subject(shape: &Shape) -> &'static str {
 pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
     let [x0, y0, x1, y1] = normalize(rect);
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    match callout_side(rect, knee) {
+        Side::Left => [x0, cy],
+        Side::Right => [x1, cy],
+        Side::Top => [cx, y1],
+        Side::Bottom => [cx, y0],
+    }
+}
+
+/// A side of a callout's text box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Side {
+    /// Whether a knee line on this side is horizontal (it meets the left or right side). Acrobat
+    /// lets a knee line be resized along its own direction only (Acrobat DC Help, 11/28/2019,
+    /// p. 357).
+    pub fn horizontal(self) -> bool {
+        matches!(self, Side::Left | Side::Right)
+    }
+}
+
+/// The side of the text box `rect` that faces `knee`: the one [`callout_attach`] attaches to.
+pub fn callout_side(rect: [f64; 4], knee: [f64; 2]) -> Side {
+    let [x0, _, x1, y1] = normalize(rect);
     if knee[0] < x0 {
-        [x0, cy]
+        Side::Left
     } else if knee[0] > x1 {
-        [x1, cy]
+        Side::Right
     } else if knee[1] > y1 {
-        [cx, y1]
+        Side::Top
     } else {
-        [cx, y0]
+        Side::Bottom
+    }
+}
+
+/// A callout's knee line when Acrobat lays it out: 12 pt, out from the middle of the side. Seen in
+/// Acrobat Pro DC, a 2021 Continuous release: a new callout's knee line, and one laid out again
+/// after its knee was dragged into the box or the side it meets was moved, are all 12 pt, and the
+/// knee can't come nearer the box than that.
+pub const CALLOUT_KNEE_LINE: f64 = 12.0;
+
+/// Where a knee goes on `side` of the text box `rect`: [`CALLOUT_KNEE_LINE`] out from the middle
+/// of that side, so the knee line is level (left, right) or upright (top, bottom).
+pub fn callout_knee_on(rect: [f64; 4], side: Side) -> [f64; 2] {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    match side {
+        Side::Left => [x0 - CALLOUT_KNEE_LINE, cy],
+        Side::Right => [x1 + CALLOUT_KNEE_LINE, cy],
+        Side::Top => [cx, y1 + CALLOUT_KNEE_LINE],
+        Side::Bottom => [cx, y0 - CALLOUT_KNEE_LINE],
+    }
+}
+
+/// A new callout's knee: on the side of its text box `rect` that faces the arrow `point`
+/// ([`callout_knee_on`]).
+pub fn callout_knee(rect: [f64; 4], point: [f64; 2]) -> [f64; 2] {
+    callout_knee_on(rect, callout_side(rect, point))
+}
+
+/// How far apart, in points, two positions of a callout's box or line may be and still count as the
+/// same. The page hands a box back as `f32` values, which moves a coordinate such as 323.05 by a few
+/// hundred-thousandths of a point (review on #4094).
+const CALLOUT_SLACK: f64 = 0.01;
+
+/// Whether `end` lies on `side` of the text box `rect`: the leader line can stay where it meets it.
+fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
+    let [x0, y0, x1, y1] = normalize(rect);
+    let near = |a: f64, b: f64| (a - b).abs() < CALLOUT_SLACK;
+    let within = |v: f64, lo: f64, hi: f64| v > lo - CALLOUT_SLACK && v < hi + CALLOUT_SLACK;
+    match side {
+        Side::Left => near(end[0], x0) && within(end[1], y0, y1),
+        Side::Right => near(end[0], x1) && within(end[1], y0, y1),
+        Side::Top => near(end[1], y1) && within(end[0], x0, x1),
+        Side::Bottom => near(end[1], y0) && within(end[0], x0, x1),
     }
 }
 
@@ -1915,10 +1987,12 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
 /// At most this many points reshape a comment (a drawn polygon has a handful).
 const MAX_POINTS: usize = 100_000;
 
-/// Reshape a line, connected lines, a polygon or a cloud: its points in user space (a line's two
-/// ends, the others' corners), as dragging the comment's handles sets them. `/Rect` follows the
-/// points with room for the line's width and endings, as when the comment was drawn, and the
-/// appearance is redrawn. A measurement keeps the points it measured.
+/// Reshape a line, connected lines, a polygon, a cloud or a callout: its points in user space (a
+/// line's two ends, the others' corners; a callout's arrow point and, if it has one, its knee), as
+/// dragging the comment's handles sets them. `/Rect` follows the points with room for the line's
+/// width and endings, as when the comment was drawn, and the appearance is redrawn. A callout's
+/// text box stays where it is and its leader line re-attaches. A measurement keeps the points it
+/// measured.
 pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64; 2]], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -1928,6 +2002,15 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     }
     if points.len() > MAX_POINTS {
         return Err(AnnotError::Invalid(format!("at most {MAX_POINTS} points")));
+    }
+    if d.name(b"Subtype") == Some(b"FreeText") && callout_line(doc, &d).is_some() {
+        // A callout's points: its arrow point, then optionally its knee (a four-number `/CL`
+        // gains one; ISO 32000-2 Table 177 allows both forms).
+        if !matches!(points.len(), 1 | 2) || !finite(&points.concat()) {
+            return Err(AnnotError::Invalid("a callout has an arrow point and, optionally, a knee".into()));
+        }
+        let text_box = callout_text_box(doc, &d).ok_or_else(|| AnnotError::Invalid("the callout's text box (/RD) can't be read".into()))?;
+        return place_text_box(doc, r, text_box, Some(points), meta, false);
     }
     let style = Style { width: border_width_of(&d), ..Style::default() };
     let ends = line_endings_of(&d).unwrap_or_default();
@@ -2004,6 +2087,43 @@ fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Res
 /// leader line re-attaches and `/Rect` grows to hold it, and the appearance is redrawn
 /// (`new_text`: for changed contents, see [`set_appearance`] and `draw_appearance`).
 fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, new_text: bool) -> Result<(), AnnotError> {
+    place_text_box(doc, r, rect, None, meta, new_text)
+}
+
+/// A callout's leader line (`/CL`, ISO 32000-2 Table 177): four numbers (start, end) or six
+/// (start, knee, end), as points in user space. `None` when the annotation has no usable `/CL`.
+fn callout_line(doc: &Document, d: &Dict) -> Option<Vec<[f64; 2]>> {
+    // All or nothing: a non-number would shift every later number into the wrong point.
+    let l: Vec<f64> = doc.resolve(d.get(b"CL")?).as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect::<Option<_>>()?;
+    (matches!(l.len(), 4 | 6) && finite(&l)).then(|| l.as_chunks::<2>().0.to_vec())
+}
+
+/// A callout's text box: `/Rect` inset by `/RD` (ISO 32000-2 Table 177). `None` without both.
+fn callout_text_box(doc: &Document, d: &Dict) -> Option<[f64; 4]> {
+    let nums = |key: &[u8]| -> Option<Vec<f64>> { doc.resolve(d.get(key)?).as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect() };
+    let r = nums(b"Rect").filter(|v| v.len() == 4 && finite(v))?;
+    let rd = nums(b"RD").filter(|v| v.len() == 4 && finite(v) && v.iter().all(|x| *x >= 0.0))?;
+    let r = normalize([r[0], r[1], r[2], r[3]]);
+    let tb = [r[0] + rd[0], r[1] + rd[1], r[2] - rd[2], r[3] - rd[3]];
+    (tb[2] - tb[0] >= 1.0 && tb[3] - tb[1] >= 1.0).then_some(tb)
+}
+
+/// As [`apply_text_box`]. For a callout, `lead` (its arrow point and optional knee, dragged by
+/// their handles) replaces the leader line's own points. The arrow point never moves with the box
+/// ("The text box moves around a stationary anchor point—the arrow on the end-point line",
+/// Acrobat DC Help, 11/28/2019, p. 357), and the line follows the box as Acrobat Pro DC (a 2021
+/// Continuous release) was seen to:
+/// - the box moved without changing size: the knee and the end move with it (also seen in
+///   Acrobat Pro 2026.002.22031);
+/// - the box resized with the side the line meets left where it was (the end still on it): the
+///   line doesn't change;
+/// - otherwise (that side moved): the line meets the middle of that side, the knee
+///   [`CALLOUT_KNEE_LINE`] out from it ([`callout_knee_on`]). Acrobat also moves the box next to
+///   the arrow point then; PdfCraft leaves the box where it was put.
+///
+/// With `lead`, the end stays where it is while it is on the side facing the knee (dragging the
+/// knee or the arrow point leaves it in Acrobat), and otherwise meets the middle of that side.
+fn place_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], lead: Option<&[[f64; 2]]>, meta: &Meta, new_text: bool) -> Result<(), AnnotError> {
     let rect = normalize(rect);
     if !finite(&rect) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
         return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
@@ -2012,17 +2132,53 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
     if !new_text {
         refuse_foreign_text(doc, &d)?;
     }
-    // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
-    let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
-    let (outer, cl) = match callout {
-        Some(mut l) => {
-            let attach = callout_attach(rect, [l[2], l[3]]);
-            (l[4], l[5]) = (attach[0], attach[1]);
-            let pad = border_width_of(&d) / 2.0 + appearance::arrow_size(border_width_of(&d)) + 1.0;
-            let lead = grow(bounds([[l[0], l[1]], [l[2], l[3]]].into_iter()).unwrap_or_default(), pad);
-            ([rect[0].min(lead[0]), rect[1].min(lead[1]), rect[2].max(lead[2]), rect[3].max(lead[3])], Some(l))
+    // A callout's rectangle is its text box: `/Rect` grows to hold the leader line. A four-number
+    // `/CL` (no knee) stays four numbers unless `lead` adds a knee.
+    let old_line = callout_line(doc, &d);
+    let old_box = callout_text_box(doc, &d);
+    let old_end = old_line.as_deref().and_then(<[[f64; 2]]>::last).copied();
+    let line: Option<Vec<[f64; 2]>> = match (lead, old_line.as_deref()) {
+        (Some(lead @ [.., toward]), _) => {
+            let side = callout_side(rect, *toward);
+            let end = old_end.filter(|e| on_side(rect, side, *e)).unwrap_or_else(|| callout_attach(rect, *toward));
+            Some(lead.iter().copied().chain([end]).collect())
         }
-        None => (rect, None),
+        (Some(_), _) => None,
+        (None, Some(old @ [start, .., end])) => {
+            let (start, end) = (*start, *end);
+            let knee = old.get(1).filter(|_| old.len() == 3).copied();
+            let toward = knee.unwrap_or(start);
+            Some(match old_box {
+                // Moved, not resized: the knee and the end come along.
+                Some(b)
+                    if ((rect[2] - rect[0]) - (b[2] - b[0])).abs() < CALLOUT_SLACK && ((rect[3] - rect[1]) - (b[3] - b[1])).abs() < CALLOUT_SLACK =>
+                {
+                    let (dx, dy) = (rect[0] - b[0], rect[1] - b[1]);
+                    let shift = |p: [f64; 2]| [p[0] + dx, p[1] + dy];
+                    [start].into_iter().chain(knee.map(shift)).chain([shift(end)]).collect()
+                }
+                // Resized, the side the line meets still under its end: nothing changes.
+                Some(b) if on_side(rect, callout_side(b, toward), end) => old.to_vec(),
+                // That side moved: laid out again as a new callout is, from the side facing the
+                // arrow point (the box may now be on the knee's other side).
+                Some(_) => {
+                    let new_knee = callout_knee(rect, start);
+                    let end = callout_attach(rect, new_knee);
+                    [start].into_iter().chain(knee.map(|_| new_knee)).chain([end]).collect()
+                }
+                None => [start].into_iter().chain(knee).chain([callout_attach(rect, toward)]).collect(),
+            })
+        }
+        (None, _) => None,
+    };
+    let (outer, cl) = match line.as_deref() {
+        Some(line @ [lead @ .., _]) => {
+            // The end is on the box, so only the arrow point and the knee need room around them.
+            let pad = border_width_of(&d) / 2.0 + appearance::arrow_size(border_width_of(&d)) + 1.0;
+            let lead_box = grow(bounds(lead.iter().copied()).unwrap_or_default(), pad);
+            ([rect[0].min(lead_box[0]), rect[1].min(lead_box[1]), rect[2].max(lead_box[2]), rect[3].max(lead_box[3])], Some(line.concat()))
+        }
+        _ => (rect, None),
     };
     doc.update_dict(r, |d| {
         d.set(b"Rect".to_vec(), num_array(&outer));
@@ -2262,9 +2418,12 @@ pub struct Summary {
     pub intent: Option<String>,
     /// A Fill & Sign mark ([`is_fill_sign`]).
     pub fill_sign: bool,
-    /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
-    /// (`/Vertices`), in user space; empty for other comments.
+    /// A line's two ends (`/L`), the corners of connected lines, a polygon or a cloud
+    /// (`/Vertices`), or a callout's arrow point and knee (`/CL` without its end, which follows
+    /// the text box), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
+    pub text_box: Option<[f32; 4]>,
 }
 
 fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -2319,12 +2478,20 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 }
             }
             let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
-            // Keep in step with `pdfcraft_render::inspect`.
+            // Keep in step with `pdfcraft_render::inspect`: a callout gives its points only with a
+            // readable text box, without which they can't be changed either.
+            let callout = (subtype == "FreeText").then(|| callout_line(doc, d).zip(callout_text_box(doc, d))).flatten();
             let points = match subtype.as_str() {
                 "Line" => Some(nums(b"L")).filter(|l| l.len() == 4).map(|l| l.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
                 "PolyLine" | "Polygon" => nums(b"Vertices").as_chunks::<2>().0.to_vec(),
+                "FreeText" => callout
+                    .as_ref()
+                    .and_then(|(line, _)| line.split_last())
+                    .map(|(_, lead)| lead.iter().map(|p| [p[0] as f32, p[1] as f32]).collect())
+                    .unwrap_or_default(),
                 _ => Vec::new(),
             };
+            let text_box = callout.map(|(_, t)| t.map(|v| v as f32));
             let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             out.push(Summary {
                 page,
@@ -2345,6 +2512,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 fill_sign: is_fill_sign(doc, d),
                 points,
+                text_box,
             });
         }
     }

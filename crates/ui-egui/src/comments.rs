@@ -622,6 +622,11 @@ impl PageCx<'_> {
         self.xf.user_rect(self.info, self.page, a.rect)
     }
 
+    /// Where a comment's selection frame and resize handles go on screen ([`frame`]).
+    fn frame_rect(&self, a: &Annotation) -> Rect {
+        self.xf.user_rect(self.info, self.page, frame(a))
+    }
+
     /// Top-level comments on this page, in paint order.
     fn comments(&self) -> impl Iterator<Item = &Annotation> {
         self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.in_reply_to.is_none() && a.subtype != "Popup")
@@ -684,7 +689,7 @@ impl PageCx<'_> {
         shift: bool,
         pending: Option<&Edit>,
     ) -> Rect {
-        let r = self.screen_rect(a);
+        let r = self.frame_rect(a);
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
@@ -693,11 +698,8 @@ impl PageCx<'_> {
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.xf.user_rect(
-                self.info,
-                self.page,
-                [a.rect[0] + *dx as f32, a.rect[1] + *dy as f32, a.rect[2] + *dx as f32, a.rect[3] + *dy as f32],
-            );
+            let f = frame(a);
+            return self.xf.user_rect(self.info, self.page, [f[0] + *dx as f32, f[1] + *dy as f32, f[2] + *dx as f32, f[3] + *dy as f32]);
         }
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
@@ -713,19 +715,69 @@ fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
-/// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
-/// `/Rect` also holds its leader line, so it only moves.
+/// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout
+/// resizes its text box ([`frame`]); one whose box can't be read (no `/RD`) only moves, since its
+/// `/Rect` also holds its leader line.
 fn resizable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink")
+        && (a.intent.as_deref() != Some("FreeTextCallout") || a.text_box.is_some())
 }
 
-/// Lines, connected lines, polygons and clouds: their ends and corners have handles of their own
-/// (measurements keep the points they measured, and a locked comment its shape).
+/// Lines, connected lines, polygons, clouds and callouts: their ends, corners, or a callout's
+/// arrow point and knee have handles of their own (measurements keep the points they measured,
+/// and a locked comment its shape).
 fn reshapable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Line" | "PolyLine" | "Polygon")
+    (matches!(a.subtype.as_str(), "Line" | "PolyLine" | "Polygon") || is_callout(a))
         && !a.points.is_empty()
         && !a.locked
         && !a.intent.as_deref().is_some_and(|i| i.ends_with("Dimension"))
+}
+
+/// A callout whose text box and leader line PdfCraft can read.
+fn is_callout(a: &Annotation) -> bool {
+    a.subtype == "FreeText" && a.text_box.is_some()
+}
+
+/// The rectangle a comment's selection frame and resize handles go around, in user space: a
+/// callout's text box, otherwise `/Rect`.
+fn frame(a: &Annotation) -> [f32; 4] {
+    a.text_box.unwrap_or(a.rect)
+}
+
+/// A callout's points while one is dragged to `to`. Its knee moves along its knee line only
+/// (Acrobat: "The knee line can be resized in one direction only; horizontal knee lines can be
+/// resized horizontally only; vertical knee lines can be resized vertically only", Acrobat DC Help,
+/// 11/28/2019, p. 357), and no nearer the box than [`pdfcraft_engine::CALLOUT_KNEE_LINE`]
+/// (Acrobat Pro DC, a 2021 Continuous release, lays a knee dragged into the box out again at that
+/// distance). Its arrow point moves freely, with Shift held to 45° from the knee.
+fn callout_reshaped(points: &[[f64; 2]], text_box: [f32; 4], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
+    let tb = text_box.map(f64::from);
+    let gap = pdfcraft_engine::CALLOUT_KNEE_LINE;
+    match (i, points.get(1)) {
+        (1, Some(knee)) => {
+            let to = match pdfcraft_engine::callout_side(tb, *knee) {
+                pdfcraft_engine::CalloutSide::Left => [to[0].min(tb[0] - gap), knee[1]],
+                pdfcraft_engine::CalloutSide::Right => [to[0].max(tb[2] + gap), knee[1]],
+                pdfcraft_engine::CalloutSide::Top => [knee[0], to[1].max(tb[3] + gap)],
+                pdfcraft_engine::CalloutSide::Bottom => [knee[0], to[1].min(tb[1] - gap)],
+            };
+            let mut out = points.to_vec();
+            if let Some(k) = out.get_mut(1) {
+                *k = to;
+            }
+            out
+        }
+        _ => reshaped(points, i, to, shift),
+    }
+}
+
+/// A selected comment's points moved as handle `i` is dragged to `to` ([`reshaped`], or
+/// [`callout_reshaped`] for a callout).
+fn reshape_for(a: &Annotation, points: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
+    match a.text_box.filter(|_| is_callout(a)) {
+        Some(tb) => callout_reshaped(points, tb, i, to, shift),
+        None => reshaped(points, i, to, shift),
+    }
 }
 
 /// Whether `tool` picks up a line's end and corner handles: the Select and Fill & Sign tools.
@@ -1133,7 +1185,7 @@ fn press_point(ui: &egui::Ui, cx: &PageCx<'_>) -> Option<Pos2> {
 /// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
 fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation) -> bool) -> bool {
     view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed).is_some_and(|a| {
-        (resizable(a) && HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
+        (resizable(a) && HANDLES.into_iter().any(|h| handle_pos(cx.frame_rect(a), h).distance(p) <= 7.0))
             || (grabs_points(cx.tool) && reshapable(a) && point_handle(cx, a, p).is_some())
     })
 }
@@ -1157,7 +1209,7 @@ fn select_input(
     // Handles of a selected, resizable comment.
     let handle_at = |p: Pos2| -> Option<(i8, i8)> {
         let a = selected.filter(|a| cx.allowed && resizable(a))?;
-        let r = cx.screen_rect(a);
+        let r = cx.frame_rect(a);
         HANDLES.into_iter().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
     };
     // Ends and corners of a selected line, connected lines, polygon or cloud.
@@ -1165,8 +1217,17 @@ fn select_input(
         |p: Pos2| -> Option<usize> { selected.filter(|a| cx.allowed && grabs_points(cx.tool) && reshapable(a)).and_then(|a| point_handle(cx, a, p)) };
     let mut consumed = false;
     if let Some(p) = pointer {
-        if point_at(p).is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        if let Some(i) = point_at(p) {
+            // A callout's knee moves along its knee line only (see `callout_reshaped`).
+            let knee_side = selected.filter(|a| i == 1 && is_callout(a)).and_then(|a| {
+                let (tb, knee) = (a.text_box?, a.points.get(1)?);
+                Some(pdfcraft_engine::callout_side(tb.map(f64::from), [f64::from(knee[0]), f64::from(knee[1])]))
+            });
+            ui.ctx().set_cursor_icon(match knee_side {
+                Some(side) if side.horizontal() => egui::CursorIcon::ResizeHorizontal,
+                Some(_) => egui::CursorIcon::ResizeVertical,
+                None => egui::CursorIcon::Crosshair,
+            });
         } else if let Some(h) = handle_at(p) {
             ui.ctx().set_cursor_icon(match h {
                 (0, _) => egui::CursorIcon::ResizeVertical,
@@ -1193,7 +1254,7 @@ fn select_input(
             let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
             // A drawn signature keeps its shape from the corners, as image signatures do.
             let aspect_ratio = aspect_ratio.or_else(|| {
-                let r = cx.screen_rect(a);
+                let r = cx.frame_rect(a);
                 (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
             });
             cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
@@ -1221,13 +1282,19 @@ fn select_input(
                 let (a, b) = (cx.to_user(from), cx.to_user(p));
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+                    view.pending_edit = Some(match cx.get(index).filter(|a| moves_box_only(cx, a, from)) {
+                        Some(a) => {
+                            let f = frame(a).map(f64::from);
+                            Edit::ResizeAnnotation { page, index, rect: [f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy] }
+                        }
+                        None => Edit::MoveAnnotation { page, index, dx, dy },
+                    });
                 }
             }
             Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
                 cv.gesture = None;
                 if let Some(a) = cx.get(index) {
-                    let from_rect = cx.screen_rect(a);
+                    let from_rect = cx.frame_rect(a);
                     let shift = ui.input(|i| i.modifiers.shift);
                     let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
                     let rect = cx.rect_to_user(r);
@@ -1240,8 +1307,8 @@ fn select_input(
                 cv.gesture = None;
                 let shift = ui.input(|i| i.modifiers.shift);
                 let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-                if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                if moved && let Some(a) = cx.get(index) {
+                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshape_for(a, &points, point, cx.to_user(p), shift) });
                 }
             }
             _ => {}
@@ -1354,7 +1421,8 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
-        if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
+        let points = cx.allowed && grabs_points(cx.tool) && reshapable(a);
+        if points && !is_callout(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
@@ -1365,15 +1433,29 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
                 painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
             }
         }
+        // A callout's arrow point and knee, over its text box's frame.
+        if points {
+            return paint_points(painter, cx, view, a, pointer, shift);
+        }
     }
     paint_gesture(painter, cx, view);
 }
 
+/// Whether dragging `a` from `from` moves a callout's text box alone: a press inside the box. Its
+/// arrow point stays and its knee comes along, as seen in Acrobat Pro DC (a 2021 Continuous
+/// release) and Acrobat Pro 2026.002.22031 (#1152), and "The text box moves around a stationary
+/// anchor point" (Acrobat DC Help, 11/28/2019, p. 357). A press on the leader line moves the whole
+/// callout (seen in the 2021 release).
+fn moves_box_only(cx: &PageCx<'_>, a: &Annotation, from: Pos2) -> bool {
+    is_callout(a) && resizable(a) && cx.frame_rect(a).contains(from)
+}
+
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
 /// one is dragged (or its edit is on its way), the new shape over the old.
-/// The points a selected line, polygon or cloud is drawn with while it changes: an end or corner
-/// being dragged, the whole comment being moved by its body, or the edit just released (until the
-/// page is drawn again). `None` while it isn't changing.
+/// The points a selected line, polygon, cloud or callout is drawn with while it changes: an end,
+/// corner, arrow point or knee being dragged (moved by `reshape`: [`reshaped`], or a callout's
+/// [`callout_reshaped`]), the whole comment being moved by its body, or the edit just released
+/// (until the page is drawn again). `None` while it isn't changing.
 fn changing_points(
     gesture: Option<&Gesture>,
     pending: Option<&Edit>,
@@ -1381,12 +1463,12 @@ fn changing_points(
     points: &[[f64; 2]],
     to_user: impl Fn(Pos2) -> [f64; 2],
     pointer: Option<Pos2>,
-    shift: bool,
+    reshape: impl Fn(&[[f64; 2]], usize, [f64; 2]) -> Vec<[f64; 2]>,
 ) -> Option<Vec<[f64; 2]>> {
     let shifted = |dx: f64, dy: f64| points.iter().map(|q| [q[0] + dx, q[1] + dy]).collect();
     match (gesture, pending) {
         (Some(Gesture::Reshape { page: p, index: i, point, points: from }), _) if (*p, *i) == (page, index) => {
-            pointer.map(|at| reshaped(from, *point, to_user(at), shift))
+            pointer.map(|at| reshape(from, *point, to_user(at)))
         }
         (Some(Gesture::Move { page: p, index: i, from }), _) if (*p, *i) == (page, index) => pointer.map(|at| {
             let (a, b) = (to_user(*from), to_user(at));
@@ -1401,17 +1483,30 @@ fn changing_points(
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
-    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
+    let reshape = |from: &[[f64; 2]], i: usize, to: [f64; 2]| reshape_for(a, from, i, to, shift);
+    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, reshape);
     let changed = changing.is_some();
-    let points = changing.unwrap_or(points);
+    let mut points = changing.unwrap_or(points);
+    // A callout's box moved alone leaves its arrow point where it is.
+    if let (Some(Gesture::Move { page, index, from }), Some(first)) = (cv.gesture.as_ref(), a.points.first())
+        && (*page, *index) == (cx.page, a.index)
+        && moves_box_only(cx, a, *from)
+        && let Some(p) = points.first_mut()
+    {
+        *p = [f64::from(first[0]), f64::from(first[1])];
+    }
     let screen: Vec<Pos2> = points.iter().map(|q| cx.to_screen(*q)).collect();
     if changed {
         let stroke = Stroke::new(1.5, SELECT_BLUE);
-        painter.add(if a.subtype == "Polygon" {
-            egui::Shape::closed_line(screen.clone(), stroke)
-        } else {
-            egui::Shape::line(screen.clone(), stroke)
-        });
+        // A callout's line ends where it meets the (possibly moving) text box.
+        let mut line = screen.clone();
+        if is_callout(a)
+            && let Some(toward) = points.last()
+        {
+            let tb = cx.rect_to_user(cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()));
+            line.push(cx.to_screen(pdfcraft_engine::callout_attach(tb, *toward)));
+        }
+        painter.add(if a.subtype == "Polygon" { egui::Shape::closed_line(line, stroke) } else { egui::Shape::line(line, stroke) });
     }
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
@@ -1651,14 +1746,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
             let rect = text_box_rect(c.at, &text, 10.0, 0);
-            let side = if point[0] < rect[0] {
-                rect[0]
-            } else if point[0] > rect[2] {
-                rect[2]
-            } else {
-                (rect[0] + rect[2]) / 2.0
-            };
-            let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
+            let knee = pdfcraft_engine::callout_knee(rect, point);
             Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
@@ -2176,20 +2264,25 @@ mod tests {
 
     /// A selected line is drawn where it is going: moved by its body (both ends follow the
     /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
+    /// [`reshaped`] without Shift, as `changing_points` takes it.
+    fn straight(points: &[[f64; 2]], i: usize, to: [f64; 2]) -> Vec<[f64; 2]> {
+        reshaped(points, i, to, false)
+    }
+
     #[test]
     fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
         let line = [[10.0, 10.0], [50.0, 10.0]];
         let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
         let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
         let at = Some(pos2(25.0, 30.0));
-        assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-        assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+        assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+        assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, straight), None, "another comment's move");
         let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-        assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+        assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
         let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
         let to = Some(pos2(60.0, 10.0));
-        assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-        assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+        assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+        assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, straight), None, "not changing");
     }
     use pdfcraft_render::TextGlyph;
 
@@ -2406,6 +2499,7 @@ mod tests {
                 intent: None,
                 fill_sign: false,
                 points: Vec::new(),
+                text_box: None,
             }],
             ..Default::default()
         };

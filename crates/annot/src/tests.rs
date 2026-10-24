@@ -406,10 +406,10 @@ fn editing_a_callout_refits_the_box_and_keeps_the_leader() {
     let outer = rect(d);
     let f = |k: &[u8]| -> Vec<f64> { d.get(k).unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
     let cl = f(b"CL");
-    // The leader line keeps its start and knee; the attach point follows the re-fitted box.
-    assert_eq!(&cl[..4], &[200.0, 520.0, 260.0, 560.0]);
+    // The box grows down from its top; the side the line meets stays where it was, so the line
+    // doesn't change (as Acrobat keeps it while a box is resized from its other corner).
     let want = expected_box(612.0, 200.0, long, 12.0, 2.0);
-    assert_eq!((cl[4], cl[5]), callout_attach([300.0, want[1], 500.0, 612.0], [260.0, 560.0]).into());
+    assert_eq!(cl, [200.0, 520.0, 260.0, 560.0, 300.0, 606.0]);
     // The text box (recovered from /Rect and /RD) keeps its width and top edge.
     let tb = [outer[0] + f(b"RD")[0], outer[1] + f(b"RD")[1], outer[2] - f(b"RD")[2], outer[3] - f(b"RD")[3]];
     assert_eq!((tb[0], tb[2], tb[3]), (300.0, 500.0, 612.0));
@@ -1674,4 +1674,256 @@ fn a_star_note_keeps_its_star_when_recoloured() {
     let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
     let Object::Stream(s) = &*doc.get(n) else { panic!() };
     assert_eq!(s.decoded().unwrap(), note_drawing(Some("Star"), [0.0, 0.0, 1.0]));
+}
+
+/// A callout with its text box at [300 600 500 640], knee [260 620] and arrow point [200 520]:
+/// the knee line runs level from the box's left side, as Acrobat draws it.
+fn callout_fixture() -> (Document, usize) {
+    let mut doc = fixture();
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 600.0, 500.0, 640.0],
+                knee: [260.0, 620.0],
+                point: [200.0, 520.0],
+                font_size: 12.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    (doc, c)
+}
+
+fn nums(d: &Dict, k: &[u8]) -> Vec<f64> {
+    d.get(k).unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect()
+}
+
+/// The text box a callout's `/Rect` and `/RD` describe.
+fn text_box_of(d: &Dict) -> [f64; 4] {
+    let (r, rd) = (rect(d), nums(d, b"RD"));
+    [r[0] + rd[0], r[1] + rd[1], r[2] - rd[2], r[3] - rd[3]]
+}
+
+/// #1152: a callout's arrow point and knee move on their own, as its handles drag them (Acrobat:
+/// "Callout text boxes have three parts: a text box, a knee line, and an end-point line. You can
+/// resize each part by dragging a handle", Acrobat DC Help, 11/28/2019, p. 357). The text box
+/// stays and the line re-attaches to it.
+#[test]
+fn a_callouts_arrow_point_and_knee_move_on_their_own() {
+    let (mut doc, c) = callout_fixture();
+    // The arrow point alone: the knee and the box stay.
+    set_points(&mut doc, 0, c, &[[150.0, 400.0], [260.0, 620.0]], &meta("p")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[c];
+    assert_eq!(nums(d, b"CL"), [150.0, 400.0, 260.0, 620.0, 300.0, 620.0]);
+    assert_eq!(text_box_of(d), [300.0, 600.0, 500.0, 640.0]);
+    // /Rect holds the line (padded) and the box.
+    let r = rect(d);
+    assert!(r[0] < 150.0 && r[1] < 400.0 && r[2] >= 500.0 && r[3] >= 640.0, "{r:?}");
+    assert!(ap_content(&doc, d).contains("150 400 m"), "the line starts at the new arrow point");
+    // The knee alone, to the right of the box: the line now meets the right side.
+    let mut doc = doc;
+    set_points(&mut doc, 0, c, &[[150.0, 400.0], [560.0, 620.0]], &meta("k")).unwrap();
+    let d = &list(&doc, 0)[c];
+    assert_eq!(nums(d, b"CL"), [150.0, 400.0, 560.0, 620.0, 500.0, 620.0]);
+    assert_eq!(text_box_of(d), [300.0, 600.0, 500.0, 640.0]);
+    assert_eq!(summaries(&doc).iter().find(|s| s.index == c).map(|s| s.points.clone()), Some(vec![[150.0, 400.0], [560.0, 620.0]]));
+}
+
+/// A callout's leader line as its box moves or is resized, as Acrobat Pro DC (a 2021 Continuous
+/// release) was seen to keep it (#1152): the arrow point never moves ("The text box moves around
+/// a stationary anchor point", Acrobat DC Help, 11/28/2019, p. 357); moved, the knee and the end
+/// come along;
+/// resized with the side the line meets left in place, nothing changes; that side moved, the line
+/// is laid out again from the side facing the arrow point with a 12 pt knee line, and the box stays
+/// where it was put (Acrobat moves it next to the arrow point).
+#[test]
+fn a_callouts_box_moves_around_its_arrow_and_keeps_the_knee_beside_it() {
+    let (mut doc, c) = callout_fixture();
+    let cl = |doc: &Document| nums(&list(doc, 0)[c], b"CL");
+    // Wider and taller, its left side where it was: the line stays.
+    set_rect(&mut doc, 0, c, [300.0, 580.0, 540.0, 640.0], &meta("r")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 260.0, 620.0, 300.0, 620.0]);
+    // Moved 40 right and 10 up, same size: the knee and the end come along.
+    set_rect(&mut doc, 0, c, [340.0, 590.0, 580.0, 650.0], &meta("m")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 300.0, 630.0, 340.0, 630.0]);
+    // The left side moved: the line meets its middle, the knee 12 pt out.
+    set_rect(&mut doc, 0, c, [380.0, 590.0, 580.0, 650.0], &meta("s")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 368.0, 620.0, 380.0, 620.0]);
+    assert_eq!(text_box_of(&list(&doc, 0)[c]), [380.0, 590.0, 580.0, 650.0], "the box stays where it was put");
+    // Past the arrow point: the line leaves from the side facing it.
+    set_rect(&mut doc, 0, c, [100.0, 600.0, 180.0, 640.0], &meta("p")).unwrap();
+    assert_eq!(cl(&doc), [200.0, 520.0, 192.0, 620.0, 180.0, 620.0]);
+}
+
+/// The line is laid out again when the end no longer lies on the side it met (the box shrank past
+/// it), and from the side facing the arrow point, not the old knee, which can end up over the box.
+#[test]
+fn a_callout_is_laid_out_again_when_its_end_leaves_the_box() {
+    let (mut doc, c) = callout_fixture();
+    // Left side unmoved, but the box now starts above the end (300, 620).
+    set_rect(&mut doc, 0, c, [300.0, 625.0, 500.0, 640.0], &meta("a")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [200.0, 520.0, 288.0, 632.5, 300.0, 632.5]);
+    let (mut doc, c) = callout_fixture();
+    // Over the old knee (260, 620), which would face the bottom; the arrow faces the left side.
+    set_rect(&mut doc, 0, c, [250.0, 590.0, 450.0, 640.0], &meta("b")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [200.0, 520.0, 238.0, 615.0, 250.0, 615.0]);
+}
+
+/// Review on #4094: the page sends a callout's text box back as `f32` values, so a box moved or
+/// resized on screen comes back a few hundred-thousandths of a point off. That still counts as a
+/// move (the knee comes along) and as the same side (the line stays), not as a new layout.
+#[test]
+fn a_callout_box_sent_back_as_f32_still_moves_and_keeps_its_line() {
+    let mut doc = fixture();
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [323.05, 292.14, 506.98, 374.91],
+                knee: [311.05, 333.53],
+                point: [299.05, 274.83],
+                font_size: 12.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    let f32s = |r: [f64; 4]| r.map(|v| f64::from(v as f32));
+    let cl = |doc: &Document| nums(&list(doc, 0)[c], b"CL");
+    let before = cl(&doc);
+    // Resized from the bottom right, its left side where it was.
+    set_rect(&mut doc, 0, c, f32s([323.05, 250.14, 540.98, 374.91]), &meta("r")).unwrap();
+    assert_eq!(cl(&doc), before, "the line stays");
+    // Moved by (47.62, 26.13), same size.
+    let tb = text_box_of(&list(&doc, 0)[c]);
+    set_rect(&mut doc, 0, c, f32s([tb[0] + 47.62, tb[1] + 26.13, tb[2] + 47.62, tb[3] + 26.13]), &meta("m")).unwrap();
+    let after = cl(&doc);
+    assert!((after[2] - (before[2] + 47.62)).abs() < 0.01 && (after[3] - (before[3] + 26.13)).abs() < 0.01, "the knee came along: {after:?}");
+    assert_eq!((after[0], after[1]), (before[0], before[1]), "the arrow point stayed");
+}
+
+/// Review on #4094: a `/CL` with something other than a number in it is not read at all, rather
+/// than read with its numbers shifted into the wrong points.
+#[test]
+fn a_callout_line_with_a_non_number_is_not_read() {
+    let (mut doc, c) = callout_fixture();
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| {
+        d.set(
+            b"CL".to_vec(),
+            Object::Array(vec![Object::name("x"), Object::Real(200.0), Object::Real(520.0), Object::Real(260.0), Object::Real(620.0)]),
+        )
+    })
+    .unwrap();
+    assert!(matches!(set_points(&mut doc, 0, c, &[[1.0, 1.0]], &meta("x")), Err(AnnotError::Invalid(_))), "not a callout line it can reshape");
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == c).map(|s| (s.points.len(), s.text_box.is_some())), Some((0, false)));
+}
+
+/// A new callout's knee is Acrobat's: 12 pt out from the middle of the side facing the arrow.
+#[test]
+fn a_new_callouts_knee_line_is_twelve_points() {
+    let tb = [300.0, 600.0, 500.0, 640.0];
+    assert_eq!(callout_knee(tb, [200.0, 520.0]), [288.0, 620.0]);
+    assert_eq!(callout_knee(tb, [600.0, 700.0]), [512.0, 620.0]);
+    assert_eq!(callout_knee(tb, [400.0, 700.0]), [400.0, 652.0]);
+    assert_eq!(callout_knee(tb, [400.0, 500.0]), [400.0, 588.0]);
+}
+
+/// ISO 32000-2 Table 177: `/CL` may have four numbers (no knee). Resizing such a callout kept its
+/// line only with six, so the box lost `/RD` and the line was left outside `/Rect`.
+#[test]
+fn a_callout_without_a_knee_keeps_its_line() {
+    let (mut doc, c) = callout_fixture();
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| d.set(b"CL".to_vec(), num_array(&[200.0, 520.0, 300.0, 620.0]))).unwrap();
+    set_rect(&mut doc, 0, c, [300.0, 580.0, 500.0, 640.0], &meta("r")).unwrap();
+    let d = &list(&doc, 0)[c];
+    assert_eq!(nums(d, b"CL"), [200.0, 520.0, 300.0, 620.0], "still four numbers, the left side unmoved");
+    assert_eq!(text_box_of(d), [300.0, 580.0, 500.0, 640.0]);
+    assert!(rect(d)[1] < 520.0, "/Rect holds the line");
+    // Its one point is the arrow; a second adds a knee.
+    assert_eq!(summaries(&doc).iter().find(|s| s.index == c).map(|s| s.points.clone()), Some(vec![[200.0, 520.0]]));
+    set_points(&mut doc, 0, c, &[[210.0, 500.0]], &meta("p")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [210.0, 500.0, 300.0, 620.0]);
+    set_points(&mut doc, 0, c, &[[210.0, 500.0], [250.0, 610.0]], &meta("k")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [210.0, 500.0, 250.0, 610.0, 300.0, 620.0]);
+    // Back to no knee, then the left side moved: the end meets its middle.
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| d.set(b"CL".to_vec(), num_array(&[210.0, 500.0, 300.0, 620.0]))).unwrap();
+    set_rect(&mut doc, 0, c, [280.0, 590.0, 500.0, 640.0], &meta("s")).unwrap();
+    assert_eq!(nums(&list(&doc, 0)[c], b"CL"), [210.0, 500.0, 280.0, 615.0]);
+}
+
+#[test]
+fn a_callout_refuses_points_it_cant_have() {
+    let (mut doc, c) = callout_fixture();
+    let before = list(&doc, 0)[c].clone();
+    for bad in [&[][..], &[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]][..], &[[f64::NAN, 1.0]][..], &[[1e9, 1.0]][..]] {
+        assert!(matches!(set_points(&mut doc, 0, c, bad, &meta("x")), Err(AnnotError::Invalid(_))), "{bad:?}");
+    }
+    assert_eq!(list(&doc, 0)[c], before, "left as it was");
+    // Without a readable /RD there is no box to keep, so nothing moves.
+    let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"RD");
+    })
+    .unwrap();
+    assert!(matches!(set_points(&mut doc, 0, c, &[[1.0, 1.0]], &meta("x")), Err(AnnotError::Invalid(_))));
+    // Nor with an /RD that puts the box outside /Rect (negative) or leaves no box (under 1 pt):
+    // set_points refuses, and summaries offer no text box to drag.
+    let outer = rect(&list(&doc, 0)[c]);
+    for rd in [[-5.0, 50.0, 0.0, 0.0], [0.0, 0.0, outer[2] - outer[0] - 0.5, 0.0]] {
+        doc.update_dict(r, |d| d.set(b"RD".to_vec(), num_array(&rd))).unwrap();
+        assert!(matches!(set_points(&mut doc, 0, c, &[[1.0, 1.0]], &meta("x")), Err(AnnotError::Invalid(_))), "{rd:?}");
+        assert_eq!(summaries(&doc).into_iter().find(|s| s.index == c).and_then(|s| s.text_box), None, "{rd:?}");
+    }
+}
+
+/// The side a knee faces: left or right of the box first, then above or below. A knee exactly on
+/// a side's line (or inside the box's width) is above or below it.
+#[test]
+fn a_callouts_knee_faces_the_side_it_is_beyond() {
+    let tb = [100.0, 100.0, 200.0, 150.0];
+    assert_eq!(callout_side(tb, [99.0, 125.0]), Side::Left);
+    assert_eq!(callout_side(tb, [201.0, 125.0]), Side::Right);
+    assert_eq!(callout_side(tb, [100.0, 160.0]), Side::Top, "on the left edge's line");
+    assert_eq!(callout_side(tb, [200.0, 90.0]), Side::Bottom, "on the right edge's line");
+    assert_eq!(callout_side(tb, [150.0, 125.0]), Side::Bottom, "inside");
+    assert!(Side::Left.horizontal() && Side::Right.horizontal() && !Side::Top.horizontal() && !Side::Bottom.horizontal());
+}
+
+#[test]
+fn summaries_give_a_callouts_points_and_text_box() {
+    let (doc, c) = callout_fixture();
+    let s = summaries(&doc).into_iter().find(|s| s.index == c).unwrap();
+    assert_eq!(s.points, vec![[200.0, 520.0], [260.0, 620.0]]);
+    assert_eq!(s.text_box, Some([300.0, 600.0, 500.0, 640.0]));
+    let square = summaries(&doc).into_iter().find(|s| s.subtype == "Square").unwrap();
+    assert_eq!((square.points.len(), square.text_box), (0, None));
+}
+
+/// A callout whose text box can't be read (no `/RD`, a negative inset, or no box left inside
+/// `/Rect`) lists no points either, as `pdfcraft_render::inspect` does: `set_points` refuses it.
+#[test]
+fn summaries_give_no_callout_points_without_a_text_box() {
+    for rd in [None, Some([-1.0, 0.0, 0.0, 0.0]), Some([0.0, 0.0, 0.0, 1000.0])] {
+        let (mut doc, c) = callout_fixture();
+        let (_, r) = annot_ref(&mut doc, 0, c).unwrap();
+        doc.update_dict(r, |d| match rd {
+            Some(rd) => d.set(b"RD".to_vec(), num_array(&rd)),
+            None => {
+                d.remove(b"RD");
+            }
+        })
+        .unwrap();
+        let s = summaries(&doc).into_iter().find(|s| s.index == c).unwrap();
+        assert_eq!((s.points.len(), s.text_box), (0, None), "/RD {rd:?}");
+    }
 }
