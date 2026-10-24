@@ -374,7 +374,17 @@ pub enum PropsTab {
     InitialView,
     Security,
     Fonts,
+    Custom,
     Advanced,
+}
+
+/// Document Properties ▸ Custom being edited: the properties as they will be after OK, in order,
+/// and the Name and Value fields.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CustomDraft {
+    pub props: Vec<(String, String)>,
+    pub name: String,
+    pub value: String,
 }
 
 /// Duplicate Field: the field and the pages (all, or a range, 1-based).
@@ -782,6 +792,8 @@ pub struct PdfCraftApp {
     pub props_draft: Option<(DocId, [String; 4])>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
+    /// Document Properties ▸ Custom being edited.
+    pub custom_draft: Option<(DocId, CustomDraft)>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
     /// Native file pickers in flight (they never block the frame; see `pickers`).
@@ -1161,6 +1173,7 @@ impl PdfCraftApp {
             save_override: None,
             props_draft: None,
             view_draft: None,
+            custom_draft: None,
             requests: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
@@ -1284,14 +1297,19 @@ impl PdfCraftApp {
     }
 
     /// Open a document the way it asks to be opened: navigation panel, layout, magnification,
-    /// page (Document Properties ▸ Initial View). With Always use my default zoom and page
-    /// layout on, the layout and magnification stay at the defaults the view opened with.
+    /// page and the place on it (Document Properties ▸ Initial View, `/OpenAction`). With Always
+    /// use my default zoom and page layout on, the layout and magnification stay at the defaults
+    /// the view opened with, and the view goes to the opening page's top.
     fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
         // A right panel the user closed stays closed, whatever the document asks for (#2884).
+        // A document that asks for full screen gets the panel it names for outside it
+        // (`/NonFullScreenPageMode`, Table 147), there when the prompt is declined or full
+        // screen is left.
+        let navigation = if v.full_screen { v.non_full_screen } else { v.navigation };
         if self.active == Some(index) && !self.right_panel_closed {
-            match v.navigation {
+            match navigation {
                 N::PageOnly => {}
                 N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
                 N::Pages => self.right = Some(RightPanel::Pages),
@@ -1325,8 +1343,19 @@ impl PdfCraftApp {
                 M::FitHeight => view.fit = canvas::Fit::Height,
             }
         }
-        if v.page > 0 && v.page < pages {
-            view.go_to_page(v.page);
+        // The opening destination (`/OpenAction`, named destinations resolved): its page, and
+        // where on it and how large, as a bookmark or link to it would (ISO 32000-2 Table 149).
+        // With the default view kept, only the page.
+        let info = self.session.get(view.id).map(|d| &d.info);
+        match info.and_then(|i| i.open_dest.filter(|(page, _)| *page < pages).map(|d| (i, d))) {
+            Some((info, (page, dest))) if !self.always_default_view => view.go_to_dest(page, dest, info),
+            Some((_, (page, _))) => {
+                if page > 0 {
+                    view.go_to_page(page);
+                }
+            }
+            None if v.page > 0 && v.page < pages => view.go_to_page(v.page),
+            None => {}
         }
     }
 
@@ -1526,16 +1555,18 @@ impl PdfCraftApp {
         // Read mode opens with the panes closed; the rail still opens them (#932). A right panel
         // the user closed stays closed (#1590).
         let opening_mode = self.mode_override.unwrap_or(self.default_mode);
+        let initial = doc.initial_view();
         if activate && self.right.is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
             self.right = if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
-            } else if !doc.info.outline.is_empty() {
+            // A full-screen document names its panel for outside full screen, and with
+            // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
+            } else if !doc.info.outline.is_empty() && !initial.full_screen {
                 Some(RightPanel::Bookmarks)
             } else {
                 None
             };
         }
-        let initial = doc.initial_view();
         let view = DocView::new(id, &doc.info, self.view_defaults);
         self.views.push(view);
         if activate {
@@ -2606,6 +2637,7 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
@@ -2738,6 +2770,9 @@ impl PdfCraftApp {
         if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
             self.comment_prefs.hide_empty_highlight_hover = hide;
         }
+        if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
+            self.comment_prefs.pinned = pinned;
+        }
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
         if let Some(styles) = v["comment_styles"].as_array() {
@@ -2867,6 +2902,7 @@ impl PdfCraftApp {
                     "properties" => Some(Dialog::Properties(PropsTab::Description)),
                     "security" => Some(Dialog::Properties(PropsTab::Security)),
                     "fonts" => Some(Dialog::Properties(PropsTab::Fonts)),
+                    "custom" => Some(Dialog::Properties(PropsTab::Custom)),
                     "advanced" => Some(Dialog::Properties(PropsTab::Advanced)),
                     "shortcuts" => Some(Dialog::Shortcuts),
                     "split" => Some(Dialog::Split),
@@ -3079,6 +3115,13 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("comment-tool-pinned", _) => {
+                self.comment_prefs.pinned = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("comment-tool-pinned must be true or false".into()),
+                };
+            }
             ("hide-empty-highlight-hover", _) => {
                 self.comment_prefs.hide_empty_highlight_hover = match value {
                     "true" => true,

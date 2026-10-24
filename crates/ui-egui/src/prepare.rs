@@ -543,7 +543,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     let prep = &view.prepare;
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
-    let zoom = (xf.rect.width() / xf.pw.max(1.0)).clamp(0.5, 3.0);
+    let zoom = xf.zoom().clamp(0.5, 3.0);
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
             let mut r = screen_rect(xf, info, page, w.rect);

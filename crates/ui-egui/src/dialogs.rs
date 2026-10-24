@@ -36,6 +36,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(dialog) = app.dialog else {
         app.props_draft = None;
         app.view_draft = None;
+        app.custom_draft = None;
         return;
     };
     // Properties ▸ Fonts shows the fonts as they are now, after any content edits.
@@ -49,6 +50,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     {
         app.props_draft = Some((id, INFO_KEYS.map(|k| doc.info_value(k).unwrap_or_default())));
         app.view_draft = Some((id, doc.initial_view()));
+        app.custom_draft = Some((id, crate::CustomDraft { props: doc.custom_info(), ..Default::default() }));
     }
     let mut apply = false;
     let mut split_now: Option<crate::SplitPlan> = None;
@@ -114,6 +116,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         (PropsTab::InitialView, tl!("Initial View")),
                         (PropsTab::Security, tl!("Security")),
                         (PropsTab::Fonts, tl!("Fonts")),
+                        (PropsTab::Custom, tl!("Custom")),
                         (PropsTab::Advanced, tl!("Advanced")),
                     ] {
                         if widgets::mode_tab(ui, label, tab == tb).clicked() {
@@ -343,6 +346,89 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                                     " · Not embedded (substituted)"
                                 });
                                 row(ui, &f.name, detail);
+                            }
+                        }
+                        PropsTab::Custom => {
+                            // Add takes a new name, Update changes the value of the listed property the
+                            // Name field names, Delete removes it; OK writes the changes as one step.
+                            let editable = doc.allows_modification();
+                            let Some((_, d)) = app.custom_draft.as_mut() else { return };
+                            let l = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_muted));
+                            ui.add_enabled(
+                                editable,
+                                widgets::line(&mut d.name).desired_width(420.0).background_color(t.field).id_salt("custom-name"),
+                            )
+                            .labelled_by(l.id);
+                            ui.end_row();
+                            let l = ui.label(egui::RichText::new(tl!("Value:")).color(t.text_muted));
+                            ui.add_enabled(
+                                editable,
+                                widgets::line(&mut d.value).desired_width(420.0).background_color(t.field).id_salt("custom-value"),
+                            )
+                            .labelled_by(l.id);
+                            ui.end_row();
+                            // Untrimmed: a file's `/Project#20` is not `/Project`, and a typed space is refused.
+                            let name = d.name.clone();
+                            let value = d.value.trim().to_owned();
+                            let listed = d.props.iter().position(|(k, _)| *k == name);
+                            // An entry the list leaves out (not text, only padding, or past its 256) keeps its value.
+                            let file_props = doc.custom_info();
+                            let unlisted = doc.has_info(&name) && !file_props.iter().any(|(k, _)| *k == name);
+                            let refused = pdfcraft_engine::check_custom_key(&name).err().filter(|_| !name.is_empty()).map(|e| e.to_string());
+                            ui.label("");
+                            // A file can hold a custom name that `check_custom_key` refuses, such as one
+                            // with a space: the tab lists it, and Add, Update and Delete stay off for it.
+                            let why = |b: egui::Response| match &refused {
+                                Some(why) => b.on_disabled_hover_text(crate::i18n::words(why)),
+                                None => b,
+                            };
+                            // A name that isn't UTF-8 is listed with U+FFFD and can't be written back as it is.
+                            let editable = editable && refused.is_none() && !name.contains(char::REPLACEMENT_CHARACTER);
+                            // `custom_info` lists at most 256 properties, and a new name goes after the file's
+                            // entries, so Add is off once the draft or the file's own list holds 256.
+                            let room = d.props.len() < 256 && file_props.len() < 256;
+                            ui.horizontal(|ui| {
+                                let add = editable && room && listed.is_none() && !unlisted && !name.is_empty() && !value.is_empty();
+                                if why(ui.add_enabled(add, egui::Button::new(tl!("Add")))).clicked() {
+                                    d.props.push((name.clone(), value.clone()));
+                                    d.name.clear();
+                                    d.value.clear();
+                                }
+                                let update = editable && !value.is_empty() && listed.and_then(|n| d.props.get(n)).is_some_and(|(_, v)| *v != value);
+                                if why(ui.add_enabled(update, egui::Button::new(tl!("Update")))).clicked()
+                                    && let Some(p) = listed.and_then(|n| d.props.get_mut(n))
+                                {
+                                    p.1 = value.clone();
+                                }
+                                if why(ui.add_enabled(editable && listed.is_some(), egui::Button::new(tl!("Delete")))).clicked()
+                                    && let Some(n) = listed.filter(|n| *n < d.props.len())
+                                {
+                                    d.props.remove(n);
+                                    d.name.clear();
+                                    d.value.clear();
+                                }
+                            });
+                            ui.end_row();
+                            if d.props.is_empty() {
+                                ui.label("");
+                                ui.label(egui::RichText::new(tl!("None")).color(t.text_faint));
+                                ui.end_row();
+                            }
+                            // A click on a property fills the fields with it; values are document data.
+                            let mut picked = None;
+                            for (k, v) in &d.props {
+                                if ui.selectable_label(*k == name, k.as_str()).clicked() {
+                                    picked = Some((k.clone(), v.clone()));
+                                }
+                                ui.scope(|ui| {
+                                    ui.set_max_width(420.0);
+                                    ui.add(egui::Label::new(v.as_str()).wrap());
+                                });
+                                ui.end_row();
+                            }
+                            if let Some((k, v)) = picked {
+                                d.name = k;
+                                d.value = v;
                             }
                         }
                         PropsTab::Advanced => {
@@ -1443,6 +1529,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
+        app.custom_draft = None;
         app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
@@ -1493,6 +1580,18 @@ fn draft_changes(app: &PdfCraftApp) -> Option<Vec<Edit>> {
         && *v != doc.initial_view()
     {
         edits.push(Edit::SetInitialView(Box::new(v.clone())));
+    }
+    // Custom: deleted properties are cleared, then added and changed ones are set.
+    if let Some((cid, d)) = &app.custom_draft
+        && cid == id
+    {
+        let before = doc.custom_info();
+        for (k, _) in before.iter().filter(|(k, _)| !d.props.iter().any(|(n, _)| n == k)) {
+            edits.push(Edit::SetInfo { key: k.clone(), value: String::new() });
+        }
+        for (k, v) in d.props.iter().filter(|(k, v)| !before.iter().any(|(n, w)| n == k && w == v)) {
+            edits.push(Edit::SetInfo { key: k.clone(), value: v.clone() });
+        }
     }
     Some(edits)
 }

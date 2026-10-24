@@ -4,7 +4,8 @@
 //! cancels, Tab moves to the next field). Check boxes and radio buttons toggle on click, or on
 //! Space once Tab or a click has focused them. List boxes are directly selectable in-place on the
 //! page (clicking picks an option; Ctrl-click toggles on multi-select lists). Combo boxes open a
-//! list of their options. Every change is one undoable engine edit.
+//! list of their options; an editable one (Edit flag) also takes typed text in a box over the
+//! field. Every change is one undoable engine edit.
 
 use std::collections::HashSet;
 
@@ -89,11 +90,29 @@ fn fillable(f: &FormField) -> bool {
     !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
 
+/// Whether a combo box takes typed text as well as a choice from its list: the Edit flag
+/// (ISO 32000-2 Table 233), which only means something with Combo set.
+fn editable_combo(f: &FormField) -> bool {
+    f.kind == FormFieldKind::Combo && f.has(field_flags::EDIT)
+}
+
+/// The text a field's editor starts with: its value, or for a combo box the shown text of the
+/// option it picks (a free value typed into an editable one has no option, and shows as is).
+pub(crate) fn draft_text(f: &FormField) -> String {
+    let value = f.value.first().cloned().unwrap_or_default();
+    if f.kind == FormFieldKind::Combo
+        && let Some((_, shown)) = f.options.iter().find(|(export, _)| *export == value)
+    {
+        return shown.clone();
+    }
+    value
+}
+
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
         widget,
-        text: f.value.first().cloned().unwrap_or_default(),
+        text: draft_text(f),
         picked: f.value.clone(),
         request_focus: true,
         select_all: false,
@@ -273,6 +292,11 @@ pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
     let f = form.iter().find(|f| f.name == focus.name)?;
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
+        // Typed into an editable combo box: a shown text picks its option, anything else is the
+        // value itself (the engine maps it, and refuses free text when Edit is clear).
+        FormFieldKind::Combo if editable_combo(f) && focus.text != draft_text(f) && f.value.first() != Some(&focus.text) => {
+            FieldValue::Choice(if focus.text.is_empty() { Vec::new() } else { vec![focus.text.clone()] })
+        }
         _ => return None,
     };
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
@@ -285,6 +309,49 @@ pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
     if let Some(edit) = draft_edit(&focus, form) {
         view.pending_edit = Some(edit);
         view.forms.committed = Some(focus);
+    }
+}
+
+/// The text box of an editable combo box, over the field. What is typed becomes the value when
+/// Enter, Tab or a click away commits it; a pick from the list still sets an option.
+#[allow(clippy::too_many_arguments)]
+fn combo_editor(ctx: &egui::Context, view: &mut DocView, form: &[FormField], f: &FormField, w: &FormWidget, rect: Rect, zoom: f32, widget: usize) {
+    let mut enter = false;
+    egui::Area::new(egui::Id::new(("form-editor", view.id.0)))
+        .fade_in(false)
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .constrain_to(view.viewport_rect())
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(rect.size());
+            let Some(fx) = view.forms.focus.as_mut() else { return };
+            let font = (field_text_size(ui.painter(), f, w, &fx.text) * zoom).clamp(3.0, 64.0);
+            // The box is pale yellow in every theme, as a text field's is (#655).
+            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
+            let te = egui::TextEdit::singleline(&mut fx.text)
+                .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
+                .font(egui::FontId::proportional(font))
+                .background_color(FIELD_FILL)
+                .text_color(Color32::BLACK)
+                .margin(egui::Margin::symmetric(3, 1))
+                .id(egui::Id::new(("form-field", view.id.0, &f.name, widget)));
+            let r = ui.add_sized(rect.size(), te);
+            if std::mem::take(&mut fx.request_focus) {
+                r.request_focus();
+                // Entered with Tab: typing replaces the value.
+                if std::mem::take(&mut fx.select_all)
+                    && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
+                {
+                    let n = fx.text.chars().count();
+                    st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
+                    st.store(ui.ctx(), r.id);
+                }
+            }
+            enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        });
+    if enter {
+        commit(view, form);
     }
 }
 
@@ -577,7 +644,7 @@ pub(crate) fn overlay(
         return None;
     };
     let rect = widget_rect(&xf, info, page, w.rect);
-    let zoom = xf.rect.width() / xf.pw.max(1.0);
+    let zoom = xf.zoom();
     let t = Tokens::get(ctx);
     let mut edit = None;
     let mut close = false;
@@ -695,6 +762,11 @@ pub(crate) fn overlay(
             }
         }
         FormFieldKind::Combo => {
+            // An editable combo box has a text box over the field as well as its list (ISO
+            // 32000-2 Table 233, Edit).
+            if editable_combo(f) {
+                combo_editor(ctx, view, form, f, w, rect, zoom, focus.widget);
+            }
             let resp = egui::Area::new(egui::Id::new(("form-choices", view.id.0)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))

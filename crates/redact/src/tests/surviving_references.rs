@@ -66,3 +66,42 @@ fn an_image_a_surviving_form_draws_is_kept() {
     assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
     assert!(full_save_holds(&doc, b"IMAGESECRET"), "the image the form still draws outside the mark");
 }
+
+/// The surviving form draws the image through a nested form without /Resources of its own,
+/// which draws through the outer form's: the image is kept.
+#[test]
+fn an_image_a_surviving_forms_nested_form_draws_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"q 100 0 0 100 0 0 cm /Im Do Q /Fm Do"),
+        b"<< /XObject << /Im 6 0 R /Fm 7 0 R /Inner 8 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"IMAGESECRET"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources 5 0 R", b"/Inner Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"q 50 0 0 50 200 200 cm /Im Do Q"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 120.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(full_save_holds(&doc, b"IMAGESECRET"), "the image the nested form still draws outside the mark");
+}
+
+/// Two pages share one resource dictionary, and the second draws the image only through a form
+/// without /Resources: redacting the image on the first page keeps it for the second.
+#[test]
+fn an_image_another_page_draws_through_a_form_without_resources_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources 7 0 R >>".to_vec(),
+        stream("", b"q 100 0 0 100 0 0 cm /Im Do Q"),
+        stream("", b"/Inner Do"),
+        b"<< /XObject << /Im 8 0 R /Inner 9 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"IMAGESECRET"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"q 50 0 0 50 200 200 cm /Im Do Q"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 120.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(full_save_holds(&doc, b"IMAGESECRET"), "the second page still draws the image through its form");
+}

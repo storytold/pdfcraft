@@ -106,6 +106,7 @@ const MAX_BOOKMARK_POSITION: f64 = 1_000_000.0;
 const FIND_FIRST_BATCH: usize = 8;
 const FIND_MAX_BATCH: usize = 128;
 
+use file_access::foreign_share;
 use text_cache::TextCache;
 
 type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
@@ -2403,24 +2404,6 @@ fn lexical(path: &Path) -> Option<PathBuf> {
     Some(parts.iter().collect())
 }
 
-/// Whether `path` names another network share or device namespace than `root` (Windows
-/// `\\host\share`, `\\?\UNC\…`, `\\.\…`, `\\?\…`). Those are refused by name: even checking
-/// that one exists would contact the host. Drive letters are left to the normal check.
-fn foreign_share(path: &Path, root: &Path) -> bool {
-    use std::path::{Component, Prefix};
-    fn share(p: &Path) -> Option<String> {
-        let Some(Component::Prefix(prefix)) = p.components().next() else { return None };
-        let (kind, a, b) = match prefix.kind() {
-            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => return None,
-            Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share) => ("unc", host, share),
-            Prefix::DeviceNS(name) => ("device", name, std::ffi::OsStr::new("")),
-            Prefix::Verbatim(name) => ("verbatim", name, std::ffi::OsStr::new("")),
-        };
-        Some(format!("{kind}\\{}\\{}", a.to_string_lossy(), b.to_string_lossy()).to_lowercase())
-    }
-    share(path).is_some_and(|s| share(root).as_ref() != Some(&s))
-}
-
 // ---- JSON helpers ----------------------------------------------------------------------------
 
 fn parse_style_ranges(value: Option<&Value>) -> Result<Vec<pdfcraft_engine::RangeStyle>> {
@@ -2683,6 +2666,9 @@ fn info(d: &Document) -> Value {
         "creator": i.creator, "producer": i.producer,
         "tagged": i.tagged,
         "has_javascript": i.has_javascript,
+        // Where the document opens (/OpenAction, named destinations resolved): 1-based page and
+        // destination, null without one.
+        "open_destination": i.open_dest.as_ref().map(|(p, view)| json!({ "page": page1(*p), "destination": i.pages.get(*p).and_then(|pg| destination(view, pg)) })),
         // XFA forms: "static" (the PDF's own fields work; the XFA data is ignored) or "dynamic"
         // (laid out from the template by PdfCraft, see xfa_layout; placeholder pages when that failed).
         "xfa": i.xfa.map(|x| match x { pdfcraft_render::Xfa::Static => "static", pdfcraft_render::Xfa::Dynamic => "dynamic" }),

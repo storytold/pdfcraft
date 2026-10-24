@@ -14,7 +14,10 @@ use base64::Engine;
 
 use crate::XfaError;
 use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
-use crate::model::*;
+use crate::model::{
+    Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
+    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+};
 use crate::text::{self, Block, Face, Span};
 
 /// Most pages a form may lay out to.
@@ -1325,6 +1328,10 @@ impl Layouter<'_> {
         if cap.value.is_empty() && cap.reserve.is_none() {
             return None;
         }
+        // A check box has no text for an inline caption to run with: it is not shown.
+        if f.ui == Ui::CheckButton && cap.placement == Placement::Inline {
+            return None;
+        }
         let placement = if cap.placement == Placement::Inline { Placement::Left } else { cap.placement };
         let font = ctx.font.apply(&cap.font);
         let para = ctx.para.apply(&cap.para);
@@ -1365,13 +1372,18 @@ impl Layouter<'_> {
         };
         match self.caption_reserve(f, inner_w, ctx) {
             Some((Placement::Top | Placement::Bottom, r)) => ui + r,
-            Some((_, r)) => {
+            Some((placement, r)) => {
+                // A check box's caption without a reserve is drawn in all the box leaves.
+                let w = match auto_check_reserve(f, placement, inner_w, None) {
+                    Some(auto) => auto,
+                    None => inner_w - r,
+                };
                 let cap = f.caption.as_ref().map(|c| {
                     let rich = match &c.value {
                         Value::Rich(r) => r.clone(),
                         other => text::plain(&other.plain().unwrap_or_default()),
                     };
-                    text::measure_height(&rich, (inner_w - r).max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
+                    text::measure_height(&rich, w.max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
                         self.embed(id, max)
                     })
                 });
@@ -1838,6 +1850,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&f.common.margin);
         let (mut ui, mut cap_rect) = (inner, None);
         if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, ctx) {
+            let reserve = auto_check_reserve(f, placement, inner.w, Some(inner.h)).unwrap_or(reserve);
             let r = reserve.max(0.0);
             match placement {
                 Placement::Top => {
@@ -1975,12 +1988,21 @@ impl Layouter<'_> {
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
                 let s = f.check_size.unwrap_or(10.0).min(ui.w.max(1.0)).min(ui.h.max(1.0));
-                let y = match fctx.para.v_align {
-                    VAlign::Top => ui.y + f.ui_margin.top,
-                    VAlign::Middle => ui.y + (ui.h - s) / 2.0,
-                    VAlign::Bottom => ui.bottom() - s - f.ui_margin.bottom,
+                // Without a caption the box sits at the right of the content area, as if a
+                // caption on its left took the rest, so the paragraph's alignment has no room to
+                // act on; beside a caption that alignment places it. The box's own margin doesn't
+                // move it.
+                let x = match (cap_rect, fctx.para.h_align) {
+                    (None, _) | (Some(_), HAlign::Right) => ui.right() - s,
+                    (Some(_), HAlign::Center) => ui.x + (ui.w - s) / 2.0,
+                    (Some(_), HAlign::Left | HAlign::Justify) => ui.x,
                 };
-                let r = Rect::new(ui.x + f.ui_margin.left, y, s, s);
+                let y = match fctx.para.v_align {
+                    VAlign::Top => ui.y,
+                    VAlign::Middle => ui.y + (ui.h - s) / 2.0,
+                    VAlign::Bottom => ui.bottom() - s,
+                };
+                let r = Rect::new(x, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
                     Some((group, on_value, tip, chosen)) => (
@@ -2067,6 +2089,22 @@ impl Layouter<'_> {
             no_scroll: f.no_scroll,
         })))
     }
+}
+
+/// The room a caption without a reserve takes beside a check box: all the box leaves of a
+/// content area `w` wide (and `h` tall, when known), the box at the size it can be drawn there.
+/// `None` for any other field, or a caption with a reserve of its own.
+fn auto_check_reserve(f: &Field, placement: Placement, w: f64, h: Option<f64>) -> Option<f64> {
+    if f.ui != Ui::CheckButton || f.caption.as_ref().is_none_or(|c| c.reserve.is_some()) {
+        return None;
+    }
+    let s = f.check_size.unwrap_or(10.0).min(w.max(1.0)).min(h.map_or(f64::INFINITY, |h| h.max(1.0)));
+    let rest = match (placement, h) {
+        (Placement::Top | Placement::Bottom, Some(h)) => h - s,
+        (Placement::Top | Placement::Bottom, None) => return None,
+        _ => w - s,
+    };
+    Some(rest.max(0.0))
 }
 
 /// The widget's own border from the `<ui>` border element. Without one, a check box gets a

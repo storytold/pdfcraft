@@ -110,6 +110,10 @@ pub struct DocInfo {
     pub attachments: Vec<Attachment>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
+    /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
+    /// named destinations resolved. `None` without one, for an action that goes nowhere in this
+    /// document (a script, say), or for one that doesn't resolve to a page of it.
+    pub open_dest: Option<(usize, DestView)>,
     pub warnings: Vec<String>,
 }
 
@@ -401,6 +405,9 @@ pub struct OutlineItem {
     /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
     pub view: DestView,
     pub children: Vec<OutlineItem>,
+    /// Whether the bookmark starts open: only a positive `/Count` says so (ISO 32000-2 §12.3.3,
+    /// Table 151). A negative one is closed, and so is a missing one, which a bookmark with
+    /// children should not have.
     pub open: bool,
     /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), or `None` for the
     /// default black or a value that isn't three numbers.
@@ -825,6 +832,25 @@ impl<'a> Inspector<'a> {
         {
             info.has_javascript = true;
         }
+        info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
+    }
+
+    /// The destination `/OpenAction` opens at (ISO 32000-2 §7.7.2 Table 29): an explicit
+    /// destination array, a `/GoTo` action's `/D`, or (leniently, since Table 29 asks for an array
+    /// or an action) a destination name or string; a name or string is looked up as a named
+    /// destination (§12.3.2.4). Any other action (a script, a remote go-to) has none here, and
+    /// neither has a page number past the end of the document.
+    fn open_dest(&self, action: &Object) -> Option<(usize, DestView)> {
+        let dest = match self.resolve(action) {
+            Object::Dictionary(d) => {
+                if d.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) != Some(&b"GoTo"[..]) {
+                    return None;
+                }
+                d.get(b"D").ok()?
+            }
+            other => other,
+        };
+        self.dest(dest, 0).filter(|(page, _)| *page < self.page_ids.len())
     }
 
     // ── object helpers ──────────────────────────────────────────────────────────────────────
@@ -4112,5 +4138,114 @@ mod open_action_javascript_tests {
         let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
         let info = inspect(Arc::new(bytes), None).expect("inspects");
         assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod open_dest_tests {
+    use std::sync::Arc;
+
+    use super::{DestView, inspect};
+
+    /// Three 612×792 pages (objects 3, 4, 5); `catalog` is added to the catalog dictionary and
+    /// `extra` become objects 6, 7, ….
+    fn pdf(catalog: &str, extra: &[String]) -> Vec<u8> {
+        let mut objs =
+            vec![format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"), "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_string()];
+        for _ in 0..3 {
+            objs.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_string());
+        }
+        objs.extend(extra.iter().cloned());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    fn open_dest(catalog: &str, extra: &[String]) -> Option<(usize, DestView)> {
+        inspect(Arc::new(pdf(catalog, extra)), None).expect("inspects").open_dest
+    }
+
+    const XYZ: DestView = DestView::Xyz { left: Some(100.0), top: Some(500.0), zoom: Some(2.0) };
+
+    #[test]
+    fn an_explicit_destination_opens_at_its_page_and_position() {
+        assert_eq!(open_dest("/OpenAction [5 0 R /XYZ 100 500 2]", &[]), Some((2, XYZ)));
+        assert_eq!(open_dest("/OpenAction [4 0 R /FitH 400]", &[]), Some((1, DestView::FitH { top: Some(400.0) })));
+        // Indirect, and a zoom of 0 keeps the zoom (Table 149).
+        assert_eq!(
+            open_dest("/OpenAction 6 0 R", &["[4 0 R /XYZ 0 792 0]".into()]),
+            Some((1, DestView::Xyz { left: Some(0.0), top: Some(792.0), zoom: None }))
+        );
+    }
+
+    #[test]
+    fn a_go_to_action_opens_at_its_destination_explicit_or_named() {
+        assert_eq!(open_dest("/OpenAction << /S /GoTo /D [5 0 R /XYZ 100 500 2] >>", &[]), Some((2, XYZ)));
+        // A name, through the PDF 1.1 catalog /Dests dictionary (§12.3.2.4).
+        assert_eq!(open_dest("/OpenAction << /S /GoTo /D /there >> /Dests << /there [5 0 R /XYZ 100 500 2] >>", &[]), Some((2, XYZ)));
+        // A byte string, through the /Names /Dests name tree, whose value is a dictionary with /D.
+        assert_eq!(
+            open_dest(
+                "/OpenAction << /S /GoTo /D (there) >> /Names << /Dests 6 0 R >>",
+                &["<< /Kids [7 0 R] >>".into(), "<< /Names [(here) [3 0 R /Fit] (there) << /D [5 0 R /XYZ 100 500 2] >>] >>".into()]
+            ),
+            Some((2, XYZ))
+        );
+    }
+
+    #[test]
+    fn an_open_action_given_as_a_name_or_string_is_looked_up() {
+        assert_eq!(open_dest("/OpenAction /there /Dests << /there [4 0 R /Fit] >>", &[]), Some((1, DestView::Fit)));
+        assert_eq!(
+            open_dest("/OpenAction (there) /Names << /Dests << /Names [(there) [5 0 R /FitV 30]] >> >>", &[]),
+            Some((2, DestView::FitV { left: Some(30.0) }))
+        );
+    }
+
+    #[test]
+    fn an_open_action_that_goes_nowhere_here_has_no_destination() {
+        for catalog in [
+            "",
+            "/OpenAction << /S /JavaScript /JS (app.alert(1)) >>",
+            // A remote go-to's /D is a page of another file.
+            "/OpenAction << /S /GoToR /F (other.pdf) /D [1 /Fit] >>",
+            "/OpenAction << /D [4 0 R /Fit] >>",
+            // An unknown name, and no name dictionaries at all.
+            "/OpenAction << /S /GoTo /D /missing >> /Dests << /there [4 0 R /Fit] >>",
+            "/OpenAction /missing",
+            // A page number past the end, and a page reference that is no page.
+            "/OpenAction [7 /Fit]",
+            "/OpenAction [2 0 R /Fit]",
+            "/OpenAction 42",
+        ] {
+            assert_eq!(open_dest(catalog, &[]), None, "{catalog}");
+        }
+    }
+
+    #[test]
+    fn cyclic_and_deep_named_destinations_end() {
+        // Names that refer to each other.
+        assert_eq!(open_dest("/OpenAction /a /Dests << /a /b /b /a >>", &[]), None);
+        assert_eq!(open_dest("/OpenAction /a /Dests << /a << /D /a >> >>", &[]), None);
+        // A name tree whose node is its own kid.
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &["<< /Kids [6 0 R] >>".into()]), None);
+        // A name tree deeper than the depth bound: the leaf past it isn't read.
+        let depth = 40;
+        let mut nodes: Vec<String> = (0..depth).map(|i| format!("<< /Kids [{} 0 R] >>", 7 + i)).collect();
+        nodes.push("<< /Names [(x) [4 0 R /Fit]] >>".into());
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &nodes), None);
+        // A shallow one is read.
+        let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
     }
 }

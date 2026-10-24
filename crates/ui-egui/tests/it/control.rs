@@ -89,6 +89,25 @@ fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, pa
 }
 
 #[test]
+fn comment_pin_is_reported_and_persistent() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], false);
+    for pinned in [true, false] {
+        ok(&mut h, &c, "ui.set", json!({"key":"comment-tool-pinned","value":pinned}));
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], pinned);
+        let mut restored = PdfCraftApp::new();
+        restored.comment_prefs.pinned = !pinned;
+        restored.restore(&h.state().persist());
+        assert_eq!(restored.comment_prefs.pinned, pinned);
+        for invalid in [json!("yes"), json!(1), json!(null), json!([]), json!({})] {
+            assert!(call(&mut h, &c, "ui.set", json!({"key":"comment-tool-pinned","value":invalid})).is_err());
+            assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], pinned);
+        }
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["dirty"], false);
+    }
+}
+
+#[test]
 fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "pages"}));

@@ -1423,6 +1423,95 @@ fn mode_tabs_keep_the_hand_over_a_text_field_scrolled_under_them() {
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the field's editor");
 }
 
+/// Two combo boxes of Apple and Banana: `fruit` editable (Combo and Edit, ISO 32000-2 Table 233),
+/// `veg` a drop-down list only.
+fn combo_form() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (fruit) /Ff 393216 /Opt [(Apple) (Banana)] /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (veg) /Ff 131072 /Opt [(Apple) (Banana)] /Rect [20 300 280 322] /P 3 0 R /F 4 >>",
+    ])
+}
+
+fn combo_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("combo.pdf", None, combo_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// An editable combo box takes a typed value that isn't among its options, and still takes a
+/// pick from its list; the typed value is what Save writes.
+#[test]
+fn an_editable_combo_box_takes_a_typed_value() {
+    let dir = scratch("editable-combo");
+    let out = dir.join("saved.pdf");
+    let mut h = combo_harness();
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(focused(&h), Some(("fruit".into(), 0)));
+    h.event(egui::Event::Text("Cherry".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["Cherry"], "Enter commits the typed value");
+    assert!(h.state().views[0].forms.focus.is_none(), "and closes the field");
+    // Reopened, it shows the typed value, and the list still picks an option.
+    click_field(&mut h, "fruit", 0);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some("Cherry"));
+    h.get_by_label("Banana").click();
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["Banana"], "a pick from the list");
+    // Typed again, Tab commits it, and Save writes it.
+    click_field(&mut h, "fruit", 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Damson".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "fruit"), ["Damson"], "Tab commits the typed value");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+    wait_for_file(&mut h, &out);
+    assert_eq!(saved_value(&out, "fruit"), ["Damson"]);
+    // Undo takes the typing back as one step.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(value(&h, "fruit"), ["Banana"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A combo box without the Edit flag is a drop-down list only: typing changes nothing.
+#[test]
+fn a_combo_box_without_edit_takes_no_typing() {
+    let mut h = combo_harness();
+    click_field(&mut h, "veg", 0);
+    assert_eq!(focused(&h), Some(("veg".into(), 0)));
+    h.event(egui::Event::Text("Cherry".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(""), "no text box took the typing");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert!(value(&h, "veg").is_empty(), "nothing typed reaches the field");
+    // Tab went on to `fruit`, whose open list covers `veg`: close it first.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    click_field(&mut h, "veg", 0);
+    h.get_by_label("Apple").click();
+    h.run_steps(4);
+    assert_eq!(value(&h, "veg"), ["Apple"], "its list still picks");
+}
+
 /// A button script's `ShowHideFileAttachment` opens the attachments panel, and running it again
 /// closes it.
 #[test]

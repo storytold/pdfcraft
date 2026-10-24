@@ -213,6 +213,49 @@ fn doc_info_lists_page_transitions_and_display_times() {
     );
 }
 
+/// `doc_info` says where the document opens: the `/OpenAction` destination, a named one
+/// resolved (ISO 32000-2 §12.3.2.4), as a 1-based page and a destination in view coordinates.
+#[test]
+fn doc_info_reports_the_open_destination() {
+    let dir = workdir("open-destination");
+    let write = |name: &str, catalog: &str| {
+        let objects: Vec<String> = vec![
+            format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for o in offsets {
+            bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        std::fs::write(dir.join(name), bytes).unwrap();
+    };
+    write("named.pdf", "/OpenAction << /S /GoTo /D /there >> /Dests << /there [4 0 R /XYZ 100 500 2] >>");
+    write("script.pdf", "/OpenAction << /S /JavaScript /JS (1) >>");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "named.pdf" }))["doc"].as_u64().unwrap();
+    let open = ok(&mut a, "doc_info", json!({ "doc": doc }))["open_destination"].clone();
+    assert_eq!(open["page"], 2, "{open}");
+    // y 500 is 292 points below the top of the 792-point page.
+    assert_eq!(
+        (open["destination"]["fit"].as_str(), open["destination"]["left"].as_f64(), open["destination"]["top"].as_f64()),
+        (Some("XYZ"), Some(100.0), Some(292.0)),
+        "{open}"
+    );
+    assert_eq!(open["destination"]["zoom"].as_f64(), Some(2.0));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "script.pdf" }))["doc"].as_u64().unwrap();
+    assert!(ok(&mut a, "doc_info", json!({ "doc": doc }))["open_destination"].is_null());
+}
+
 /// Page transitions through the tools: set on chosen pages, written to the file as `/Trans` and
 /// `/Dur`, removed again, bad values refused, and one undo step. (Read through `pdfcraft_cos`,
 /// so this does not lean on `doc_info` listing them.)
@@ -8866,6 +8909,34 @@ fn bookmark_list_reports_colour_and_style() {
     let mut b = auto(&dir);
     let re = ok(&mut b, "doc_open", json!({ "path": "restyled.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
+}
+
+/// An editable combo box (ISO 32000-2 Table 233, Edit) takes a value that isn't one of its
+/// options, and its page appearance shows it, before and after a save; one without Edit takes
+/// only its options.
+#[test]
+fn form_fill_takes_free_text_only_in_an_editable_combo_box() {
+    let dir = workdir("editable-combo");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let combo = |name: &str, top: f64, editable: bool| json!({ "doc": doc, "page": 1, "type": "combo", "rect": [20, top, 200, top + 22.0], "name": name, "options": ["Apple", "Banana"], "editable": editable });
+    ok(&mut a, "form_add_field", combo("fruit", 20.0, true));
+    ok(&mut a, "form_add_field", combo("veg", 60.0, false));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "fruit": "Cherry" } }));
+    assert!(page_text(&mut a, doc)[0].contains("Cherry"), "the typed value is drawn");
+    let refused = err(&mut a, "form_fill", json!({ "doc": doc, "values": { "veg": "Cherry" } }));
+    assert!(matches!(&refused, ToolError::Failed(m) | ToolError::InvalidArgs(m) if m.contains("no option")), "{refused:?}");
+    // A choice from the list still works in both.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "veg": "Banana" } }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "filled.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "filled.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": saved }));
+    let value = |name: &str| fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).map(|f| f["value"].clone());
+    assert_eq!(value("fruit"), Some(json!("Cherry")), "{fields}");
+    assert_eq!(value("veg"), Some(json!("Banana")), "{fields}");
+    let text = page_text(&mut a, saved);
+    assert!(text[0].contains("Cherry") && text[0].contains("Banana"), "{text:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `page_render`'s pixels show a rubber stamp written without an appearance as the stamp its

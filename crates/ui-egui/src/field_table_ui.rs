@@ -343,10 +343,36 @@ fn column_bar(ui: &mut egui::Ui, d: &mut FieldTableDraft, t: &theme::Tokens) {
             .collect()
     };
     let n = d.table.columns.len();
+    let ends = edges(&d.shares());
+    let active = column_dividers(ui, d, bar, &ends);
+
+    let painter = ui.painter_at(bar);
+    // Input may have resized a pair; paint the shares after handling it.
+    let shares = d.shares();
+    let mut left = bar.left();
+    for (c, (&right, share)) in edges(&shares).iter().zip(&shares).enumerate() {
+        // The last column ends at the bar's edge, whatever rounding says.
+        let right = if c + 1 == n { bar.right() } else { right.min(bar.right()) };
+        let column = Rect::from_min_max(pos2(left, bar.top()), pos2(right, bar.bottom()));
+        painter.rect_filled(column, CornerRadius::ZERO, SELECT_BLUE.gamma_multiply(if c % 2 == 0 { 0.11 } else { 0.055 }));
+        if column.width() > 32.0 {
+            painter.text(column.center(), egui::Align2::CENTER_CENTER, format!("{:.0}%", share * 100.0), theme::medium(11.0), t.text);
+        }
+        left = right;
+    }
+    painter.rect_stroke(bar, CornerRadius::same(3), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    for (i, &x) in edges(&shares).iter().enumerate().take(n.saturating_sub(1)) {
+        let stroke = if active == Some(i) { Stroke::new(3.0, SELECT_BLUE) } else { Stroke::new(1.5, t.border) };
+        painter.line_segment([pos2(x, bar.top() + 1.0), pos2(x, bar.bottom() - 1.0)], stroke);
+    }
+}
+
+/// Handle input at the pre-interaction edges and return the hovered, dragged or focused divider.
+fn column_dividers(ui: &mut egui::Ui, d: &mut FieldTableDraft, bar: Rect, ends: &[f32]) -> Option<usize> {
+    let n = d.table.columns.len();
     // Wide enough to grab, never reaching past the middle of a column.
     let reach = (bar.width() / n.max(1) as f32 / 2.0).clamp(2.0, 8.0);
     let mut active = None;
-    let ends = edges(&d.shares());
     for (i, &x) in ends.iter().enumerate().take(n.saturating_sub(1)) {
         let hit = Rect::from_min_max(pos2(x - reach, bar.top()), pos2(x + reach, bar.bottom()));
         let resp = ui.interact(hit, ui.id().with(("field table divider", i)), Sense::click_and_drag());
@@ -374,24 +400,7 @@ fn column_bar(ui: &mut egui::Ui, d: &mut FieldTableDraft, t: &theme::Tokens) {
         }
     }
 
-    let painter = ui.painter_at(bar);
-    let shares = d.shares();
-    let mut left = bar.left();
-    for (c, (&right, share)) in edges(&shares).iter().zip(&shares).enumerate() {
-        // The last column ends at the bar's edge, whatever rounding says.
-        let right = if c + 1 == n { bar.right() } else { right.min(bar.right()) };
-        let column = Rect::from_min_max(pos2(left, bar.top()), pos2(right, bar.bottom()));
-        painter.rect_filled(column, CornerRadius::ZERO, SELECT_BLUE.gamma_multiply(if c % 2 == 0 { 0.11 } else { 0.055 }));
-        if column.width() > 32.0 {
-            painter.text(column.center(), egui::Align2::CENTER_CENTER, format!("{:.0}%", share * 100.0), theme::medium(11.0), t.text);
-        }
-        left = right;
-    }
-    painter.rect_stroke(bar, CornerRadius::same(3), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    for (i, &x) in edges(&shares).iter().enumerate().take(n.saturating_sub(1)) {
-        let stroke = if active == Some(i) { Stroke::new(3.0, SELECT_BLUE) } else { Stroke::new(1.5, t.border) };
-        painter.line_segment([pos2(x, bar.top() + 1.0), pos2(x, bar.bottom() - 1.0)], stroke);
-    }
+    active
 }
 
 /// The table being set up, on its page: each cell with its name, or the table's outline in red
@@ -401,7 +410,7 @@ pub(crate) fn paint_preview(painter: &egui::Painter, xf: &PageXform, page: usize
     if preview.page != page {
         return;
     }
-    let zoom = (xf.rect.width() / xf.pw.max(1.0)).clamp(0.5, 3.0);
+    let zoom = xf.zoom().clamp(0.5, 3.0);
     let font = theme::regular((9.0 * zoom).clamp(7.0, 13.0));
     let on_screen = |r: [f64; 4]| xf.view_rect([r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
     let outline = on_screen(preview.laid.table.rect);
@@ -446,6 +455,62 @@ mod tests {
         let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[], 0);
         d.table.set_columns(columns, &d.base);
         d
+    }
+
+    fn bar_frame(ctx: &egui::Context, d: &mut FieldTableDraft, key: Option<egui::Key>, focus: Option<usize>) -> egui::FullOutput {
+        let events = key
+            .into_iter()
+            .flat_map(|key| {
+                [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE })
+            })
+            .collect();
+        ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 160.0))), events, ..Default::default() },
+            |ui| {
+                let other = ui.button("Other control");
+                if let Some(i) = focus {
+                    ui.memory_mut(|memory| memory.request_focus(ui.id().with(("field table divider", i))));
+                } else {
+                    other.request_focus();
+                }
+                column_bar(ui, d, &theme::Tokens::get(ctx));
+            },
+        )
+    }
+
+    #[test]
+    fn arrow_keys_resize_only_the_focused_pair_and_paint_its_new_widths() {
+        for columns in [3, 30] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(theme::font_definitions());
+            let mut d = draft(columns);
+            let before: Vec<f64> = d.table.columns.iter().map(|c| c.width).collect();
+            let total: f64 = before.iter().sum();
+            bar_frame(&ctx, &mut d, None, Some(0)).drop_without_applying_deltas();
+            let output = bar_frame(&ctx, &mut d, Some(egui::Key::ArrowRight), Some(0));
+            assert!((d.table.columns[0].width - before[0] - total * 0.01).abs() < 1e-9);
+            assert!((d.table.columns[1].width - before[1] + total * 0.01).abs() < 1e-9);
+            assert_eq!(d.table.columns.iter().skip(2).map(|c| c.width).collect::<Vec<_>>(), before[2..]);
+            let painted: Vec<Rect> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(r) if r.fill == SELECT_BLUE.gamma_multiply(0.11) || r.fill == SELECT_BLUE.gamma_multiply(0.055) => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(painted.len(), columns);
+            let width: f32 = painted.iter().map(Rect::width).sum();
+            assert!((f64::from(painted[0].width() / width) - d.shares()[0]).abs() < 1e-6, "paint the changed shares in the same frame");
+            output.drop_without_applying_deltas();
+            bar_frame(&ctx, &mut d, Some(egui::Key::ArrowLeft), Some(0)).drop_without_applying_deltas();
+            assert!(d.table.columns.iter().zip(&before).all(|(c, w)| (c.width - w).abs() < 1e-9), "left reverses right on the focused divider");
+            bar_frame(&ctx, &mut d, Some(egui::Key::ArrowRight), None).drop_without_applying_deltas();
+            assert!(
+                d.table.columns.iter().zip(&before).all(|(c, w)| (c.width - w).abs() < 1e-9),
+                "arrows on another control leave the columns alone"
+            );
+        }
     }
 
     /// Thirty even columns leave each pair less than twice the least share a divider keeps: the

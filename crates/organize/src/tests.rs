@@ -528,6 +528,29 @@ fn custom_document_properties_are_listed_set_removed_and_their_names_checked() {
     assert!(custom_info(&doc).is_empty());
 }
 
+/// An `/Info` dictionary written directly in the trailer: a cleared entry is removed, and the
+/// other entries are kept.
+#[test]
+fn document_info_entries_are_cleared_from_an_info_dictionary_in_the_trailer() {
+    let b = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+            body("X"),
+        ],
+        "/Root 1 0 R /Info << /Title (Report) /Project (Apollo) /Revision (7) >>",
+    );
+    let mut doc = open(b);
+    set_info(&mut doc, "Missing", "").unwrap();
+    assert!(matches!(doc.trailer().get(b"Info"), Some(Object::Dict(_))), "clearing an absent entry changes nothing");
+    set_info(&mut doc, "Project", "").unwrap();
+    set_info(&mut doc, "Title", "").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(custom_info(&doc), [("Revision".to_string(), "7".to_string())]);
+    assert_eq!(info(&doc, "Title"), None);
+}
+
 /// Padding is not part of a custom value, in any mix of NULs and whitespace, a value that is only
 /// padding is not listed, and such entries don't count towards the 256 listed: a real property
 /// after 300 blank ones is still there.
@@ -1725,6 +1748,18 @@ fn bookmarks_add_rename_move_delete() {
     assert_eq!(crate::move_bookmark(&mut d, &[0], &[2], 9).unwrap(), vec![1, 1]);
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Figure 1]"]);
     assert_eq!(crate::move_bookmark(&mut d, &[1], &[1, 0], 0), Err(crate::OutlineError::IntoItself));
+    // Into a bookmark with no children yet (Indent): it opens, so the moved one shows.
+    assert_eq!(crate::move_bookmark(&mut d, &[1, 1], &[0], 0).unwrap(), vec![0, 0]);
+    let intro = crate::bookmarks(&d)[0].obj;
+    assert_eq!(count_of(&d, intro), Some(1));
+    // Reordering inside a closed parent leaves it closed.
+    crate::add_bookmark(&mut d, &[0], 1, "Second", 0).unwrap();
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    crate::move_bookmark(&mut d, &[0, 1], &[0], 0).unwrap();
+    assert_eq!(count_of(&d, intro), Some(-2));
+    crate::delete_bookmark(&mut d, &[0, 0]).unwrap();
+    crate::move_bookmark(&mut d, &[0, 0], &[1], 9).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Figure 1]"]);
     crate::delete_bookmark(&mut d, &[1, 0]).unwrap();
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Figure 1]"]);
 
@@ -2390,6 +2425,46 @@ fn initial_view_round_trips_and_keeps_scripts() {
     crate::set_initial_view(&mut doc, &crate::InitialView { layout: Layout::SinglePage, ..Default::default() }).unwrap();
     assert!(doc.get(root).as_dict().unwrap().get(b"OpenAction").and_then(|o| o.as_dict()).is_some_and(|d| d.name(b"S") == Some(b"JavaScript")));
     assert!(crate::set_initial_view(&mut doc, &crate::InitialView { page: 9, ..Default::default() }).is_err());
+}
+
+#[test]
+fn an_unchanged_opening_destination_keeps_its_position_and_name() {
+    use crate::view::{Magnification, Navigation};
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    let xyz = Object::Array(vec![page2.clone(), Object::name("XYZ"), Object::Int(100), Object::Int(500), Object::Int(2)]);
+    let mut named = pdfcraft_cos::Dict::new();
+    named.set(b"S".to_vec(), Object::name("GoTo"));
+    named.set(b"D".to_vec(), Object::name("there"));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page2, Object::name("Fit")]));
+    let mut prefs = pdfcraft_cos::Dict::new();
+    prefs.set(b"NonFullScreenPageMode".to_vec(), Object::name("UseOutlines"));
+    for action in [xyz, Object::Dict(named)] {
+        let mut doc = open(fixture());
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"OpenAction".to_vec(), action.clone());
+            c.set(b"Dests".to_vec(), Object::Dict(dests.clone()));
+            c.set(b"PageMode".to_vec(), Object::name("FullScreen"));
+            c.set(b"ViewerPreferences".to_vec(), Object::Dict(prefs.clone()));
+        })
+        .unwrap();
+        // Another option changes: the opening action is written back as it was, and so is the
+        // full-screen panel, which the dialog doesn't edit.
+        let v = crate::initial_view(&doc);
+        assert_eq!(v.non_full_screen, Navigation::Bookmarks);
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_eq!(catalog.get(b"OpenAction"), Some(&action));
+        let doc = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&doc), crate::InitialView { hide_toolbar: true, ..v.clone() });
+        // A changed magnification writes a destination of its own.
+        let mut doc = doc;
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitPage, ..v }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_ne!(catalog.get(b"OpenAction"), Some(&action));
+        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitPage);
+    }
 }
 
 // ── Split / Extract keep only the resources the part draws (#204) ──────────────────────────────

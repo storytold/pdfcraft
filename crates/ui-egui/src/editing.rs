@@ -493,7 +493,7 @@ impl PdfCraftApp {
                 && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
                 && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
             {
-                focus.text = field.value.first().cloned().unwrap_or_default();
+                focus.text = crate::forms_ui::draft_text(field);
                 focus.picked = field.value.clone();
             }
             if let Some(page) = signature_page

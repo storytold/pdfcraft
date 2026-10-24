@@ -6413,6 +6413,42 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
     }
 }
 
+/// ISO 32000-2 Table 178: with `/LL`, `/L` gives the ends of the leader lines, and the line itself
+/// is drawn `/LL` from it (above, for a positive `/LL` on a line drawn left to right). The page
+/// view shows the line there, with its leaders down to `/L`, and nothing along `/L` itself.
+#[test]
+fn a_line_without_an_appearance_is_drawn_at_its_leader_length() {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [0 0 200 300] /L [40 100 160 100] /LL 30 /C [1 0 0] /BS << /W 4 >> >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("line.pdf", None, Arc::new(bytes), None).expect("opens");
+    let p = shown(&s, id, 0);
+    let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+    // y down: /L is row 200, the line itself row 170.
+    assert_eq!(px(100, 170), vec![255, 0, 0, 255], "the line, 30 above /L");
+    assert_eq!(px(40, 185), vec![255, 0, 0, 255], "the leader line at the start");
+    assert_eq!(px(160, 185), vec![255, 0, 0, 255], "the leader line at the end");
+    assert_eq!(px(100, 200), vec![255, 255, 255, 255], "nothing along /L");
+}
+
 /// A stamp's `/Rect` and the colour family expected inside it.
 type StampRect = ([f64; 4], char);
 

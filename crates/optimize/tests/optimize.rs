@@ -1273,6 +1273,50 @@ fn indirectly_referenced_destination_is_kept() {
     assert!(!left.contains(&b"unused".to_vec()));
 }
 
+#[test]
+fn a_destination_named_only_by_a_remote_or_embedded_go_to_is_removed() {
+    // The /D of a GoToR or GoToE action names a destination in another document. A local
+    // destination of the same name that nothing else uses is unreferenced.
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let link = |doc: &mut Document, action: Dict| {
+        let mut link = Dict::new();
+        link.set(b"Type".to_vec(), Object::name("Annot"));
+        link.set(b"Subtype".to_vec(), Object::name("Link"));
+        link.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        link.set(b"A".to_vec(), Object::Dict(action));
+        Object::Ref(doc.add(Object::Dict(link)))
+    };
+    let mut go_to = Dict::new();
+    go_to.set(b"S".to_vec(), Object::name("GoTo"));
+    go_to.set(b"D".to_vec(), s("local"));
+    let mut remote = Dict::new();
+    remote.set(b"S".to_vec(), Object::name("GoToR"));
+    remote.set(b"F".to_vec(), s("other.pdf"));
+    remote.set(b"D".to_vec(), s("remote"));
+    let mut target = Dict::new();
+    target.set(b"R".to_vec(), Object::name("C"));
+    target.set(b"N".to_vec(), s("attached.pdf"));
+    let mut embedded = Dict::new();
+    embedded.set(b"S".to_vec(), Object::name("GoToE"));
+    embedded.set(b"T".to_vec(), Object::Dict(target));
+    embedded.set(b"D".to_vec(), s("embedded"));
+    let links = vec![link(&mut doc, go_to), link(&mut doc, remote), link(&mut doc, embedded)];
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(links))).unwrap();
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("embedded"), fit.clone(), s("local"), fit.clone(), s("remote"), fit]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.unreferenced_dests, 2);
+    assert_eq!(named_dest_keys(&doc), vec![b"local".to_vec()]);
+}
+
 /// The keys in the catalog's /Names /Dests name tree (one level, as the optimizer writes it).
 fn named_dest_keys(doc: &Document) -> Vec<Vec<u8>> {
     let cat = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();

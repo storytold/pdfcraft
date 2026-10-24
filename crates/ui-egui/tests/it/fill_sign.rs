@@ -237,6 +237,51 @@ fn fill_text_size_resizes_the_selected_text() {
     assert!(after > before * 2.0, "36 pt text has a taller box than 10 pt text: {before} -> {after}");
 }
 
+/// The font sizes of the texts `text` drawn in the last frame.
+fn drawn_sizes(h: &Harness<'static, PdfCraftApp>, text: &str) -> Vec<f32> {
+    fn walk(shape: &egui::Shape, text: &str, out: &mut Vec<f32>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, text, out)),
+            egui::Shape::Text(t) if t.galley.text() == text => {
+                out.extend(t.galley.job.sections.first().map(|s| s.format.font_id.size));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        walk(&clipped.shape, text, &mut out);
+    }
+    out
+}
+
+/// The type box draws its text at the page's zoom whichever way the view is turned. With the
+/// view turned a quarter, the page's width runs down the screen: reading the zoom off the screen
+/// rectangle's width instead made the typed text a height-over-width too large (here 4/3).
+#[test]
+fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
+    for rotate in ["0", "90"] {
+        let mut h = harness();
+        h.state_mut().set_option("rotate", rotate).unwrap();
+        h.run_steps(3);
+        h.state_mut().execute("sign.fill.text");
+        click(&mut h, 50.0, 250.0);
+        h.event(egui::Event::Text("Ada".into()));
+        h.run_steps(2);
+        let s = h.state();
+        let page = &s.session.get(s.views[0].id).unwrap().info.pages[0];
+        let rect = s.views[0].page_screen_rect(0).expect("on screen");
+        // Screen pixels per page point: the page's width lies across, or down when turned.
+        let zoom = if rotate == "90" { rect.height() } else { rect.width() } / page.width;
+        let size = s.views[0].fill_text.as_ref().expect("an open type box").size as f32;
+        let drawn = drawn_sizes(&h, "Ada");
+        assert!(!drawn.is_empty(), "{rotate}°: the typed text is drawn");
+        for d in drawn {
+            assert!((d - size * zoom).abs() < 0.5, "{rotate}°: drawn at {d}, the page shows it at {}", size * zoom);
+        }
+    }
+}
+
 #[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();

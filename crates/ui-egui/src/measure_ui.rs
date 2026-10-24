@@ -208,7 +208,7 @@ pub(crate) fn page_input(
             if state.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != doc.edit_generation()) {
                 state.paths = Some((page, doc.edit_generation(), doc.measurement_paths(page)));
             }
-            let pixels_per_unit = (xf.rect.width() / xf.pw).max(1e-6);
+            let pixels_per_unit = xf.zoom().max(1e-6);
             if let Some((_, _, Err(e))) = &state.paths {
                 state.error = Some(e.clone());
             }

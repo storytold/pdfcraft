@@ -352,6 +352,19 @@ fn links_out_of_a_root_are_refused() {
     assert_eq!(names(&base.join("outside")), ["pic.png", "secret.pdf"]);
 }
 
+/// #4003: without `--root`, another network share or a device is refused by name through the
+/// tools too, with the same words as any other path outside a root.
+#[cfg(windows)]
+#[test]
+fn other_shares_and_devices_are_refused_by_name() {
+    let (mut server, base) = confined("shares", true, true);
+    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    for p in [r"\\.\pipe\pdfcraft-4003.pdf", r"\\pdfcraft-no-such-host.invalid\share\a.pdf", "//pdfcraft-no-such-host.invalid/share/a.pdf"] {
+        refused(&mut server, "doc_open", json!({"path": p}), "outside the read root");
+        refused(&mut server, "doc_save", json!({"doc": 1, "path": p}), "outside the write root");
+    }
+}
+
 #[test]
 fn without_roots_nothing_is_confined() {
     let base = folders("none");
