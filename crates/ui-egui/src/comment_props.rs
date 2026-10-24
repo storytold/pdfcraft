@@ -255,7 +255,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                                                 && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
                                             {
                                                 *font = entry.name.clone();
-                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                                                let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
                                             }
                                         }
                                     }

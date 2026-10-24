@@ -641,7 +641,8 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
         Some(crate::format_text_ui::FontChoice::Thai(entry))
             if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() =>
         {
-            ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+            let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+            ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
             if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
                 style.family = pdfcraft_engine::FontFamily::Courier;
             } else {
@@ -654,7 +655,8 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
         Some(crate::format_text_ui::FontChoice::Installed(path))
             if pdfcraft_fonts::set_active_thai_font_by_path(&path).is_ok() =>
         {
-            ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+            let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+            ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
             if let Some(entry) = pdfcraft_fonts::active_thai_font_entry() {
                 ui.data_mut(|d| d.insert_temp(font_choice_id, (entry.name.clone(), style.family)));
             }
