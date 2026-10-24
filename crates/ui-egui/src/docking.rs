@@ -80,24 +80,55 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    /// Whether `panel` sits left of the document; a closed one where it would open again. Read
+    /// from the panels' order across the window, which holds whichever neighbour a panel was
+    /// placed against (Tools and the side panels may share a side).
+    fn left_of_document(&self, panel: Panel) -> bool {
+        let mut probe = self.clone();
+        if !probe.layout.contains(&panel) && probe.set_visible(panel, true).is_err() {
+            return panel.default_side() == Zone::Left;
+        }
+        let order = probe.layout.panels();
+        let at = |p: Panel| order.iter().position(|o| **o == p);
+        matches!((at(panel), at(Panel::Canvas)), (Some(p), Some(c)) if p < c)
+    }
+
     /// Side of the Tools panel, including its saved position while closed.
     pub fn tools_on_right(&self) -> bool {
-        let location = self
-            .layout
-            .location(&Panel::Tools)
-            .ok()
-            .or_else(|| self.hidden.iter().find(|(panel, _)| *panel == Panel::Tools).map(|(_, location)| location.clone()));
-        location.is_some_and(|location| matches!(location.placement, Placement::Split(Zone::Right)))
+        !self.left_of_document(Panel::Tools)
     }
 
     /// Place Tools at the outer left or right edge while preserving its open state.
     pub fn set_tools_on_right(&mut self, right: bool) -> Result<(), String> {
         let was_open = self.layout.contains(&Panel::Tools);
         self.set_visible(Panel::Tools, true)?;
-        let anchor = if right && self.layout.contains(&Panel::Inspector) { Panel::Inspector } else { Panel::Canvas };
+        let side_panels_there = self.layout.contains(&Panel::Inspector) && self.side_panels_on_left() != right;
+        let anchor = if side_panels_there { Panel::Inspector } else { Panel::Canvas };
         self.apply(Action::Move { panel: Panel::Tools, anchor, placement: Placement::Split(if right { Zone::Right } else { Zone::Left }) })?;
         if !was_open {
             self.set_visible(Panel::Tools, false)?;
+        }
+        Ok(())
+    }
+
+    /// Side of the side panels (comments, bookmarks, pages … and their rail), including their
+    /// saved position while closed.
+    pub fn side_panels_on_left(&self) -> bool {
+        self.left_of_document(Panel::Inspector)
+    }
+
+    /// Place the side panels beside the document on the left or the right while preserving their
+    /// open state; Tools on the same side stays at the outer edge.
+    pub fn set_side_panels_on_left(&mut self, left: bool) -> Result<(), String> {
+        let was_open = self.layout.contains(&Panel::Inspector);
+        self.set_visible(Panel::Inspector, true)?;
+        self.apply(Action::Move {
+            panel: Panel::Inspector,
+            anchor: Panel::Canvas,
+            placement: Placement::Split(if left { Zone::Left } else { Zone::Right }),
+        })?;
+        if !was_open {
+            self.set_visible(Panel::Inspector, false)?;
         }
         Ok(())
     }
@@ -472,6 +503,34 @@ mod tests {
         assert!(!workspace.layout.contains(&Panel::Tools));
         workspace.set_visible(Panel::Tools, true).unwrap();
         assert!(!workspace.tools_on_right());
+        workspace.validate().unwrap();
+    }
+
+    #[test]
+    fn side_panels_move_to_either_side_beside_the_document_and_tools_keep_their_side() {
+        let mut workspace = Workspace::default();
+        assert!(!workspace.side_panels_on_left() && !workspace.tools_on_right());
+        workspace.set_side_panels_on_left(true).unwrap();
+        assert!(workspace.side_panels_on_left());
+        assert!(!workspace.tools_on_right(), "Tools stays on the left, at the outer edge");
+        let order: Vec<Panel> = workspace.layout.panels().into_iter().copied().collect();
+        assert_eq!(order, [Panel::Tools, Panel::Inspector, Panel::Canvas]);
+        // Closed and opened again: still on the left.
+        workspace.set_visible(Panel::Inspector, false).unwrap();
+        assert!(workspace.side_panels_on_left());
+        workspace.set_visible(Panel::Inspector, true).unwrap();
+        assert!(workspace.side_panels_on_left());
+        // Tools to the right, the side panels stay; then swapped back.
+        workspace.set_tools_on_right(true).unwrap();
+        assert!(workspace.tools_on_right() && workspace.side_panels_on_left());
+        workspace.set_side_panels_on_left(false).unwrap();
+        workspace.set_tools_on_right(false).unwrap();
+        let order: Vec<Panel> = workspace.layout.panels().into_iter().copied().collect();
+        assert_eq!(order, [Panel::Tools, Panel::Canvas, Panel::Inspector]);
+        // Closed while moved: it opens again where it was put.
+        workspace.set_visible(Panel::Inspector, false).unwrap();
+        workspace.set_side_panels_on_left(true).unwrap();
+        assert!(!workspace.layout.contains(&Panel::Inspector) && workspace.side_panels_on_left());
         workspace.validate().unwrap();
     }
 

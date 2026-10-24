@@ -59,6 +59,35 @@ fn tools_panel_side_preference_moves_and_persists() {
     assert!(!h.state().docking.tools_on_right());
 }
 
+/// Preferences ▸ Side panels moves the side panels and their rail (page navigation, zoom) to
+/// the left of the page and back; Tools keeps its side, the choice is kept with the workspace,
+/// and the control channel's `panels-side` sets it too.
+#[test]
+fn side_panels_preference_moves_the_rail_and_persists() {
+    use pdfcraft_ui_egui::Dialog;
+
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let zoom_x = |h: &Harness<'static, PdfCraftApp>| h.get_by_label("Zoom").rect().center().x;
+    assert!(zoom_x(&h) > 1300.0, "the rail starts on the right");
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.run_steps(3);
+    h.get_by_label("Side panels Left").click();
+    h.run_steps(3);
+    assert!(h.state().docking.side_panels_on_left());
+    assert!(!h.state().docking.tools_on_right(), "Tools stays where it was");
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert!(zoom_x(&h) < 100.0, "the rail is on the left: {}", zoom_x(&h));
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(restored.docking.side_panels_on_left());
+    h.state_mut().set_option("panels-side", "right").unwrap();
+    h.run_steps(3);
+    assert!(zoom_x(&h) > 1300.0);
+    assert!(h.state_mut().set_option("panels-side", "up").is_err());
+}
+
 /// Every piece of text painted on the last frame: its whole text, whether it was cut with "…",
 /// and where it was drawn.
 fn painted_text(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, bool, egui::Rect)> {

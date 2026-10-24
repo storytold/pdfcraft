@@ -332,6 +332,27 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             app.notify(error);
         }
     });
+    // The side panels (comments, bookmarks, pages …) and their rail, left or right of the page.
+    ui.horizontal(|ui| {
+        ui.label(tl!("Side panels"));
+        let left = app.docking.side_panels_on_left();
+        // Named with the row, so each side's button is told from the Tools row's.
+        let named = |resp: egui::Response, side: &str, on: bool| {
+            let name = format!("{} {side}", tl!("Side panels"));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, &name));
+            resp
+        };
+        if named(ui.selectable_label(left, tl!("Left")), tl!("Left"), left).clicked()
+            && let Err(error) = app.docking.set_side_panels_on_left(true)
+        {
+            app.notify(error);
+        }
+        if named(ui.selectable_label(!left, tl!("Right")), tl!("Right"), !left).clicked()
+            && let Err(error) = app.docking.set_side_panels_on_left(false)
+        {
+            app.notify(error);
+        }
+    });
     ui.add_space(8.0);
     crate::appearance::preferences_section(ui, app, t);
     ui.add_space(8.0);

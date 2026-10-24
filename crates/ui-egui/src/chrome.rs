@@ -651,8 +651,9 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     );
     let page_count = doc.info.pages.len();
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-    egui::Panel::right("rail")
-        .resizable(false)
+    // On the side the side panels are on (Preferences ▸ Side panels).
+    let rail = if app.docking.side_panels_on_left() { egui::Panel::left("rail") } else { egui::Panel::right("rail") };
+    rail.resizable(false)
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {

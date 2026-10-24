@@ -2785,6 +2785,11 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
+            ("panels-side", _) => self.docking.set_side_panels_on_left(match value {
+                "left" => true,
+                "right" => false,
+                _ => return Err("panels-side must be left or right".into()),
+            })?,
             ("tools-side", _) => self.docking.set_tools_on_right(match value {
                 "left" => false,
                 "right" => true,
@@ -3365,7 +3370,9 @@ impl eframe::App for PdfCraftApp {
             // there, so its buttons (Bookmarks, Page thumbnails, ...) must open their panels.
             // Outside Read mode the docking workspace draws the inspector.
             if self.mode == Mode::Read && self.right.is_some() {
-                egui::Panel::right("read_right_panel")
+                let panel =
+                    if self.docking.side_panels_on_left() { egui::Panel::left("read_right_panel") } else { egui::Panel::right("read_right_panel") };
+                panel
                     .resizable(true)
                     .default_size(330.0)
                     .size_range(260.0..=520.0)
