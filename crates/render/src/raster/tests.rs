@@ -8763,8 +8763,8 @@ mod devicen_inks;
 // patch 27).
 mod isolated_cmyk_groups;
 
-// #2780: images and soft masks whose data stops short of their height (vendored
-// hayro-interpret patch 67).
+// #2780: images and soft masks whose data stops short of their height, and 16-bit data
+// with an odd byte count (vendored hayro-interpret patches 67 and 68).
 mod short_image_data;
 
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
