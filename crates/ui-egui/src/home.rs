@@ -29,26 +29,34 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     .font(theme::regular(14.0)),
             );
             ui.add_space(14.0);
-            egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(14))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        widgets::artcraft_mark(ui, 28.0);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(tl!("Join the ArtCraft community")).font(theme::semibold(15.0)));
-                            ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
+            if !app.community_card_closed {
+                egui::Frame::NONE
+                    .fill(t.card)
+                    .stroke(Stroke::new(1.0, t.border))
+                    .corner_radius(CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(14))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            widgets::artcraft_mark(ui, 28.0);
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(tl!("Join the ArtCraft community")).font(theme::semibold(15.0)));
+                                ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
+                            });
+                            // Closed for this run only: the card is back on the next launch.
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                if icons::button(ui, "x", 24.0, false, tl!("Close")).clicked() {
+                                    app.community_card_closed = true;
+                                }
+                            });
                         });
+                        ui.add_space(8.0);
+                        if let Some(cmd) = widgets::community_links(ui) {
+                            app.execute(cmd);
+                        }
                     });
-                    ui.add_space(8.0);
-                    if let Some(cmd) = widgets::community_links(ui) {
-                        app.execute(cmd);
-                    }
-                });
-            ui.add_space(22.0);
+                ui.add_space(22.0);
+            }
 
             egui::Frame::NONE
                 .fill(t.card)
