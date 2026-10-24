@@ -374,6 +374,28 @@ fn faux_redaction_over_a_short_value_after_a_long_label_is_found() {
     assert!(findings[0].covered_text.contains("4111"), "{findings:?}");
 }
 
+/// A short TJ cell must keep its own 40% threshold even beside a much longer cell.
+#[test]
+fn partial_tj_cell_cover_is_not_diluted_by_another_cell() {
+    let text = "BT /F1 11 Tf 72 742 Td [(123456789) -8000 (A much longer neighbouring table cell)] TJ ET\n";
+    let doc = open(one_page(text.as_bytes(), ""));
+    let lines = pdfcraft_edit::text_lines(&doc, 0).expect("extract synthetic cells");
+    assert_eq!(lines.len(), 2, "fixture must split into two TJ cells");
+    let cell = lines.first().expect("first cell").rect;
+    for fraction in [0.35, 0.45] {
+        let width = (cell[2] - cell[0]) * fraction;
+        let height = cell[3] - cell[1];
+        let content = format!("{text}0 g {} {} {width} {height} re f\n", cell[0], cell[1]);
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit painted cover");
+        assert_eq!(findings.len(), usize::from(fraction > 0.4), "painted fraction={fraction}");
+        for subtype in ["Square /IC [0 0 0] /CA 1", "Redact"] {
+            let annot = format!("/Annots [<< /Subtype /{subtype} /Rect [{} {} {} {}] >>]", cell[0], cell[1], cell[0] + width, cell[3]);
+            let findings = audit_redactions(&open(one_page(text.as_bytes(), &annot))).expect("audit annotation cover");
+            assert_eq!(findings.len(), usize::from(fraction > 0.4), "{subtype}, fraction={fraction}");
+        }
+    }
+}
+
 /// Text set with a negative font size in a mirrored text matrix runs its glyphs backwards: a
 /// cover over the address it draws is still found.
 #[test]
@@ -765,7 +787,7 @@ fn copy_restricted_documents_withhold_covered_text() {
 fn withheld_covered_text_is_not_assembled() {
     const PAGE: [f64; 4] = [0.0, 0.0, 612.0, 792.0];
     let doc = open(one_page(b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n", ""));
-    let lines = pdfcraft_edit::text_lines(&doc, 0).expect("text");
+    let lines = crate::audit_lines(&doc, 0, &pdfcraft_model::pages(&doc)[0]).expect("text");
     let mut budget = crate::Budget { limits: crate::Limits::DEFAULT, comparisons: 0, page_cost: 0, covered_text: 0 };
     budget.start_page(&lines);
     let withheld = budget.hidden_text(&lines, false, &PAGE, |_| true).expect("within the budget");

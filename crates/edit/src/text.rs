@@ -84,6 +84,16 @@ pub struct TextLine {
     /// `ink`, and whether joining put a space before it. Empty when the line's text was put
     /// into another order (see [`TextLine::runs`]).
     runs: Vec<(String, usize, bool)>,
+    /// When a run comes from a sub-slice of a multi-column `TJ` array, its operator index,
+    /// operand range and equivalent numeric adjustment (`-1000 * advance / (size * scale)`).
+    slices: Vec<TjSlice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TjSlice {
+    op: usize,
+    range: std::ops::Range<usize>,
+    adjustment: f64,
 }
 
 impl TextLine {
@@ -189,23 +199,23 @@ fn layout_draft(
         return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
-    // split BT/ET or add font resources. A multiset also handles coincident repeated text.
-    let key =
-        |line: &TextLine| (line.text.clone(), line.font.clone(), line.rect.map(f64::to_bits), line.size.to_bits(), line.color.map(f64::to_bits));
-    let mut untouched = std::collections::BTreeMap::new();
+    // split BT/ET or add font resources. A multiset also handles coincident repeated text;
+    // a small box tolerance absorbs the `num` rounding when a shared TJ array is patched.
+    let key = |line: &TextLine| (line.text.clone(), line.font.clone(), line.size.to_bits(), line.color.map(f64::to_bits));
+    let mut untouched: std::collections::BTreeMap<_, Vec<[f64; 4]>> = std::collections::BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         if !source.lines.contains(&index) {
-            *untouched.entry(key(line)).or_insert(0_usize) += 1;
+            untouched.entry(key(line)).or_default().push(line.rect);
         }
     }
     let mut draft = doc.clone();
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
-        if let Some(count) = untouched.get_mut(&key(&line))
-            && *count > 0
+        if let Some(rects) = untouched.get_mut(&key(&line))
+            && let Some(pos) = rects.iter().position(|r| r.iter().zip(line.rect).all(|(a, b)| (a - b).abs() < 1e-2))
         {
-            *count -= 1;
+            rects.swap_remove(pos);
             continue;
         }
         // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
@@ -801,6 +811,39 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
     pieces.splice(edits)
 }
 
+/// Splice rewritten paragraph `block_ops` at `at` while replacing `partial_patches` in place
+/// and dropping `drop` operators. When `split` is `true`, sibling operators at `at` are emitted
+/// before the closing `ET` in `block_ops`.
+pub(crate) fn splice_rewrite(
+    pieces: &Pieces,
+    ops: &[Op],
+    drop: &std::collections::HashSet<usize>,
+    mut partial_patches: HashMap<usize, Op>,
+    at: usize,
+    split: bool,
+    mut block_ops: Vec<Op>,
+) -> Vec<Vec<u8>> {
+    splice(pieces, ops, |i| {
+        let mut insert = Vec::new();
+        let keep = if let Some(patched) = partial_patches.remove(&i) {
+            insert.push(patched);
+            false
+        } else {
+            !drop.contains(&i)
+        };
+        if i == at {
+            if split {
+                insert.extend(std::mem::take(&mut block_ops));
+            } else {
+                let mut b = std::mem::take(&mut block_ops);
+                b.extend(insert);
+                insert = b;
+            }
+        }
+        (insert, keep)
+    })
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
 /// (keeping their dictionaries), the others stay as they were.
 pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>)], new: Vec<Vec<u8>>) -> Object {
@@ -899,6 +942,7 @@ struct Shown {
     paint: Paint,
     logical_order: bool,
     actual_text: bool,
+    slice: Option<std::ops::Range<usize>>,
 }
 
 impl Shown {
@@ -915,6 +959,54 @@ impl Shown {
         let (start, across) = to_frame(dir, (self.start_x, self.baseline));
         (dir, start, to_frame(dir, (self.end_x, self.end_y)).0, across)
     }
+
+    /// The `TJ` operand slice and equivalent thousandths-of-an-em adjustment for this segment.
+    fn tj_slice(&self) -> Option<TjSlice> {
+        let range = self.slice.clone()?;
+        let denom = self.state.size * self.state.scale;
+        let adjustment = if denom != 0.0 { -1000.0 * self.advance / denom } else { 0.0 };
+        adjustment.is_finite().then_some(TjSlice { op: self.op, range, adjustment })
+    }
+}
+
+/// Whether `line` owns the interpreted run `s` (matching its `TJ` operand slice when segmented).
+fn line_owns_shown(line: &TextLine, s: &Shown) -> bool {
+    if line.slices.iter().any(|ts| ts.op == s.op) {
+        s.slice.as_ref().is_some_and(|slice| line.slices.iter().any(|ts| ts.op == s.op && ts.range == *slice))
+    } else {
+        line.ops.contains(&s.op)
+    }
+}
+
+/// Rewrite a subrange of a `TJ` operand array by replacing each matched slice with its advance adjustment.
+fn patch_tj_subarray(pieces: &[Object], range: std::ops::Range<usize>, slices: &[&TjSlice]) -> Vec<Object> {
+    let mut out = Vec::new();
+    let mut idx = range.start;
+    while idx < range.end {
+        let Some(piece) = pieces.get(idx) else { break };
+        if let Some(s) = slices.iter().find(|s| s.range.start == idx && s.range.end <= range.end) {
+            out.push(pdfcraft_content::num(s.adjustment));
+            idx = s.range.end.max(idx.saturating_add(1));
+        } else {
+            out.push(piece.clone());
+            idx = idx.saturating_add(1);
+        }
+    }
+    out
+}
+
+/// Read a document-derived `TJ` range without trusting its bounds or ordering.
+fn tj_operands(pieces: &[Object], range: std::ops::Range<usize>) -> Result<&[Object], EditError> {
+    pieces.get(range).ok_or_else(|| EditError::Invalid("a text operation has an invalid array range".into()))
+}
+
+/// Patch a `TJ` operator in place by replacing `slices` with numeric advance adjustments.
+fn patch_tj_slices(op: &Op, slices: &[&TjSlice]) -> Option<Op> {
+    if !op.is("TJ") || slices.is_empty() {
+        return None;
+    }
+    let pieces = op.operands.last()?.as_array()?;
+    Some(Op::new("TJ", vec![Object::Array(patch_tj_subarray(pieces, 0..pieces.len(), slices))]))
 }
 
 /// Where the previous run of a line ended: its text object, baseline direction, offset across
@@ -970,7 +1062,7 @@ fn tj_tracking(pieces: &[Object], metrics: &Metrics, size: f64, scale: f64) -> f
             for (code, len) in metrics.codes(&s.bytes) {
                 let blank = metrics.is_space(code, len) || metrics.text_of(code).is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                 if previous && !blank {
-                    gaps.push(gap);
+                    gaps.push(gap * (size * scale).signum());
                 }
                 previous = !blank;
                 gap = 0.0;
@@ -979,7 +1071,96 @@ fn tj_tracking(pieces: &[Object], metrics: &Metrics, size: f64, scale: f64) -> f
             gap += -n / 1000.0 * size * scale;
         }
     }
-    typical_tracking(&mut gaps, size * scale.abs() * 0.5)
+    typical_tracking(&mut gaps, (size * scale).abs() * 0.5)
+}
+
+/// Horizontal advance of a single encoded glyph in text space (`((w0 * Tfs + Tc + Tw) * Th)`).
+fn glyph_advance(m: &Metrics, code: u32, len: usize, ts: &Ts) -> f64 {
+    let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
+    w * ts.scale
+}
+
+/// Total horizontal advance of a slice of `TJ` or `Tj` operands in text space.
+fn pieces_advance(pieces: &[Object], m: &Metrics, ts: &Ts) -> f64 {
+    let mut x = 0.0;
+    for p in pieces {
+        match p {
+            Object::String(s) => {
+                for (code, len) in m.codes(&s.bytes) {
+                    x += glyph_advance(m, code, len, ts);
+                }
+            }
+            other => {
+                if let Some(n) = other.as_f64() {
+                    x += -n / 1000.0 * ts.size * ts.scale;
+                }
+            }
+        }
+    }
+    x
+}
+
+/// Reach in font-size `em`s beyond which an intra-`BT` horizontal gap starts a new cell.
+fn column_reach(ts: &Ts) -> f64 {
+    if ts.render_mode == 3 { 0.6 } else { 3.0 }
+}
+
+/// Whether a `TJ` gap `dx` (already scaled by `ts.size * ts.scale`) exceeds the intra-`BT`
+/// line-join threshold of [`Pen::continues`].
+fn is_column_jump(dx: f64, tracking: f64, ts: &Ts) -> bool {
+    let em = ts.size.abs();
+    let step = dx * (ts.size * ts.scale).signum();
+    em.is_finite() && ts.scale.is_finite() && em > 0.0 && ts.scale != 0.0 && (step - tracking >= em * column_reach(ts) || step <= -em)
+}
+
+/// Non-overlapping index ranges of `pieces` for each column run inside a `TJ` array.
+/// Runs separated by at least the intra-`BT` line join threshold (`3 em`, or `0.6 em` for
+/// invisible OCR text, or `-1 em` backwards) split into separate runs so table columns
+/// emitted in a single `TJ` operator become independent cells (#3744).
+fn tj_segments(pieces: &[Object], m: &Metrics, ts: &Ts, tracking: f64) -> Vec<std::ops::Range<usize>> {
+    let mut segments: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut current: Option<std::ops::Range<usize>> = None;
+    let mut gap_dx = 0.0;
+    for (idx, p) in pieces.iter().enumerate() {
+        match p {
+            Object::String(s) => {
+                let mut str_dx = 0.0;
+                let mut has_ink = false;
+                for (code, len) in m.codes(&s.bytes) {
+                    let shown = m.text_of(code);
+                    let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+                    if !blank {
+                        has_ink = true;
+                    }
+                    str_dx += glyph_advance(m, code, len, ts);
+                }
+                if has_ink {
+                    if let Some(range) = &mut current {
+                        if is_column_jump(gap_dx, tracking, ts) {
+                            segments.push(range.clone());
+                            *range = idx..idx + 1;
+                        } else {
+                            range.end = idx + 1;
+                        }
+                    } else {
+                        current = Some(idx..idx + 1);
+                    }
+                    gap_dx = 0.0;
+                } else {
+                    gap_dx += str_dx;
+                }
+            }
+            other => {
+                if let Some(n) = other.as_f64() {
+                    gap_dx += -n / 1000.0 * ts.size * ts.scale;
+                }
+            }
+        }
+    }
+    if let Some(range) = current {
+        segments.push(range);
+    }
+    segments
 }
 
 fn positioned_tracking(shown: &mut [Shown]) {
@@ -1121,10 +1302,17 @@ fn interpret(
                     let tail = out.split_off(start.min(out.len()));
                     let mut items = tail.into_iter();
                     if let Some(mut first) = items.next() {
+                        first.slice = None;
                         for shown in items {
                             first.glyph_count = first.glyph_count.saturating_add(shown.glyph_count);
-                            first.extra_ops.push(shown.op);
-                            first.extra_ops.extend(shown.extra_ops);
+                            if shown.op != first.op && !first.extra_ops.contains(&shown.op) {
+                                first.extra_ops.push(shown.op);
+                            }
+                            for op in shown.extra_ops {
+                                if op != first.op && !first.extra_ops.contains(&op) {
+                                    first.extra_ops.push(op);
+                                }
+                            }
                             first.rect = [
                                 first.rect[0].min(shown.rect[0]),
                                 first.rect[1].min(shown.rect[1]),
@@ -1268,179 +1456,208 @@ fn interpret(
                 };
                 // Tc is already included in the pen advance; TJ may encode tracking instead.
                 let tracking = if op.is("TJ") { tj_tracking(&pieces, &m, ts.size, ts.scale) } else { 0.0 };
-                let trm0 = tm.then(&ts.ctm);
-                let start = trm0.apply(0.0, ts.rise);
-                let mut text = String::new();
-                let mut decodable = true;
-                let mut x_text = 0.0;
-                // Vertical text (§9.4.4): the pen moves along y instead, and each glyph is centred
-                // on it horizontally; `half` is half the widest glyph.
-                let vertical = ts.vertical;
-                let (mut y_text, mut half) = (0.0, 0.0_f64);
-                // Where each word's glyphs start and end along the run (text space), and whether
-                // the next glyph continues the last word.
-                let mut words: Vec<(f64, f64)> = Vec::new();
-                let mut in_word = false;
-                let mut glyph_count = 0_usize;
-                for p in &pieces {
-                    match p {
-                        Object::String(s) => {
-                            for (code, len) in m.codes(&s.bytes) {
-                                glyph_count = glyph_count.saturating_add(1);
-                                let shown = m.text_of(code);
-                                let blank =
-                                    m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
-                                match shown {
-                                    Some(t) => {
-                                        carry.text_left = carry
-                                            .text_left
-                                            .checked_sub(t.len())
-                                            .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                                        text.push_str(&t);
+                // Column splitting is horizontal only. Vertical TJ numbers advance the y pen
+                // without Tz, and remain in the upstream vertical geometry/preview path below.
+                let segments = if op.is("TJ") && ts.vertical.is_none() { tj_segments(&pieces, &m, &ts, tracking) } else { Vec::new() };
+                let is_col_jump = |dx: f64| is_column_jump(dx, tracking, &ts);
+                let runs: Vec<(std::ops::Range<usize>, Option<std::ops::Range<usize>>)> = if segments.len() >= 2 {
+                    segments.into_iter().map(|r| (r.clone(), Some(r))).collect()
+                } else if let Some(seg) = segments.first().filter(|s| {
+                    is_col_jump(pieces_advance(pieces.get(..s.start).unwrap_or_default(), &m, &ts))
+                        || is_col_jump(pieces_advance(pieces.get(s.end..).unwrap_or_default(), &m, &ts))
+                }) {
+                    vec![(seg.clone(), Some(seg.clone()))]
+                } else {
+                    vec![(0..pieces.len(), None)]
+                };
+                let mut cursor = 0usize;
+                for (seg, slice) in runs {
+                    let lead_dx = pieces_advance(pieces.get(cursor..seg.start).unwrap_or_default(), &m, &ts);
+                    if lead_dx != 0.0 {
+                        tm = Matrix([1.0, 0.0, 0.0, 1.0, lead_dx, 0.0]).then(&tm);
+                    }
+                    let trm0 = tm.then(&ts.ctm);
+                    let start = trm0.apply(0.0, ts.rise);
+                    let mut text = String::new();
+                    let mut decodable = true;
+                    let mut x_text = 0.0;
+                    // Vertical text (§9.4.4): the pen moves along y instead, and each glyph is centred
+                    // on it horizontally; `half` is half the widest glyph.
+                    let vertical = ts.vertical;
+                    let (mut y_text, mut half) = (0.0, 0.0_f64);
+                    // Where each word's glyphs start and end along the run (text space), and whether
+                    // the next glyph continues the last word.
+                    let mut words: Vec<(f64, f64)> = Vec::new();
+                    let mut in_word = false;
+                    let mut glyph_count = 0_usize;
+                    for p in pieces.get(seg.clone()).unwrap_or_default() {
+                        match p {
+                            Object::String(s) => {
+                                for (code, len) in m.codes(&s.bytes) {
+                                    glyph_count = glyph_count.saturating_add(1);
+                                    let shown = m.text_of(code);
+                                    let blank = m.is_space(code, len)
+                                        || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+                                    match shown {
+                                        Some(t) => {
+                                            carry.text_left = carry
+                                                .text_left
+                                                .checked_sub(t.len())
+                                                .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
+                                            text.push_str(&t);
+                                        }
+                                        None => decodable = false,
                                     }
-                                    None => decodable = false,
-                                }
-                                let spacing = ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
-                                if let Some(w1) = vertical {
-                                    half = half.max((m.width(code) * ts.size * ts.scale).abs() / 2.0);
+                                    let spacing = ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
+                                    if let Some(w1) = vertical {
+                                        half = half.max((m.width(code) * ts.size * ts.scale).abs() / 2.0);
+                                        if !blank {
+                                            let ink_end = y_text + w1 * ts.size;
+                                            let (lo, hi) = (y_text.min(ink_end), y_text.max(ink_end));
+                                            match words.last_mut() {
+                                                Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
+                                                _ => words.push((lo, hi)),
+                                            }
+                                        }
+                                        in_word = !blank;
+                                        y_text += w1 * ts.size + spacing;
+                                        continue;
+                                    }
                                     if !blank {
-                                        let ink_end = y_text + w1 * ts.size;
-                                        let (lo, hi) = (y_text.min(ink_end), y_text.max(ink_end));
+                                        let ink_end = x_text + m.width(code) * ts.size * ts.scale;
+                                        // A negative font size or `Tz` runs the glyphs backwards:
+                                        // the word is the union of its glyphs, whichever way they go.
+                                        let (lo, hi) = (x_text.min(ink_end), x_text.max(ink_end));
                                         match words.last_mut() {
                                             Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
                                             _ => words.push((lo, hi)),
                                         }
                                     }
                                     in_word = !blank;
-                                    y_text += w1 * ts.size + spacing;
-                                    continue;
+                                    x_text += glyph_advance(&m, code, len, &ts);
                                 }
-                                if !blank {
-                                    let ink_end = x_text + m.width(code) * ts.size * ts.scale;
-                                    // A negative font size or `Tz` runs the glyphs backwards:
-                                    // the word is the union of its glyphs, whichever way they go.
-                                    let (lo, hi) = (x_text.min(ink_end), x_text.max(ink_end));
-                                    match words.last_mut() {
-                                        Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
-                                        _ => words.push((lo, hi)),
-                                    }
-                                }
-                                in_word = !blank;
-                                let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
-                                x_text += w * ts.scale;
                             }
-                        }
-                        other => {
-                            if let Some(n) = other.as_f64() {
-                                if vertical.is_some() {
-                                    // Down by n/1000 em, not scaled by `Tz`.
-                                    let dy = -n / 1000.0 * ts.size;
-                                    if -dy > ts.size * 0.2 && !text.ends_with(' ') {
+                            other => {
+                                if let Some(n) = other.as_f64() {
+                                    if vertical.is_some() {
+                                        // Down by n/1000 em, not scaled by `Tz`.
+                                        let dy = -n / 1000.0 * ts.size;
+                                        if -dy > ts.size * 0.2 && !text.ends_with(' ') {
+                                            text.push(' ');
+                                        }
+                                        if dy.abs() > ts.size.abs() * 0.2 {
+                                            in_word = false;
+                                        }
+                                        y_text += dy;
+                                        continue;
+                                    }
+                                    let dx = -n / 1000.0 * ts.size * ts.scale;
+                                    // A large gap inside TJ reads as a space.
+                                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
                                         text.push(' ');
                                     }
-                                    if dy.abs() > ts.size.abs() * 0.2 {
+                                    // Tracking and kerning keep a word together; a larger jump
+                                    // ends it (whatever the sign of the size or `Tz`).
+                                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 || dx < -(ts.size * ts.scale).abs() * 0.2 {
                                         in_word = false;
                                     }
-                                    y_text += dy;
-                                    continue;
+                                    x_text += dx;
                                 }
-                                let dx = -n / 1000.0 * ts.size * ts.scale;
-                                // A large gap inside TJ reads as a space.
-                                if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
-                                    text.push(' ');
-                                }
-                                // Tracking and kerning keep a word together; a larger jump
-                                // ends it (whatever the sign of the size or `Tz`).
-                                if dx - tracking > (ts.size * ts.scale).abs() * 0.2 || dx < -(ts.size * ts.scale).abs() * 0.2 {
-                                    in_word = false;
-                                }
-                                x_text += dx;
                             }
                         }
                     }
-                }
-                tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(&tm);
-                let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
-                // The box from `a` to `b` along the run: from descent to ascent across it, or for
-                // vertical text, the widest glyph's width centred on the pen.
-                let span = |a: f64, b: f64| match vertical {
-                    Some(_) => {
-                        [trm0.apply(-half, ts.rise + a), trm0.apply(half, ts.rise + a), trm0.apply(-half, ts.rise + b), trm0.apply(half, ts.rise + b)]
+                    tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(&tm);
+                    let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
+                    // The box from `a` to `b` along the run: from descent to ascent across it, or for
+                    // vertical text, the widest glyph's width centred on the pen.
+                    let span = |a: f64, b: f64| match vertical {
+                        Some(_) => [
+                            trm0.apply(-half, ts.rise + a),
+                            trm0.apply(half, ts.rise + a),
+                            trm0.apply(-half, ts.rise + b),
+                            trm0.apply(half, ts.rise + b),
+                        ],
+                        None => [
+                            trm0.apply(a, ts.rise + m.descent * ts.size),
+                            trm0.apply(b, ts.rise + m.descent * ts.size),
+                            trm0.apply(a, ts.rise + m.ascent * ts.size),
+                            trm0.apply(b, ts.rise + m.ascent * ts.size),
+                        ],
+                    };
+                    let corners = span(0.0, if vertical.is_some() { y_text } else { x_text });
+                    let rect = corners
+                        .iter()
+                        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+                    // The same corners along and across the baseline: the run's own box, not its
+                    // upright bounding box turned (which is wider by the box's height on a slant).
+                    let dir = direction(&trm0);
+                    let frame = corners
+                        .iter()
+                        .map(|&p| to_frame(dir, p))
+                        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+                    let ink = words
+                        .iter()
+                        .map(|&(a, b)| {
+                            span(a, b)
+                                .iter()
+                                .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
+                        })
+                        .collect();
+                    let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
+                    // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
+                    // It must not create a phantom editable line or enlarge its neighbours' boxes.
+                    cursor = seg.end;
+                    if !pieces.get(seg.clone()).unwrap_or_default().iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
+                        continue;
                     }
-                    None => [
-                        trm0.apply(a, ts.rise + m.descent * ts.size),
-                        trm0.apply(b, ts.rise + m.descent * ts.size),
-                        trm0.apply(a, ts.rise + m.ascent * ts.size),
-                        trm0.apply(b, ts.rise + m.ascent * ts.size),
-                    ],
-                };
-                let corners = span(0.0, if vertical.is_some() { y_text } else { x_text });
-                let rect = corners
-                    .iter()
-                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-                // The same corners along and across the baseline: the run's own box, not its
-                // upright bounding box turned (which is wider by the box's height on a slant).
-                let dir = direction(&trm0);
-                let frame = corners
-                    .iter()
-                    .map(|&p| to_frame(dir, p))
-                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-                let ink = words
-                    .iter()
-                    .map(|&(a, b)| {
-                        span(a, b)
-                            .iter()
-                            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
-                    })
-                    .collect();
-                let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
-                // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
-                // It must not create a phantom editable line or enlarge its neighbours' boxes.
-                if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
-                    continue;
+                    out.push(Shown {
+                        op: i,
+                        extra_ops: Vec::new(),
+                        slice,
+                        glyph_count,
+                        // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
+                        // preview divides by size × `Tz`, so `Tz` is put back here.
+                        advance: if vertical.is_some() { y_text * ts.scale } else { x_text },
+                        tracking: 0.0,
+                        tm: Matrix([
+                            tm.0[0],
+                            tm.0[1],
+                            tm.0[2],
+                            tm.0[3],
+                            tm.0[4] - x_text * tm.0[0] - y_text * tm.0[2],
+                            tm.0[5] - x_text * tm.0[1] - y_text * tm.0[3],
+                        ]),
+                        state: ts.clone(),
+                        tlm,
+                        bt_op: at_bt.0,
+                        bt_state: at_bt.1.clone(),
+                        text,
+                        rect,
+                        frame,
+                        ink,
+                        baseline: start.1,
+                        start_x: start.0,
+                        end_x: end.0,
+                        end_y: end.1,
+                        bt,
+                        font: name.clone(),
+                        base_font: m.base_font.clone(),
+                        face: ts.face.clone(),
+                        size: if size_user > 0.0 { size_user } else { ts.size },
+                        bold: m.bold,
+                        italic: m.italic,
+                        visual_order: m.visual_order,
+                        decodable,
+                        scope: marked.last().copied().flatten(),
+                        paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+                        logical_order: false,
+                        actual_text: false,
+                    });
                 }
-                out.push(Shown {
-                    op: i,
-                    extra_ops: Vec::new(),
-                    glyph_count,
-                    // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
-                    // preview divides by size × `Tz`, so `Tz` is put back here.
-                    advance: if vertical.is_some() { y_text * ts.scale } else { x_text },
-                    tracking: 0.0,
-                    tm: Matrix([
-                        tm.0[0],
-                        tm.0[1],
-                        tm.0[2],
-                        tm.0[3],
-                        tm.0[4] - x_text * tm.0[0] - y_text * tm.0[2],
-                        tm.0[5] - x_text * tm.0[1] - y_text * tm.0[3],
-                    ]),
-                    state: ts.clone(),
-                    tlm,
-                    bt_op: at_bt.0,
-                    bt_state: at_bt.1.clone(),
-                    text,
-                    rect,
-                    frame,
-                    ink,
-                    baseline: start.1,
-                    start_x: start.0,
-                    end_x: end.0,
-                    end_y: end.1,
-                    bt,
-                    font: name,
-                    base_font: m.base_font.clone(),
-                    face: ts.face.clone(),
-                    size: if size_user > 0.0 { size_user } else { ts.size },
-                    bold: m.bold,
-                    italic: m.italic,
-                    visual_order: m.visual_order,
-                    decodable,
-                    scope: marked.last().copied().flatten(),
-                    paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
-                    logical_order: false,
-                    actual_text: false,
-                });
+                let tail_dx = pieces_advance(pieces.get(cursor..).unwrap_or_default(), &m, &ts);
+                if tail_dx != 0.0 {
+                    tm = Matrix([1.0, 0.0, 0.0, 1.0, tail_dx, 0.0]).then(&tm);
+                }
             }
             _ => {}
         }
@@ -1507,6 +1724,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                             && same_paint(l, &s.state)
                     }))
                 && near
+                && lines.last().is_none_or(|l| !l.ops.contains(&s.op))
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
                 && (s.state.render_mode != 3 || gap < pen.size * 0.6)
@@ -1524,6 +1742,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.runs.push((s.text.clone(), l.ink.len(), spaced));
             l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
+            if let Some(slice) = s.tj_slice() {
+                l.slices.push(slice);
+            }
             l.decodable &= s.decodable;
             l.visual_order |= s.visual_order;
             l.actual_text |= s.actual_text;
@@ -1533,6 +1754,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             }
             // Spaces may use a separate subset font; they do not change the visible style.
         } else {
+            let slices = s.tj_slice().into_iter().collect();
             lines.push(TextLine {
                 text: s.text.clone(),
                 rect: s.rect,
@@ -1553,6 +1775,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
+                slices,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
@@ -1625,6 +1848,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
                         && same_paint(l, &s.state)
                 }))
             && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
+            && lines.last().is_none_or(|l| !l.ops.contains(&s.op))
     });
     if joins && let Some(l) = lines.last_mut() {
         let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
@@ -1639,6 +1863,9 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.runs.push((s.text.clone(), l.ink.len(), spaced));
         l.ops.push(s.op);
         l.ops.extend(s.extra_ops.iter().copied());
+        if let Some(slice) = s.tj_slice() {
+            l.slices.push(slice);
+        }
         l.decodable &= s.decodable;
         l.visual_order |= s.visual_order;
         l.actual_text |= s.actual_text;
@@ -1647,6 +1874,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
     } else {
+        let slices = s.tj_slice().into_iter().collect();
         lines.push(TextLine {
             text: s.text.clone(),
             rect: s.rect,
@@ -1667,6 +1895,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
+            slices,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
@@ -2467,10 +2696,10 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
 /// `clear_block` already refuses these for the same reason.
 ///
 /// Every line the rewrite drops is checked, not only the one being replaced: a line's runs need
-/// not share a rendering mode (see [`TextLine::clips`]), and [`coincident_ops`] drops a whole
+/// not share a rendering mode (see [`TextLine::clips`]), and [`dropped_lines`] drops a whole
 /// overlapping line without regard to its mode -- so a mask could go with text that is ink.
-fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<usize>) -> Result<(), EditError> {
-    if lines.iter().any(|l| l.clips && l.ops.iter().any(|op| dropped.contains(op))) {
+fn refuse_clipping_text(dropped_lines: &[&TextLine]) -> Result<(), EditError> {
+    if dropped_lines.iter().any(|l| l.clips) {
         return Err(EditError::Invalid("text used as a clipping path cannot be edited: its glyphs mask the artwork behind them".into()));
     }
     Ok(())
@@ -2480,20 +2709,21 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     let text = text.replace(['\n', '\r'], " ");
     let lines = text_lines(doc, page)?;
-    let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
-    target.ensure_editable()?;
-    // Copies of the line drawn on the same baseline go with it, so the replacement is all that
-    // shows. Which operators go is settled here, before any font is generated, so that a refusal
-    // leaves the document untouched.
-    let mut drops = coincident_ops(&lines, &[&target]);
-    drops.extend(target.ops.iter().copied());
-    refuse_clipping_text(&lines, &drops)?;
+    let target_ref = lines.get(line).ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
+    target_ref.ensure_editable()?;
+    let dropped_list = dropped_lines(&lines, &[target_ref]);
+    refuse_clipping_text(&dropped_list)?;
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
+    // Copies of the line drawn on the same baseline go with it, so the replacement is all that
+    // shows. Which operators go is settled here, before any font is generated, so that a refusal
+    // leaves the document untouched.
+    let (drops, mut partial_patches) = drop_and_patch(&lines, &[target_ref], &ops);
+    let target = target_ref.clone();
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     // The line's own font, when it can show every character.
     let font = fonts_res.get(target.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
@@ -2514,15 +2744,14 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
         _ => {}
     }
-    match reused {
-        Some(metrics) => replacement.extend(source_show(
-            metrics,
-            &shown,
-            target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
-            source_space(doc, &fonts_res, metrics),
-            target.origin.state.char_spacing,
-            target.origin.state.word_spacing,
-        )?),
+    let new_adj = match reused {
+        Some(metrics) => {
+            let size = target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size);
+            let space = source_space(doc, &fonts_res, metrics);
+            let adv = source_width(metrics, &shown, size, space, target.origin.state.char_spacing, target.origin.state.word_spacing);
+            replacement.extend(source_show(metrics, &shown, size, space, target.origin.state.char_spacing, target.origin.state.word_spacing)?);
+            if size != 0.0 { -1000.0 * adv / size } else { 0.0 }
+        }
         None => {
             let fallback_shown = crate::bidi::to_visual(&text);
             if needs_type3(&text) {
@@ -2536,6 +2765,11 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 }
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(format!("{} Type3", fallback.family));
+                let adv: f64 = fallback_shown
+                    .chars()
+                    .map(|c| fallback.widths.iter().find(|(ch, _)| *ch == c).map_or(0.0, |(_, w)| *w) * size + target.origin.state.char_spacing)
+                    .sum();
+                if size != 0.0 { -1000.0 * adv / size } else { 0.0 }
             } else {
                 let win = pdfcraft_fonts::win_ansi(&fallback_shown);
                 // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
@@ -2558,11 +2792,48 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 f.set(b"BaseFont".to_vec(), Object::name(base));
                 f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
                 fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
+                let face = family.std14(target.bold, target.italic);
+                let adv = face.text_width(&fallback_shown, size)
+                    + fallback_shown.chars().count() as f64 * target.origin.state.char_spacing
+                    + fallback_shown.matches(' ').count() as f64 * target.origin.state.word_spacing;
+                if size != 0.0 { -1000.0 * adv / size } else { 0.0 }
             }
         }
+    };
+    if let Some(target_slice) = target.slices.iter().find(|s| s.op == first)
+        && let Some(arr) = ops[first].operands.last().and_then(Object::as_array)
+    {
+        let other_slices: Vec<&TjSlice> =
+            dropped_list.iter().flat_map(|l| &l.slices).filter(|s| s.op == first && s.range != target_slice.range).collect();
+        let prefix = patch_tj_subarray(arr, 0..target_slice.range.start, &other_slices);
+        let mut suffix = patch_tj_subarray(arr, target_slice.range.end..arr.len(), &other_slices);
+        let mut wrapped = Vec::new();
+        if !prefix.is_empty() {
+            wrapped.push(Op::new("TJ", vec![Object::Array(prefix)]));
+        }
+        wrapped.append(&mut replacement);
+        // Restore the original pen advance even for the final cell: later shows in
+        // this text object can be positioned relative to it without resetting Tm.
+        let delta = target_slice.adjustment - new_adj;
+        if delta.is_finite() && delta != 0.0 {
+            suffix.insert(0, pdfcraft_content::num(delta));
+        }
+        if !suffix.is_empty() {
+            wrapped.push(Op::new("TJ", vec![Object::Array(suffix)]));
+        }
+        replacement = wrapped;
+        partial_patches.remove(&first);
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
-    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    let new_data = splice(&pieces, &ops, |i| {
+        if i == first {
+            (std::mem::take(&mut replacement), false)
+        } else if let Some(patched) = partial_patches.remove(&i) {
+            (vec![patched], false)
+        } else {
+            (Vec::new(), !drops.contains(&i))
+        }
+    });
     let contents = rewritten_contents(doc, &streams, new_data);
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -2582,26 +2853,43 @@ fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
     ops[..at].iter().rev().find(|o| o.is("Tf")).and_then(|o| o.num(1))
 }
 
-/// Operators of every line that is another drawing of one of `targets` (fake bold, an invisible
-/// text layer). A surviving copy would show the old text under the replacement.
-///
-/// A copy overlaps a target by more than half the smaller box and sits on the same baseline
-/// (within the tolerance that joins showing operators onto one line). A neighbouring line can
-/// share box area when the leading is tighter than the font's ascent plus descent; its baseline
-/// is farther away, so it stays.
-fn coincident_ops(lines: &[TextLine], targets: &[&TextLine]) -> std::collections::HashSet<usize> {
+/// Every line in `lines` that is one of `targets` or another drawing of one on the same baseline
+/// (fake bold, an invisible text layer). A surviving copy would show the old text under the replacement.
+fn dropped_lines<'a>(lines: &'a [TextLine], targets: &[&'a TextLine]) -> Vec<&'a TextLine> {
     let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
+    lines
+        .iter()
+        .filter(|line| {
+            targets.iter().any(|target| {
+                std::ptr::eq(*line, *target)
+                    || ((line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3))
+                        && overlaps_half(line.rect, target.rect, area)
+                        && on_same_baseline(line, target))
+            })
+        })
+        .collect()
+}
+
+/// Operators to drop outright and operators to patch in place when columns of a
+/// `TJ` array with column jumps are being removed (#3744).
+fn drop_and_patch(all_lines: &[TextLine], members: &[&TextLine], ops: &[Op]) -> (std::collections::HashSet<usize>, HashMap<usize, Op>) {
+    let dropped = dropped_lines(all_lines, members);
     let mut drop = std::collections::HashSet::new();
-    for line in lines {
-        let copy = targets.iter().any(|target| {
-            let same_text = line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3);
-            same_text && overlaps_half(line.rect, target.rect, area) && on_same_baseline(line, target)
-        });
-        if copy {
-            drop.extend(line.ops.iter().copied());
+    let mut partial_patches = HashMap::new();
+    for &op_idx in dropped.iter().flat_map(|l| &l.ops) {
+        if partial_patches.contains_key(&op_idx) {
+            continue;
         }
+        let slices: Vec<&TjSlice> = dropped.iter().flat_map(|l| &l.slices).filter(|s| s.op == op_idx).collect();
+        if let Some(op) = ops.get(op_idx)
+            && let Some(patched) = patch_tj_slices(op, &slices)
+        {
+            partial_patches.insert(op_idx, patched);
+            continue;
+        }
+        drop.insert(op_idx);
     }
-    drop
+    (drop, partial_patches)
 }
 
 fn overlaps_half(a: [f64; 4], b: [f64; 4], area: impl Fn([f64; 4]) -> f64) -> bool {
@@ -2692,8 +2980,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let target = blocks.get(block).ok_or_else(|| EditError::Invalid("the paragraph no longer exists".into()))?;
     let targets: Vec<&TextLine> = target.lines.iter().filter_map(|i| lines.get(*i)).collect();
     targets.iter().try_for_each(|line| line.ensure_editable())?;
-    let mut drops = coincident_ops(&lines, &targets);
-    drops.extend(target.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()));
+    let dropped = dropped_lines(&lines, &targets);
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
@@ -2701,17 +2988,37 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
-    for s in shown.into_iter().filter(|s| drops.contains(&s.op)) {
-        if s.state.render_mode >= 4 {
-            return Err(EditError::Invalid("text used as a clipping path cannot be previewed for editing".into()));
+    let mut by_op: HashMap<usize, Vec<Shown>> = HashMap::new();
+    for s in shown {
+        by_op.entry(s.op).or_default().push(s);
+    }
+    for (op_idx, runs) in by_op {
+        let dropped_runs: Vec<&Shown> = runs.iter().filter(|s| dropped.iter().any(|l| line_owns_shown(l, s))).collect();
+        if dropped_runs.is_empty() {
+            continue;
         }
-        let denominator = s.state.size * s.state.scale;
-        let adjustment = if denominator != 0.0 { -1000.0 * s.advance / denominator } else { 0.0 };
-        if !adjustment.is_finite() || (denominator == 0.0 && s.advance != 0.0) {
-            return Err(EditError::Invalid("the paragraph's text advance cannot be previewed".into()));
+        let mut last_adj = 0.0;
+        for s in &dropped_runs {
+            if s.state.render_mode >= 4 {
+                return Err(EditError::Invalid("text used as a clipping path cannot be previewed for editing".into()));
+            }
+            let denominator = s.state.size * s.state.scale;
+            let adjustment = if denominator != 0.0 { -1000.0 * s.advance / denominator } else { 0.0 };
+            if !adjustment.is_finite() || (denominator == 0.0 && s.advance != 0.0) {
+                return Err(EditError::Invalid("the paragraph's text advance cannot be previewed".into()));
+            }
+            last_adj = adjustment;
+        }
+        let slices: Vec<TjSlice> = dropped_runs.iter().filter_map(|s| s.tj_slice()).collect();
+        let slice_refs: Vec<&TjSlice> = slices.iter().collect();
+        if let Some(op) = ops.get(op_idx)
+            && let Some(patched) = patch_tj_slices(op, &slice_refs)
+        {
+            patches.insert(op_idx, vec![patched]);
+            continue;
         }
         let mut replacement = Vec::new();
-        if let Some(op) = ops.get(s.op) {
+        if let Some(op) = ops.get(op_idx) {
             if op.is("\"") {
                 replacement.push(Op::new("Tw", vec![op.operands.first().cloned().unwrap_or(Object::Int(0))]));
                 replacement.push(Op::new("Tc", vec![op.operands.get(1).cloned().unwrap_or(Object::Int(0))]));
@@ -2720,8 +3027,8 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
                 replacement.push(Op::new("T*", vec![]));
             }
         }
-        replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
-        patches.insert(s.op, replacement);
+        replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(last_adj)])]));
+        patches.insert(op_idx, replacement);
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data);
@@ -2887,9 +3194,7 @@ fn rewrite_block_from(
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
-    let mut dropped = coincident_ops(&lines, &members);
-    dropped.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    refuse_clipping_text(&lines, &dropped)?;
+    refuse_clipping_text(&dropped_lines(&lines, &members))?;
     let first = members.first().copied().ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     members.iter().try_for_each(|line| line.ensure_editable())?;
     let p = page_dict(doc, page)?;
@@ -3129,7 +3434,7 @@ fn rewrite_block_from(
     let n = pdfcraft_content::num;
     // The paragraph's operators go, and so does another drawing on the same baseline (a fake-bold
     // second copy, an invisible text layer): the new text is all that may show.
-    let drop = dropped;
+    let (drop, partial_patches) = drop_and_patch(&lines, &members, &ops);
     // Text shown earlier in the same text object stays first: the paragraph then goes where its
     // last row was, after any backgrounds between the rows, or between two halves of the text object.
     let start = last.ops.first().copied().unwrap_or(emit.bt_op);
@@ -3282,10 +3587,7 @@ fn rewrite_block_from(
         block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { emit.bt_op };
-    let new_data = splice(&pieces, &ops, |i| {
-        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, !drop.contains(&i))
-    });
+    let new_data = splice_rewrite(&pieces, &ops, &drop, partial_patches, at, split, block_ops);
     let contents = rewritten_contents(doc, &streams, new_data);
     if new_font {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
@@ -3437,12 +3739,14 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
     let mut selected = std::collections::BTreeSet::new();
+    let mut selected_lines = Vec::new();
     for index in indexes {
         let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
         for line in &b.lines {
             let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
             l.ensure_editable()?;
             selected.extend(l.ops.iter().copied());
+            selected_lines.push(l);
         }
     }
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -3454,7 +3758,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     // Keep full precision: a tiny rounded text-space change can be magnified by a CTM,
     // and restoring rise/spacing must not alter following unselected text.
     let n = Object::Real;
-    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+    let move_params = |s: &Shown| -> Result<(f64, f64, f64), EditError> {
         if !(0..=3).contains(&s.state.render_mode) {
             return Err(EditError::Invalid("text used as a clipping path cannot be moved in a group".into()));
         }
@@ -3481,7 +3785,57 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         if ![shift, rise, dx, dy].iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the paragraph move is too large".into()));
         }
-        let original = ops.get(s.op).ok_or_else(|| EditError::Invalid("a selected text operation is missing".into()))?;
+        Ok((shift, rise, dy))
+    };
+    let mut by_op: std::collections::BTreeMap<usize, Vec<Shown>> = std::collections::BTreeMap::new();
+    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+        by_op.entry(s.op).or_default().push(s);
+    }
+    for (op_idx, runs) in by_op {
+        let original = ops.get(op_idx).ok_or_else(|| EditError::Invalid("a selected text operation is missing".into()))?;
+        if runs.iter().any(|s| s.slice.is_some()) && original.is("TJ") {
+            let arr =
+                original.operands.last().and_then(Object::as_array).ok_or_else(|| EditError::Invalid("a text operation has no array".into()))?;
+            let mut replacement = Vec::new();
+            let first_start = runs.first().and_then(|r| r.slice.as_ref().map(|s| s.start)).unwrap_or(0);
+            if first_start > 0 {
+                replacement.push(Op::new("TJ", vec![Object::Array(tj_operands(arr, 0..first_start)?.to_vec())]));
+            }
+            for (idx_m, s) in runs.iter().enumerate() {
+                let seg = s.slice.as_ref().ok_or_else(|| EditError::Invalid("a selected text operation cannot be moved".into()))?;
+                let next_start = runs.get(idx_m.saturating_add(1)).and_then(|next| next.slice.as_ref().map(|r| r.start)).unwrap_or(arr.len());
+                // interpret emits ascending, disjoint ranges from this same final TJ array.
+                // Check both ranges even for an unselected cell: overlaps or reversed runs
+                // must return an error before any content is written to the document.
+                let cell = tj_operands(arr, seg.clone())?;
+                let gap = tj_operands(arr, seg.end..next_start)?;
+                if selected_lines.iter().any(|l| line_owns_shown(l, s)) {
+                    let (shift, rise, dy) = move_params(s)?;
+                    if dy != 0.0 {
+                        replacement.push(Op::new("Ts", vec![n(rise)]));
+                    }
+                    if shift != 0.0 {
+                        replacement.push(Op::new("TJ", vec![Object::Array(vec![n(shift)])]));
+                    }
+                    replacement.push(Op::new("TJ", vec![Object::Array(cell.to_vec())]));
+                    if shift != 0.0 {
+                        replacement.push(Op::new("TJ", vec![Object::Array(vec![n(-shift)])]));
+                    }
+                    if dy != 0.0 {
+                        replacement.push(Op::new("Ts", vec![n(s.state.rise)]));
+                    }
+                    if !gap.is_empty() {
+                        replacement.push(Op::new("TJ", vec![Object::Array(gap.to_vec())]));
+                    }
+                } else {
+                    replacement.push(Op::new("TJ", vec![Object::Array(tj_operands(arr, seg.start..next_start)?.to_vec())]));
+                }
+            }
+            patches.insert(op_idx, replacement);
+            continue;
+        }
+        let s = runs.first().ok_or_else(|| EditError::Invalid("a selected text operation cannot be moved".into()))?;
+        let (shift, rise, dy) = move_params(s)?;
         let mut replacement = Vec::new();
         let show = if original.is("'") || original.is("\"") {
             if original.is("\"") {
@@ -3512,7 +3866,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         if dy != 0.0 {
             replacement.push(Op::new("Ts", vec![n(s.state.rise)]));
         }
-        patches.insert(s.op, replacement);
+        patches.insert(op_idx, replacement);
     }
     if patches.len() != selected.len() {
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
@@ -3526,6 +3880,26 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tj_move_ranges_reject_mismatched_bounds() {
+        let pieces =
+            [Object::String(PdfString::literal(vec![0xff, 0x80])), Object::Int(-8000), Object::String(PdfString::literal(b"Right".to_vec()))];
+        assert_eq!(tj_operands(&pieces, 0..1).unwrap(), &pieces[..1]);
+        assert_eq!(tj_operands(&pieces, 1..2).unwrap(), &pieces[1..2]);
+        assert_eq!(tj_operands(&pieces, 2..3).unwrap(), &pieces[2..]);
+        assert!(tj_operands(&pieces, 3..3).unwrap().is_empty());
+        // Parsed runs normally share the exact array that produced them. Exercise the
+        // defensive boundary directly with stale, overlapping and extreme ranges.
+        for (start, end) in [(0, 4), (4, 4), (2, 1), (0, usize::MAX), (usize::MAX, usize::MAX)] {
+            let range = start..end;
+            assert_eq!(
+                tj_operands(&pieces, range.clone()),
+                Err(EditError::Invalid("a text operation has an invalid array range".into())),
+                "{range:?}"
+            );
+        }
+    }
 
     fn block(text: &str, rect: [f64; 4]) -> TextBlock {
         TextBlock {

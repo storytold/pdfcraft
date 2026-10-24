@@ -6205,6 +6205,232 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
 
+#[test]
+fn tj_tracking_respects_signed_text_direction() {
+    for (size, scale) in [(10, 100), (10, -100), (-10, 100), (-10, -100)] {
+        for (jump, count) in [(3100, 1), (3300, 2)] {
+            let doc = text_page(&format!("BT /F1 {size} Tf {scale} Tz 1 0 0 1 300 700 Tm [(A) -200 (B) -200 (C) -200 (D) -{jump} (E)] TJ ET"));
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.len(), count, "size={size} scale={scale} jump={jump}: {lines:?}");
+        }
+    }
+}
+
+#[test]
+fn replacing_final_tj_cell_preserves_following_show_position() {
+    for (size, scale) in [(12, 100), (12, -100), (-12, 100), (-12, -100)] {
+        for suffix in ["", " 0", " -500"] {
+            let original = text_page(&format!(
+                "BT /F1 {size} Tf {scale} Tz 0.4 Tc 0.8 Tw 1 0 0 1 300 700 Tm [(Left) -8000 (Right Cell){suffix}] TJ [-8000] TJ (Tail) Tj [-8000 (Last)] TJ ET"
+            ));
+            let before = text::text_lines(&original, 0).unwrap();
+            let target = before.iter().position(|l| l.text == "Right Cell").unwrap();
+            for replacement in ["X", "Much Longer Cell", "Right Cell"] {
+                for by_block in [false, true] {
+                    let mut doc = original.clone();
+                    if by_block {
+                        text::replace_block(&mut doc, 0, target, replacement).unwrap();
+                    } else {
+                        text::replace_line(&mut doc, 0, target, replacement).unwrap();
+                    }
+                    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+                    assert!(after.iter().any(|l| l.text == replacement), "replacement missing: {after:?}");
+                    for label in ["Left", "Tail", "Last"] {
+                        let old = before.iter().find(|l| l.text == label).unwrap();
+                        let kept = after.iter().find(|l| l.text == label).unwrap();
+                        assert!(
+                            close(kept.rect, old.rect),
+                            "size={size} scale={scale} suffix={suffix:?} block={by_block} replacement={replacement} {label}: {:?} != {:?}",
+                            kept.rect,
+                            old.rect
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// #3744: QuickBooks and Microsoft Print to PDF write an entire invoice table row as one `TJ`
+/// array with multi-em negative adjustments between columns. Each cell must be its own line and
+/// paragraph, and editing, previewing, or moving one cell must leave the other columns in place.
+#[test]
+fn tj_table_row_splits_into_per_column_cells_and_edits_without_collapsing_neighbours() {
+    let q3 = "BT /F1 9 Tf 1 0 0 1 88.56 420 Tm [(Labor) -6713 (Remove Cabinets) -26768 (150.00) -3846 (150.00)] TJ ET";
+    let q3_t = "q 0.75 0 0 0.75 0 0 cm BT /F1 11.98 Tf 1 0 0 1 118.08 560 Tm \
+                [(Labor) -7127 (Remove Cabinets) -26531 (150.00) -3846 (150.00)] TJ \
+                0 -18.67 Td [(Materials) -4800 (Oak Countertop) -24900 (275.00) -3846 (275.00)] TJ ET Q";
+
+    for (label, content, expected_count) in [("Q3", q3, 4), ("Q3-T", q3_t, 8)] {
+        let doc = text_page(content);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let reading = text::reading_blocks(&doc, 0).unwrap();
+        assert_eq!(lines.len(), expected_count, "{label} lines: {lines:?}");
+        assert_eq!(blocks.len(), expected_count, "{label} blocks: {blocks:?}");
+        assert_eq!(reading.len(), expected_count, "{label} reading blocks: {reading:?}");
+        assert_eq!(blocks[..4].iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Labor", "Remove Cabinets", "150.00", "150.00"], "{label}");
+        for b in &blocks[..4] {
+            assert!(b.rect[2] - b.rect[0] < 120.0, "{label}: cell {:?} spanned {:?}", b.text, b.rect);
+        }
+        assert!((blocks[0].rect[0] - 88.56).abs() < 1.0, "{label}: col 0 {:?}", blocks[0].rect);
+        assert!((blocks[1].rect[0] - 174.0).abs() < 5.0, "{label}: col 1 {:?}", blocks[1].rect);
+        assert!((blocks[2].rect[0] - 487.9).abs() < 5.0, "{label}: col 2 {:?}", blocks[2].rect);
+        assert!((blocks[3].rect[0] - 550.0).abs() < 15.0, "{label}: col 3 {:?}", blocks[3].rect);
+
+        // Editing any single cell via `replace_block` or `replace_line` preserves all other cells at their positions.
+        for (cell_idx, replacement) in [(0, "Work"), (1, "Install Sink"), (3, "225.00"), (expected_count - 3, " Maple Countertop")] {
+            let replacement = replacement.trim();
+            for by_block in [true, false] {
+                let mut edited = doc.clone();
+                let before = text::text_lines(&edited, 0).unwrap();
+                if by_block {
+                    text::replace_block(&mut edited, 0, cell_idx, replacement).unwrap();
+                } else {
+                    text::replace_line(&mut edited, 0, cell_idx, replacement).unwrap();
+                }
+                let after = text::text_lines(&reopen(&edited), 0).unwrap();
+                assert_eq!(after.len(), expected_count, "{label} cell {cell_idx} by_block={by_block}: {after:?}");
+                for (i, old) in before.iter().enumerate() {
+                    if i == cell_idx {
+                        let new_cell = after.iter().find(|l| l.text == replacement).expect("edited cell present");
+                        assert!((new_cell.rect[0] - old.rect[0]).abs() < 1.0 && (new_cell.rect[1] - old.rect[1]).abs() < 1.0);
+                    } else {
+                        let kept = after
+                            .iter()
+                            .find(|l| l.text == old.text && (l.rect[0] - old.rect[0]).abs() < 1.0 && (l.rect[1] - old.rect[1]).abs() < 1.0);
+                        assert!(kept.is_some(), "{label} cell {cell_idx} by_block={by_block} lost or shifted {old:?}: {after:?}");
+                    }
+                }
+            }
+        }
+
+        // Clearing one cell for preview leaves the other cells untouched.
+        let mut preview = doc.clone();
+        let before = text::text_lines(&preview, 0).unwrap();
+        text::clear_block(&mut preview, 0, 1).unwrap();
+        let after = text::text_lines(&reopen(&preview), 0).unwrap();
+        assert_eq!(after.len(), expected_count - 1, "{label} clear_block");
+        for (i, old) in before.iter().enumerate().filter(|(i, _)| *i != 1) {
+            assert!(after.iter().any(|l| l.text == old.text && close(l.rect, old.rect)), "{label} clear_block shifted cell {i} ({old:?}): {after:?}");
+        }
+
+        // Moving one cell in a group moves only that cell and keeps the others in place.
+        let mut moved = doc.clone();
+        let before = text::text_lines(&moved, 0).unwrap();
+        move_objects(&mut moved, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 1 }], [12.0, -8.0]).unwrap();
+        let after = text::text_lines(&reopen(&moved), 0).unwrap();
+        assert_eq!(after.len(), expected_count, "{label} move_objects");
+        for (i, old) in before.iter().enumerate() {
+            let [dx, dy] = if i == 1 { [12.0, -8.0] } else { [0.0, 0.0] };
+            let expected = [old.rect[0] + dx, old.rect[1] + dy, old.rect[2] + dx, old.rect[3] + dy];
+            assert!(
+                after.iter().any(|l| l.text == old.text && close(l.rect, expected)),
+                "{label} move_objects cell {i}: expected {expected:?} in {after:?}"
+            );
+        }
+    }
+
+    // Sequential edits across all 4 cells of the same TJ row (both replace_block and replace_line).
+    for by_block in [true, false] {
+        let mut seq = text_page(q3);
+        let orig = text::text_lines(&seq, 0).unwrap();
+        let updates = ["Service", "Refinish Cabinets", "175.00", "175.00"];
+        for (target_x, new_text) in orig.iter().map(|l| l.rect[0]).zip(updates) {
+            let current = text::text_lines(&seq, 0).unwrap();
+            let idx = current.iter().position(|l| (l.rect[0] - target_x).abs() < 1.0 && !updates.contains(&l.text.as_str())).unwrap();
+            if by_block {
+                text::replace_block(&mut seq, 0, idx, new_text).unwrap();
+            } else {
+                text::replace_line(&mut seq, 0, idx, new_text).unwrap();
+            }
+            seq = reopen(&seq);
+        }
+        let final_lines = text::text_lines(&seq, 0).unwrap();
+        assert_eq!(final_lines.len(), 4);
+        for (orig_line, expected_text) in orig.iter().zip(updates) {
+            assert!(
+                final_lines.iter().any(|l| l.text == expected_text && (l.rect[0] - orig_line.rect[0]).abs() < 1.0),
+                "sequential by_block={by_block} missing {expected_text} at {}: {final_lines:?}",
+                orig_line.rect[0]
+            );
+        }
+    }
+
+    // Rich range styling (`rewrite_styled_block`) on a single cell of a TJ row keeps neighbour cells intact.
+    let mut styled = text_page(q3);
+    let orig = text::text_lines(&styled, 0).unwrap();
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 0..8,
+            family: None,
+            resource: None,
+            size: None,
+            color: Some([0.8, 0.1, 0.1]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut styled, 0, 1, Some("Refinish Cabinets"), &style).unwrap();
+    let after_styled = text::text_blocks(&reopen(&styled), 0).unwrap();
+    assert_eq!(after_styled.len(), 4, "styled TJ blocks: {after_styled:?}");
+    for (orig_idx, expected_text) in [(0, "Labor"), (1, "Refinish Cabinets"), (2, "150.00"), (3, "150.00")] {
+        assert!(
+            after_styled.iter().any(|b| b.text == expected_text && (b.rect[0] - orig[orig_idx].rect[0]).abs() < 1.0),
+            "styled TJ missing {expected_text}: {after_styled:?}"
+        );
+    }
+
+    // Intra-cell kerning and word gaps stay inside their cell while column jumps split.
+    let kerned = text_page("BT /F1 9 Tf 1 0 0 1 88.56 420 Tm [(La) -25 (bor) -6713 (Remove) -280 (Cabi) 15 (nets) -26768 (150.00)] TJ ET");
+    let kerned_blocks = text::text_blocks(&kerned, 0).unwrap();
+    assert_eq!(kerned_blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Labor", "Remove Cabinets", "150.00"]);
+
+    // Invisible OCR text (`3 Tr`) splits at 0.6 em so adjacent OCR table cells do not merge.
+    let ocr = text_page("BT 3 Tr /F1 10 Tf 1 0 0 1 72 500 Tm [(Item) -250 (One) -900 (25.00) -900 (50.00)] TJ ET");
+    let ocr_blocks = text::text_blocks(&ocr, 0).unwrap();
+    assert_eq!(ocr_blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Item One", "25.00", "50.00"]);
+
+    // Clipping mode (`4 Tr`) on a split TJ row is refused without mutating the document.
+    let mut clip_doc = text_page("BT 4 Tr /F1 9 Tf 1 0 0 1 88.56 420 Tm [(Labor) -6713 (Remove Cabinets)] TJ ET");
+    assert!(text::replace_block(&mut clip_doc, 0, 0, "Work").is_err());
+    assert!(text::replace_line(&mut clip_doc, 0, 1, "Refinish").is_err());
+    assert!(text::clear_block(&mut clip_doc, 0, 0).is_err());
+    assert!(move_objects(&mut clip_doc, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }], [5.0, 0.0]).is_err());
+
+    // `text_edit_layout` on a split TJ cell excludes untouched sibling columns from `draft_rect`.
+    let q3_doc = text_page(q3);
+    let layout = text::text_edit_layout(&q3_doc, 0, 0, "Work", &text::BlockStyle::default()).unwrap();
+    let draft_rect = layout.draft_rect.expect("draft rect present");
+    assert!(draft_rect[2] - draft_rect[0] < 40.0, "draft_rect leaked into sibling TJ columns: {draft_rect:?}");
+    assert!(!layout.overflow);
+
+    // Mixing `replace_line` on column 1 followed by `replace_block` on column 0 keeps column 1 and 2 in place.
+    let mut mixed = text_page(q3);
+    let orig_mixed = text::text_lines(&mixed, 0).unwrap();
+    text::replace_line(&mut mixed, 0, 1, "Refinish").unwrap();
+    text::replace_block(&mut mixed, 0, 0, "Work").unwrap();
+    let after_mixed = text::text_lines(&reopen(&mixed), 0).unwrap();
+    assert_eq!(after_mixed.len(), 4);
+    for (idx, expected) in [(0, "Work"), (1, "Refinish"), (2, "150.00"), (3, "150.00")] {
+        assert!(
+            after_mixed.iter().any(|l| l.text == expected && (l.rect[0] - orig_mixed[idx].rect[0]).abs() < 1.0),
+            "mixed replace_line + replace_block shifted {expected}: {after_mixed:?}"
+        );
+    }
+
+    // Condensed horizontal scaling (`50 Tz`) measures TJ gaps in page-scaled ems: `-4000` is 2 em
+    // (stays one line), while `-8000` is 4 em (splits into separate cells).
+    let condensed_join = text_page("BT /F1 12 Tf 50 Tz 1 0 0 1 72 500 Tm [(Item one) -4000 (Amount)] TJ ET");
+    let condensed_join_blocks = text::text_blocks(&condensed_join, 0).unwrap();
+    assert_eq!(condensed_join_blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Item one Amount"]);
+    let condensed_split = text_page("BT /F1 10 Tf 50 Tz 1 0 0 1 72 500 Tm [(ColA) -8000 (ColB)] TJ ET");
+    let condensed_split_blocks = text::text_blocks(&condensed_split, 0).unwrap();
+    assert_eq!(condensed_split_blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["ColA", "ColB"]);
+}
+
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
 /// other, and its commit writes what a one-shot rewrite writes, whatever was laid out before.
 #[test]
@@ -6695,6 +6921,101 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
             "Ordinary body text. Still the same paragraph.",
         ]
     );
+}
+
+/// Integrating horizontal TJ cells must not split vertical runs or scale their y advances by Tz.
+/// Numeric-only TJ still moves the vertical pen, including the preview's replacement TJ.
+#[test]
+fn vertical_tj_keeps_its_column_and_numeric_advance_when_cleared() {
+    let mut doc = vertical_page("BT /V1 20 Tf 50 Tz 500 720 Td [1000] TJ [<0041> 4000 <0042>] TJ /F1 12 Tf (Tail) Tj ET");
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["A B", "Tail"]);
+    assert!(close(before[0].rect, [495.0, 580.0, 505.0, 700.0]), "{:?}", before[0]);
+    assert_eq!(before[0].baseline(), [500.0, 700.0]);
+    assert_eq!(before[1].baseline(), [500.0, 580.0]);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let column = blocks.iter().position(|b| b.text == "A B").unwrap();
+    text::clear_block(&mut doc, 0, column).unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(after.len(), 1, "numeric-only preview must not produce a phantom line: {after:?}");
+    assert_eq!(after[0].text, "Tail");
+    assert!(close(after[0].rect, before[1].rect), "the following run moved: {after:?}");
+}
+
+/// #3569 and #3744 together: every cell-edit path must use the last TJ operand, just as reading
+/// does. The surplus array is deliberately shorter, so using it could also index out of bounds.
+#[test]
+fn tj_cells_with_a_surplus_array_edit_only_the_array_that_is_drawn() {
+    let original = text_page("BT /F1 12 Tf 72 700 Td [(NOT DRAWN)] [(Left) -8000 (Right)] TJ ET");
+    let before = text::text_lines(&original, 0).unwrap();
+    assert_eq!(before.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Left", "Right"]);
+    for operation in 0..4 {
+        let mut doc = original.clone();
+        match operation {
+            0 => {
+                text::replace_line(&mut doc, 0, 1, "Edited").unwrap();
+            }
+            1 => {
+                text::replace_block(&mut doc, 0, 1, "Edited").unwrap();
+            }
+            2 => {
+                text::clear_block(&mut doc, 0, 1).unwrap();
+            }
+            _ => {
+                move_objects(&mut doc, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 1 }], [12.0, -8.0]).unwrap();
+            }
+        }
+        let after = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), if operation == 2 { 1 } else { 2 }, "operation {operation}: {after:?}");
+        assert!(after.iter().any(|l| l.text == "Left" && close(l.rect, before[0].rect)), "operation {operation}: {after:?}");
+        if operation != 2 {
+            let (label, dx, dy) = if operation == 3 { ("Right", 12.0, -8.0) } else { ("Edited", 0.0, 0.0) };
+            assert!(
+                after.iter().any(|l| l.text == label
+                    && (l.rect[0] - before[1].rect[0] - dx).abs() < 0.01
+                    && (l.rect[1] - before[1].rect[1] - dy).abs() < 0.01),
+                "operation {operation}: {after:?}"
+            );
+        }
+    }
+}
+
+/// Invalid TJ entries are ignored by reading; moving any subset still preserves all other
+/// text, including the leading/trailing adjustments and the gap between cells.
+#[test]
+fn tj_moves_preserve_cells_with_malformed_array_entries() {
+    let original = text_page(
+        "BT /F1 12 Tf 72 700 Td [] [null false /Ignored 20 (Left) -8000 [] <<>> (Right) 50] TJ ET \
+         BT /F1 12 Tf 72 650 Td (Tail) Tj ET",
+    );
+    let before = text::text_lines(&original, 0).unwrap();
+    assert_eq!(before.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), ["Left", "Right", "Tail"]);
+    for indexes in [vec![0], vec![1], vec![0, 1]] {
+        let mut doc = original.clone();
+        let targets = indexes.iter().map(|index| ObjectTarget { kind: ObjectKind::Text, index: *index }).collect::<Vec<_>>();
+        move_objects(&mut doc, 0, &targets, [12.0, -8.0]).unwrap();
+        let after = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), before.len());
+        for (index, line) in before.iter().enumerate() {
+            let actual = after.iter().find(|other| other.text == line.text).unwrap();
+            let (dx, dy) = if indexes.contains(&index) { (12.0, -8.0) } else { (0.0, 0.0) };
+            let [x, y] = line.baseline();
+            let [actual_x, actual_y] = actual.baseline();
+            assert!((actual_x - x - dx).abs() < 0.01 && (actual_y - y - dy).abs() < 0.01, "selected {indexes:?}, {}", line.text);
+            // Selection boxes also include TJ advances. Emitting the trailing 50 in a
+            // separate run can change that box without moving any ink, already before
+            // the checked-range change. Compare every painted word, not that advance.
+            assert!(!line.ink.is_empty());
+            assert_eq!(actual.ink.len(), line.ink.len());
+            for (ink, actual_ink) in line.ink.iter().zip(&actual.ink) {
+                let [x0, y0, x1, y1] = *ink;
+                assert!(close(*actual_ink, [x0 + dx, y0 + dy, x1 + dx, y1 + dy]), "selected {indexes:?}, {}: {actual:?}", line.text);
+            }
+            if line.text == "Tail" {
+                assert!(close(actual.rect, line.rect));
+            }
+        }
+    }
 }
 
 /// Text set larger than the widest page PDF allows (14 400 pt) panicked when its paragraph was given
