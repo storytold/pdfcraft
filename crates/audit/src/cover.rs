@@ -51,6 +51,8 @@ struct Gs {
     stroke_alpha: f64,
     /// Line width, in the space the path is drawn in.
     width: f64,
+    /// Line cap (`J`, `/LC`): 0 butt, 1 round, 2 projecting square.
+    cap: i64,
 }
 
 /// The path under construction, as far as the audit cares about it.
@@ -75,24 +77,30 @@ impl Path {
     }
 
     /// The rectangle a stroke of this path paints, if the path is one segment along an axis: the
-    /// segment widened by half the line width each side (caps are not counted). The width is
-    /// measured across the segment after the CTM, so a non-uniform scale widens only the strokes
-    /// it stretches across.
+    /// segment widened by half the line width each side, and lengthened by as much at each end
+    /// under a round or projecting square cap (a round cap is counted by its box). Both are
+    /// measured after the CTM: the pen is a disc of the line width in the space the path is
+    /// drawn in, and its extent along a page direction is that direction's length under the
+    /// transposed matrix, so a non-uniform scale widens only the strokes it stretches across.
     fn stroked_rect(&self, gs: &Gs) -> Option<[f64; 4]> {
         const EPS: f64 = 1e-6;
         let Path::Lines(pts, _) = self else { return None };
         let [a, b] = <[[f64; 2]; 2]>::try_from(pts.as_slice()).ok()?;
         let [m0, m1, m2, m3, ..] = gs.ctm.0;
-        // |det M| / |M u| for the segment's unit direction u in drawing space, via adj(M).
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let half = gs.width * (m3 * dx - m2 * dy).hypot(m0 * dy - m1 * dx) / dx.hypot(dy) / 2.0;
+        let len = dx.hypot(dy);
+        let half = gs.width * (m3 * dx - m2 * dy).hypot(m0 * dy - m1 * dx) / len / 2.0;
         if half.is_nan() || half <= EPS {
             return None;
         }
+        let cap = if gs.cap == 0 { 0.0 } else { gs.width * (m0 * dx + m1 * dy).hypot(m2 * dx + m3 * dy) / len / 2.0 };
+        if cap.is_nan() {
+            return None;
+        }
         if (a[1] - b[1]).abs() <= EPS && (a[0] - b[0]).abs() > EPS {
-            Some([a[0].min(b[0]), a[1] - half, a[0].max(b[0]), a[1] + half])
+            Some([a[0].min(b[0]) - cap, a[1] - half, a[0].max(b[0]) + cap, a[1] + half])
         } else if (a[0] - b[0]).abs() <= EPS && (a[1] - b[1]).abs() > EPS {
-            Some([a[0] - half, a[1].min(b[1]), a[0] + half, a[1].max(b[1])])
+            Some([a[0] - half, a[1].min(b[1]) - cap, a[0] + half, a[1].max(b[1]) + cap])
         } else {
             None
         }
@@ -131,7 +139,7 @@ fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
 
 impl Default for Gs {
     fn default() -> Self {
-        Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0, stroke: [0.0, 0.0, 0.0], stroke_alpha: 1.0, width: 1.0 }
+        Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0, stroke: [0.0, 0.0, 0.0], stroke_alpha: 1.0, width: 1.0, cap: 0 }
     }
 }
 
@@ -222,6 +230,11 @@ impl<'a> Walker<'a> {
                 b"w" => {
                     if let Some(v) = op.num(0).filter(|v| v.is_finite() && *v >= 0.0) {
                         gs.width = v;
+                    }
+                }
+                b"J" => {
+                    if let Some(v) = op.num(0).filter(|v| [0.0, 1.0, 2.0].contains(v)) {
+                        gs.cap = v as i64;
                     }
                 }
                 b"gs" => {
@@ -372,6 +385,9 @@ fn ext_state(doc: &Document, resources: &Dict, name: &[u8], gs: &mut Gs) {
     }
     if let Some(w) = num(b"LW").filter(|w| *w >= 0.0) {
         gs.width = w;
+    }
+    if let Some(c) = num(b"LC").filter(|c| [0.0, 1.0, 2.0].contains(c)) {
+        gs.cap = c as i64;
     }
 }
 

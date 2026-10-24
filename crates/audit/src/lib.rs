@@ -13,10 +13,10 @@
 //!
 //! Covers come from the page content — `re` rectangles and single closed `m`/`l` subpaths whose
 //! four corners form an axis-aligned rectangle in user space (#1510), filled opaquely, and a
-//! thick opaque stroke along one axis (a "marker" line) — and from the annotations: an opaque
-//! `/Highlight` dark enough to hide the text under it (#2385), and an opaque filled `/Square`
-//! likewise, or white (#2854). A `/Redact` mark is reported whatever its flags: Hidden or NoView
-//! hides the mark, not the text.
+//! thick opaque stroke along one axis (a "marker" line, its round or square caps included) — and
+//! from the annotations: an opaque `/Highlight` dark enough to hide the text under it (#2385), and
+//! an opaque filled `/Square` likewise, or white (#2854). A `/Redact` mark is reported whatever its
+//! flags: Hidden or NoView hides the mark, not the text.
 //!
 //! Detection limits (documented, not hidden): other filled paths, slanted or bent strokes,
 //! shadings and patterns are not considered; a cover drawn with a translucent ExtGState

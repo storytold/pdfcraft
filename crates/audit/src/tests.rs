@@ -752,6 +752,47 @@ fn stroke_width_follows_a_non_uniform_ctm_across_the_segment() {
     assert_eq!(rects(b"q 4 0 0 1 0 0 cm 0 G 5 w 20 690 m 20 720 l S Q\n"), [[70.0, 690.0, 90.0, 720.0]]);
 }
 
+/// A round or projecting square cap (`1 J`, `2 J`, or `/LC` in an ExtGState) paints half the
+/// line width past each end of the stroke, so the text under a cap is hidden too; a butt cap
+/// (the default, and `0 J` again) paints none. Under a CTM the cap is the pen's extent along
+/// the stroke: four times the width under `4 0 0 1 0 0 cm`, `sqrt 2` times it under a shear.
+#[test]
+fn stroke_caps_lengthen_the_cover() {
+    let text = &b"BT /F1 14 Tf 72 700 Td (IBAN IT60X0542811101000000123456) Tj ET\n"[..];
+    let rects = |cover: &[u8]| {
+        audit_redactions(&open(one_page(&[text, cover].concat(), ""))).expect("audit must run").into_iter().map(|f| f.rect).collect::<Vec<_>>()
+    };
+    assert_eq!(rects(b"0 G 20 w 80 705 m 400 705 l S\n"), [[80.0, 695.0, 400.0, 715.0]], "butt");
+    assert_eq!(rects(b"0 G 1 J 20 w 80 705 m 400 705 l S\n"), [[70.0, 695.0, 410.0, 715.0]], "round");
+    assert_eq!(rects(b"0 G 2 J 20 w 80 705 m 400 705 l S\n"), [[70.0, 695.0, 410.0, 715.0]], "projecting square");
+    assert_eq!(rects(b"0 G 1 J 0 J 20 w 80 705 m 400 705 l S\n"), [[80.0, 695.0, 400.0, 715.0]], "butt again");
+    assert_eq!(rects(b"0 G 1 J 20 w 80 700 m 80 720 l S\n"), [[70.0, 690.0, 90.0, 730.0]], "vertical");
+    assert_eq!(rects(b"q 4 0 0 1 0 0 cm 0 G 1 J 20 w 20 705 m 100 705 l S Q\n"), [[40.0, 695.0, 440.0, 715.0]], "scaled along the stroke");
+    let [sheared] = rects(b"q 1 0 1 1 0 0 cm 0 G 1 J 20 w -625 705 m -305 705 l S Q\n")[..] else { panic!("one cover") };
+    let want = [80.0 - 10.0 * 2f64.sqrt(), 695.0, 400.0 + 10.0 * 2f64.sqrt(), 715.0];
+    assert!(sheared.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6), "sheared: {sheared:?} vs {want:?}");
+    // The cap is state like the width: `/LC` sets it, a `gs` without it leaves it, `Q` restores it.
+    let states = |cover: &[u8], states| {
+        audit_redactions(&open(page_with_states(&[text, cover].concat(), states)))
+            .expect("audit must run")
+            .into_iter()
+            .map(|f| f.rect)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(states(b"/GS1 gs /GS2 gs 0 G 80 705 m 400 705 l S\n", ["<< /LC 1 /LW 20 >>", "<< >>"]), [[70.0, 695.0, 410.0, 715.0]]);
+    assert_eq!(rects(b"q 1 J Q 0 G 20 w 80 705 m 400 705 l S\n"), [[80.0, 695.0, 400.0, 715.0]], "restored");
+    // The cap alone can hide a word: with butt caps the stroke stops short of IBAN, the round cap reaches it.
+    let hidden = |cover: &[u8]| {
+        audit_redactions(&open(one_page(&[text, cover].concat(), "")))
+            .expect("audit must run")
+            .into_iter()
+            .map(|f| f.covered_text)
+            .collect::<Vec<_>>()
+    };
+    assert!(hidden(b"0 G 30 w 20 705 m 84 705 l S\n").is_empty(), "butt: under a third of IBAN");
+    assert_eq!(hidden(b"0 G 1 J 30 w 20 705 m 84 705 l S\n"), ["IBAN IT60X0542811101000000123456"], "the cap reaches over most of IBAN");
+}
+
 /// A white cover is `hidden-under-white` whatever the text's color: white text on a dark page,
 /// whited out, is not a dark cover just because text and cover have no contrast.
 #[test]
@@ -781,6 +822,7 @@ fn highlight_covers_its_quad_points_not_its_rect() {
     assert_eq!(findings.len(), 1, "{findings:?}");
     assert_eq!(findings[0].covered_text, "IBAN IT60X0542811101000000123456");
     assert_eq!(audit("")[0].covered_text, "IBAN IT60X0542811101000000123456 Account holder Jane Doe");
+}
 
 /// The current path is not graphics state: a rectangle built before `Q` and filled after it
 /// paints the box, so it is a cover.
