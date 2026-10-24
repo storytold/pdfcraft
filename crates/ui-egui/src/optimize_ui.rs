@@ -214,6 +214,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             discard_box(ui, &mut d.discard, Hidden::Comments, "Discard all comments, forms and multimedia");
             discard_box(ui, &mut d.discard, Hidden::Metadata, "Discard document information and metadata");
             discard_box(ui, &mut d.discard, Hidden::Attachments, "Discard all object data (file attachments)");
+            ui.add(widgets::checkbox(&mut s.discard_external_refs, tl!("Discard external cross-references")));
             discard_box(ui, &mut d.discard, Hidden::PrivateData, "Discard private data of other applications");
             discard_box(ui, &mut d.discard, Hidden::HiddenText, "Discard hidden text");
         }

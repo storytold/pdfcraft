@@ -31,6 +31,13 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes). Streams with `/DecodeParms`, images and object streams are left alone.
+- **Discard external cross-references** (off by default): `GoToR`, `GoToE`, `Launch` and
+  `ImportData` actions, and `Thread` actions with an `/F`, are taken out of link annotations and
+  bookmarks, and the actions chained after one through `/Next` take its place. Other annotations,
+  such as form fields, keep their actions. A link left with no action and no `/Dest` is removed
+  from its page, and its object, when something else refers to it, keeps the link without the
+  action; a bookmark keeps its title and children. Links within the document and web links
+  (`URI`) stay. An outline of more than 100,000 bookmarks stops the optimization with an error.
 
 The engine runs Remove Hidden Information (`pdfcraft-redact`) for the user-data categories,
 then this, then merges identical objects and writes a full, compressed save

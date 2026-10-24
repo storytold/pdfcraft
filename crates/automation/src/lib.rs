@@ -1258,6 +1258,7 @@ impl Automation {
             ("flate_unencoded", &mut settings.flate_unencoded),
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
+            ("discard_external_refs", &mut settings.discard_external_refs),
         ] {
             if let Some(b) = a.opt_bool(key)? {
                 *flag = b;
@@ -1297,6 +1298,8 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "external_links": o.external_links,
+            "external_bookmarks": o.external_bookmarks,
             "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),

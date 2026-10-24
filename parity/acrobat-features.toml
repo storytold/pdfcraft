@@ -7526,11 +7526,11 @@ title = "Discard external cross-references"
 area = "K"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["optimize.advanced"]
+tools = ["doc_optimize"]
+evidence = ["crates/optimize/tests/optimize.rs::links_and_bookmarks_to_other_documents_are_discarded_and_links_within_stay", "crates/optimize/tests/optimize.rs::an_action_to_another_document_hands_its_place_to_the_actions_after_it", "crates/optimize/tests/optimize.rs::a_chain_deeper_than_the_limit_loses_its_tail_and_one_without_a_remote_action_stays", "crates/optimize/tests/optimize.rs::a_long_chain_of_indirect_actions_stays_indirect_and_reads_back_after_saving", "crates/optimize/tests/optimize.rs::shared_actions_that_multiply_stop_the_optimization_when_one_opens_another_document", "crates/optimize/tests/optimize.rs::a_shared_chain_without_remote_actions_is_looked_at_once", "crates/optimize/tests/optimize.rs::a_link_named_through_an_indirect_subtype_is_discarded_and_a_form_field_keeps_its_action", "crates/optimize/tests/optimize.rs::thread_actions_into_another_file_and_data_imports_are_discarded_and_threads_here_stay", "crates/optimize/tests/optimize.rs::an_outline_over_the_limit_stops_the_optimization", "crates/optimize/tests/optimize.rs::bookmarks_stored_inside_other_bookmarks_lose_their_actions_too", "crates/optimize/tests/optimize.rs::a_removed_link_kept_by_the_structure_tree_reads_back_without_its_action", "crates/automation/tests/it/automation.rs::optimizing_discards_links_to_other_documents_through_tools"]
+notes = "PDF Optimizer ▸ Discard User Data, off by default. Takes GoToR, GoToE, Launch and ImportData actions, and Thread actions with an /F, out of the /A of link annotations (/Subtype /Link, stored directly or as an indirect name) and bookmarks, and the actions chained after one through /Next take its place in order. A link left with no action and no /Dest is removed from /Annots, and when the link is an indirect object its object is rewritten without the action for its other users (the structure tree, for example); a bookmark keeps its title and children. Bookmarks stored directly inside another bookmark or the outline dictionary are changed in place; an outline of more than 100,000 items, or with direct items nested more than 512 levels deep, stops the optimization with an error. Links within the document (/Dest, GoTo) and web links (URI) stay. An indirect action that changes is written as a new indirect object, except the first action left at the head of an /A, which is copied into the /A directly when other actions follow it; the old one stays for its other users. Past 512 nested levels (actions, /Next arrays and references), the rest of a chain is kept when it opens no other document and removed when it does. An /A with more than 100,000 values to check, or one that opens another document and needs more than 100,000 values to rewrite (actions shared so that their paths multiply), stops the optimization with an error. Not changed: /AA triggers, widget and other annotation actions, the catalog /OpenAction, and JavaScript."
 
 [[feature]]
 id = "optimize.discard-hidden-layers"

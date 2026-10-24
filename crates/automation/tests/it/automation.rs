@@ -7352,6 +7352,22 @@ fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
     assert_eq!(reopened["pages"], 1);
 }
 
+#[test]
+fn optimizing_discards_links_to_other_documents_through_tools() {
+    let dir = workdir("optimize-external-refs");
+    std::fs::write(dir.join("remote.pdf"), remote_link_pdf("other.pdf", None)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "remote.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf" }));
+    assert_eq!(kept["external_links"], 0, "{kept}");
+    let kept = ok(&mut a, "doc_open", json!({ "path": "kept.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "link_list", json!({ "doc": kept }))["count"], 1);
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf", "discard_external_refs": true }));
+    assert_eq!((r["external_links"].as_u64(), r["external_bookmarks"].as_u64()), (Some(1), Some(0)), "{r}");
+    let small = ok(&mut a, "doc_open", json!({ "path": "small.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "link_list", json!({ "doc": small }))["count"], 0);
+}
+
 /// A two-page PDF with the same three-row table ("Name Qty / Apple 12 / Pear 7"); the second
 /// page is turned with /Rotate 90.
 fn table_pdf() -> Vec<u8> {
