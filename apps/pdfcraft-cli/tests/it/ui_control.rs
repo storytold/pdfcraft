@@ -86,6 +86,24 @@ fn write_private(path: &Path, text: &str) {
         opts.mode(0o600);
     }
     opts.open(path).unwrap().write_all(text.as_bytes()).unwrap();
+    // On Windows the file inherits its folder's access list, as the app's would before it
+    // restricts it (#3922).
+    #[cfg(windows)]
+    {
+        use pdfcraft_platform::owner_only;
+        owner_only::restrict_to_owner(path).unwrap();
+        // The file the CLI is handed must already pass its check, or a refusal below would be
+        // the helper's fault, not the CLI's.
+        let sddl = owner_only::sddl_of(path).unwrap();
+        let listing = |p: &Path| Command::new("icacls").arg(p).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        let folder = path.parent().map(listing);
+        assert_eq!(
+            owner_only::foreign_access(&sddl, &owner_only::current_user_sid().unwrap()),
+            None,
+            "restricted file: {sddl}; icacls: {:?}; folder: {folder:?}",
+            listing(path)
+        );
+    }
 }
 
 fn ui(control: &Path, method: &str) -> Output {

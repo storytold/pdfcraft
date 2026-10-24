@@ -504,7 +504,9 @@ fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::
             Ok(())
         }
         Err(e) => {
-            let message = format!("--control {file}: {e}. Use a control file in a folder only you can write, such as ~/.pdfcraft-control.json");
+            // cmd.exe doesn't expand `~` (#3922).
+            let example = if cfg!(windows) { r"%USERPROFILE%\.pdfcraft-control.json" } else { "~/.pdfcraft-control.json" };
+            let message = format!("--control {file}: {e}. Use a control file in a folder only you can write, such as {example}");
             log::error!("{message}");
             Err(message)
         }
@@ -513,7 +515,8 @@ fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::
 
 /// Write the control endpoint so that only the current user can read the token.
 ///
-/// The JSON goes to a new file next to `path`, created fresh (owner-only on Unix), which then
+/// The JSON goes to a new file next to `path`, created fresh and owner-only (mode 0600 on Unix, an
+/// access list of this user and SYSTEM on Windows), which then
 /// replaces `path`. Opening `path` itself would follow a link planted there and truncate whatever
 /// it points at; a rename replaces the link and leaves its target alone. A reader polling for the
 /// file also never sees it half-written.
@@ -545,6 +548,15 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
             Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => continue,
             Err(e) => return Err(e),
         };
+        // Windows: the new file inherited its folder's access list, which may let other users read
+        // it. It gets a list of its own with only this user and SYSTEM on it before the token is
+        // written, and nothing is written if that fails (#3922). Unix has mode 0600 above.
+        #[cfg(windows)]
+        if let Err(e) = pdfcraft_platform::owner_only::restrict_to_owner(&staged) {
+            drop(file);
+            let _ = std::fs::remove_file(&staged);
+            return Err(e);
+        }
         // The block closes the file before it is renamed.
         let written = {
             let mut file = file;
@@ -1428,6 +1440,26 @@ mod tests {
             let mode = std::fs::metadata(dir.join("ctl.json")).unwrap().permissions().mode();
             assert_eq!(mode & 0o077, 0, "only the owner can read the token: {mode:o}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3922: a control file created in a folder that lets every user read what's in it is still
+    /// readable by its user and SYSTEM only, like mode 0600 on Unix.
+    #[cfg(windows)]
+    #[test]
+    fn the_control_file_is_owner_only_in_a_folder_other_users_can_read() {
+        use pdfcraft_platform::owner_only;
+        let dir = scratch();
+        let users = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(users.status.success());
+        // What the folder hands down, for comparison: a plain file there is readable by Users.
+        std::fs::write(dir.join("plain.txt"), "x").unwrap();
+        let me = owner_only::current_user_sid().unwrap();
+        assert!(owner_only::foreign_access(&owner_only::sddl_of(&dir.join("plain.txt")).unwrap(), &me).is_some());
+        super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+        let sddl = owner_only::sddl_of(&dir.join("ctl.json")).unwrap();
+        assert_eq!(owner_only::foreign_access(&sddl, &me), None, "{sddl}");
+        assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
