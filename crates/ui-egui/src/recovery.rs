@@ -424,21 +424,49 @@ mod idle_tests {
     struct TestDir(PathBuf);
 
     impl TestDir {
+        /// A new folder of this test's own. The tests run on parallel threads of one process, and
+        /// two can read the same clock time (it moves in microseconds on macOS), so a counter
+        /// tells their folders apart; the time keeps runs of the process apart.
         fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-            let path = std::env::temp_dir().join(format!("pdfcraft-idle-recovery-{}-{nonce}", std::process::id()));
+            let path = std::env::temp_dir().join(format!("pdfcraft-idle-recovery-{}-{nonce}-{n}", std::process::id()));
             std::fs::create_dir(&path).unwrap();
             Self(path)
         }
+
+        /// The folder.
         fn path(&self) -> &Path {
             &self.0
         }
     }
 
     impl Drop for TestDir {
+        /// Remove the folder and what the test left in it.
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Folders made at the same moment on parallel threads, as the tests make theirs, are each
+    /// their own: none fails because another test's folder took its name.
+    #[test]
+    fn test_folders_made_at_once_on_parallel_threads_are_each_their_own() {
+        let start = std::sync::Barrier::new(8);
+        let dirs: Vec<PathBuf> = std::thread::scope(|s| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    s.spawn(|| {
+                        start.wait();
+                        (0..25).map(|_| TestDir::new()).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            threads.into_iter().flat_map(|t| t.join().unwrap()).map(|d| d.path().to_path_buf()).collect()
+        });
+        let distinct: std::collections::HashSet<&PathBuf> = dirs.iter().collect();
+        assert_eq!(distinct.len(), 200);
     }
 
     fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, now: f64) -> Duration {

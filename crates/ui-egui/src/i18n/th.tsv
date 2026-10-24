@@ -568,6 +568,7 @@
 	Discard private data of other applications	ละทิ้งข้อมูลเฉพาะของแอปพลิเคชันอื่น
 	Discard hidden text	ละทิ้งข้อความที่ซ่อนอยู่
 	Use Flate to encode streams that are not encoded	ใช้ Flate เข้ารหัสสตรีมที่ยังไม่ได้เข้ารหัส
+	In streams that use LZW encoding, use Flate instead	ใช้ Flate แทนในสตรีมที่เข้ารหัสแบบ LZW
 	Remove invalid links and bookmarks	เอาลิงก์และบุ๊กมาร์กที่ใช้ไม่ได้ออก
 	Remove unreferenced named destinations	เอาปลายทางที่มีชื่อซึ่งไม่ถูกอ้างถึงออก
 	Compress document structure (object streams)	บีบอัดโครงสร้างเอกสาร (object streams)
@@ -1984,6 +1985,10 @@
 	Perimeter	เส้นรอบรูป
 	Area	พื้นที่
 	Drawing scale	มาตราส่วนของแบบ
+	Scale	มาตราส่วน
+	Common scales	มาตราส่วนที่ใช้บ่อย
+	Enter a scale such as 1:50.	ป้อนมาตราส่วน เช่น 1:50
+	Applying a scale switches units to m / mm.	การใช้มาตราส่วนจะเปลี่ยนหน่วยเป็น m / mm
 	Snapping	การยึด
 	Export measurements	ส่งออกการวัด
 	Open a PDF to measure it.	เปิด PDF เพื่อวัดระยะ
@@ -2226,6 +2231,8 @@ signature pad	Type	พิมพ์
 	Printer paper and scaling may differ. Check driver settings.	กระดาษและการปรับขนาดของเครื่องพิมพ์อาจต่างออกไป โปรดตรวจสอบการตั้งค่าไดรเวอร์
 	Drawing scale changes. Use Actual size for full-scale plans.	มาตราส่วนของแบบจะเปลี่ยน ใช้ขนาดจริงสำหรับแบบแปลนเต็มมาตราส่วน
 	Reload documents when their files change on disk	โหลดเอกสารใหม่เมื่อไฟล์บนดิสก์เปลี่ยนแปลง
+	Don't show again	ไม่ต้องแสดงอีก
+	Show a notice when a document is secured	แสดงการแจ้งเตือนเมื่อเอกสารมีการรักษาความปลอดภัย
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	ไฟล์นี้เปลี่ยนแปลงบนดิสก์ โหลดใหม่เพื่อดูรุ่นใหม่ การเปลี่ยนแปลงที่ยังไม่ได้บันทึกจะหายไป
 	Reload	โหลดใหม่
 	Couldn't reload {name}: {e}	โหลด {name} ใหม่ไม่ได้: {e}
@@ -2681,3 +2688,9 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	วันนี้
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง

@@ -601,6 +601,9 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let written = crate::pdf::write_form(doc, &form)?;
     let mut warnings = form.warnings;
     warnings.extend(written.warnings);
+    if written.usage_rights {
+        warnings.push(crate::pdf::USAGE_RIGHTS_REMOVED.into());
+    }
     warnings.dedup();
     Ok(Report { pages: written.pages, fields: written.fields, template_bytes: packets.xdp.len(), warnings })
 }

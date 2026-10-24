@@ -969,6 +969,8 @@ theme	Appearance	Giao diện
 	Redaction code:	Mã xóa nội dung nhạy cảm:
 	Reload	Tải lại
 	Reload documents when their files change on disk	Tải lại tài liệu khi tệp của chúng thay đổi trên đĩa
+	Don't show again	Không hiển thị lại
+	Show a notice when a document is secured	Hiển thị thông báo khi tài liệu được bảo mật
 	Always use my default zoom and page layout	Luôn dùng thu phóng và bố cục trang mặc định của tôi
 	Remove checkmark	Bỏ dấu kiểm
 	Remove invalid links and bookmarks	Gỡ các liên kết và dấu trang không hợp lệ
@@ -1268,6 +1270,7 @@ theme	Appearance	Giao diện
 	Update	Cập nhật
 	Use 72 DPI (one point per pixel)	Dùng 72 DPI (một điểm cho mỗi điểm ảnh)
 	Use Flate to encode streams that are not encoded	Dùng Flate để mã hóa các luồng chưa được mã hóa
+	In streams that use LZW encoding, use Flate instead	Dùng Flate thay cho LZW trong các luồng mã hóa LZW
 	Use a Digital ID from a file	Dùng Digital ID từ một tệp
 	Use custom DPI	Dùng DPI tùy chỉnh
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Dùng DPI nhúng của từng hình ảnh; dùng 72 DPI khi không có.
@@ -1439,6 +1442,10 @@ theme	Appearance	Giao diện
 	Draw freehand	Vẽ tự do
 	Drawing	Bản vẽ
 	Drawing scale	Tỷ lệ bản vẽ
+	Scale	Tỷ lệ
+	Common scales	Tỷ lệ thông dụng
+	Enter a scale such as 1:50.	Nhập một tỷ lệ như 1:50.
+	Applying a scale switches units to m / mm.	Áp dụng tỷ lệ sẽ chuyển đơn vị sang m / mm.
 	Drop-down list	Danh sách thả xuống
 	Duplicate pages	Nhân bản trang
 	Edit a PDF	Chỉnh sửa một PDF
@@ -2748,6 +2755,11 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Attach a file…	Đính kèm tệp…
+	Delete attachment	Xóa tệp đính kèm
+	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
+	Attach {name}	Đính kèm {name}
+	Delete attachment {key}	Xóa tệp đính kèm {key}
 	Thumbnail size	Kích thước hình thu nhỏ
 	Smaller thumbnails	Giảm kích thước hình thu nhỏ
 	Larger thumbnails	Tăng kích thước hình thu nhỏ
@@ -2780,3 +2792,9 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Hôm nay
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu

@@ -282,6 +282,7 @@
 	Discard private data of other applications	Премахни частните данни на други приложения
 	Discard hidden text	Премахни скрития текст
 	Use Flate to encode streams that are not encoded	Кодирай с Flate некодираните потоци
+	In streams that use LZW encoding, use Flate instead	Кодирай с Flate потоците, кодирани с LZW
 	Remove invalid links and bookmarks	Премахни невалидните връзки и отметки
 	Remove unreferenced named destinations	Премахни неизползваните именувани местоназначения
 	Compress document structure (object streams)	Компресирай структурата на документа (потоци от обекти)
@@ -1902,6 +1903,10 @@
 	Perimeter	Периметър
 	Area	Площ
 	Drawing scale	Мащаб на чертежа
+	Scale	Мащаб
+	Common scales	Често използвани мащаби
+	Enter a scale such as 1:50.	Въведете мащаб, например 1:50.
+	Applying a scale switches units to m / mm.	Прилагането на мащаб превключва единиците на m / mm.
 	Snapping	Прилепване
 	Export measurements	Експортирай измерванията
 	Open a PDF to measure it.	Отворете PDF файл, за да го измервате.
@@ -2178,6 +2183,7 @@ signature pad	Type	Въвеждане
 action wizard	Start	Старт
 	Margins (in)	Полета (in)
 	Reopen the files that were open when PdfCraft last closed	Отваряй отново файловете, които бяха отворени при последното затваряне на PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Възстановяване на последния изглед (страница, мащаб и показване на страниците) при повторно отваряне на документ
 	Clear Recent Files	Изчисти последно отваряните файлове
 	Remove from Recent	Премахни от последно отваряните
 	Remove {name} from Recent	Премахни {name} от последно отваряните
@@ -2282,6 +2288,8 @@ key	Space	Интервал
 	Printer paper and scaling may differ. Check driver settings.	Хартията и мащабът на принтера може да се различават. Проверете настройките на драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Мащабът на чертежа се променя. Използвайте Действителен размер за планове в оригинален мащаб.
 	Reload documents when their files change on disk	Презареждай документите, когато файловете им се променят на диска
+	Don't show again	Не показвай отново
+	Show a notice when a document is secured	Показвай известие, когато документът е защитен
 	Always use my default zoom and page layout	Винаги използвай моя мащаб и оформление на страниците по подразбиране
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Този файл беше променен на диска. „Презареждане“ показва новата версия и отхвърля незаписаните ви промени; „Запис“ я заменя с тази версия.
 	Reload	Презареди
@@ -2444,6 +2452,11 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Attach a file…	Прикачване на файл…
+	Delete attachment	Изтриване на прикачения файл
+	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията
+	Attach {name}	Прикачване на {name}
+	Delete attachment {key}	Изтриване на прикачения файл {key}
 	Font	Шрифт
 	Bulleted list	Списък с водещи символи
 	Numbered list	Номериран списък
@@ -2478,3 +2491,6 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Днес

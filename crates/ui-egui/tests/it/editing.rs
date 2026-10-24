@@ -791,6 +791,50 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     assert!(h.state().close_request.is_none());
 }
 
+/// Run `frames` frames and collect every attention request they sent to the window.
+fn attention_over(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> Vec<egui::UserAttentionType> {
+    let mut sent = Vec::new();
+    for _ in 0..frames {
+        h.step();
+        let commands = h.output().viewport_output.values().flat_map(|v| v.commands.iter());
+        sent.extend(commands.filter_map(|c| if let egui::ViewportCommand::RequestUserAttention(a) = c { Some(*a) } else { None }));
+    }
+    sent
+}
+
+/// Close the window as the operating system does: Quit in the Dock menu, or logging out.
+fn close_window(h: &mut Harness<'static, PdfCraftApp>) {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+}
+
+/// Quit from the Dock while another app is in front: the prompt opens in a window the user can't
+/// see, so the Dock icon bounces (the taskbar button flashes) until they come back. A prompt that
+/// opens in front asks for nothing.
+#[test]
+fn a_save_prompt_opened_in_the_background_asks_for_attention_until_the_user_returns() {
+    use egui::UserAttentionType::{Critical, Reset};
+    let mut h = harness(2, |_| {});
+    h.state_mut().views[0].select_pages(&[0]);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.input_mut().focused = false;
+    close_window(&mut h);
+    assert_eq!(attention_over(&mut h, 4), [Critical], "asked once, when the prompt opened");
+    assert_eq!(h.state().close_request, Some(CloseRequest::Quit));
+    h.input_mut().focused = true;
+    assert_eq!(attention_over(&mut h, 3), [Reset], "coming back withdraws the request");
+    h.get_by_label_contains("Save changes to “doc.pdf”");
+    h.get_by_label("Cancel").click();
+    assert!(attention_over(&mut h, 3).is_empty());
+    assert_eq!(h.state().views.len(), 1, "cancel keeps the document open");
+    // With PdfCraft in front, the prompt is in plain sight.
+    close_window(&mut h);
+    assert!(attention_over(&mut h, 4).is_empty());
+    h.get_by_label_contains("Save changes to “doc.pdf”");
+    // Leaving with the prompt open doesn't ask either: the user has seen it.
+    h.input_mut().focused = false;
+    assert!(attention_over(&mut h, 3).is_empty());
+}
+
 /// PDFs written to a fresh temp folder, removed when the test ends.
 struct TempPdfs(std::path::PathBuf);
 
@@ -2241,6 +2285,88 @@ fn split_before_selected_pages() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn split_from_organize_grid_context_menu() {
+    let dir = temp_path("split-org-ctx");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = organize(4);
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    h.get_by_label("Page 3").click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_all_by_label("Split document…").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
+    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Selection);
+    h.get_by_label_contains("Creates 2 files from 4 pages");
+    h.get_all_by_label("Split").last().unwrap().click();
+    h.run_steps(3);
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["doc (pages 1-2).pdf", "doc (pages 3-4).pdf"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn split_from_pages_panel_context_menu() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let thumb = h.get_all_by_label("Page 3").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
+    thumb.click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_all_by_label("Split document…").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
+    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Selection);
+    h.get_by_label_contains("Creates 2 files from 4 pages");
+}
+
+#[test]
+fn split_from_pages_panel_context_menu_on_current_page_without_selection() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    // Navigate to Page 2 (0-indexed 1) so it is current, but keep selected empty
+    h.state_mut().views[0].go_to_page(1);
+    h.state_mut().views[0].selected.clear();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 1);
+    assert!(h.state().views[0].selected.is_empty());
+    let thumb = h.get_all_by_label("Page 2").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
+    thumb.click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_all_by_label("Split document…").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
+    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Selection);
+    h.get_by_label_contains("Creates 2 files from 4 pages");
+}
+
+#[test]
+fn split_from_pages_panel_context_menu_on_page_one_falls_back_to_pages() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let thumb = h.get_all_by_label("Page 1").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
+    thumb.click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_all_by_label("Split document…").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
+    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Pages);
+}
+
+#[test]
+fn split_from_pages_panel_context_menu_with_multi_selection() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    // Select pages 2 and 4 (indices 1 and 3)
+    h.state_mut().views[0].select_pages(&[1, 3]);
+    h.run_steps(2);
+    let thumb = h.get_all_by_label("Page 2").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
+    thumb.click_button(egui::PointerButton::Secondary);
+    h.run_steps(2);
+    h.get_all_by_label("Split document…").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
+    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Selection);
+    h.get_by_label_contains("Creates 3 files from 4 pages");
+}
+
 // ── Encrypted documents ───────────────────────────────────────────────────────────────────────
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Vec<u8> {
@@ -2348,6 +2474,61 @@ fn the_security_notice_unlocks_with_the_permissions_password() {
     assert!(!h.state().session.get(h.state().active_ids().unwrap().1).unwrap().dirty, "unlocking is not an edit");
 }
 
+/// #4035: the secured-document notice can be turned off for good. "Don't show again" hides it
+/// in every document, the choice is kept in the settings and turned back on in Preferences (or
+/// `--secured-notice`); the document stays restricted and Properties ▸ Security still opens.
+#[test]
+fn the_security_notice_can_be_turned_off_for_good() {
+    let open = |settings: Option<String>| {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            if let Some(s) = &settings {
+                app.restore(s);
+            }
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app
+        });
+        h.run_steps(4);
+        h
+    };
+    let mut h = open(None);
+    assert!(h.state().show_secured_notice, "on by default");
+    h.get_by_label_contains("This document is secured");
+    h.get_by_label("Don't show again").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("This document is secured").is_none());
+    assert!(!h.state().show_secured_notice);
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state().session.get(id).unwrap().security_summary().is_some_and(|s| !s.owner), "still restricted");
+    h.state_mut().set_option("dialog", "properties").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Security").click();
+    h.run_steps(3);
+    h.get_by_label("Password security");
+    h.get_by_label("User password");
+    // Kept in the settings: a later session opens the same file without the notice.
+    let saved = h.state().persist();
+    let mut h = open(Some(saved));
+    assert!(h.query_by_label_contains("This document is secured").is_none(), "remembered across a restart");
+    // Back on from Preferences.
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "Show a notice when a document is secured").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::CheckBox, "Show a notice when a document is secured").click();
+    h.run_steps(2);
+    assert!(h.state().show_secured_notice);
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    h.get_by_label_contains("This document is secured");
+    // Scriptable, with a clear refusal for anything else.
+    let app = h.state_mut();
+    app.set_option("secured-notice", "false").unwrap();
+    assert!(!app.show_secured_notice);
+    assert_eq!(app.set_option("secured-notice", "maybe"), Err("secured-notice must be true or false".into()));
+}
+
 /// Changing a restricted document's security asks for its permissions password first (Acrobat
 /// does too), then carries on.
 #[test]
@@ -2433,6 +2614,11 @@ fn copying_out_of_a_document_honours_its_security() {
             app.system_clipboard = false;
             app.open_bytes("no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
             app.submit_password(Some(password.into()));
+            // One page at a time: Select All takes that page's text (scrolling continuously it would
+            // take both pages', #2639; what is tested here is the security of copying it).
+            if let Some(v) = app.views.first_mut() {
+                v.set_continuous(false);
+            }
             app
         });
         // Select the page's text once its text layer is loaded (up to ~4 s: a loaded test machine
@@ -3298,17 +3484,19 @@ fn editing_existing_text_in_place() {
     assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
 }
 
-/// The Read mode command (View ▸ Read mode, its shortcut, the palette) leaves Edit as the Edit tab
-/// does when another tab is chosen (#2241): Edit text & images is put down, and a paragraph still
-/// open in the editor is applied instead of staying open, editable, over the page in Read mode.
-#[test]
-fn the_read_mode_command_applies_an_open_paragraph_and_puts_edit_text_down() {
+/// Under the Edit tab, opens the line "Page 1" (at (20, 150) on a 200 × 300 page, 24 pt) in the
+/// paragraph editor and retypes it as "Chapter One", leaving the editor open.
+fn edit_tab_with_an_open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    let mut h = harness(1, |_| {});
     h.get_by_label("Edit").click();
     h.run_steps(3);
     assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Edit, QuickTool::EditText));
-    // Open the line "Page 1" (at (20, 150) on a 200 × 300 page, 24 pt) and retype it.
+    open_the_first_line(h);
+}
+
+/// With Edit text & images on, opens the line "Page 1" in the paragraph editor and retypes it as
+/// "Chapter One", leaving the editor open.
+fn open_the_first_line(h: &mut Harness<'static, PdfCraftApp>) {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
     h.hover_at(at);
@@ -3320,16 +3508,68 @@ fn the_read_mode_command_applies_an_open_paragraph_and_puts_edit_text_down() {
     assert_eq!(h.state().views[0].line_editor.as_ref().expect("the line opens for editing").text, "Page 1");
     h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Chapter One".into();
     h.run_steps(1);
-    assert!(h.state_mut().execute("view.read_mode"));
-    h.run_steps(3);
-    let s = h.state();
-    assert_eq!(s.mode, Mode::Read);
-    assert_eq!(s.quick_tool, QuickTool::Select, "Edit text & images is put down");
-    assert!(s.views[0].line_editor.is_none(), "no paragraph editor is left open in Read mode");
+}
+
+/// Edit was left with the paragraph [`edit_tab_with_an_open_paragraph`] opened: Edit text & images
+/// is put down, and the paragraph's edit is applied instead of its editor staying open over the page.
+fn assert_edit_text_put_down_and_the_paragraph_applied(s: &PdfCraftApp) {
+    assert_eq!(s.quick_tool, pdfcraft_ui_egui::QuickTool::Select, "Edit text & images is put down");
+    assert!(s.views[0].line_editor.is_none(), "no paragraph editor is left open");
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.can_undo(), Some("Edit text"), "the open paragraph's edit is applied");
     assert_eq!(doc.text_lines(0)[0].text, "Chapter One");
     assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
+}
+
+/// The Read mode command (View ▸ Read mode, its shortcut, the palette) leaves Edit as the Edit tab
+/// does when another tab is chosen (#2241): Edit text & images is put down, and a paragraph still
+/// open in the editor is applied instead of staying open, editable, over the page in Read mode.
+#[test]
+fn the_read_mode_command_applies_an_open_paragraph_and_puts_edit_text_down() {
+    let mut h = harness(1, |_| {});
+    edit_tab_with_an_open_paragraph(&mut h);
+    assert!(h.state_mut().execute("view.read_mode"));
+    h.run_steps(3);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+    assert_edit_text_put_down_and_the_paragraph_applied(h.state());
+}
+
+/// The Edit panel's back arrow (it has one when opened from All tools; the Edit tab is its own way
+/// back) leaves for All tools as the mode bar does: Edit text & images is put down and a paragraph
+/// still open in the editor is applied, instead of every paragraph keeping its box, and the editor
+/// staying open, under All tools.
+#[test]
+fn the_edit_panel_back_arrow_applies_an_open_paragraph_and_puts_edit_text_down() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode, QuickTool};
+    let mut h = harness(1, |_| {});
+    // All tools ▸ Edit a PDF ▸ Edit text & images: the Edit panel, under All tools.
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().quick_tool), (Mode::AllTools, QuickTool::EditText));
+    open_the_first_line(&mut h);
+    h.get_by_label("Back to all tools").click();
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().left), (Mode::AllTools, LeftPanel::AllTools));
+    assert_edit_text_put_down_and_the_paragraph_applied(h.state());
+}
+
+/// Organize pages, opened under the Edit tab, leaves Edit the same way through its own back arrow.
+#[test]
+fn the_organize_back_arrow_applies_an_open_paragraph_and_puts_edit_text_down() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode};
+    let mut h = harness(1, |_| {});
+    edit_tab_with_an_open_paragraph(&mut h);
+    // What the Edit panel's Organize pages row runs.
+    assert!(h.state_mut().execute("page.organize"));
+    h.run_steps(3);
+    assert!(h.state().views[0].organize, "the page grid opens");
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is still open behind the grid");
+    h.get_by_label("Back to all tools").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.mode, s.left), (Mode::AllTools, LeftPanel::AllTools));
+    assert!(!s.views[0].organize, "the grid closes");
+    assert_edit_text_put_down_and_the_paragraph_applied(s);
 }
 
 #[test]
@@ -4237,6 +4477,30 @@ fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     assert!(!doc.dirty);
     assert_dragged_paragraphs(&dragged_paragraphs(&h), &before);
     assert!(h.state().toast.as_ref().unwrap().0.contains("Text used as a clipping path cannot be moved with this selection."));
+}
+
+/// A delete the engine refuses (text used as a clipping path) leaves the document as it was and
+/// keeps the selection, so the user can still move or nudge what they had selected.
+#[test]
+fn a_refused_delete_keeps_the_object_selection() {
+    let content = "q BT 4 Tr /F1 12 Tf 60 320 Td (Clipping text) Tj ET Q";
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture(content, 0, 1), 0);
+    let id = h.state().views[0].id;
+    let (generation, bytes) = {
+        let doc = h.state().session.get(id).unwrap();
+        (doc.edit_generation(), doc.bytes.clone())
+    };
+    // An area selection from empty page space around the paragraph.
+    let (center, _) = paragraph_drag_points(&h, "Clipping text", [0.0, 0.0]);
+    drag(&mut h, center - egui::vec2(60.0, 25.0), center + egui::vec2(60.0, 25.0));
+    h.get_by_label("1 object selected");
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!((doc.edit_generation(), &doc.bytes), (generation, &bytes), "the refused delete changed nothing");
+    assert!(doc.can_undo().is_none());
+    assert!(h.state().toast.is_some(), "the refusal is reported");
+    h.get_by_label("1 object selected");
 }
 
 #[test]
@@ -5990,4 +6254,34 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     h.run_steps(4);
     click_at(&mut h, convert);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the paragraph's editor");
+}
+
+/// A paragraph selected by its frame goes with one Delete (or Backspace), as in Acrobat, instead
+/// of being emptied a typed character at a time, and undo brings it back.
+#[test]
+fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
+    for key in [Key::Delete, Key::Backspace] {
+        let mut h = harness(2, |_| {});
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let blocks = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().text_blocks(0);
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+        let b = blocks(&h)[0].clone();
+        click_at(&mut h, screen((b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0));
+        assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+        click_at(&mut h, screen((b.rect[0] + b.rect[2]) / 2.0, b.rect[3]) - egui::vec2(0.0, 4.0));
+        assert!(h.state().views[0].line_editor.is_none(), "the frame selects the box");
+        press(&mut h, Modifiers::NONE, key);
+        assert!(blocks(&h).is_empty(), "{key:?} deletes the whole paragraph: {:?}", blocks(&h));
+        assert!(h.state().views[0].line_editor.is_none(), "no empty editor is left behind");
+        assert!(h.query_all_by_label_contains("object selected").next().is_none(), "the deleted paragraph is no longer selected");
+        assert_eq!(h.state().session.get(id).unwrap().text_blocks(1)[0].text, "Page 2", "the next page keeps its text");
+        assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "Delete removed the paragraph, not a page");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(2);
+        assert_eq!(blocks(&h).iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Page 1"], "undo restores it");
+    }
 }

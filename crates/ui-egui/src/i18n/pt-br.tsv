@@ -81,6 +81,7 @@
 	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	O PdfCraft está desenhando sem processador gráfico, por isso pode ficar lento. Atualizar o driver de vídeo pode ajudar.
 	Go to page…	Ir para a página…
 	Reopen the files that were open when PdfCraft last closed	Reabrir os arquivos que estavam abertos quando o PdfCraft foi fechado pela última vez
+	Restore the last view (page, zoom and page display) when a document is opened again	Restaurar a última visualização (página, zoom e exibição de páginas) ao reabrir um documento
 	Margins	Margens
 	For page sizes and margins.	Para tamanhos de página e margens.
 	Open	Abrir
@@ -238,6 +239,7 @@
 	Discard private data of other applications	Descartar dados privados de outros aplicativos
 	Discard hidden text	Descartar texto oculto
 	Use Flate to encode streams that are not encoded	Usar Flate para codificar fluxos não codificados
+	In streams that use LZW encoding, use Flate instead	Em fluxos que usam codificação LZW, usar Flate
 	Remove invalid links and bookmarks	Remover links e marcadores inválidos
 	Remove unreferenced named destinations	Remover destinos nomeados não referenciados
 	Compress document structure (object streams)	Compactar estrutura do documento (fluxos de objetos)
@@ -1774,6 +1776,10 @@
 	Perimeter	Perímetro
 	Area	Área
 	Drawing scale	Escala de desenho
+	Scale	Escala
+	Common scales	Escalas comuns
+	Enter a scale such as 1:50.	Digite uma escala como 1:50.
+	Applying a scale switches units to m / mm.	Aplicar uma escala muda as unidades para m / mm.
 	Snapping	Alinhamento inteligente
 	Export measurements	Exportar medições
 	Open a PDF to measure it.	Abra um PDF para medi-lo.
@@ -2321,6 +2327,8 @@ key	Space	Espaço
 	Printer paper and scaling may differ. Check driver settings.	O papel e a escala da impressora podem variar. Confira as configurações do driver.
 	Drawing scale changes. Use Actual size for full-scale plans.	A escala do desenho muda. Use Tamanho real para plantas em escala.
 	Reload documents when their files change on disk	Recarregar documentos quando os arquivos mudarem no disco
+	Don't show again	Não mostrar novamente
+	Show a notice when a document is secured	Mostrar um aviso quando um documento estiver protegido
 	Always use my default zoom and page layout	Sempre usar meu zoom e layout da página padrão
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Este arquivo foi alterado no disco. Recarregar mostra a nova versão e descarta suas alterações não salvas; Salvar a substitui por esta versão.
 	Reload	Recarregar
@@ -2495,6 +2503,11 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Attach a file…	Anexar um arquivo…
+	Delete attachment	Excluir anexo
+	Attaching files is not available on the web yet	Anexar arquivos ainda não está disponível na web
+	Attach {name}	Anexar {name}
+	Delete attachment {key}	Excluir anexo {key}
 
 # Remaining keys from the current catalog union, translated from their English meaning (2026-10-21).
 	 on page {label}	 na página {label}
@@ -2800,3 +2813,6 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Hoje

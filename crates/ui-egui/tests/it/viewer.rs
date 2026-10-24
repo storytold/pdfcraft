@@ -85,7 +85,9 @@ fn view_history_select_all_and_find_options() {
     assert_eq!(h.state().views[0].current, 0);
     assert!(h.state_mut().views[0].view_history(true));
     assert_eq!(h.state().views[0].current, 3, "next view");
-    // Select all on the current page (once its text is known).
+    // Select all on the current page (once its text is known), one page at a time: scrolling
+    // continuously it takes the whole document's text (#2639).
+    h.state_mut().views[0].set_continuous(false);
     // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
     for _ in 0..3000 {
         h.run_steps(2);
@@ -1387,7 +1389,7 @@ fn pages_panel_thumbnails_have_a_context_menu() {
     h.run_steps(2);
     // The page right-clicked becomes the selection the menu acts on.
     assert_eq!(h.state().views[0].target_pages(), vec![2]);
-    for item in ["Extract pages", "Cut", "Paste after"] {
+    for item in ["Extract pages", "Split document…", "Cut", "Paste after"] {
         h.get_by_label(item);
     }
     h.get_by_label("Copy").click();

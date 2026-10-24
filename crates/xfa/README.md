@@ -70,6 +70,10 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   field changes, and click for buttons. Every generated copy of a page-master button resolves
   its own PDF field to the shared XFA click script, so clicking an early copy works as well
   as the last, including through `js_run` and after save/reopen.
+  While this XFA layout is active, the engine does not
+  initialize Acrobat JavaScript with the PDF container's document-level scripts (including
+  non-XFA-viewer warnings). They stay available for inspection and saving; explicit console
+  scripts and XFA messages still run. Static XFA keeps its document scripts.
 
   Private keys PdfCraft writes (other viewers ignore them):
 

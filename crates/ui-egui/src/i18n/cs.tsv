@@ -139,7 +139,10 @@
 	Fit one full page	Celá jedna stránka
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Používá se, když PDF nepožaduje rozložení ani zvětšení. Plynulé posouvání mezi stránkami neskáče.
 	Reopen the files that were open when PdfCraft last closed	Znovu otevřít soubory, které byly otevřené při posledním zavření aplikace PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Při opětovném otevření dokumentu obnovit poslední zobrazení (stránku, zvětšení a rozložení stránek)
 	Reload documents when their files change on disk	Znovu načítat dokumenty při změně jejich souborů na disku
+	Don't show again	Znovu nezobrazovat
+	Show a notice when a document is secured	Zobrazit upozornění, když je dokument zabezpečený
 	Always use my default zoom and page layout	Vždy používat mé výchozí zvětšení a rozvržení stránky
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tento soubor se na disku změnil. Znovu načíst zobrazí novou verzi a zahodí neuložené změny; Uložit ji nahradí touto verzí.
 	Reload	Znovu načíst
@@ -692,6 +695,7 @@ key	Space	Mezerník
 	Discard private data of other applications	Zahodit soukromá data jiných aplikací
 	Discard hidden text	Zahodit skrytý text
 	Use Flate to encode streams that are not encoded	Kódovat nekódované proudy metodou Flate
+	In streams that use LZW encoding, use Flate instead	Proudy kódované LZW kódovat metodou Flate
 	Remove invalid links and bookmarks	Odebrat neplatné odkazy a záložky
 	Remove unreferenced named destinations	Odebrat nepoužívané pojmenované cíle
 	Compress document structure (object streams)	Komprimovat strukturu dokumentu (proudy objektů)
@@ -2087,6 +2091,10 @@ key	Space	Mezerník
 	Perimeter	Obvod
 	Area	Plocha
 	Drawing scale	Měřítko výkresu
+	Scale	Měřítko
+	Common scales	Běžná měřítka
+	Enter a scale such as 1:50.	Zadejte měřítko, například 1:50.
+	Applying a scale switches units to m / mm.	Použití měřítka přepne jednotky na m / mm.
 	Snapping	Přichytávání
 	Export measurements	Exportovat měření
 	Open a PDF to measure it.	Otevřete PDF, které chcete měřit.
@@ -2555,6 +2563,11 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Attach a file…	Připojit soubor…
+	Delete attachment	Odstranit přílohu
+	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici
+	Attach {name}	Připojit {name}
+	Delete attachment {key}	Odstranit přílohu {key}
 	Font	Písmo
 	Bulleted list	Odrážkový seznam
 	Numbered list	Číslovaný seznam
@@ -2822,3 +2835,6 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Dnes
