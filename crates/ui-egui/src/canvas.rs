@@ -485,8 +485,8 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page sizes (width, height) in points (view space), for mapping text positions to scroll offsets.
+    page_sizes: Vec<(f32, f32)>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
@@ -786,7 +786,7 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
-            page_heights: info.pages.iter().map(|p| p.height).collect(),
+            page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
             viewport_screen: Rect::NOTHING,
@@ -861,7 +861,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
-        self.page_heights = info.pages.iter().map(|p| p.height).collect();
+        self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
         self.selected.retain(|p| *p <= last);
@@ -1250,16 +1250,40 @@ impl DocView {
         self.flash_match(p);
     }
 
+    /// The centre of the current match as a fraction of its displayed page `[x, y]` (0..1 from
+    /// the top-left corner, after the view rotation, as [`Self::goto_point`] takes it).
+    fn match_centre(&self) -> Option<[f32; 2]> {
+        let f = self.find.as_ref()?;
+        let (p, r) = f.matches.get(f.current?)?;
+        let glyphs = self.texts.get(p)?.glyphs.get(r.clone())?;
+        let [x0, y0, x1, y1] = glyphs.iter().map(|g| g.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
+        let &(w, h) = self.page_sizes.get(*p).filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
+        let (u, v) = ((((x0 + x1) / 2.0) / w).clamp(0.0, 1.0), (((y0 + y1) / 2.0) / h).clamp(0.0, 1.0));
+        // Turned clockwise by the view rotation, as `PageInfo::dest_fraction` does.
+        Some(match self.rotation % 360 {
+            90 => [1.0 - v, u],
+            180 => [1.0 - u, 1.0 - v],
+            270 => [v, 1.0 - u],
+            _ => [u, v],
+        })
+    }
+
     fn flash_match(&mut self, page: usize) {
         let frac = self
             .find
             .as_ref()
             .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
             .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
-            .zip(self.page_heights.get(page).copied())
+            .zip(self.page_sizes.get(page).map(|&(_, h)| h))
             .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
             .unwrap_or(0.0);
         self.goto = Some((page, frac));
+        // Then put the match's centre at the window's centre, as Acrobat does (#3530) and as a
+        // /FitR destination's rectangle is: a page wider or taller than the window no longer
+        // leaves it off to one side or near an edge.
+        if let Some([fx, fy]) = self.match_centre() {
+            self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
+        }
         self.current = page;
         self.reset_coarse_state();
     }
@@ -5970,7 +5994,8 @@ trailer << /Root 1 0 R >>
             // Chrome refreshes the idle page box; navigation must not overwrite a draft
             // that may still be focused. DocView does not own the editor's focus state.
             assert_eq!(v.page_input, "draft in progress");
-            assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+            let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+            assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
             v.go_to_match(1);
             assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
             assert!(v.view_history(false));
@@ -5981,6 +6006,18 @@ trailer << /Root 1 0 R >>
             v.go_to_match(2);
             assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
             assert_eq!(v.back, vec![0]);
+        }
+    }
+
+    #[test]
+    fn search_centres_the_match_on_a_rotated_view() {
+        // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+        for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+            let mut v = history_search_view();
+            v.rotation = rotation;
+            v.find_step(true);
+            let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+            assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
         }
     }
 
