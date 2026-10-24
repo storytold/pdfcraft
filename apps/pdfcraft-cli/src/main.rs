@@ -752,6 +752,12 @@ fn render(args: &[String]) -> Result<(), CliError> {
                 let _ =
                     writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
             }
+            pdfcraft_render::RenderWarning::ImageSkipped => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "warning: page {page}: an image could not be decoded (damaged, unsupported or too large) and was skipped"
+                );
+            }
         }
     }
     Ok(())
