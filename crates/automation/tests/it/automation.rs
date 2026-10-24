@@ -7989,6 +7989,36 @@ fn a_root_less_write_output_is_atomic_too() {
 }
 
 #[test]
+fn rc4_40_protection_refuses_unsupported_permissions_and_roundtrips_supported_permissions() {
+    let dir = workdir("protect-r2");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    match a.call("doc_protect", &json!({ "doc": doc, "permissions_password": "owner", "compatibility": "rc4-40", "printing": "low" })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("RC4-40"), "{m}"),
+        other => panic!("unsupported permissions must fail: {other:?}"),
+    }
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before);
+    ok(
+        &mut a,
+        "doc_protect",
+        json!({ "doc": doc, "permissions_password": "owner", "compatibility": "rc4-40", "printing": "high", "changes": "none", "copy": false, "accessibility": false }),
+    );
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "r2.pdf" }));
+    let mut b = auto(&dir);
+    let user = ok(&mut b, "doc_open", json!({ "path": "r2.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut b, "doc_info", json!({ "doc": user }));
+    assert_eq!(info["security"]["printing"], "high");
+    for key in ["copy", "accessibility", "modify", "annotate", "fill_forms", "assemble"] {
+        assert_eq!(info["security"][key], false, "{key}: {info}");
+    }
+    assert_eq!(ok(&mut b, "text_find", json!({ "doc": user, "query": "Page" }))["count"], 3);
+    drop(a);
+    drop(b);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn fdf_nested_comment_values_survive_export_import_and_save_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, write_full};
     use std::sync::Arc;

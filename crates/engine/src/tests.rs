@@ -6873,6 +6873,97 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }
 
+#[test]
+fn rc4_40_unsupported_permissions_are_refused_atomically() {
+    let base = Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_40, accessibility: false, ..protection(None, Some("owner")) };
+    for p in [
+        Protection { printing: Printing::Low, ..base.clone() },
+        Protection { changes: Changes::Pages, ..base.clone() },
+        Protection { changes: Changes::FillSign, ..base.clone() },
+        Protection { accessibility: true, ..base.clone() },
+    ] {
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        s.undo(id).unwrap();
+        let before = s.get(id).unwrap();
+        let bytes = before.bytes.clone();
+        let security = before.security_summary();
+        let history = (before.can_undo().map(str::to_owned), before.can_redo().map(str::to_owned), before.dirty);
+        let result = s.apply(id, Edit::Protect(p));
+        assert!(matches!(result, Err(EditError::Protection(ref m)) if m.contains("RC4-40")), "{result:?}");
+        let after = s.get(id).unwrap();
+        assert_eq!(after.bytes, bytes);
+        assert_eq!(after.security_summary(), security);
+        assert_eq!((after.can_undo().map(str::to_owned), after.can_redo().map(str::to_owned), after.dirty), history);
+    }
+}
+
+#[test]
+fn rc4_40_supported_permissions_survive_save_and_reopen() {
+    for (printing, changes, copy, accessibility) in [
+        (Printing::None, Changes::None, false, false),
+        (Printing::High, Changes::CommentFillSign, false, false),
+        (Printing::High, Changes::AnyExceptExtract, true, false),
+    ] {
+        let (mut s, id) = session_with(1);
+        let p = Protection {
+            algorithm: pdfcraft_cos::Algorithm::Rc4_40,
+            printing,
+            changes,
+            copy,
+            accessibility,
+            ..protection(Some("user"), Some("owner"))
+        };
+        s.apply(id, Edit::Protect(p)).unwrap();
+        let pending = s.get(id).unwrap().security_summary().unwrap().permissions;
+        let saved = s.save_bytes(id).unwrap();
+        let mut re = Session::new();
+        let user = re.open("r2.pdf", None, saved.clone(), Some("user")).unwrap();
+        assert_eq!(page_texts(&re, user), ["Page 1"]);
+        let p = re.get(user).unwrap().permissions().unwrap();
+        assert_eq!(pending, p);
+        assert_eq!((p.print(), p.print_high_quality()), (printing == Printing::High, printing == Printing::High));
+        assert_eq!((p.copy(), p.extract_for_accessibility()), (copy, copy));
+        assert_eq!((p.annotate(), p.fill_forms()), (changes != Changes::None, changes != Changes::None));
+        assert_eq!((p.modify(), p.assemble()), (changes == Changes::AnyExceptExtract, changes == Changes::AnyExceptExtract));
+        let owner = re.open("r2.pdf", None, saved, Some("owner")).unwrap();
+        let p = re.get(owner).unwrap().permissions().unwrap();
+        assert!(
+            p.owner
+                && p.modify()
+                && p.copy()
+                && p.annotate()
+                && p.fill_forms()
+                && p.assemble()
+                && p.print()
+                && p.print_high_quality()
+                && p.extract_for_accessibility()
+        );
+    }
+    // Settings cannot restrict an open-password-only document.
+    let p =
+        Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_40, printing: Printing::Low, changes: Changes::Pages, ..protection(Some("open"), None) };
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::Protect(p)).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let mut re = Session::new();
+    let user = re.open("open.pdf", None, saved, Some("open")).unwrap();
+    assert_eq!(page_texts(&re, user), ["Page 1"]);
+    assert!(re.get(user).unwrap().allows_security_change());
+    let p = re.get(user).unwrap().permissions().unwrap();
+    assert!(
+        p.print()
+            && p.print_high_quality()
+            && p.modify()
+            && p.assemble()
+            && p.copy()
+            && p.extract_for_accessibility()
+            && p.annotate()
+            && p.fill_forms()
+    );
+}
+
 /// A 60 x 20 JPEG at 144 x 72 dpi, tagged with EXIF Orientation 6 (shown turned 90 degrees clockwise).
 fn phone_jpeg() -> Vec<u8> {
     use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};

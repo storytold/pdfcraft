@@ -1319,6 +1319,17 @@ impl Protection {
         {
             return bad("this compatibility level supports only plain ASCII passwords; use AES-256 (Acrobat X and later)");
         }
+        if self.algorithm == pdfcraft_cos::Algorithm::Rc4_40 && self.permissions_password.is_some() {
+            if self.printing == Printing::Low {
+                return bad("RC4-40 supports only no printing or high-quality printing; choose one or use a newer compatibility level");
+            }
+            if matches!(self.changes, Changes::Pages | Changes::FillSign) {
+                return bad("RC4-40 supports changes none, comment-fill-sign, or any-except-extract; choose one or use a newer compatibility level");
+            }
+            if self.accessibility && !self.copy {
+                return bad("RC4-40 requires copying for accessibility; enable copying, disable accessibility, or use a newer compatibility level");
+            }
+        }
         // Encryption keys on a password as `effective_password` gives it (AES-256: SASLprep,
         // which drops soft hyphens and folds compatibility forms; older levels: the first 32
         // bytes, padded). One that comes out as the empty password opens the file without asking,

@@ -214,7 +214,7 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/editing.rs::restricted_documents_show_a_notice_and_block_page_changes", "crates/crypt/src/tests.rs::permission_bits_follow_table_22", "crates/crypt/src/tests.rs::perms_limits_what_an_edited_p_grants", "crates/engine/src/tests.rs::combining_protected_files_is_refused_clearly", "crates/engine/src/tests.rs::print_restricted_documents_disable_print_unless_opened_by_the_owner", "crates/ui-egui/tests/it/print.rs::print_restricted_documents_say_so_before_the_dialog", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::restricted_documents_show_a_notice_and_block_page_changes", "crates/crypt/src/tests.rs::permission_bits_follow_table_22", "crates/crypt/src/tests.rs::r2_permissions_use_legacy_flags_and_reserve_high_bits", "crates/crypt/src/tests.rs::perms_limits_what_an_edited_p_grants", "crates/engine/src/tests.rs::combining_protected_files_is_refused_clearly", "crates/engine/src/tests.rs::print_restricted_documents_disable_print_unless_opened_by_the_owner", "crates/ui-egui/tests/it/print.rs::print_restricted_documents_say_so_before_the_dialog", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
 notes = ""
 
 [[feature]]
@@ -5433,8 +5433,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["protect.password"]
 tools = ["doc_protect"]
-evidence = ["crates/ui-egui/tests/it/protect.rs::editing_restrictions_via_advanced_options", "crates/engine/src/tests.rs::permissions_password_restricts_others_but_not_this_session"]
-notes = "Advanced Options: printing (none/low/high), changes (5 levels), copying, screen readers"
+evidence = ["crates/ui-egui/tests/it/protect.rs::editing_restrictions_via_advanced_options", "crates/engine/src/tests.rs::permissions_password_restricts_others_but_not_this_session", "crates/engine/src/tests.rs::rc4_40_unsupported_permissions_are_refused_atomically", "crates/engine/src/tests.rs::rc4_40_supported_permissions_survive_save_and_reopen"]
+notes = "Advanced Options: printing (none/low/high), changes (5 levels), copying, screen readers. RC4-40 rejects low-resolution-only printing, page-only changes, form-filling-only changes, and accessibility without copying. Use a newer compatibility level for these choices."
 
 [[feature]]
 id = "protect.encryption-level"

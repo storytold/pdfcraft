@@ -353,3 +353,41 @@ fn pdfdoc_encoding_round_trips() {
     assert_eq!(legacy_candidates("Çok"), [vec![0xC7, b'o', b'k']]);
     assert_eq!(legacy_candidates("şifre"), [b"ifre".to_vec(), "şifre".as_bytes().to_vec()]);
 }
+
+#[test]
+fn r2_permissions_use_legacy_flags_and_reserve_high_bits() {
+    // ISO 32000-1 section 7.6.3.2: -44 permits printing and copying only.
+    let d = new(Algorithm::Rc4_40, "user", "owner", 0x14).dict().clone();
+    assert_eq!(d.p, -44);
+    assert_eq!(new(Algorithm::Rc4_40, "user", "owner", 0).dict().p, -64);
+    let user = SecurityHandler::open(d, ID, Some("user")).unwrap();
+    assert_eq!(user.dict().p, -44, "effective flags must not change the encryption dictionary");
+    let p = user.permissions();
+    assert_eq!((p.print(), p.print_high_quality(), p.copy(), p.extract_for_accessibility()), (true, true, true, true));
+    assert_eq!((p.modify(), p.annotate(), p.fill_forms(), p.assemble()), (false, false, false, false));
+}
+
+#[test]
+fn r2_reserved_flags_do_not_grant_modern_permissions() {
+    let denied = new(Algorithm::Rc4_40, "user", "owner", -64).dict().clone();
+    assert_eq!(denied.p, -64, "R2 reserves bits 7 through 32");
+    let user = SecurityHandler::open(denied.clone(), ID, Some("user")).unwrap();
+    let p = user.permissions();
+    assert_eq!((p.print(), p.print_high_quality(), p.copy(), p.extract_for_accessibility()), (false, false, false, false));
+    assert_eq!((p.modify(), p.annotate(), p.fill_forms(), p.assemble()), (false, false, false, false));
+    let p = SecurityHandler::open(denied, ID, Some("owner")).unwrap().permissions();
+    assert_eq!((p.print(), p.print_high_quality(), p.copy(), p.extract_for_accessibility()), (true, true, true, true));
+    assert_eq!((p.modify(), p.annotate(), p.fill_forms(), p.assemble()), (true, true, true, true));
+
+    for (flags, expected) in [(0x20, (true, false)), (0x08, (false, true))] {
+        let d = new(Algorithm::Rc4_40, "user", "owner", flags).dict().clone();
+        let p = SecurityHandler::open(d, ID, Some("user")).unwrap().permissions();
+        assert_eq!((p.fill_forms(), p.assemble()), expected);
+    }
+    for alg in [Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256] {
+        let d = new(alg, "user", "owner", 0x14).dict().clone();
+        assert_eq!(d.p, -3884, "{alg:?}");
+        let p = SecurityHandler::open(d, ID, Some("user")).unwrap().permissions();
+        assert_eq!((p.print(), p.copy(), p.print_high_quality(), p.extract_for_accessibility()), (true, true, false, false));
+    }
+}
