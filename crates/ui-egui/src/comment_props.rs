@@ -251,11 +251,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                                         ui.separator();
                                         ui.label(egui::RichText::new("Thai / System fonts").small().color(t.text_muted));
                                         for entry in &thai_fonts {
-                                            if ui.selectable_label(font == &entry.name, &entry.name).clicked() {
-                                                if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
-                                                    *font = entry.name.clone();
-                                                    ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
-                                                }
+                                            if ui.selectable_label(font == &entry.name, &entry.name).clicked()
+                                                && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
+                                            {
+                                                *font = entry.name.clone();
+                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
                                             }
                                         }
                                     }
