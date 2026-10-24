@@ -86,11 +86,24 @@
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
+    <StandardDirectory Id="SystemFolder" />
 
     <Feature Id="Main" Title="PdfCraft" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
       <ComponentGroupRef Id="PdfcraftModels" />
     </Feature>
+
+    <!-- #1080: Windows Installer writes the PDF handler keys but never tells the shell, so Explorer's
+         cached "Open with" list misses PdfCraft until sign-out. Windows requires
+         SHChangeNotify(SHCNE_ASSOCCHANGED) after association changes; send it after install and
+         uninstall. Immediate (user's session, where Explorer runs); failure must not fail setup.
+         SystemFolder's PowerShell is always 32-bit (SysWOW64 on 64-bit Windows), so int fits the
+         pointer arguments. [\[] and [\]] escape [ and ]; Target is capped at 255 characters. -->
+    <CustomAction Id="NotifyAssociationsChanged" Directory="SystemFolder" Execute="immediate" Return="ignore"
+        ExeCommand="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -W Hidden -C (Add-Type -PassThru -Name N -MemberDefinition '[\[]DllImport(\&quot;shell32\&quot;)[\]]public static extern void SHChangeNotify(int e,int f,int a,int b);')::SHChangeNotify(0x8000000,0,0,0)" />
+    <InstallExecuteSequence>
+      <Custom Action="NotifyAssociationsChanged" After="InstallFinalize" />
+    </InstallExecuteSequence>
   </Package>
 
   <Fragment>

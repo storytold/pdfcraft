@@ -238,6 +238,15 @@ if ($pdfCheckbox[2] -notmatch 'Edit with PdfCraft') { throw "Welcome PDF context
 $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
+# #1080: Explorer is told the associations changed (SHCNE_ASSOCCHANGED) after install/uninstall,
+# without ever failing setup. 34 = exe in a directory; 64 = ignore its exit code.
+$notify = Read-Row 'SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = ''NotifyAssociationsChanged''' 3
+Assert-Equal $notify[0] '98' 'Association notify action type'
+Assert-Equal $notify[1] 'SystemFolder' 'Association notify directory'
+if ($notify[2] -notmatch 'SHChangeNotify\(0x8000000,0,0,0\)' -or $notify[2].Length -gt 255) { throw "Association notify command: '$($notify[2])'" }
+$after = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''NotifyAssociationsChanged''' 1
+$finalize = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallFinalize''' 1
+if ([int] $after[0] -le [int] $finalize[0]) { throw 'Association notify must run after InstallFinalize' }
 
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.
