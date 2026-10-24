@@ -66,6 +66,7 @@ pub(crate) fn read_clipboard_files() -> Vec<std::path::PathBuf> {
 
 /// A copied file list as paths to open. On Linux the list arrives as text/uri-list, whose lines
 /// end in CR LF (RFC 2483), and arboard splits it at LF alone: the CR stays on each path.
+#[cfg(not(target_arch = "wasm32"))]
 fn clean_file_list(paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
     paths
         .into_iter()
@@ -339,7 +340,7 @@ impl PdfCraftApp {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::path::PathBuf;
 
