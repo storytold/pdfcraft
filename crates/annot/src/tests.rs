@@ -2033,3 +2033,41 @@ fn redaction_marks_without_quadpoints_outline_their_rect_in_their_oc_colour() {
     let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] /C [0 0 1] >>");
     assert_eq!(ap, "0 0 1 RG\n1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n");
 }
+
+/// A redaction mark with quadrilaterals is outlined in `/C` even when it also has an array `/OC`:
+/// only a mark without `/QuadPoints` takes its outline colour from `/OC`.
+#[test]
+fn redaction_marks_with_quadpoints_keep_their_c_outline_beside_an_oc_colour() {
+    let (ap, _) =
+        display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] /OC [1 0 0] /C [0 0 1] >>");
+    assert_eq!(ap, "0 0 1 RG\n1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n");
+}
+
+/// New text re-fits the box in the face and size it is drawn in (`/DA`, or `/DS` where it sets
+/// one), so the rectangle holds every drawn line.
+#[test]
+fn new_text_refits_the_box_in_its_drawn_face_and_size() {
+    let bottom = |annot: &str, new_text: &str| {
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        set_contents(&mut doc, 0, 0, new_text, &meta("")).unwrap();
+        let d = &list(&doc, 0)[0];
+        let rect: Vec<f64> = d.get(b"Rect").and_then(|r| r.as_array()).unwrap().iter().filter_map(|x| x.as_f64()).collect();
+        assert_eq!(rect[3], 700.0, "the top edge stays");
+        (rect[1], ap_content(&doc, d).matches(" Tj").count())
+    };
+    // The default 1-pt border: a 3-pt pad, so 114 pt for the text; the box is lines × 1.2 × size + 8 tall.
+    let words = "iiiiiiiiii iiiiiiiiii";
+    let fits = |b: f64, want: f64| (b - want).abs() < 1e-9;
+    let (b, n) = bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /Contents (Hi) >>", words);
+    assert!(n == 1 && fits(b, 700.0 - 14.4 - 8.0), "Helvetica: one line, bottom {b}");
+    let (b, n) = bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Cour 12 Tf) /Contents (Hi) >>", words);
+    assert!(n == 2 && fits(b, 700.0 - 2.0 * 14.4 - 8.0), "Courier: two lines, bottom {b}");
+    let (b, n) =
+        bottom("<< /Type /Annot /Subtype /FreeText /Rect [45 630 165 700] /DA (0 g /Helv 12 Tf) /DS (font: Helvetica 24pt) /Contents (Hi) >>", "Hi");
+    assert!(n == 1 && fits(b, 700.0 - 28.8 - 8.0), "/DS 24 pt: bottom {b}");
+}
