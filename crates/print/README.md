@@ -52,6 +52,14 @@ orientation, zero added margins and hardware-edge clipping. Long-edge and short-
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
 are removed on success and failure. Other targets offer the print-ready PDF instead.
 
+Before a job reaches the Windows spooler, every embedded TrueType or OpenType program is
+renamed `PdfCraftPrint<n>` in its `name` table and in the PDF (`/BaseFont`, `/FontName`; a
+subset keeps its tag). Windows otherwise draws a subset's renumbered glyphs with the installed
+font of the same name, so ReportLab's Arial subsets printed as shifted letters (#3132). Glyphs,
+encodings and `/ToUnicode` are unchanged, and CUPS and Save as PDF get the PDF as it was. A
+program PdfCraft can't read and rewrite keeps its old name in the PDF too, so a viewer that
+can't load it either still picks its substitute by that name.
+
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
 The desktop UI discovers printers and submits jobs on workers, so neither operation blocks
