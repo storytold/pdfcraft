@@ -1805,3 +1805,107 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, ["old viewer"]);
 }
+
+fn check_sandbox_hardening_cases() {
+    let xfa_go = |script: &str| {
+        xfa::run_xfa(
+            script,
+            &xfa::XfaEvent { activity: "initialize".into(), target: "form1[0]".into(), ..Default::default() },
+            &xfa::XfaDoc::default(),
+            &xfa_model::form(),
+            Limits::default(),
+        )
+    };
+
+    // Runtime-compiled source (eval / Function) is refused in AcroForm and checked by refuse() in XFA.
+    for script in [
+        "eval('('.repeat(500) + '1' + ')'.repeat(500))",
+        "new Function('return ' + '('.repeat(500) + '1' + ')'.repeat(500))()",
+        "new Function('('.repeat(40), '('.repeat(40), 'return 1')",
+        "eval('!'.repeat(200) + '1')",
+        "eval('1?1:'.repeat(5000) + '1')",
+        "eval('1;'.repeat(200000))",
+        "new Function('1;'.repeat(200000))",
+    ] {
+        let o = go(script, &Event::doc("Open"));
+        assert!(o.error.is_some(), "AcroForm should refuse {script}: {o:?}");
+        let x = xfa_go(script);
+        assert!(x.error.is_some(), "XFA should refuse {script}: {x:?}");
+    }
+
+    // Ordinary eval and Function calls in XFA still work.
+    let x = xfa_go("eval('2 + 3') + ':' + new Function('a', 'b', 'return a * b')(4, 5)");
+    assert_eq!((x.error.as_deref(), x.result.as_deref()), (None, Some("5:20")));
+
+    // Buffer, string-growth and sparse-array join/toString limits throw instead of aborting on OOM.
+    for script in [
+        "new ArrayBuffer(64 * 1024 * 1024)",
+        "new Uint8Array(64 * 1024 * 1024)",
+        "'x'.repeat(100000000)",
+        "'x'.padStart(100000000, 'y')",
+        "'x'.padEnd(100000000, 'y')",
+        "new Array(4294967295).join(',')",
+        "String(new Array(4294967295))",
+        "new Array(4294967295).toLocaleString()",
+        "new Array(8192).fill('x'.repeat(1024)).join(',')",
+    ] {
+        let o = go(script, &Event::doc("Open"));
+        assert!(o.error.is_some(), "AcroForm should reject {script}: {o:?}");
+        let x = xfa_go(script);
+        assert!(x.error.is_some(), "XFA should reject {script}: {x:?}");
+    }
+
+    // Host-side array string copies are bounded by total bytes, even when array length <= MAX_ARRAY_LENGTH.
+    for script in [
+        "getField('total').value = new Array(2048).fill('x'.repeat(1024))",
+        "getField('total').textColor = new Array(2048).fill('x'.repeat(1024))",
+        "getField('total').fillColor = new Array(2048).fill('x'.repeat(1024))",
+    ] {
+        let o = go(script, &Event::field("Calculate", "total", ""));
+        assert!(o.error.is_some(), "should cap host string bytes for {script}: {o:?}");
+        assert!(o.requests.is_empty() && o.changed.is_empty(), "{script}: {o:?}");
+    }
+    let o = go("this.resetForm(new Array(9000).fill('x'.repeat(4096)))", &Event::field("Calculate", "total", ""));
+    assert!(o.requests.is_empty(), "oversized resetForm payload is dropped: {o:?}");
+
+    // AcroForm Outcome vectors (alerts, console, requests) are capped by count and line length.
+    let o = go("for (var i = 0; i < 12000; i++) { app.alert('a' + i); console.println('c' + i); this.print(); }", &Event::doc("Open"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.alerts.len(), xfa::MAX_ALERTS);
+    assert!(o.console.len() <= xfa::MAX_CONSOLE + 1);
+    assert_eq!(o.requests.len(), xfa::MAX_EFFECTS);
+
+    let o = go("app.alert('x'.repeat(20000)); console.println('y'.repeat(20000));", &Event::doc("Open"));
+    assert_eq!(o.error, None);
+    assert!(o.alerts[0].chars().count() <= 4_097);
+    assert!(o.console[0].chars().count() <= 4_097);
+}
+
+#[test]
+fn runtime_compiled_source_and_host_copies_are_bounded() {
+    check_sandbox_hardening_cases();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sandbox_memory_and_eval_limits_hold_in_child_process() {
+    if std::env::var_os("PDFCRAFT_JS_SANDBOX_CHILD").is_some() {
+        check_sandbox_hardening_cases();
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new(exe)
+        .env("PDFCRAFT_JS_SANDBOX_CHILD", "1")
+        .arg("--exact")
+        .arg("tests::sandbox_memory_and_eval_limits_hold_in_child_process")
+        .arg("--nocapture")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child process failed ({:?}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
