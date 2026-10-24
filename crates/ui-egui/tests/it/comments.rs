@@ -3081,6 +3081,14 @@ fn the_rotate_handle_turns_a_rectangle_and_tab_turns_it_by_quarters() {
         assert!(raw.events.is_empty(), "the hook took the Tab");
         h.run_steps(1);
     }
+    // With the palette open the Tab is the palette's.
+    h.state_mut().palette_open = true;
+    let mut raw = egui::RawInput::default();
+    raw.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    let ctx = h.ctx.clone();
+    eframe::App::raw_input_hook(h.state_mut(), &ctx, &mut raw);
+    assert_eq!(raw.events.len(), 1, "the hook left the Tab to the palette");
+    h.state_mut().palette_open = false;
     h.drop_at(knob + egui::vec2(30.0, 5.0));
     h.run_steps(3);
     crate::support::settle(&mut h);
