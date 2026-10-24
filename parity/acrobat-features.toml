@@ -3560,8 +3560,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_list"]
-evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand"]
-notes = "cards grouped by page with replies, status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet"
+evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand", "crates/ui-egui/tests/it/comments.rs::replies_follow_irt_references_when_names_repeat_on_every_page", "crates/engine/src/tests.rs::replies_thread_by_reference_when_names_repeat_across_pages", "crates/automation/tests/it/automation.rs::replies_thread_by_reference_when_ids_repeat_across_pages"]
+notes = "cards grouped by page with replies (threaded by the `/IRT` reference, so files whose `/NM` repeats per page, as PyMuPDF writes them, thread correctly; the header counts comments without replies, as Acrobat does), status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet"
 
 [[feature]]
 id = "comment.appearance-generation"

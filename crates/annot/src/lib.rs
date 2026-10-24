@@ -2254,6 +2254,10 @@ pub struct Summary {
     pub modified: Option<String>,
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// The page and `/Annots` position `/IRT` points at, by reference (`/NM` need not be unique).
+    pub parent: Option<(usize, usize)>,
+    /// `/RT /Group`: grouped with the `/IRT` annotation (Replace Text's caret), not a reply to it.
+    pub grouped: bool,
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
     pub state: Option<String>,
@@ -2289,8 +2293,18 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
-    for (page, p) in pages.iter().enumerate() {
-        for (index, entry) in annots(doc, *p).iter().enumerate() {
+    let lists: Vec<Vec<Object>> = pages.iter().map(|p| annots(doc, *p)).collect();
+    // Where each annotation is first listed, so a reply's `/IRT` finds its parent by reference.
+    let mut slots: std::collections::HashMap<ObjRef, (usize, usize)> = std::collections::HashMap::new();
+    for (page, list) in lists.iter().enumerate() {
+        for (index, entry) in list.iter().enumerate() {
+            if let Some(r) = entry.as_ref() {
+                slots.entry(r).or_insert((page, index));
+            }
+        }
+    }
+    for (page, list) in lists.iter().enumerate() {
+        for (index, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
@@ -2326,6 +2340,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 _ => Vec::new(),
             };
             let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&r).copied());
             out.push(Summary {
                 page,
                 index,
@@ -2337,6 +2352,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 modified: text_value(doc, d, b"M"),
                 name: text_value(doc, d, b"NM"),
                 in_reply_to,
+                parent,
+                grouped: d.name(b"RT") == Some(b"Group"),
                 rect,
                 color,
                 state: text_value(doc, d, b"State"),

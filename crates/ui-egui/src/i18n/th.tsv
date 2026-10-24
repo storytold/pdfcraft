@@ -2681,3 +2681,4 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+@plural	{n} reply|{n} replies	การตอบกลับ {n} รายการ

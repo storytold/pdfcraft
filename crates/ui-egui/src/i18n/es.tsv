@@ -2838,3 +2838,4 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+@plural	{n} reply|{n} replies	{n} respuesta|{n} respuestas

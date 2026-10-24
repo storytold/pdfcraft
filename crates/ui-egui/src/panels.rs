@@ -699,11 +699,22 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
                 };
+                // Comments count like Acrobat (no replies); the replies go in small text below.
+                let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
-                    if let Some(c) = count {
-                        ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
-                    }
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
+                            if let Some(c) = count {
+                                ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
+                            }
+                        });
+                        if replies > 0 {
+                            let text = crate::i18n::trn(crate::i18n::current(), replies as u64, "{n} reply", "{n} replies");
+                            ui.label(egui::RichText::new(text).font(theme::regular(11.0)).color(t.text_faint));
+                        }
+                    });
                     if panel == RightPanel::Pages && view.selected.len() > 1 {
                         let n = view.selected.len().to_string();
                         let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
