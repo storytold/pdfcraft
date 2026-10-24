@@ -32,6 +32,7 @@ pub(crate) struct TextBackground {
     received: Option<u64>,
     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
     draft_rect: Option<[f64; 4]>,
+    draft_overflow: Option<bool>,
     /// This frame's place for the textless page under the open paragraph's editor. It stays
     /// empty, so the page shows its own text, until the paragraph is changed ([`Self::reveal`]).
     slot: Option<(egui::Painter, egui::layers::ShapeIdx, egui::Shape)>,
@@ -116,7 +117,9 @@ impl TextBackground {
         if let Some(ed) = editor {
             let draft_key = (ed.text.clone(), ed.style());
             if self.draft_key.as_ref() != Some(&draft_key) {
-                self.draft_rect = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok().and_then(|layout| layout.draft_rect);
+                let layout = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok();
+                self.draft_rect = layout.as_ref().and_then(|layout| layout.draft_rect);
+                self.draft_overflow = layout.map(|layout| layout.overflow);
                 self.draft_key = Some(draft_key);
             }
         }
@@ -156,6 +159,10 @@ impl TextBackground {
     /// The draft's measured extent, when it was measured for paragraph `block` on `page`.
     pub fn draft_rect_for(&self, page: usize, block: usize) -> Option<[f64; 4]> {
         self.draft_rect.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
+    }
+
+    fn draft_overflow_for(&self, page: usize, block: usize) -> Option<bool> {
+        self.draft_overflow.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
     }
 
     pub fn ready(&self, page: usize, block: usize) -> bool {
@@ -235,6 +242,9 @@ pub struct LineEditor {
     /// stays attached while the page is zoomed, scrolled, or rotated.
     source_rect: [f32; 4],
     multiline: bool,
+    /// A rotated source or display uses a horizontal typing surface. The stored text and its
+    /// frame retain their PDF orientation; egui's caret itself cannot rotate.
+    turned: bool,
     source: Option<(pdfcraft_engine::TextBlock, Vec<pdfcraft_engine::TextLine>)>,
     pub(crate) fonts: BTreeMap<String, String>,
     /// The draft extends outside the source container; its frame follows the live draft bounds.
@@ -377,7 +387,7 @@ impl LineEditor {
 
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
     pub(crate) fn refresh_source(&mut self, block: &pdfcraft_engine::TextBlock, lines: Vec<pdfcraft_engine::TextLine>) {
-        self.source_rect = block.rect.map(|v| v as f32);
+        self.source_rect = block.editing_rect().map(|v| v as f32);
         self.multiline = block.rows.len() > 1;
         self.source = Some((block.clone(), lines));
         self.text = block.editor_text.clone();
@@ -407,7 +417,11 @@ fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool,
 }
 
 fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
-    source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
+    let mut look = source_look(&b.base_font, b.size, b.color, b.bold, b.italic);
+    if let Some(align) = b.horizontal_alignment {
+        look.align = align;
+    }
+    look
 }
 
 pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
@@ -681,12 +695,144 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, inf
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Grip {
     Move,
-    /// An edge (screen left or right), dragged to rewrap the paragraph.
+    /// An edge along the paragraph's baseline, dragged to rewrap it.
     Left,
     Right,
+    /// An edge normal to the baseline, changing the frame without moving its text.
+    Top,
+    Bottom,
 }
 
-/// A paragraph box being dragged: moved, or (from a handle on its left or right edge) resized.
+impl Grip {
+    fn cursor(self, frame: &ParagraphFrame) -> egui::CursorIcon {
+        let axis = match self {
+            Self::Move => return egui::CursorIcon::Move,
+            Self::Left | Self::Right => frame.along,
+            Self::Top | Self::Bottom => frame.down,
+        };
+        let octant = (axis.y.atan2(axis.x) / std::f32::consts::FRAC_PI_4).round() as i32;
+        match octant.rem_euclid(4) {
+            0 => egui::CursorIcon::ResizeHorizontal,
+            1 => egui::CursorIcon::ResizeNwSe,
+            2 => egui::CursorIcon::ResizeVertical,
+            _ => egui::CursorIcon::ResizeNeSw,
+        }
+    }
+}
+
+/// A paragraph's baseline coordinates expressed in screen pixels, with y running downwards.
+/// Page rotation, view rotation and UserUnit all participate in the same projection.
+#[derive(Clone, Copy)]
+struct ParagraphFrame {
+    valid: bool,
+    origin: Pos2,
+    along: egui::Vec2,
+    down: egui::Vec2,
+    scale: f32,
+    rect: Rect,
+}
+
+impl ParagraphFrame {
+    fn new(xf: &PageXform, info: &DocInfo, page: usize, block: &pdfcraft_engine::TextBlock) -> Self {
+        let empty = Self { valid: false, origin: Pos2::ZERO, along: egui::vec2(1.0, 0.0), down: egui::vec2(0.0, 1.0), scale: 1.0, rect: Rect::ZERO };
+        let Some(p) = info.pages.get(page) else { return empty };
+        let quad = block.editing_quad().map(|point| {
+            let v = p.user_to_view(point[0] as f32, point[1] as f32);
+            xf.norm_to_screen(v[0] / xf.pw.max(0.01), v[1] / xf.ph.max(0.01))
+        });
+        let across = quad[1] - quad[0];
+        let down = quad[0] - quad[3];
+        let frame = block.editing_frame();
+        let (width, height) = (across.length(), down.length());
+        let scale = width / (frame[2] - frame[0]) as f32;
+        if !quad.iter().all(|point| point.x.is_finite() && point.y.is_finite())
+            || !width.is_finite()
+            || !height.is_finite()
+            || width <= 1e-5
+            || height <= 1e-5
+            || !scale.is_finite()
+            || scale <= 0.0
+        {
+            return empty;
+        }
+        Self {
+            valid: true,
+            origin: quad[3],
+            along: across.normalized(),
+            down: down.normalized(),
+            scale,
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(width, height)).expand(2.0),
+        }
+    }
+
+    fn local(self, point: Pos2) -> Pos2 {
+        let relative = point - self.origin;
+        egui::pos2(relative.dot(self.along), relative.dot(self.down))
+    }
+
+    fn screen(self, point: Pos2) -> Pos2 {
+        self.origin + self.along * point.x + self.down * point.y
+    }
+
+    fn quad(self, rect: Rect) -> [Pos2; 4] {
+        [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()].map(|p| self.screen(p))
+    }
+
+    fn bounds(self) -> Rect {
+        self.quad(self.rect).into_iter().fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_max(p, p)))
+    }
+
+    fn paint(self, painter: &egui::Painter, rect: Rect, fill: Color32, stroke: Stroke) {
+        if !self.valid {
+            return;
+        }
+        // Cardinal directions retain ordinary rectangle shapes. Slanted frames follow their
+        // four corners, never the larger axis-aligned box around them.
+        if self.along.x.abs() < 0.001 || self.along.y.abs() < 0.001 {
+            let corners = self.quad(rect);
+            let bounds = corners.into_iter().fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_max(p, p)));
+            painter.rect(bounds, CornerRadius::same(2), fill, stroke, egui::StrokeKind::Outside);
+        } else {
+            painter.add(egui::Shape::convex_polygon(self.quad(rect).to_vec(), fill, stroke));
+        }
+    }
+
+    fn handles(self, painter: &egui::Painter, rect: Rect) {
+        for handle in resize_handles(rect) {
+            self.paint(painter, handle, Color32::WHITE, Stroke::new(1.0, ACCENT));
+        }
+    }
+
+    fn unturned(self) -> bool {
+        (self.along - egui::vec2(1.0, 0.0)).length() < 0.001 && (self.down - egui::vec2(0.0, 1.0)).length() < 0.001
+    }
+}
+
+fn grip_at(frames: &[ParagraphFrame], p: Pos2) -> Option<(usize, Grip)> {
+    frames.iter().enumerate().rev().find_map(|(i, frame)| {
+        if !frame.valid {
+            return None;
+        }
+        let local = frame.local(p);
+        match edge_at(frame.rect, local) {
+            Some(grip) => Some((i, grip)),
+            None => frame.rect.contains(local).then_some((i, Grip::Move)),
+        }
+    })
+}
+
+pub(crate) fn paragraph_contains(xf: &PageXform, info: &DocInfo, page: usize, block: &pdfcraft_engine::TextBlock, p: Pos2) -> bool {
+    let frame = ParagraphFrame::new(xf, info, page, block);
+    frame.valid && frame.rect.contains(frame.local(p))
+}
+
+pub(crate) fn paragraph_on_frame(xf: &PageXform, info: &DocInfo, page: usize, block: &pdfcraft_engine::TextBlock, p: Pos2) -> bool {
+    let frame = ParagraphFrame::new(xf, info, page, block);
+    let local = frame.local(p);
+    frame.valid && frame.rect.expand(6.0).contains(local) && !frame.rect.contains(local)
+}
+
+/// A paragraph box being moved, rewrapped horizontally or resized vertically from an edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BlockDrag {
     page: usize,
@@ -703,34 +849,43 @@ const EDGE_REACH: f32 = 6.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels).
 const FRAME_REACH: f32 = 4.0;
 
-/// The rewrap handles drawn on a paragraph box's left and right edges (screen).
-fn width_handles(b: Rect) -> [Rect; 2] {
+/// The width and height handles drawn on a paragraph box's edges (screen).
+fn resize_handles(b: Rect) -> [Rect; 4] {
     let h = (b.height() * 0.5).clamp(14.0, 28.0);
-    [b.left(), b.right()].map(|x| Rect::from_center_size(Pos2::new(x, b.center().y), egui::vec2(7.0, h)))
+    let w = (b.width() * 0.5).clamp(14.0, 28.0);
+    [
+        Rect::from_center_size(b.left_center(), egui::vec2(7.0, h)),
+        Rect::from_center_size(b.right_center(), egui::vec2(7.0, h)),
+        Rect::from_center_size(b.center_top(), egui::vec2(w, 7.0)),
+        Rect::from_center_size(b.center_bottom(), egui::vec2(w, 7.0)),
+    ]
 }
 
-/// The edge of `b` that `p` grabs: anywhere along its height, within reach of the line. A narrow
-/// box keeps its middle for moving.
+/// The edge of `b` that `p` grabs, within reach of the outline. A small box keeps its middle
+/// for moving, and corners prefer the horizontal resize handles.
 fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
-    if p.y < b.top() - EDGE_REACH || p.y > b.bottom() + EDGE_REACH {
+    if !b.expand(EDGE_REACH).contains(p) {
         return None;
     }
     let inside = EDGE_REACH.min(b.width() / 4.0);
     let (dl, dr) = (p.x - b.left(), b.right() - p.x);
-    match (dl >= -EDGE_REACH && dl <= inside, dr >= -EDGE_REACH && dr <= inside) {
+    let horizontal = match (dl >= -EDGE_REACH && dl <= inside, dr >= -EDGE_REACH && dr <= inside) {
         (true, true) if dl <= dr => Some(Grip::Left),
         (_, true) => Some(Grip::Right),
         (true, false) => Some(Grip::Left),
         _ => None,
+    };
+    if horizontal.is_some() {
+        return horizontal;
     }
-}
-
-/// The topmost box under `p` and what it grabs there; edges only on an upright page.
-fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
-    boxes.iter().enumerate().rev().find_map(|(i, b)| match upright.then(|| edge_at(*b, p)).flatten() {
-        Some(g) => Some((i, g)),
-        None => b.contains(p).then_some((i, Grip::Move)),
-    })
+    let inside = EDGE_REACH.min(b.height() / 4.0);
+    let (dt, db) = (p.y - b.top(), b.bottom() - p.y);
+    match (dt >= -EDGE_REACH && dt <= inside, db >= -EDGE_REACH && db <= inside) {
+        (true, true) if dt <= db => Some(Grip::Top),
+        (_, true) => Some(Grip::Bottom),
+        (true, false) => Some(Grip::Top),
+        _ => None,
+    }
 }
 
 /// A paragraph's box on screen: its text rect (user space), with a little room around it.
@@ -738,17 +893,20 @@ fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) ->
     xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
 }
 
-/// The width handles need the page upright (or upside down): on a quarter-turned page the
-/// screen's horizontal is the paragraph's vertical.
-fn has_edges(info: &DocInfo, page: usize) -> bool {
-    info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0)
-}
-
-/// Whether a press at `p` takes hold of the width handle of one of the paragraphs `rects` (user
-/// space). The handle is drawn half outside the box and grabs from a little further out still,
+/// Whether a press at `p` takes hold of an edge handle of one of the paragraphs. The handle is
+/// drawn half outside the box and grabs from a little further out still,
 /// where a press is not on the box itself, so area selection must leave it to [`page_input`].
-pub(crate) fn grabs_edge(xf: &PageXform, info: &DocInfo, page: usize, mut rects: impl Iterator<Item = [f64; 4]>, p: Pos2) -> bool {
-    has_edges(info, page) && rects.any(|r| edge_at(paragraph_box(xf, info, page, r), p).is_some())
+pub(crate) fn grabs_edge<'a>(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    mut blocks: impl Iterator<Item = &'a pdfcraft_engine::TextBlock>,
+    p: Pos2,
+) -> bool {
+    blocks.any(|block| {
+        let frame = ParagraphFrame::new(xf, info, page, block);
+        frame.valid && edge_at(frame.rect, frame.local(p)).is_some()
+    })
 }
 
 /// What a right-click on a selected image asks for.
@@ -1172,12 +1330,14 @@ fn open_editor(
     view.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
-    // Screen pixels per point, from the box's width.
-    let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
+    // Screen pixels per point along the baseline, including the page's UserUnit.
+    let frame = l.editing_rect();
+    let geometry = ParagraphFrame::new(xf, &doc.info, page, l);
+    let scale = geometry.scale;
     // How far the editor box may grow: a single-line paragraph's rewrite grows to the
     // page's right edge, a multi-line paragraph rewraps to its own width.
     let right = xf.rect.right().min(view.viewport_rect().right()) - 6.0;
-    let max_width = if l.rows.len() == 1 { (right - b.left()).max(b.width()) } else { b.width() };
+    let max_width = if l.rows.len() == 1 && l.horizontal_frame.is_none() { (right - b.left()).max(b.width()) } else { b.width() };
     view.line_editor = Some(LineEditor {
         selection: None,
         font_resource: None,
@@ -1186,8 +1346,9 @@ fn open_editor(
         text: text.clone(),
         original: text,
         rect: *b,
-        source_rect: l.rect.map(|v| v as f32),
+        source_rect: frame.map(|v| v as f32),
         multiline: l.rows.len() > 1,
+        turned: !geometry.unturned() || l.rotation.abs() > 0.001,
         source: Some((l.clone(), source_lines)),
         fonts: install_source_fonts(ui.ctx(), doc, page),
         overflow: false,
@@ -1220,13 +1381,18 @@ pub(crate) fn page_input(
         view.block_drag = None;
         return true;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    let frames: Vec<_> = lines.iter().map(|l| ParagraphFrame::new(xf, info, page, l)).collect();
+    let boxes: Vec<Rect> = frames.iter().map(|frame| frame.bounds()).collect();
+    // Handles belong to the chosen frame; an indivisible word may still paint outside it.
+    // Accept that ink for body clicks and moves after giving the frame's handles priority.
+    let grab =
+        |p| grip_at(&frames, p).or_else(|| lines.iter().rposition(|l| paragraph_box(xf, info, page, l.rect).contains(p)).map(|i| (i, Grip::Move)));
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
-    for (i, b) in boxes.iter().enumerate() {
+    for (i, frame) in frames.iter().enumerate() {
         if active != Some(i) {
-            painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+            frame.paint(&painter, frame.rect, Color32::TRANSPARENT, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)));
         }
     }
     // A box a switching click asked for opens now, once the edit queued with that click has
@@ -1246,47 +1412,58 @@ pub(crate) fn page_input(
     if !allow_interaction {
         return false;
     }
-    let upright = has_edges(info, page);
-    let draw_handles = |b: Rect| {
-        for h in width_handles(b) {
-            painter.rect(h, CornerRadius::same(2), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
-        }
-    };
     // A drag in progress: the box follows the pointer (or the grabbed edge does); releasing applies it.
     if let Some(d) = view.block_drag.filter(|d| d.page == page)
-        && let (Some(b), Some(l)) = (boxes.get(d.block).copied(), lines.get(d.block))
+        && let (Some(frame), Some(l)) = (frames.get(d.block).copied(), lines.get(d.block))
     {
         let p = ui.input(|i| i.pointer.interact_pos()).unwrap_or(d.start);
-        let dx = p.x - d.start.x;
+        let b = frame.rect;
+        let delta = frame.local(p) - frame.local(d.start);
+        let (dx, dy) = (delta.x, delta.y);
         let preview = match d.grip {
-            Grip::Move => b.translate(p - d.start),
+            Grip::Move => b.translate(delta),
             Grip::Left => Rect::from_min_max(Pos2::new((b.left() + dx).min(b.right() - 12.0), b.min.y), b.max),
             Grip::Right => Rect::from_min_max(b.min, Pos2::new((b.right() + dx).max(b.left() + 12.0), b.max.y)),
+            Grip::Top => Rect::from_min_max(Pos2::new(b.min.x, (b.top() + dy).min(b.bottom() - 12.0)), b.max),
+            Grip::Bottom => Rect::from_min_max(b.min, Pos2::new(b.max.x, (b.bottom() + dy).max(b.top() + 12.0))),
         };
-        painter.rect_stroke(preview, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+        frame.paint(&painter, preview, Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
         let resizing = d.grip != Grip::Move;
         if resizing {
-            draw_handles(preview);
+            frame.handles(&painter, preview);
         }
-        ui.ctx().set_cursor_icon(if resizing { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Move });
+        ui.ctx().set_cursor_icon(d.grip.cursor(&frame));
         if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
             view.block_drag = None;
-            let (from, to) = (user_box(xf, info, page, b), user_box(xf, info, page, preview));
-            let edit = if resizing {
-                // The new width in user space: the box's change, added to the paragraph's own. A
-                // moved left side (in user space; on an upside-down page that's the screen's right
-                // edge) moves the paragraph with it.
-                let width = (l.rect[2] - l.rect[0]) + (to[2] - to[0]) - (from[2] - from[0]);
-                let shift = to[0] - from[0];
-                let style = pdfcraft_engine::BlockStyle { width: Some(width), offset: (shift != 0.0).then_some([shift, 0.0]), ..Default::default() };
+            let source = l.editing_frame();
+            let edit = if matches!(d.grip, Grip::Top | Grip::Bottom) {
+                let vertical_frame = [
+                    source[1] - f64::from((preview.bottom() - b.bottom()) / frame.scale),
+                    source[3] - f64::from((preview.top() - b.top()) / frame.scale),
+                ];
+                let style = pdfcraft_engine::BlockStyle { vertical_frame: Some(vertical_frame), ..Default::default() };
+                Edit::EditTextBlock { page, block: d.block, text: l.editor_text.clone(), style }
+            } else if resizing {
+                let width = source[2] - source[0] + f64::from((preview.width() - b.width()) / frame.scale);
+                let shift = f64::from((preview.left() - b.left()) / frame.scale);
+                let (sin, cos) = l.rotation.to_radians().sin_cos();
+                let style = pdfcraft_engine::BlockStyle {
+                    width: Some(width),
+                    offset: (shift != 0.0).then_some([shift * cos, shift * sin]),
+                    ..Default::default()
+                };
                 Edit::EditTextBlock { page, block: d.block, text: l.text.clone(), style }
             } else {
                 // Translation must keep the selected source operators. Rewriting unchanged text
                 // would also remove unrelated paragraphs that now overlap this one (#594).
+                let Some(page_info) = info.pages.get(page) else { return true };
+                let start = xf.screen_to_view(d.start);
+                let now = xf.screen_to_view(p);
+                let (start, now) = (page_info.view_to_user(start.0, start.1), page_info.view_to_user(now.0, now.1));
                 Edit::MoveObjects {
                     page,
                     objects: vec![ObjectTarget { kind: ObjectKind::Text, index: d.block }],
-                    offset: [to[0] - from[0], to[1] - from[1]],
+                    offset: [f64::from(now[0] - start[0]), f64::from(now[1] - start[1])],
                 }
             };
             if preview != b {
@@ -1302,19 +1479,19 @@ pub(crate) fn page_input(
     if resp.drag_started()
         && active.is_none()
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
-        && let Some((block, grip)) = grab_at(&boxes, o, upright)
+        && let Some((block, grip)) = grab(o)
     {
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
     let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some((hit, grip)) = grab_at(&boxes, p, upright) else { return false };
+    let Some((hit, grip)) = grab(p) else { return false };
     if active != Some(hit) {
-        painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+        frames[hit].paint(&painter, frames[hit].rect, Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
     }
     let on_edge = active.is_none() && grip != Grip::Move;
-    if upright && active.is_none() {
-        draw_handles(boxes[hit]);
+    if active.is_none() {
+        frames[hit].handles(&painter, frames[hit].rect);
     }
     // A closed paragraph moves when dragged (the four-way arrow says so; a click still opens it
     // for typing); an edge rewraps it. The open one takes the text cursor. Only where the page
@@ -1322,7 +1499,7 @@ pub(crate) fn page_input(
     // cursor (#2755).
     if resp.contains_pointer() {
         ui.ctx().set_cursor_icon(if on_edge {
-            egui::CursorIcon::ResizeHorizontal
+            grip.cursor(&frames[hit])
         } else if active.is_none() {
             egui::CursorIcon::Move
         } else {
@@ -1401,7 +1578,8 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
     if let Some((block, lines)) = &ed.source {
         let lefts: Vec<_> = block.rows.iter().filter_map(|r| r.first().and_then(|i| lines.get(*i)).map(|l| l.rect[0])).collect();
         let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);
-        let centered = block.rows.len() > 1
+        let centered = !ed.turned
+            && block.rows.len() > 1
             && left_span > block.size * 0.5
             && block.rows.iter().all(|row| {
                 let rect = row
@@ -1413,6 +1591,13 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
             });
         if centered {
             job.halign = egui::Align::Center;
+        }
+        if block.horizontal_alignment.is_some() {
+            job.halign = match ed.look.align {
+                pdfcraft_engine::TextAlign::Center => egui::Align::Center,
+                pdfcraft_engine::TextAlign::Right => egui::Align::RIGHT,
+                _ => egui::Align::LEFT,
+            };
         }
         for (range, index) in block.edited_spans(text) {
             let Some(line) = lines.get(index) else { continue };
@@ -1442,7 +1627,11 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
             }
             let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / line.size.max(0.01)) as f32 * scale;
-            let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
+            let spacing = if original_face && !ed.turned {
+                (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32
+            } else {
+                0.0
+            };
             job.append(
                 text.get(range).unwrap_or_default(),
                 0.0,
@@ -1482,9 +1671,13 @@ fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32, top_padding: f32) -> Arc<egui::Galley> {
     let mut job = editor_job(ui, ed, text, scale, width);
+    if ed.turned {
+        return ui.fonts_mut(|fonts| fonts.layout_job(job));
+    }
     let centered = job.halign == egui::Align::Center;
+    let right_aligned = job.halign == egui::Align::RIGHT;
     job.halign = egui::Align::LEFT;
     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let Some((block, lines)) = &ed.source else { return galley };
@@ -1527,8 +1720,16 @@ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: 
         let descent = (sources.get(index).map_or(last_baseline, |s| s.0) - source_rect[1]) as f32 * scale * ratio as f32;
         let base_y = (block.rect[3] - baseline) as f32 * scale;
         let row = Arc::make_mut(&mut placed.row);
-        placed.pos.y = base_y - ascent;
-        placed.pos.x = if centered { (width - row.size.x) / 2.0 } else { (source_rect[0] - block.rect[0]) as f32 * scale };
+        placed.pos.y = top_padding + base_y - ascent;
+        placed.pos.x = if centered {
+            (width - row.size.x) / 2.0
+        } else if right_aligned {
+            width - row.size.x
+        } else if block.horizontal_frame.is_some() {
+            0.0
+        } else {
+            (source_rect[0] - block.rect[0]) as f32 * scale
+        };
         for glyph in &mut row.glyphs {
             let dy = ascent - glyph.pos.y;
             glyph.pos.y = ascent;
@@ -1571,6 +1772,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         .as_ref()
         .and_then(|ed| view.text_background.draft_rect_for(ed.page, ed.block))
         .map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
+    let draft_overflow = view.line_editor.as_ref().and_then(|ed| view.text_background.draft_overflow_for(ed.page, ed.block));
     // The editor draws on its page only, as the page itself does: a paragraph running past the
     // page's edge (a converter relying on the page clip) must not cover the next page or the
     // tool bars (#3061).
@@ -1589,8 +1791,19 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         return None;
     }
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
+    let oriented = ed.source.as_ref().map(|(block, _)| ParagraphFrame::new(&xf, info, ed.page, block));
+    ed.turned = oriented.is_some_and(|frame| !frame.unturned()) || ed.source.as_ref().is_some_and(|(block, _)| block.rotation.abs() > 0.001);
+    // The chosen top edge is independent of the glyph origin. Keep the text at its ink top,
+    // leaving editable blank space when the frame grows and visible ink when it shrinks.
+    let ink = ed.source.as_ref().map_or(ed.rect, |(block, _)| xf.user_rect(info, ed.page, block.rect.map(|v| v as f32)));
+    let text_top = ed.rect.top().min(ink.top());
+    let top_padding = if ed.turned { 0.0 } else { ink.top() - text_top };
+    let text_height =
+        if ed.turned { oriented.map_or(ed.rect.height(), |frame| frame.rect.height() - 4.0) } else { ed.rect.bottom().max(ink.bottom()) - text_top };
+    let text_origin = Pos2::new(ed.rect.left(), text_top);
+    let fixed_height = ed.source.as_ref().is_some_and(|(b, _)| b.vertical_frame.is_some());
     ed.max_width = ed.rect.width();
-    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
+    let scale = oriented.map_or_else(|| (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01), |frame| frame.scale);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     // egui draws the caret at least one row of this font tall. Each row already has its source
     // row's height, so the font stays below every row (half the region's smallest size): on a
@@ -1610,7 +1823,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     egui::Area::new(egui::Id::new("edit-text-line"))
         .order(egui::Order::Foreground)
         .fade_in(false)
-        .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
+        .fixed_pos(text_origin)
         .constrain_to(viewport)
         .constrain(false)
         .show(ctx, |ui| {
@@ -1619,8 +1832,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // extent: single rows grow toward the page edge, paragraphs rewrap at their
             // source width, and the visible frame grows/shrinks vertically with their rows.
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
-            let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+            let single_run =
+                ed.source.as_ref().is_some_and(|(block, _)| block.horizontal_frame.is_none() && (block.rows.len() == 1 || block.invisible));
+            let width = if ed.turned {
+                oriented.map_or(ed.rect.width(), |frame| frame.rect.width() - 4.0).max(1.0)
+            } else if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
                 let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
                 let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
                 natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
@@ -1628,19 +1844,58 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 ed.rect.width().max(1.0)
             };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
-            ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
-            let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
+            let measured = editor_galley(ui, ed, &ed.text, scale, width, top_padding);
+            let visible = Rect::from_min_size(text_origin, measured.rect.size().max(egui::vec2(1.0, 1.0)));
+            let draft = draft_rect.unwrap_or(visible);
+            ed.overflow = if ed.turned {
+                draft_overflow.unwrap_or(false)
+            } else if fixed_height {
+                draft.left() < ed.rect.left() - 1.5
+                    || draft.right() > ed.rect.right() + 1.5
+                    || draft.top() < ed.rect.top() - 1.5
+                    || draft.bottom() > ed.rect.bottom() + 1.5
+            } else {
+                ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5)
+            };
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
-            ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            let live = if ed.source.as_ref().is_some_and(|(b, _)| b.horizontal_frame.is_some()) {
+                Rect::from_min_max(
+                    Pos2::new(live.left().min(ed.rect.left()), live.top()),
+                    Pos2::new(live.right().max(ed.rect.right()), live.bottom()),
+                )
+            } else {
+                live
+            };
+            // A fixed-height frame remains at the user's edges even when its text overflows.
+            // Only the page clip limits the text; the frame is never a clipping rectangle.
+            let live = if fixed_height {
+                Rect::from_min_max(Pos2::new(live.left(), ed.rect.top()), Pos2::new(live.right(), ed.rect.bottom()))
+            } else {
+                live
+            };
+            if ed.turned
+                && let Some(frame) = oriented
+            {
+                frame.paint(ui.painter(), frame.rect, Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
+            } else {
+                ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            }
+            if fixed_height && ed.overflow {
+                let badge = Rect::from_min_size(live.right_top() + egui::vec2(6.0, 0.0), egui::vec2(18.0, 18.0));
+                crate::icons::paint(ui, badge, "triangle-alert", 16.0, Color32::from_rgb(0xE6, 0x86, 0x19));
+                ui.interact(badge, ui.id().with("text-frame-overflow"), egui::Sense::hover()).on_hover_text(tl!("Text extends outside the frame."));
+            }
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
             if let Some(p) = ui.input(|i| i.pointer.hover_pos())
                 && ui.clip_rect().contains(p)
-                && live.expand(2.0 + FRAME_REACH).contains(p)
-                && !live.expand(2.0).contains(p)
+                && if ed.turned {
+                    oriented.is_some_and(|frame| frame.rect.expand(FRAME_REACH).contains(frame.local(p)) && !frame.rect.contains(frame.local(p)))
+                } else {
+                    live.expand(2.0 + FRAME_REACH).contains(p) && !live.expand(2.0).contains(p)
+                }
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
             }
@@ -1665,8 +1920,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
-                    if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
+                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width, top_padding);
+                    if snapshot.turned || snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let output = egui::TextEdit::multiline(&mut ed.text)
                     .id(egui::Id::new("edit-text-line-input"))
@@ -1676,9 +1931,10 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .text_color(text_color)
                     .frame(egui::Frame::NONE)
                     .desired_width(width)
+                    .min_size(egui::vec2(0.0, if fixed_height { text_height } else { 0.0 }))
                     .desired_rows(rows)
                     .show(ui);
-                if ed.has_changes() {
+                if ed.turned || ed.has_changes() {
                     if background_ready {
                         reveal = true;
                     } else {
@@ -1790,6 +2046,7 @@ mod tests {
             rect: Rect::NOTHING,
             source_rect: block.rect.map(|v| v as f32),
             multiline: block.rows.len() > 1,
+            turned: false,
             source: None,
             fonts: BTreeMap::new(),
             overflow: false,
@@ -1803,6 +2060,84 @@ mod tests {
             extras0: Extras::default(),
         };
         (app, ed)
+    }
+
+    #[test]
+    fn vertical_frame_draft_keeps_its_source_baseline_when_the_top_edge_changes() {
+        for top_shift in [30.0, -4.0] {
+            let (mut app, mut ed) = preview_app();
+            let id = app.views[0].id;
+            let doc = app.session.get(id).unwrap();
+            let original = doc.text_blocks(0).remove(0);
+            let baseline = doc.text_lines(0)[0].baseline()[1];
+            app.session
+                .apply(
+                    id,
+                    Edit::EditTextBlock {
+                        page: 0,
+                        block: 0,
+                        text: original.editor_text.clone(),
+                        style: pdfcraft_engine::BlockStyle {
+                            vertical_frame: Some([original.rect[1] - 20.0, original.rect[3] + top_shift]),
+                            ..Default::default()
+                        },
+                    },
+                )
+                .unwrap();
+            let doc = app.session.get(id).unwrap();
+            let block = doc.text_blocks(0).remove(0);
+            ed.refresh_source(&block, doc.text_lines(0));
+            ed.text = "Preview changed".into();
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                let padding = top_shift.max(0.0) as f32;
+                let g = editor_galley(ui, &ed, &ed.text, 1.0, 400.0, padding);
+                let first = g.rows.first().unwrap();
+                let glyph = first.glyphs.first().unwrap();
+                let preview_baseline = original.rect[3] + f64::from(padding) - f64::from(first.pos.y + glyph.pos.y);
+                assert!((preview_baseline - baseline).abs() < 0.01, "the draft must stay at its source baseline");
+            })
+            .textures_delta
+            .clear();
+        }
+    }
+
+    #[test]
+    fn resized_centered_and_right_aligned_drafts_stay_inside_their_frame() {
+        for align in [pdfcraft_engine::TextAlign::Center, pdfcraft_engine::TextAlign::Right] {
+            let (mut app, mut ed) = preview_app();
+            let id = app.views[0].id;
+            app.session
+                .apply(
+                    id,
+                    Edit::EditTextBlock {
+                        page: 0,
+                        block: 0,
+                        text: "Hi".into(),
+                        style: pdfcraft_engine::BlockStyle { width: Some(90.0), align: Some(align), ..Default::default() },
+                    },
+                )
+                .unwrap();
+            let doc = app.session.get(id).unwrap();
+            let block = doc.text_blocks(0).remove(0);
+            ed.refresh_source(&block, doc.text_lines(0));
+            ed.look = look_of(&block);
+            ed.look0 = ed.look.clone();
+            ed.text = "One two three four five six seven".into();
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                let g = editor_galley(ui, &ed, &ed.text, 1.0, 90.0, 0.0);
+                assert!(g.rows.len() > 1);
+                for row in &g.rows {
+                    assert!(row.pos.x >= -0.5 && row.pos.x + row.size.x <= 90.5, "{align:?}: {:?}, {:?}", row.pos, row.size);
+                    let free = 90.0 - row.size.x;
+                    let expected = if align == pdfcraft_engine::TextAlign::Center { free / 2.0 } else { free };
+                    assert!((row.pos.x - expected).abs() < 0.5);
+                }
+            })
+            .textures_delta
+            .clear();
+        }
     }
 
     #[test]

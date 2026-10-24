@@ -40,7 +40,7 @@ fn fixture(n: usize) -> Vec<u8> {
 
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
-    if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
+    if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() || std::env::var_os("PDFCRAFT_RESIZE_SNAPSHOT").is_some() {
         builder = builder.wgpu();
     }
     let mut h = builder.build_eframe(move |_cc| {
@@ -3898,7 +3898,11 @@ fn paragraph_drag_fixture(content: &str, rotation: i64, unit: i64) -> Vec<u8> {
 }
 
 fn paragraph_drag_harness(bytes: Vec<u8>, view_rotation: u16) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
+    let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 1100.0));
+    if std::env::var_os("PDFCRAFT_VERTICAL_SNAPSHOT").is_some() || std::env::var_os("PDFCRAFT_ROTATED_SNAPSHOT").is_some() {
+        builder = builder.wgpu();
+    }
+    let mut h = builder.build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option("language", "en").unwrap();
@@ -4308,14 +4312,15 @@ fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
     assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
     // Flick the right edge outward, past the box and its handle: back onto one line.
     let b = block(&h);
-    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    let edge = screen(b.editing_rect()[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
     flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
     let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
     assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
     // Flick the left edge inward: it rewraps and its left side follows the pointer.
     let b = block(&h);
-    let edge = screen(b.rect[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
-    let inward = (b.rect[2] - b.rect[0] - 45.0) as f32;
+    let frame = b.editing_rect();
+    let edge = screen(frame[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
+    let inward = (frame[2] - frame[0] - 45.0) as f32;
     flick(&mut h, edge, edge + egui::vec2(inward * k, 0.0));
     let after = lines(&h);
     let text: Vec<String> = after.iter().map(|l| l.text.clone()).collect();
@@ -4377,6 +4382,398 @@ fn a_paragraph_rewraps_from_the_outer_half_of_its_edge_handles() {
     drag(&mut h, grip, grip + egui::vec2(inward * k, 0.0));
     assert_eq!(lines(&h), ["Page", "1"], "narrowed from the left handle");
     assert!((block(&h).rect[0] - (before.rect[0] + f64::from(inward))).abs() < 1.5, "{:?} → {:?}", before.rect, block(&h).rect);
+}
+
+fn paragraph_frame_screen(h: &Harness<'static, PdfCraftApp>, rect: [f64; 4]) -> egui::Rect {
+    let app = h.state();
+    let view = &app.views[0];
+    let doc = app.session.get(view.id).unwrap();
+    let xf = pdfcraft_ui_egui::canvas::PageXform {
+        rect: view.page_screen_rect(0).unwrap(),
+        rot: view.rotation,
+        pw: doc.info.pages[0].width,
+        ph: doc.info.pages[0].height,
+    };
+    xf.user_rect(&doc.info, 0, rect.map(|v| v as f32))
+}
+
+fn check_vertical_frame_drag(rotation: i64) {
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture("BT /F1 18 Tf 80 240 Td (Fixed baseline) Tj ET", rotation, 1), 0);
+    let original = dragged_paragraphs(&h).remove(0);
+    let k = h.state().views[0].page_screen_rect(0).unwrap().width() / 360.0;
+    let before = original.editing_rect();
+    // Both controls are grabbed on their outer half, where an unhandled press becomes a marquee.
+    let top = paragraph_frame_screen(&h, before).center_top() - egui::vec2(0.0, 5.0);
+    flick(&mut h, top, top - egui::vec2(0.0, 30.0 * k));
+    let taller = dragged_paragraphs(&h).remove(0);
+    let expected =
+        if rotation == 0 { [before[0], before[1], before[2], before[3] + 30.0] } else { [before[0], before[1] - 30.0, before[2], before[3]] };
+    assert!(taller.editing_rect().iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.5), "top handle: {taller:?}");
+    assert!(taller.rect.iter().zip(original.rect).all(|(a, b)| (a - b).abs() < 0.01), "resizing must not move glyphs");
+    assert_eq!((taller.text.as_str(), taller.size), (original.text.as_str(), original.size));
+    let bottom = paragraph_frame_screen(&h, taller.editing_rect()).center_bottom() + egui::vec2(0.0, 5.0);
+    drag(&mut h, bottom, bottom + egui::vec2(0.0, 25.0 * k));
+    let grown = dragged_paragraphs(&h).remove(0);
+    let expected = if rotation == 0 {
+        [before[0], before[1] - 25.0, before[2], before[3] + 30.0]
+    } else {
+        [before[0], before[1] - 30.0, before[2], before[3] + 25.0]
+    };
+    assert!(grown.editing_rect().iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.5), "bottom handle: {grown:?}");
+    assert!(grown.rect.iter().zip(original.rect).all(|(a, b)| (a - b).abs() < 0.01));
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(dragged_paragraphs(&h)[0].editing_rect(), taller.editing_rect());
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(dragged_paragraphs(&h)[0].editing_rect(), grown.editing_rect());
+    let id = h.state().views[0].id;
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let rid = reopened.open("height.pdf", None, saved, None).unwrap();
+    assert_eq!(reopened.get(rid).unwrap().text_blocks(0)[0].editing_rect(), grown.editing_rect());
+    // The extra space above the ink belongs to the paragraph, including after selection and movement.
+    let frame = paragraph_frame_screen(&h, grown.editing_rect());
+    let ink = paragraph_frame_screen(&h, grown.rect);
+    let empty = egui::pos2(frame.center().x, (frame.top() + ink.top()) / 2.0);
+    click_at(&mut h, empty);
+    assert!(h.state().views[0].line_editor.is_some(), "empty vertical space opens the editor");
+    click_at(&mut h, frame.center_top() - egui::vec2(0.0, 4.0));
+    assert!(h.state().views[0].line_editor.is_none(), "the open frame becomes a movable selection");
+    drag(&mut h, empty, empty + egui::vec2(12.0 * k, 15.0 * k));
+    let moved = dragged_paragraphs(&h).remove(0);
+    let offset = if rotation == 0 { [12.0, -15.0] } else { [-12.0, 15.0] };
+    for axis in 0..4 {
+        assert!((moved.editing_rect()[axis] - grown.editing_rect()[axis] - offset[axis % 2]).abs() < 0.5);
+        assert!((moved.rect[axis] - grown.rect[axis] - offset[axis % 2]).abs() < 0.5);
+    }
+}
+
+#[test]
+fn vertical_frame_handles_preserve_glyphs_and_empty_space() {
+    check_vertical_frame_drag(0);
+}
+
+fn rotated_paragraph_harness(angle: f64, page_rotation: i64, view_rotation: u16) -> (Harness<'static, PdfCraftApp>, [f64; 4]) {
+    let body = "BT /F1 18 Tf 0 0 Td (One two three four) Tj ET";
+    let mut reference = pdfcraft_engine::Session::new();
+    let id = reference.open("reference.pdf", None, std::sync::Arc::new(paragraph_drag_fixture(body, 0, 1)), None).unwrap();
+    let ink = reference.get(id).unwrap().text_blocks(0)[0].rect;
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let origin = [200.0 * cos + 250.0 * sin, 250.0 * cos - 200.0 * sin];
+    let frame = std::array::from_fn(|i| ink[i] + origin[i % 2]);
+    let content = format!("q {cos:.9} {sin:.9} {:.9} {cos:.9} 200 250 cm {body} Q", -sin);
+    (paragraph_drag_harness(paragraph_drag_fixture(&content, page_rotation, 2), view_rotation), frame)
+}
+
+fn rotated_frame_world(angle: f64, point: [f64; 2]) -> [f64; 2] {
+    let (sin, cos) = angle.to_radians().sin_cos();
+    [point[0] * cos - point[1] * sin, point[0] * sin + point[1] * cos]
+}
+
+fn rotated_frame_screen(h: &Harness<'static, PdfCraftApp>, angle: f64, point: [f64; 2]) -> egui::Pos2 {
+    let app = h.state();
+    let view = &app.views[0];
+    let doc = app.session.get(view.id).unwrap();
+    let page = &doc.info.pages[0];
+    let xf = pdfcraft_ui_egui::canvas::PageXform { rect: view.page_screen_rect(0).unwrap(), rot: view.rotation, pw: page.width, ph: page.height };
+    let world = rotated_frame_world(angle, point);
+    let shown = page.user_to_view(world[0] as f32, world[1] as f32);
+    xf.norm_to_screen(shown[0] / page.width, shown[1] / page.height)
+}
+
+fn assert_rotated_frame(block: &pdfcraft_engine::TextBlock, angle: f64, frame: [f64; 4]) {
+    let points = [[frame[0], frame[1]], [frame[2], frame[1]], [frame[2], frame[3]], [frame[0], frame[3]]].map(|p| rotated_frame_world(angle, p));
+    let expected = [
+        points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
+        points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
+        points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max),
+        points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
+    ];
+    assert!(block.editing_rect().iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.6), "angle={angle}, expected={expected:?}, block={block:?}");
+    assert!((block.rotation.to_radians().sin() - angle.to_radians().sin()).abs() < 0.001);
+    assert!((block.rotation.to_radians().cos() - angle.to_radians().cos()).abs() < 0.001);
+}
+
+/// Start on the outer half of an oriented edge; the motion can also include a tangent component.
+fn drag_rotated_edge(h: &mut Harness<'static, PdfCraftApp>, angle: f64, at: [f64; 2], normal: [f64; 2], delta: [f64; 2]) {
+    let middle = rotated_frame_screen(h, angle, at);
+    let outward = rotated_frame_screen(h, angle, [at[0] + normal[0], at[1] + normal[1]]) - middle;
+    let start = middle + outward.normalized() * 5.0;
+    let movement = rotated_frame_screen(h, angle, [at[0] + delta[0], at[1] + delta[1]]) - middle;
+    flick(h, start, start + movement);
+    assert!(h.state().views[0].line_editor.is_none(), "resizing does not open the typing editor");
+}
+
+#[test]
+fn rotated_text_width_handles_follow_local_axes_on_every_page_rotation() {
+    let _gpu = std::env::var_os("PDFCRAFT_ROTATED_SNAPSHOT").is_some().then(super::gpu);
+    for angle in [30.0, 90.0, 180.0, 270.0] {
+        for page_rotation in [0, 90, 180, 270] {
+            let (mut h, mut frame) = rotated_paragraph_harness(angle, page_rotation, 90);
+            let before = dragged_paragraphs(&h).remove(0);
+            // Tangential motion must not change the baseline or the frame's other axis.
+            drag_rotated_edge(&mut h, angle, [frame[2], (frame[1] + frame[3]) / 2.0], [1.0, 0.0], [40.0, 11.0]);
+            frame[2] += 40.0;
+            let right = dragged_paragraphs(&h).remove(0);
+            assert_rotated_frame(&right, angle, frame);
+            assert_eq!(right.text, before.text);
+            assert!(right.rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 0.6), "right edge keeps the glyph origin");
+            drag_rotated_edge(&mut h, angle, [frame[0], (frame[1] + frame[3]) / 2.0], [-1.0, 0.0], [-20.0, -9.0]);
+            frame[0] -= 20.0;
+            let left = dragged_paragraphs(&h).remove(0);
+            assert_rotated_frame(&left, angle, frame);
+            let offset = rotated_frame_world(angle, [-20.0, 0.0]);
+            assert!(
+                left.rect.iter().zip(before.rect).enumerate().all(|(i, (a, b))| (a - b - offset[i % 2]).abs() < 0.6),
+                "left edge moves along the baseline only"
+            );
+            let id = h.state().views[0].id;
+            let saved = h.state_mut().session.save_bytes(id).unwrap();
+            let mut reopened = pdfcraft_engine::Session::new();
+            let id = reopened.open("turned-width.pdf", None, saved, None).unwrap();
+            assert_rotated_frame(&reopened.get(id).unwrap().text_blocks(0)[0], angle, frame);
+        }
+    }
+}
+
+#[test]
+fn rotated_text_height_handles_preserve_ink_on_every_page_rotation() {
+    let _gpu = std::env::var_os("PDFCRAFT_ROTATED_SNAPSHOT").is_some().then(super::gpu);
+    for angle in [30.0, 90.0, 180.0, 270.0] {
+        for page_rotation in [0, 90, 180, 270] {
+            let (mut h, mut frame) = rotated_paragraph_harness(angle, page_rotation, 270);
+            let before = dragged_paragraphs(&h).remove(0);
+            drag_rotated_edge(&mut h, angle, [(frame[0] + frame[2]) / 2.0, frame[3]], [0.0, 1.0], [13.0, 30.0]);
+            frame[3] += 30.0;
+            assert_rotated_frame(&dragged_paragraphs(&h)[0], angle, frame);
+            drag_rotated_edge(&mut h, angle, [(frame[0] + frame[2]) / 2.0, frame[1]], [0.0, -1.0], [-8.0, -25.0]);
+            frame[1] -= 25.0;
+            let after = dragged_paragraphs(&h).remove(0);
+            assert_rotated_frame(&after, angle, frame);
+            assert_eq!(after.rect, before.rect, "height keeps glyph positions at angle={angle}, page={page_rotation}");
+            assert_eq!(after.editor_text, before.editor_text);
+            h.state_mut().undo();
+            h.run_steps(3);
+            let mut top_only = frame;
+            top_only[1] += 25.0;
+            assert_rotated_frame(&dragged_paragraphs(&h)[0], angle, top_only);
+            h.state_mut().redo();
+            h.run_steps(3);
+            assert_rotated_frame(&dragged_paragraphs(&h)[0], angle, frame);
+        }
+    }
+}
+
+#[test]
+fn rotated_text_empty_frame_moves_and_minimum_height_keeps_visible_overflow() {
+    let _gpu = std::env::var_os("PDFCRAFT_ROTATED_SNAPSHOT").is_some().then(super::gpu);
+    for angle in [30.0, 90.0] {
+        let (mut h, mut frame) = rotated_paragraph_harness(angle, 90, 90);
+        let original = dragged_paragraphs(&h).remove(0);
+        drag_rotated_edge(&mut h, angle, [(frame[0] + frame[2]) / 2.0, frame[3]], [0.0, 1.0], [0.0, 40.0]);
+        frame[3] += 40.0;
+        assert_rotated_frame(&dragged_paragraphs(&h)[0], angle, frame);
+        let empty = [(frame[0] + frame[2]) / 2.0, frame[3] - 15.0];
+        let at = rotated_frame_screen(&h, angle, empty);
+        click_at(&mut h, at);
+        assert!(h.state().views[0].line_editor.is_some(), "the oriented frame's blank area opens its paragraph");
+        let shown_width = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == original.editor_text => Some(text.galley.rect.width()),
+                _ => None,
+            })
+            .expect("rotated text has a visible horizontal typing surface");
+        let along_width = (rotated_frame_screen(&h, angle, [frame[2], frame[1]]) - rotated_frame_screen(&h, angle, [frame[0], frame[1]])).length();
+        assert!(shown_width > along_width * 0.7, "the horizontal editor does not squeeze letters into the page-axis ink width");
+        if angle == 90.0
+            && let Some(path) = std::env::var_os("PDFCRAFT_ROTATED_SNAPSHOT")
+        {
+            for _ in 0..60 {
+                h.run_steps(2);
+                if !h.state().render_pending() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            h.render().unwrap().save(std::path::PathBuf::from(path)).unwrap();
+        }
+        let top = [(frame[0] + frame[2]) / 2.0, frame[3]];
+        let edge = rotated_frame_screen(&h, angle, top);
+        let outward = rotated_frame_screen(&h, angle, [top[0], top[1] + 1.0]) - edge;
+        click_at(&mut h, edge + outward.normalized() * 4.0);
+        assert!(h.state().views[0].line_editor.is_none(), "the oriented open frame becomes a movable selection");
+        let to = rotated_frame_screen(&h, angle, [empty[0] + 12.0, empty[1] - 15.0]);
+        drag(&mut h, at, to);
+        for i in 0..4 {
+            frame[i] += [12.0, -15.0][i % 2];
+        }
+        let moved = dragged_paragraphs(&h).remove(0);
+        assert_rotated_frame(&moved, angle, frame);
+        let offset = rotated_frame_world(angle, [12.0, -15.0]);
+        assert!(moved.rect.iter().zip(original.rect).enumerate().all(|(i, (a, b))| (a - b - offset[i % 2]).abs() < 0.6));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        // Drag past the opposite edge. The minimum keeps the frame valid and the top anchored.
+        drag_rotated_edge(&mut h, angle, [(frame[0] + frame[2]) / 2.0, frame[1]], [0.0, -1.0], [0.0, frame[3] - frame[1] + 30.0]);
+        let shrunk = dragged_paragraphs(&h).remove(0);
+        assert_eq!(shrunk.rect, moved.rect, "shrinking never clips or moves the ink");
+        let bounds = shrunk.vertical_frame.expect("the changed height persists");
+        assert!(bounds[0] < bounds[1] && bounds[1] - bounds[0] < 20.0, "finite minimum height: {bounds:?}");
+        assert!((bounds[1] - frame[3]).abs() < 0.6, "opposite top edge remains anchored");
+        // The source ink is now outside the small frame near its extended top edge.
+        let ink_point = [(frame[0] + frame[2]) / 2.0, frame[3] - 40.0 - 5.0];
+        let at = rotated_frame_screen(&h, angle, ink_point);
+        click_at(&mut h, at);
+        assert!(h.state().views[0].line_editor.is_some(), "overflow ink remains editable");
+        assert!(h.state().views[0].line_editor.as_ref().unwrap().overflow, "overflow follows the rotated frame's own axes");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("Changed text".into()));
+        h.run_steps(3);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        h.run_steps(4);
+        let edited = dragged_paragraphs(&h).remove(0);
+        frame[1] = bounds[0];
+        frame[3] = bounds[1];
+        assert_rotated_frame(&edited, angle, frame);
+        assert_eq!(edited.text, "Changed text");
+    }
+}
+
+#[test]
+fn vertical_frame_handles_respect_an_upside_down_page() {
+    check_vertical_frame_drag(180);
+}
+
+#[test]
+fn vertical_frame_can_shrink_below_ink_without_hiding_or_losing_text() {
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture("BT /F1 36 Tf 80 240 Td (Still visible) Tj ET", 0, 1), 0);
+    let before = dragged_paragraphs(&h).remove(0);
+    let screen = paragraph_frame_screen(&h, before.editing_rect());
+    let k = h.state().views[0].page_screen_rect(0).unwrap().width() / 360.0;
+    let bottom = screen.center_bottom() + egui::vec2(0.0, 5.0);
+    drag(&mut h, bottom, bottom - egui::vec2(0.0, 16.0 * k));
+    let shrunk = dragged_paragraphs(&h).remove(0);
+    assert!((shrunk.editing_rect()[1] - before.editing_rect()[1] - 16.0).abs() < 0.5, "the lower edge follows the pointer: {shrunk:?}");
+    assert_eq!(shrunk.rect, before.rect, "overflow keeps the original glyph geometry");
+    assert_eq!(shrunk.text, before.text);
+    let ink = paragraph_frame_screen(&h, shrunk.rect);
+    click_at(&mut h, egui::pos2(ink.center().x, ink.bottom() - 1.0));
+    assert!(h.state().views[0].line_editor.is_some(), "overflow below the frame remains editable");
+    assert!(h.state().views[0].line_editor.as_ref().unwrap().overflow, "a frame smaller than its ink reports overflow");
+    if let Some(path) = std::env::var_os("PDFCRAFT_VERTICAL_SNAPSHOT") {
+        for _ in 0..60 {
+            h.run_steps(2);
+            if !h.state().render_pending() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().render_pending(), "the snapshot shows the resized paragraph");
+        h.render().unwrap().save(path).unwrap();
+    }
+}
+
+/// #3474: widening must retain the container even when the glyphs do not move.
+#[test]
+fn widening_a_paragraph_keeps_both_handles_at_the_chosen_edges() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let original = block(&h);
+    let frame = original.editing_rect();
+    let grip = screen(frame[2], frame[3] - 6.0) + egui::vec2(5.0, 0.0);
+    drag(&mut h, grip, grip + egui::vec2(40.0 * k, 0.0));
+    let widened = block(&h);
+    assert_eq!(widened.editor_text, original.editor_text);
+    assert!(widened.rect.iter().zip(original.rect).all(|(a, b)| (a - b).abs() < 0.5), "glyphs stay in place");
+    assert!((widened.editing_rect()[2] - frame[2] - 40.0).abs() < 1.5, "{widened:?}");
+    // Grab the new right edge, well outside the original ink. It must remain a resize handle.
+    let new_frame = widened.editing_rect();
+    let grip = screen(new_frame[2], new_frame[3] - 6.0) + egui::vec2(5.0, 0.0);
+    drag(&mut h, grip, grip + egui::vec2(15.0 * k, 0.0));
+    assert!((block(&h).editing_rect()[2] - new_frame[2] - 15.0).abs() < 1.5);
+    // Widen from the left while preserving the right edge and the font size.
+    let before_left = block(&h);
+    let b = before_left.editing_rect();
+    let grip = screen(b[0], b[3] - 6.0) - egui::vec2(5.0, 0.0);
+    drag(&mut h, grip, grip - egui::vec2(10.0 * k, 0.0));
+    let after = block(&h);
+    assert!((after.editing_rect()[0] - b[0] + 10.0).abs() < 1.5);
+    assert!((after.editing_rect()[2] - b[2]).abs() < 1.5);
+    assert_eq!(after.size, original.size);
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(block(&h).editing_rect(), before_left.editing_rect());
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(block(&h).editing_rect(), after.editing_rect());
+    let id = h.state().views[0].id;
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let rid = reopened.open("resized.pdf", None, saved, None).unwrap();
+    assert_eq!(reopened.get(rid).unwrap().text_blocks(0)[0].editing_rect(), after.editing_rect());
+    // Empty space added to the box belongs to the editor too, rather than starting a marquee.
+    let empty = screen((after.rect[2] + after.editing_rect()[2]) / 2.0, after.rect[3] - 6.0);
+    h.event(egui::Event::PointerMoved(empty));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the widened box opens from its empty interior");
+    if let Some(path) = std::env::var_os("PDFCRAFT_RESIZE_SNAPSHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    // Selecting the open frame must keep its added area as part of the movable selection.
+    let border = screen((after.rect[2] + after.editing_rect()[2]) / 2.0, after.rect[3]) - egui::vec2(0.0, 4.0);
+    click_at(&mut h, border);
+    assert!(h.state().views[0].line_editor.is_none());
+    drag(&mut h, empty, empty + egui::vec2(10.0 * k, -15.0 * k));
+    let moved = block(&h);
+    assert!((moved.editing_rect()[0] - after.editing_rect()[0] - 10.0).abs() < 1.5);
+    assert!((moved.rect[1] - after.rect[1] - 15.0).abs() < 1.5);
+    press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert!((block(&h).editing_rect()[0] - moved.editing_rect()[0] - 1.0).abs() < 0.1, "the moved frame stays selected");
+}
+
+#[test]
+fn a_word_overflowing_a_narrow_frame_still_opens_for_typing() {
+    let mut h = harness(1, |app| {
+        let id = app.views[0].id;
+        app.session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::EditTextBlock {
+                    page: 0,
+                    block: 0,
+                    text: "Unbreakable".into(),
+                    style: pdfcraft_engine::BlockStyle { width: Some(24.0), ..Default::default() },
+                },
+            )
+            .unwrap();
+    });
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    assert!(block.rect[2] > block.editing_rect()[2] + 15.0);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = r.width() / 200.0;
+    let x = (block.rect[2] + block.editing_rect()[2]) / 2.0;
+    let y = (block.rect[1] + block.rect[3]) / 2.0;
+    click_at(&mut h, egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k));
+    assert!(h.state().views[0].line_editor.is_some(), "visible overflow remains editable");
 }
 
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.

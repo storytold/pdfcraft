@@ -69,7 +69,7 @@ impl ObjectSelection {
             self.gesture = None;
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, expected)| {
-                let inventory = doc.editable_objects(page).ok()?;
+                let inventory = selection_inventory(doc, page).ok()?;
                 let mut out = Vec::new();
                 for old in expected {
                     let mut matches = inventory.iter().filter(|o| {
@@ -115,8 +115,27 @@ impl ObjectSelection {
         if self.cache.len() >= 8 && !self.cache.contains_key(&page) {
             self.cache.clear();
         }
-        self.cache.entry(page).or_insert_with(|| doc.editable_objects(page)).clone()
+        self.cache.entry(page).or_insert_with(|| selection_inventory(doc, page)).clone()
     }
+}
+
+/// Selection includes both the chosen frame and any indivisible word that overflows it.
+/// The engine's object inventory keeps ink bounds; only UI selection needs this extra area.
+fn selection_inventory(doc: &Document, page: usize) -> Result<Vec<EditableObject>, String> {
+    let mut objects = doc.editable_objects(page)?;
+    let blocks = doc.text_blocks(page);
+    for object in &mut objects {
+        if object.target.kind == ObjectKind::Text
+            && let Some(block) = blocks.get(object.target.index)
+        {
+            let frame = block.editing_rect();
+            object.rect[0] = object.rect[0].min(frame[0]);
+            object.rect[1] = object.rect[1].min(frame[1]);
+            object.rect[2] = object.rect[2].max(frame[2]);
+            object.rect[3] = object.rect[3].max(frame[3]);
+        }
+    }
+    Ok(objects)
 }
 
 fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) -> Rect {
@@ -298,9 +317,15 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
     }
     // The frame of the paragraph open for typing takes hold of the box, as in Acrobat: a click
     // selects it (for the arrow keys), a drag moves it. Its text keeps the caret.
+    let text_blocks = doc.text_blocks(page);
     if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
         && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-        && on_frame(screen(xf, info, page, object), p)
+        && text_blocks.get(block).is_some_and(|b| {
+            crate::edit_text_ui::paragraph_on_frame(xf, info, page, b, p)
+                || (b.rotation.abs() < 0.001
+                    && info.pages.get(page).is_some_and(|p| (p.rotation + xf.rot).is_multiple_of(360))
+                    && on_frame(screen(xf, info, page, object), p))
+        })
     {
         s.clear();
         s.page = Some(page);
@@ -311,11 +336,13 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
         return true;
     }
     s.clear();
-    // A closed paragraph's width handle reaches past its box, and a press there rewraps the
-    // paragraph (as in `edit_text_ui`) instead of starting an area selection (#2276).
-    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page)
-        && crate::edit_text_ui::grabs_edge(xf, info, page, objects.iter().filter(|o| o.target.kind == ObjectKind::Text).map(|o| o.rect), p);
-    if hit.is_some() || on_edge {
+    // A closed paragraph's edge handle reaches past its box; leave those presses to the
+    // paragraph resize controls instead of starting an area selection (#2276).
+    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page) && crate::edit_text_ui::grabs_edge(xf, info, page, text_blocks.iter(), p);
+    let in_text_frame = text_blocks
+        .iter()
+        .any(|b| (b.horizontal_frame.is_some() || b.vertical_frame.is_some()) && crate::edit_text_ui::paragraph_contains(xf, info, page, b, p));
+    if hit.is_some() || on_edge || in_text_frame {
         return false;
     }
     leave_single(view);

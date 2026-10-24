@@ -24,8 +24,11 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
+#[path = "text_frame.rs"]
+mod text_frame;
 use regions::{group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
+use text_frame::HorizontalFrame;
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +68,7 @@ pub struct TextLine {
     origin: Origin,
     /// Explicit marked-content scope (when present); distinct scopes must not be guessed into one paragraph.
     scope: Option<usize>,
+    horizontal_frame: Option<HorizontalFrame>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
     /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi
@@ -181,8 +185,24 @@ fn layout_draft(
     text: &str,
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
+    let source_rect = source.editing_rect();
+    let dir = source.direction();
+    let mut target_rect = source.editing_frame();
+    if let Some(width) = style.width {
+        target_rect[2] = target_rect[0] + width;
+    }
+    if let Some([bottom, top]) = style.vertical_frame {
+        target_rect[1] = bottom;
+        target_rect[3] = top;
+    }
+    if let Some([dx, dy]) = style.offset {
+        let (dx, dy) = to_frame(dir, (dx, dy));
+        target_rect = [target_rect[0] + dx, target_rect[1] + dy, target_rect[2] + dx, target_rect[3] + dy];
+    }
+    let outside =
+        |r: [f64; 4]| r[0] < target_rect[0] - 0.5 || r[1] < target_rect[1] - 0.5 || r[2] > target_rect[2] + 0.5 || r[3] > target_rect[3] + 0.5;
     if text == source.editor_text && *style == BlockStyle::default() {
-        return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
+        return Ok(TextEditLayout { source_rect, draft_rect: Some(source.rect), overflow: outside(source.ink_frame) });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
@@ -197,6 +217,7 @@ fn layout_draft(
     let mut draft = doc.clone();
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
+    let mut frame: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
         if let Some(count) = untouched.get_mut(&key(&line))
             && *count > 0
@@ -205,10 +226,16 @@ fn layout_draft(
             continue;
         }
         rect = Some(rect.map_or(line.rect, |r| [r[0].min(line.rect[0]), r[1].min(line.rect[1]), r[2].max(line.rect[2]), r[3].max(line.rect[3])]));
+        // Project the line's oriented corners, never its world-axis bounding box: rotating
+        // that already enlarged box would report overflow for text that fits its frame.
+        let local = frame_corners(line.frame_rect())
+            .map(|p| to_frame(dir, from_frame(line.direction(), p)))
+            .into_iter()
+            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)]);
+        frame = Some(frame.map_or(local, |r| union(r, local)));
     }
-    let overflow = rect
-        .is_some_and(|r| r[0] < source.rect[0] - 0.5 || r[1] < source.rect[1] - 0.5 || r[2] > source.rect[2] + 0.5 || r[3] > source.rect[3] + 0.5);
-    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow })
+    let overflow = frame.is_some_and(outside);
+    Ok(TextEditLayout { source_rect, draft_rect: rect, overflow })
 }
 
 /// Text and graphics state captured for rewriting.
@@ -339,6 +366,14 @@ pub struct TextBlock {
     /// The lines' text joined with spaces (lines that ended in a hyphen are joined directly).
     pub text: String,
     pub rect: [f64; 4],
+    /// Ink bounds along and normal to the baseline, in page-user-space points.
+    pub ink_frame: [f64; 4],
+    /// Explicit left/right edges along the baseline, when resized. `rect` remains world-axis ink.
+    pub horizontal_frame: Option<[f64; 2]>,
+    /// Explicit bottom/top edges normal to the baseline. Text outside stays visible.
+    pub vertical_frame: Option<[f64; 2]>,
+    /// Alignment within an explicit horizontal frame; absent for inferred source regions.
+    pub horizontal_alignment: Option<crate::added::Align>,
     pub base_font: String,
     pub size: f64,
     pub bold: bool,
@@ -362,6 +397,36 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
+    /// The editing bounds in baseline coordinates: upright text uses ordinary page coordinates.
+    pub fn editing_frame(&self) -> [f64; 4] {
+        let [left, right] = self.horizontal_frame.unwrap_or([self.ink_frame[0], self.ink_frame[2]]);
+        let [bottom, top] = self.vertical_frame.unwrap_or([self.ink_frame[1], self.ink_frame[3]]);
+        [left, bottom, right, top]
+    }
+
+    /// The editing frame's page-space corners, ordered bottom-left, bottom-right, top-right, top-left.
+    pub fn editing_quad(&self) -> [[f64; 2]; 4] {
+        frame_corners(self.editing_frame()).map(|p| {
+            let (x, y) = from_frame(self.direction(), p);
+            [x, y]
+        })
+    }
+
+    /// World-axis bounds of the editing frame, for inventories and rectangular selection.
+    pub fn editing_rect(&self) -> [f64; 4] {
+        if self.horizontal_frame.is_none() && self.vertical_frame.is_none() {
+            return self.rect;
+        }
+        self.editing_quad()
+            .into_iter()
+            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])])
+    }
+
+    fn direction(&self) -> (f64, f64) {
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        (cos, sin)
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -540,13 +605,13 @@ impl TextLine {
     }
 
     fn rotation(&self) -> f64 {
-        let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
-        m[1].atan2(m[0]).to_degrees()
+        let (x, y) = self.direction();
+        y.atan2(x).to_degrees()
     }
 
     /// The unit direction its baseline runs in, in user space.
     fn direction(&self) -> (f64, f64) {
-        direction(&Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)))
+        self.horizontal_frame.map_or_else(|| direction(&Matrix(self.origin.tm).then(&Matrix(self.origin.ctm))), |f| f.direction)
     }
 
     /// Whether it reads left to right along the page's x axis (most text; a page drawn
@@ -579,6 +644,14 @@ fn direction(m: &Matrix) -> (f64, f64) {
 /// same way (#1443).
 fn to_frame(dir: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     (p.0 * dir.0 + p.1 * dir.1, p.1 * dir.0 - p.0 * dir.1)
+}
+
+fn from_frame(dir: (f64, f64), p: (f64, f64)) -> (f64, f64) {
+    (p.0 * dir.0 - p.1 * dir.1, p.0 * dir.1 + p.1 * dir.0)
+}
+
+fn frame_corners([left, bottom, right, top]: [f64; 4]) -> [(f64, f64); 4] {
+    [(left, bottom), (right, bottom), (right, top), (left, top)]
 }
 
 /// The box covering both `[x0, y0, x1, y1]` boxes.
@@ -772,6 +845,7 @@ struct Shown {
     visual_order: bool,
     decodable: bool,
     scope: Option<usize>,
+    horizontal_frame: Option<HorizontalFrame>,
     paint: Paint,
     logical_order: bool,
     actual_text: bool,
@@ -901,6 +975,8 @@ struct Carry {
     ts: Ts,
     stack: Vec<Ts>,
     marked: Vec<Option<usize>>,
+    /// Only actual private frames need storage; ordinary nested marked spans inherit the last.
+    frames: Vec<(usize, HorizontalFrame)>,
     /// For each open marked-content sequence, its optional content group when it is `/OC`.
     layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
@@ -930,7 +1006,7 @@ impl Carry {
             vertical: None,
             unreadable: None,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), frames: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
     }
 }
 
@@ -960,6 +1036,8 @@ fn interpret(
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
     let mut marked = std::mem::take(&mut carry.marked);
+    let mut frames = std::mem::take(&mut carry.frames);
+    let closed_frames = HorizontalFrame::closed(ops);
     let mut layers = std::mem::take(&mut carry.layers);
     let mut actual: Vec<Option<(usize, usize, String)>> = Vec::new();
     for (i, op) in ops.iter().enumerate() {
@@ -970,7 +1048,11 @@ fn interpret(
                 // Marked text paragraphs/headings are authoritative boundaries. Ignore
                 // artifacts and inner spans, which inherit their enclosing region.
                 let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
-                marked.push(if region { Some(i) } else { marked.last().copied().flatten() });
+                let frame = closed_frames.contains(&i).then(|| HorizontalFrame::read(op, i, ts.ctm)).flatten();
+                marked.push(if region || frame.is_some() { Some(i) } else { marked.last().copied().flatten() });
+                if let Some(frame) = frame {
+                    frames.push((marked.len(), frame));
+                }
                 // A layer named in the resources is told apart by its name, an inline one by where it opens.
                 let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
                 layers.push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{i}").into_bytes(), <[u8]>::to_vec)));
@@ -987,6 +1069,9 @@ fn interpret(
             }
             b"EMC" => {
                 marked.pop();
+                if frames.last().is_some_and(|(depth, _)| *depth > marked.len()) {
+                    frames.pop();
+                }
                 layers.pop();
                 if let Some(Some((start, open, logical))) = actual.pop() {
                     let tail = out.split_off(start.min(out.len()));
@@ -1231,7 +1316,14 @@ fn interpret(
                     .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
                 // The same corners along and across the baseline: the run's own box, not its
                 // upright bounding box turned (which is wider by the box's height on a slant).
-                let dir = direction(&trm0);
+                let actual_dir = direction(&trm0);
+                // Metadata cannot assign baseline coordinates from another orientation to
+                // these glyphs. Ignore a mismatched marker, keeping the source ink editable.
+                let horizontal_frame = frames
+                    .last()
+                    .map(|(_, f)| *f)
+                    .filter(|f| (f.direction.0 - actual_dir.0).abs() < 1e-3 && (f.direction.1 - actual_dir.1).abs() < 1e-3);
+                let dir = horizontal_frame.map_or(actual_dir, |f| f.direction);
                 let frame = corners
                     .iter()
                     .map(|&p| to_frame(dir, p))
@@ -1288,6 +1380,7 @@ fn interpret(
                     visual_order: m.visual_order,
                     decodable,
                     scope: marked.last().copied().flatten(),
+                    horizontal_frame,
                     paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
                     logical_order: false,
                     actual_text: false,
@@ -1299,6 +1392,7 @@ fn interpret(
     carry.ts = ts;
     carry.stack = stack;
     carry.marked = marked;
+    carry.frames = frames;
     carry.layers = layers;
     positioned_tracking(&mut out);
     Ok(out)
@@ -1394,6 +1488,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 face: s.face.clone(),
                 stream: si,
                 scope: s.scope,
+                horizontal_frame: s.horizontal_frame,
                 paint: s.paint.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
@@ -1496,6 +1591,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             face: s.face.clone(),
             stream,
             scope: s.scope,
+            horizontal_frame: s.horizontal_frame,
             paint: s.paint.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
@@ -1651,7 +1747,14 @@ fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), E
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
+        let mut carry = Carry {
+            ts: Ts { ctm: form.ctm, ..ts },
+            stack: Vec::new(),
+            marked: Vec::new(),
+            frames: Vec::new(),
+            layers: Vec::new(),
+            text_left: *text_left,
+        };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
@@ -2625,8 +2728,13 @@ pub struct BlockStyle {
     pub scale: Option<f64>,
     /// Move the paragraph by `[dx, dy]` in user space (dragging its box).
     pub offset: Option<[f64; 2]>,
-    /// Rewrap to this width in user space (dragging the box's edge).
+    /// Rewrap to this width in user space (dragging the box's edge). Paragraphs retain
+    /// the explicit frame across subsequent edits and saves, independently of glyph bounds.
     pub width: Option<f64>,
+    /// Set bottom/top frame edges normal to the baseline, in page-user-space points,
+    /// without moving, scaling or clipping text. Upright text uses ordinary page y coordinates.
+    /// Each edge must be finite and the height must be positive and at most 14,400 points.
+    pub vertical_frame: Option<[f64; 2]>,
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
@@ -2675,6 +2783,23 @@ fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    let vertical_only = style.vertical_frame.is_some()
+        && text.is_none_or(|text| text == b.editor_text)
+        && BlockStyle { vertical_frame: None, ..style.clone() } == BlockStyle::default();
+    let mut style = style.clone();
+    if let Some([left, right]) = b.horizontal_frame {
+        style.width.get_or_insert(right - left);
+        style.align = style.align.or(b.horizontal_alignment);
+    }
+    style.vertical_frame = style.vertical_frame.or(b.vertical_frame);
+    if let Some([bottom, top]) = style.vertical_frame {
+        if ![bottom, top].iter().all(|v| v.is_finite() && v.abs() <= 1e9) || top <= bottom || top - bottom > 14_400.0 + 1e-6 {
+            return Err(EditError::Invalid("the paragraph's height must be positive and at most 14400 points".into()));
+        }
+        style.vertical_frame = Some([bottom, top.min(bottom + 14_400.0)]);
+        style.width.get_or_insert(b.editing_frame()[2] - b.editing_frame()[0]);
+    }
+    let style = &style;
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
     let mut dropped = coincident_ops(&lines, &members);
@@ -2697,6 +2822,14 @@ fn rewrite_block_from(
     // Text turned on the page (a landscape page drawn a quarter turn round) is rewritten in its
     // own text space below; the styled region path lays rows out along the page's x axis.
     let upright = members.iter().all(|line| line.upright());
+    if vertical_only && let Some(bounds) = style.vertical_frame {
+        return text_frame::resize_vertical(doc, page, &b, &lines, bounds);
+    }
+    if !upright && members.iter().any(|line| line.font != first.font || line.size != first.size || line.color != first.color) {
+        return Err(EditError::Invalid(
+            "rewrapping mixed-style turned text isn't supported yet; its height can be changed without rewriting it".into(),
+        ));
+    }
     if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
@@ -2722,6 +2855,18 @@ fn rewrite_block_from(
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
+    if !upright {
+        // One extracted line can contain several showing operators with different tracking,
+        // rise or rendering modes. The uniform turned-text writer cannot preserve those
+        // differences; refuse before embedding fonts instead of flattening the source style.
+        let selected: std::collections::HashSet<_> = members.iter().flat_map(|line| line.ops.iter().copied()).collect();
+        let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+        if shown.iter().filter(|s| selected.contains(&s.op)).any(|s| TextState::of(&s.state) != first.origin.state) {
+            return Err(EditError::Invalid(
+                "rewrapping turned text with mixed text states isn't supported yet; its height can be changed without rewriting it".into(),
+            ));
+        }
+    }
     // Explicit line breaks stay (#1443); within a line, runs of white space become one space.
     let text = text
         .unwrap_or(&b.text)
@@ -2767,11 +2912,9 @@ fn rewrite_block_from(
     let rtl = crate::bidi::rtl_base(&flat);
     let anchored_right = rtl && upright && style.width.is_none() && members.len() == 1;
     // The paragraph's width along its lines: in user space unless it is turned.
-    let frame = if upright {
-        b.rect
-    } else {
-        members.iter().map(|l| l.frame_rect()).reduce(|a, f| [a[0].min(f[0]), a[1].min(f[1]), a[2].max(f[2]), a[3].max(f[3])]).unwrap_or(b.rect)
-    };
+    let frame = b.editing_frame();
+    let dir = first.direction();
+    let (along_move, across_move) = to_frame(dir, (dx, dy));
     // A centred title is laid out in the box it already sits in, so it keeps its centre as it
     // grows or wraps, rather than being grown to the right up to the page's margin (#2581).
     // Turned text is left alone: its centre lives along its own baseline, not in page space.
@@ -2809,11 +2952,33 @@ fn rewrite_block_from(
     } else {
         None
     };
-    let tm = if o.ctm == emit.ctm {
+    let mut tm = if o.ctm == emit.ctm {
         o.tm
     } else {
         let emit_inv = Matrix(emit.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
         Matrix(o.tm).then(&Matrix(o.ctm)).then(&emit_inv).0
+    };
+    if b.horizontal_frame.is_some() {
+        let back = Matrix([emit.ctm[0], emit.ctm[1], emit.ctm[2], emit.ctm[3], 0.0, 0.0])
+            .invert()
+            .ok_or_else(|| EditError::Invalid("the paragraph's frame has no area".into()))?;
+        let correction = from_frame(dir, (frame[0] - first.frame_origin().0, 0.0));
+        let (x, y) = back.apply(correction.0, correction.1);
+        tm[4] += x;
+        tm[5] += y;
+    }
+    let saved_frame = if style.width.is_some() {
+        Some(HorizontalFrame::start(
+            frame[0] + along_move,
+            first.frame_origin().1 + across_move,
+            width,
+            style.vertical_frame.map(|[bottom, top]| [bottom + across_move, top + across_move]),
+            align.unwrap_or(crate::added::Align::Left),
+            Matrix(emit.ctm),
+            dir,
+        )?)
+    } else {
+        None
     };
     let type3 = if !reuse && needs_type3(&flat) { Some(type3_font(doc, &mut fonts_res, &flat, family, bold, max_glyphs)?) } else { None };
     let advance = |s: &str| -> f64 {
@@ -2910,6 +3075,7 @@ fn rewrite_block_from(
     let n = pdfcraft_content::num;
     // In its own graphics state, so a new colour (or anything else) stops at the paragraph.
     let mut block_ops = vec![Op::new("q", vec![])];
+    block_ops.extend(saved_frame.clone());
     block_ops.extend(reveal_ops(&b, &lines, style, emit.ctm)?);
     // Moved: a translation inside that state.
     if let Some((ax, ay)) = movement {
@@ -3018,11 +3184,17 @@ fn rewrite_block_from(
         block_ops.push(Op::new("S", vec![]));
         block_ops.push(Op::new("Q", vec![]));
     }
+    if saved_frame.is_some() {
+        block_ops.push(Op::new("EMC", vec![]));
+    }
     block_ops.push(Op::new("Q", vec![]));
     // The paragraph's operators go, and so does another drawing on the same baseline (a fake-bold
     // second copy, an invisible text layer): the new text is all that may show.
     let mut drop = coincident_ops(&lines, &members);
     drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
+    if let Some(frame) = first.horizontal_frame {
+        frame.remove(&ops, &mut drop);
+    }
     // Text shown earlier in the same text object stays first: the paragraph then goes where its
     // last row was, after any backgrounds between the rows, or between two halves of the text object.
     let start = last.ops.first().copied().unwrap_or(emit.bt_op);
@@ -3276,6 +3448,12 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     if patches.len() != selected.len() {
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
     }
+    for frame in lines.iter().filter(|l| l.ops.iter().any(|i| selected.contains(i))).filter_map(|l| l.horizontal_frame) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = patches.entry(frame.op) {
+            let original = ops.get(frame.op).ok_or_else(|| EditError::Invalid("the paragraph's frame is missing".into()))?;
+            entry.insert(vec![frame.moved(original, offset)?]);
+        }
+    }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
@@ -3290,6 +3468,10 @@ mod tests {
         TextBlock {
             text: text.into(),
             rect,
+            ink_frame: rect,
+            horizontal_frame: None,
+            vertical_frame: None,
+            horizontal_alignment: None,
             base_font: String::new(),
             size: 12.0,
             bold: false,

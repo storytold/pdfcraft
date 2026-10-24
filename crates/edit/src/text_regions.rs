@@ -6,6 +6,7 @@ fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
     a.scope == b.scope
+        && a.horizontal_frame == b.horizontal_frame
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
@@ -233,6 +234,12 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
         let (Some(rect), Some(frame)) = (row_rect(&row, lines), frame_row_rect(&row, lines)) else { continue };
         let joins = blocks.last().is_some_and(|block| {
+            if mixed
+                && first.horizontal_frame.is_some()
+                && block.lines.first().and_then(|i| lines.get(*i)).is_some_and(|prev| prev.horizontal_frame == first.horizontal_frame)
+            {
+                return true;
+            }
             // A bullet of its own opens a list item (#2564): such a row is a new paragraph, and
             // letting it join is what made an edit of the row above delete this item and the ones
             // after it.
@@ -272,6 +279,10 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 editor_text: String::new(),
                 spans: Vec::new(),
                 rect,
+                ink_frame: frame,
+                horizontal_frame: first.horizontal_frame.map(|f| f.bounds),
+                vertical_frame: first.horizontal_frame.and_then(|f| f.vertical),
+                horizontal_alignment: first.horizontal_frame.map(|f| f.align),
                 base_font: first.base_font.clone(),
                 size: first.size,
                 bold: first.bold,
@@ -315,6 +326,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         block.text.push_str(row_text.trim_matches(paragraph_separator));
         block.rect = union(block.rect, rect);
+        block.ink_frame = union(block.ink_frame, frame);
         block.rows.push(row);
     }
     blocks
@@ -539,6 +551,26 @@ pub(super) fn rewrite_styled_block(
         block.rect[2] - block.rect[0]
     };
     let width = style.width.unwrap_or(natural).clamp(1.0, 14_400.0);
+    let frame_left = block.editing_rect()[0];
+    let crop = p.crop(doc);
+    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
+    let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+    // A width change rewrites every row, so it emits at the last source run. Validate the
+    // frame before embedding any fallback fonts: a refused edit must leave no new objects.
+    let saved_frame = if style.width.is_some() {
+        let lead = block.lines.last().and_then(|i| lines.get(*i)).unwrap_or(first);
+        Some(HorizontalFrame::start(
+            frame_left + dx,
+            first.origin.baseline + dy,
+            width,
+            style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
+            align,
+            Matrix(lead.origin.ctm),
+            first.direction(),
+        )?)
+    } else {
+        None
+    };
     // Each tuple is a character, its source style and an encodable resource name.
     let mut chars = Vec::new();
     let mut substituted = None;
@@ -835,14 +867,13 @@ pub(super) fn rewrite_styled_block(
     }
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
+    block_ops.extend(saved_frame.clone());
     block_ops.extend(reveal_ops(block, lines, style, o.ctm)?);
     let back = Matrix([o.ctm[0], o.ctm[1], o.ctm[2], o.ctm[3], 0.0, 0.0])
         .invert()
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
     block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(tx), n(ty)]));
-    let crop = p.crop(doc);
-    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
@@ -869,9 +900,8 @@ pub(super) fn rewrite_styled_block(
             continue;
         }
         let w = measured.get(row_index).copied().unwrap_or(0.0);
-        let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
         let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && style.align.is_none() { original_rect[0] } else { block.rect[0] };
+        let left = if style.width.is_none() && style.align.is_none() { original_rect[0] } else { frame_left };
         let available = if style.width.is_none() && style.align.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left
             + match align {
@@ -1005,8 +1035,14 @@ pub(super) fn rewrite_styled_block(
             style.line_spacing.unwrap_or(1.5).clamp(0.5, 5.0) * style.size.unwrap_or(anchor.size)
         };
     }
+    if saved_frame.is_some() {
+        block_ops.push(Op::new("EMC", vec![]));
+    }
     block_ops.push(Op::new("Q", vec![]));
     let mut drop = coincident_ops(lines, &members);
+    if let Some(frame) = first.horizontal_frame {
+        frame.remove(&ops, &mut drop);
+    }
     drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
     let start = lead.ops.first().copied().unwrap_or(o.bt_op);
     let split = ops

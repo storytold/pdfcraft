@@ -6909,8 +6909,117 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     assert!(((rect[2] - rect[0]) - 20.0).abs() < 0.01 && ((rect[3] - rect[1]) - 30.0).abs() < 0.01, "{rect:?}");
 }
 
+/// #3474: an explicit frame survives every state transition without depending on glyph bounds.
+#[test]
+fn explicit_paragraph_width_survives_reopen_retyping_and_history() {
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).unwrap().text_blocks(0)[0].clone();
+    s.apply(
+        id,
+        Edit::EditTextBlock { page: 0, block: 0, text: "Hi".into(), style: pdfcraft_edit::BlockStyle { width: Some(90.0), ..Default::default() } },
+    )
+    .unwrap();
+    let check = |s: &Session, id| {
+        let b = s.get(id).unwrap().text_blocks(0).remove(0);
+        let r = b.editing_rect();
+        assert!((r[2] - r[0] - 90.0).abs() < 0.5, "{b:?}");
+        b
+    };
+    assert!(check(&s, id).rect[2] - check(&s, id).rect[0] < 90.0);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0], before);
+    s.redo(id).unwrap();
+    check(&s, id);
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("saved.pdf", None, saved, None).unwrap();
+    check(&reopened, rid);
+    reopened
+        .apply(rid, Edit::EditTextBlock { page: 0, block: 0, text: "One two three four five six seven eight nine".into(), style: Default::default() })
+        .unwrap();
+    let long = check(&reopened, rid);
+    assert!(long.rows.len() > 1, "{long:?}");
+    assert!(long.rect[2] <= long.editing_rect()[2] + 0.5);
+    reopened.undo(rid).unwrap();
+    assert_eq!(check(&reopened, rid).text, "Hi");
+    reopened.redo(rid).unwrap();
+    assert_eq!(check(&reopened, rid).text, long.text);
+}
+
 /// Opening a paragraph and applying its edit read the page's text blocks; after an edit they are
 /// still read once per document state, and undo and redo never get another state's blocks.
+#[test]
+fn vertical_paragraph_frames_follow_scaled_moves_and_history() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    let contents = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"q 0.5 0 0 0.5 0 0 cm BT /F1 24 Tf 40 300 Td (Hi) Tj ET Q",
+    )));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(contents))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("scaled-frame.pdf", None, bytes, None).unwrap();
+    let ink = s.get(id).unwrap().text_blocks(0)[0].rect;
+    s.apply(
+        id,
+        Edit::EditTextBlock {
+            page: 0,
+            block: 0,
+            text: "Hi".into(),
+            style: pdfcraft_edit::BlockStyle { width: Some(90.0), vertical_frame: Some([ink[3] - 40.0, ink[3]]), ..Default::default() },
+        },
+    )
+    .unwrap();
+    let before = s.get(id).unwrap().text_blocks(0)[0].clone();
+    assert!(before.rect.iter().zip(ink).all(|(a, b)| (a - b).abs() < 0.1));
+    s.apply(id, Edit::MoveObjects { page: 0, objects: vec![ObjectTarget { kind: ObjectKind::Text, index: 0 }], offset: [15.0, -20.0] }).unwrap();
+    let moved = s.get(id).unwrap().text_blocks(0)[0].clone();
+    let expected = before.editing_rect().iter().zip([15.0, -20.0, 15.0, -20.0]).map(|(v, delta)| v + delta).collect::<Vec<_>>();
+    assert!(moved.editing_rect().iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.1), "{moved:?}");
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0], before);
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0], moved);
+    let saved = s.save_bytes(id).unwrap();
+    let mut re = Session::new();
+    let rid = re.open("moved-frame.pdf", None, saved, None).unwrap();
+    assert_eq!(re.get(rid).unwrap().text_blocks(0)[0], moved);
+}
+
+#[test]
+fn height_only_keeps_ocr_text_invisible_but_retyping_still_reveals_it() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    let contents = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"0.8 0.9 1 rg 0 0 200 300 re f BT /F1 24 Tf 3 Tr 20 150 Td (Hidden OCR) Tj ET",
+    )));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(contents))).unwrap();
+    let mut s = Session::new();
+    let id = s.open("invisible-ocr.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+    let source = s.get(id).unwrap().text_blocks(0)[0].clone();
+    assert!(source.invisible);
+    let before = render_page(&s, id).rgba;
+    s.apply(
+        id,
+        Edit::EditTextBlock {
+            page: 0,
+            block: 0,
+            text: source.editor_text.clone(),
+            style: pdfcraft_edit::BlockStyle { vertical_frame: Some([source.rect[3] - 10.0, source.rect[3]]), ..Default::default() },
+        },
+    )
+    .unwrap();
+    let after = s.get(id).unwrap().text_blocks(0)[0].clone();
+    assert!(after.invisible, "changing only height must not reveal the OCR layer: {after:?}");
+    assert_eq!(after.rect, source.rect);
+    assert_eq!(render_page(&s, id).rgba, before, "height alone does not cover or paint scan content");
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "Replacement".into(), style: Default::default() }).unwrap();
+    assert!(!s.get(id).unwrap().text_blocks(0)[0].invisible, "real retyping still draws the replacement visibly");
+    assert_ne!(render_page(&s, id).rgba, before);
+}
+
 #[test]
 fn text_blocks_stay_cached_after_an_edit_and_follow_undo_and_redo() {
     let (mut session, id) = session_with(1);
