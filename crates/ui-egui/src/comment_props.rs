@@ -28,8 +28,7 @@ pub struct PropsDraft {
     pub make_default: bool,
 }
 
-const ICONS: [NoteIcon; 7] =
-    [NoteIcon::Comment, NoteIcon::Note, NoteIcon::Help, NoteIcon::Insert, NoteIcon::Key, NoteIcon::NewParagraph, NoteIcon::Paragraph];
+const ICONS: [NoteIcon; 14] = NoteIcon::ALL;
 
 /// The name shown in the line-ending combo. [`LineEnding::name`] stays the PDF `/LE` token.
 fn ending_label(ending: LineEnding) -> &'static str {

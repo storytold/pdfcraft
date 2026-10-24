@@ -383,6 +383,36 @@ impl Automation {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
             }
+            "bookmark_set_style" => {
+                let path = a.path("path")?;
+                // Left out keeps the colour; [0, 0, 0] is the default black.
+                let color = match a.get("color") {
+                    None => None,
+                    Some(v) => {
+                        let rgb: Option<Vec<f64>> = v.as_array().and_then(|c| c.iter().map(Value::as_f64).collect());
+                        match rgb.as_deref() {
+                            Some(&[r, g, b]) if [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) => Some([r, g, b]),
+                            _ => return Err(ToolError::InvalidArgs("color must be [r, g, b], each from 0 to 1".into())),
+                        }
+                    }
+                };
+                let (bold, italic) = (a.opt_bool("bold")?, a.opt_bool("italic")?);
+                if color.is_none() && bold.is_none() && italic.is_none() {
+                    return Err(ToolError::InvalidArgs("give color, bold or italic".into()));
+                }
+                let mut edits = Vec::new();
+                if let Some(color) = color {
+                    edits.push(Edit::SetBookmarkColor { path: path.clone(), color: Some(color) });
+                }
+                if bold.is_some() || italic.is_some() {
+                    edits.push(Edit::SetBookmarkStyle { path, bold, italic });
+                }
+                // A colour and a style given together are one step to undo, applied all or nothing.
+                match edits.len() {
+                    1 => self.apply(&a, edits.remove(0))?,
+                    _ => self.apply(&a, Edit::Batch { label: "Style".into(), edits })?,
+                }
+            }
             "bookmark_from_structure" => {
                 let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
                 let listing = self.bookmark_listing(&a)?;
@@ -2470,6 +2500,16 @@ fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow], pages: &[pdfcraft_render::Pa
         }
         let path: Vec<usize> = row.path.iter().map(|p| p.saturating_add(1)).collect();
         let mut fields = json!({ "path": path, "title": row.title, "page": row.page.map(|p| p.saturating_add(1)), "open": row.open });
+        // Only what differs from the defaults (black, regular), as the PDF itself stores it.
+        if let Some(color) = row.color {
+            fields["color"] = json!(color);
+        }
+        if row.bold {
+            fields["bold"] = json!(true);
+        }
+        if row.italic {
+            fields["italic"] = json!(true);
+        }
         if let Some(destination) = row.page.and_then(|p| pages.get(p)).and_then(|p| destination(&row.view, p)) {
             fields["destination"] = destination;
         }
@@ -2623,7 +2663,8 @@ fn info(d: &Document) -> Value {
                     })).collect::<Vec<_>>(),
                     "preserve_rb": preserve_rb,
                 }),
-                pdfcraft_render::LinkTarget::RemoteGoTo { file, destination, new_window } => json!({
+                pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
+                    "action": if *launch { "Launch" } else { "GoToR" },
                     "remote_document": file,
                     "destination": match destination {
                         pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),

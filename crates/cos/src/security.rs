@@ -178,7 +178,10 @@ fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandl
         Object::Stream(s) => {
             let mut dict: Dict = s.dict.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass))).collect();
             let ty = s.dict.name(b"Type");
-            if ty == Some(b"XRef") || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
+            // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
+            // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
+            // writer builds its own cross-reference streams outside this transform.
+            if (decrypt && ty == Some(b"XRef")) || (ty == Some(b"Metadata") && !h.encrypts_metadata()) {
                 return Object::Stream(Stream { dict, raw: s.raw.clone() });
             }
             let mut named = named_crypt_filter(&s.dict);

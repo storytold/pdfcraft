@@ -13,6 +13,8 @@ use crate::{Args, Automation, Content, DEFAULT_DPI, MAX_DPI, Result, ToolError, 
 
 /// Author used when a tool call names none.
 pub(crate) const DEFAULT_AUTHOR: &str = "PdfCraft";
+/// The largest side of a stamp's box, in points: the largest page PDF allows (ISO 32000-2 Annex C).
+const MAX_STAMP_SIDE: f64 = 14_400.0;
 
 pub(crate) fn parse_color(s: &str) -> Result<Rgb> {
     let named = match s.to_ascii_lowercase().as_str() {
@@ -674,19 +676,34 @@ impl Automation {
 
 impl Automation {
     /// A custom stamp: a picture file (PDF page or image) centred at `at`, at its natural size
-    /// (at most 200 pt) or `width` points wide.
+    /// (at most 200 pt), or fitted inside `rect`, keeping its shape and centred (#4077).
     pub(crate) fn stamp_custom(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
+        let rect = match (a.nums::<4>("rect")?, a.get("at")) {
+            (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass at (a point) or rect (a box), not both".into())),
+            (Some(r), None) => {
+                let (w, h) = ((r[2] - r[0]).abs(), (r[3] - r[1]).abs());
+                if !((1.0..=MAX_STAMP_SIDE).contains(&w) && (1.0..=MAX_STAMP_SIDE).contains(&h)) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "rect must be [x0, y0, x1, y1] with each side at least 1 pt and at most {MAX_STAMP_SIDE} pt"
+                    )));
+                }
+                rect_to_user(&info, r)
+            }
+            (None, _) => {
+                let [x, y] = a.need::<2>("at", "a stamp (its centre, or pass rect)")?;
+                let [ux, uy] = to_user(&info, x, y);
+                [ux, uy, ux, uy]
+            }
+        };
         let path = self.resolve(a.str("path")?, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
-        let [x, y] = a.need::<2>("at", "a stamp (its centre)")?;
-        let [ux, uy] = to_user(&info, x, y);
         let edit = Edit::AddCustomStamp {
             page,
-            rect: [ux, uy, ux, uy],
+            rect,
             name,
             file: pdfcraft_engine::MarkFile {
                 name: file,

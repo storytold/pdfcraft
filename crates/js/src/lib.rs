@@ -144,6 +144,8 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// The document has an XFA form, so scripts see `xfa_installed`.
+    pub xfa: bool,
 }
 
 /// Something a script asked the viewer to do.
@@ -971,6 +973,11 @@ fn color_object(ctx: &mut Context) -> JsObject {
     o.build()
 }
 
+/// The XFA version scripts see as `xfa_version`.
+const XFA_VERSION: f64 = 3.5;
+
+/// Define the globals every script sees: the document's functions and properties (`getField`,
+/// `numPages`, `info`, the XFA version), and `app`, `util`, `console`, `display` and `color`.
 fn install(ctx: &mut Context) -> JsResult<()> {
     let globals: [(&str, usize, NativeFunction); 9] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
@@ -991,9 +998,9 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
     let ps = function(ctx, NativeFunction::from_fn_ptr(page_num_set));
-    let (file, pages, info) = {
+    let (file, pages, info, xfa) = {
         let h = host(ctx)?.borrow();
-        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone())
+        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone(), h.doc.xfa)
     };
     let mut io = ObjectInitializer::new(ctx);
     for (k, v) in &info {
@@ -1006,6 +1013,12 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
     ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
     ctx.register_global_property(js_string!("info"), info, rw)?;
+    // XFA forms check both before they run: every document sees the XFA version, and only an
+    // XFA form sees `xfa_installed`.
+    ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;
+    if xfa {
+        ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
+    }
 
     let app = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)

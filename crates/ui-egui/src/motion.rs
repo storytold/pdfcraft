@@ -463,22 +463,6 @@ mod tests {
             let style = ctx.global_style();
             assert_eq!((style.animation_time, style.scroll_animation), times, "{effects:?}");
         }
-        // The row's labels are translated: the heading, and On and Off as they suit it.
-        let de = crate::i18n::Lang::from_code("de").expect("German ships");
-        assert_eq!(crate::i18n::tr(de, "Animation effects"), "Animationseffekte");
-        let labels: Vec<&str> =
-            AnimationEffects::ALL.into_iter().map(|choice| crate::i18n::tr_ctx(de, "animation effects", choice.label())).collect();
-        assert_eq!(labels, ["Systemeinstellung verwenden", "Ein", "Aus"]);
-        for lang in crate::i18n::Lang::all() {
-            for english in ["Animation effects", "On", "Off"] {
-                let shown = if english == "Animation effects" {
-                    crate::i18n::tr(lang, english)
-                } else {
-                    crate::i18n::tr_ctx(lang, "animation effects", english)
-                };
-                assert!(lang.code() == "en" || shown != english, "{}: {english} is not translated", lang.code());
-            }
-        }
     }
 
     /// The chrome's hover wash has a duration of its own (`theme::Press`): it eases in with

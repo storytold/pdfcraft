@@ -2730,6 +2730,66 @@ trailer << /Root 1 0 R >>
     assert!(matches!(a.call("accessibility_set_alt", &json!({ "doc": fd, "figure": 6, "alt": "x" })), Err(ToolError::Failed(_))));
 }
 
+/// A table's summary and a header cell's scope are set through `accessibility_set_tag_property`
+/// (#4103, #4104): the summary clears the table-summary finding, both are listed with the tags,
+/// undone, and saved.
+#[test]
+fn table_summary_and_header_scope_through_automation() {
+    let dir = workdir("a11y-table");
+    let content = "/TH << /MCID 0 >> BDC 10 150 40 20 re f EMC /TD << /MCID 1 >> BDC 60 150 40 20 re f EMC";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree 11 0 R >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R] >> endobj
+7 0 obj << /S /Table /P 6 0 R /K [8 0 R] >> endobj
+8 0 obj << /S /TR /P 7 0 R /K [9 0 R 10 0 R] >> endobj
+9 0 obj << /S /TH /P 8 0 R /Pg 3 0 R /K 0 >> endobj
+10 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 1 >> endobj
+11 0 obj << /Nums [0 [9 0 R 10 0 R]] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("table.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let fd = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let summary_status = |a: &mut Automation| {
+        let r = ok(a, "accessibility_check", json!({ "doc": fd, "rules": ["table-summary"] }));
+        r["results"].as_array().unwrap().iter().find(|x| x["rule"] == "table-summary").unwrap()["status"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(summary_status(&mut a), "failed");
+    let args =
+        |object: u32, property: &str, value: &str| json!({ "doc": fd, "object": object, "generation": 0, "property": property, "value": value });
+    let tags = ok(&mut a, "accessibility_set_tag_property", args(7, "summary", "Opening hours by day"));
+    let tag = |tags: &Value, object: u64| tags["tags"].as_array().unwrap().iter().find(|t| t["object"] == object).unwrap().clone();
+    assert_eq!(tag(&tags, 7)["summary"], "Opening hours by day");
+    assert_eq!(summary_status(&mut a), "passed");
+    let tags = ok(&mut a, "accessibility_set_tag_property", args(9, "scope", "Column"));
+    assert_eq!(tag(&tags, 9)["scope"], "Column");
+    // A scope is Row, Column or Both; only a table has a summary and only a header cell a scope.
+    for (object, property, value) in [(9, "scope", "column"), (10, "scope", "Row"), (9, "summary", "No")] {
+        assert!(
+            matches!(err(&mut a, "accessibility_set_tag_property", args(object, property, value)), ToolError::Failed(_)),
+            "{property} {value} on {object}"
+        );
+    }
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": fd }))["undone"], "Change tag properties");
+    assert_eq!(tag(&ok(&mut a, "accessibility_tags", json!({ "doc": fd })), 9)["scope"], Value::Null);
+    ok(&mut a, "edit_redo", json!({ "doc": fd }));
+    ok(&mut a, "doc_save", json!({ "doc": fd, "path": "tagged-table.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("tagged-table.pdf")).unwrap())).unwrap();
+    // Saving renumbers the objects: the tags are found by type.
+    let saved = pdfcraft_engine::a11y::tags(&saved);
+    assert_eq!(saved.iter().find(|t| t.kind == "Table").and_then(|t| t.summary.as_deref()), Some("Opening hours by day"));
+    assert_eq!(saved.iter().find(|t| t.kind == "TH").and_then(|t| t.scope.as_deref()), Some("Column"));
+}
+
 #[test]
 fn marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved() {
     let dir = workdir("a11y-artifact");
@@ -4642,6 +4702,64 @@ fn stamps_through_tools() {
     assert!(matches!(a.call("stamp_custom", &json!({ "doc": doc, "page": 1, "path": "nope.png", "at": [1, 1] })), Err(ToolError::Failed(_))));
 }
 
+/// #4077: a PDF page placed at a given width (a text column, 483 pt) through `rect`, fitted
+/// inside it keeping its shape and centred, and still vector (its text is text).
+#[test]
+fn custom_stamps_fit_a_pdf_page_inside_a_rect() {
+    let dir = workdir("stamp_rect");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 595, "height": 842 }))["doc"].as_u64().unwrap();
+    let rect_of = |a: &mut Automation, i: usize| -> Vec<f64> {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        list["comments"][i]["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    // Without rect, the page keeps its natural size, at most 200 pt: 200 × 300 is 133⅓ × 200.
+    ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 2, "at": [100, 150] }));
+    let natural = rect_of(&mut a, 0);
+    assert!((natural[2] - natural[0] - 400.0 / 3.0).abs() < 0.01 && (natural[3] - natural[1] - 200.0).abs() < 0.01, "{natural:?}");
+    // 483 × 750: the width limits the 200 × 300 page to 483 × 724.5, centred top to bottom.
+    ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 2, "rect": [56, 50, 539, 800] }));
+    assert_eq!(rect_of(&mut a, 1), [56.0, 62.75, 539.0, 787.25]);
+    assert!(page_text(&mut a, doc)[0].contains("Page 2"), "the stamped page's text is still text");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add stamp");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1);
+
+    for (args, why) in [
+        (json!({ "rect": [10, 10, 10, 50] }), "zero width"),
+        (json!({ "rect": [10, 10, 50, 10] }), "zero height"),
+        (json!({ "rect": [0, 0, 1e-10, 100] }), "thinner than a point"),
+        (json!({ "rect": [0, 0, 20000, 100] }), "wider than a PDF page can be"),
+        (json!({ "rect": [0, 0, 100, f64::NAN] }), "not a number"),
+        (json!({ "rect": [0, 0, 100] }), "three numbers"),
+        (json!({ "rect": [0, 0, 100, 100], "at": [10, 10] }), "both a box and a point"),
+        (json!({}), "neither a box nor a point"),
+    ] {
+        let mut call = json!({ "doc": doc, "page": 1, "path": "b.pdf" });
+        call.as_object_mut().unwrap().extend(args.as_object().unwrap().clone());
+        assert!(matches!(a.call("stamp_custom", &call), Err(ToolError::InvalidArgs(_))), "{why}");
+    }
+    let past_the_end = json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 9, "rect": [0, 0, 100, 100] });
+    assert!(matches!(a.call("stamp_custom", &past_the_end), Err(ToolError::Failed(_))));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1, "a refused stamp adds nothing");
+
+    // On a quarter-turned page the picture is fitted as displayed: an 80 × 40 picture in a
+    // 100 × 100 box is 100 × 50 on screen, centred.
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 80, 40);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[200; 80 * 40 * 3]).unwrap();
+    }
+    std::fs::write(dir.join("wide.png"), png_bytes).unwrap();
+    let turned = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": turned, "pages": [1], "degrees": 90 }));
+    ok(&mut a, "stamp_custom", json!({ "doc": turned, "page": 1, "path": "wide.png", "rect": [50, 60, 150, 160] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": turned }));
+    let rect: Vec<f64> = list["comments"][0]["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert_eq!(rect, [50.0, 85.0, 150.0, 135.0]);
+}
+
 #[test]
 fn bookmark_split_with_equal_titles_keeps_every_part() {
     let dir = workdir("organize_dup_titles");
@@ -4749,6 +4867,33 @@ fn links_through_tools() {
     assert_eq!(r2["removed"], 1);
     assert_eq!(ok(&mut a, "link_list", json!({ "doc": doc }))["count"], 0);
     assert!(matches!(a.call("link_add", &json!({ "doc": doc, "page": 1, "rect": [0, 0, 50, 20] })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// #4168: a Launch action whose file is a PDF (here with Windows `\` separators, relative to the
+/// source as a remote link is) opens that PDF in PdfCraft through link_open, within the root; one
+/// naming a program is listed but never followed.
+#[test]
+fn a_launch_link_to_a_pdf_opens_it_like_a_remote_link() {
+    let (_base, root) = sandbox("launch-pdf");
+    std::fs::create_dir_all(root.join("ts")).unwrap();
+    std::fs::create_dir_all(root.join("se")).unwrap();
+    std::fs::write(root.join("se/se_B2.pdf"), fixture(2)).unwrap();
+    // The helper writes a GoToR; the action is renamed (the parser rebuilds the shifted offsets).
+    let launch = |file: &str| String::from_utf8(remote_link_pdf(file, None)).unwrap().replace("/S /GoToR", "/S /Launch").into_bytes();
+    std::fs::write(root.join("ts/TS_304.pdf"), launch(r"..\se\se_B2.pdf")).unwrap();
+    std::fs::write(root.join("ts/program.pdf"), launch("tool.exe")).unwrap();
+    let mut a = auto(&root);
+    let source = ok(&mut a, "doc_open", json!({ "path": "ts/TS_304.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": source }));
+    let link = &info["links"][0]["target"];
+    assert_eq!((link["action"].as_str(), link["remote_document"].as_str()), (Some("Launch"), Some("../se/se_B2.pdf")), "{info}");
+    let opened = ok(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
+    assert_eq!(opened["path"].as_str().map(|p| p.replace('\\', "/")).as_deref(), Some("se/se_B2.pdf"), "{opened}");
+    assert_eq!(opened["document"]["pages"], 2);
+    let program = ok(&mut a, "doc_open", json!({ "path": "ts/program.pdf" }))["doc"].as_u64().unwrap();
+    let before = a.session().docs().len();
+    assert!(matches!(err(&mut a, "link_open", json!({ "doc": program, "page": 1, "index": 1 })), ToolError::InvalidArgs(_) | ToolError::Failed(_)));
+    assert_eq!(a.session().docs().len(), before, "nothing was opened or launched");
 }
 
 #[test]
@@ -6422,7 +6567,9 @@ fn cut_stack_printing_through_tools() {
         &mut a,
         "doc_print",
         json!({
-            "doc": doc, "pages": "2-10", "subset": "odd", "reverse": true,
+            // Even pages by page number (#3984): 2, 4, 6, 8 and 10 (counting places in the range,
+            // "even" would have been 3, 5, 7 and 9).
+            "doc": doc, "pages": "2-10", "subset": "even", "reverse": true,
             "layout": "multiple", "order": "cut-stack", "per_sheet": 2, "auto_rotate": false,
             "orientation": "landscape", "path": "range.pdf"
         }),
@@ -8195,4 +8342,85 @@ fn comments_are_reshaped_through_the_tool() {
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Reshape comment");
     assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "points": [[1, 2]] })).is_err(), "a line has two ends");
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "points": "no" })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// #3193: bookmark_list reports a bookmark's colour and style (ISO 32000-2 §12.3.3, Tables 151
+/// and 152), only where they differ from black and regular. The list is read from the opened file
+/// and, once the document has been edited, from the edited one; both read them alike.
+/// bookmark_set_style changes them, and they survive a save.
+#[test]
+fn bookmark_list_reports_colour_and_style() {
+    let dir = workdir("bookmark-style");
+    let objects: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R >>",
+        b"<< /Type /Outlines /First 5 0 R /Last 7 0 R /Count 3 >>",
+        b"<< /Title (Plain) /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>",
+        b"<< /Title (Red bold) /Parent 4 0 R /Prev 5 0 R /Next 7 0 R /Dest [3 0 R /Fit] /C [1 0 0] /F 2 >>",
+        b"<< /Title (Blue italic) /Parent 4 0 R /Prev 6 0 R /Dest [3 0 R /Fit] /C [0 0 1] /F 1 >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    std::fs::write(dir.join("styled.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+    let style = |list: &Value| -> Vec<(Value, Value, Value)> {
+        list.as_array().unwrap().iter().map(|b| (b["color"].clone(), b["bold"].clone(), b["italic"].clone())).collect()
+    };
+    let expected = vec![
+        (Value::Null, Value::Null, Value::Null),
+        (json!([1.0, 0.0, 0.0]), json!(true), Value::Null),
+        (json!([0.0, 0.0, 1.0]), Value::Null, json!(true)),
+    ];
+    let opened = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    assert_eq!(style(&opened), expected, "as opened: {opened}");
+    ok(&mut a, "bookmark_rename", json!({ "doc": doc, "path": [1], "title": "Still plain" }));
+    let edited = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    assert_eq!(style(&edited), expected, "after an edit: {edited}");
+
+    // bookmark_set_style changes only what it is given.
+    ok(&mut a, "bookmark_set_style", json!({ "doc": doc, "path": [1], "color": [0, 0.5, 0], "italic": true }));
+    ok(&mut a, "bookmark_set_style", json!({ "doc": doc, "path": [2], "bold": false }));
+    ok(&mut a, "bookmark_set_style", json!({ "doc": doc, "path": [3], "color": [0, 0, 0] }));
+    let set = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    assert_eq!(
+        style(&set),
+        vec![
+            (json!([0.0, 0.5, 0.0]), Value::Null, json!(true)),
+            (json!([1.0, 0.0, 0.0]), Value::Null, Value::Null),
+            (Value::Null, Value::Null, json!(true))
+        ],
+        "{set}"
+    );
+    // A colour and a style in one call are one undo step.
+    ok(&mut a, "bookmark_set_style", json!({ "doc": doc, "path": [2], "color": [0, 0, 0], "bold": true, "italic": true }));
+    let both = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    assert_eq!(style(&both)[1], (Value::Null, json!(true), json!(true)), "{both}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undone = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    assert_eq!(style(&undone), style(&set), "one undo takes back both: {undone}");
+    for bad in [
+        json!({ "doc": doc, "path": [1] }),
+        json!({ "doc": doc, "path": [1], "color": [2, 0, 0] }),
+        json!({ "doc": doc, "path": [1], "color": [1, 0] }),
+    ] {
+        assert!(matches!(a.call("bookmark_set_style", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "restyled.pdf" }));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({ "path": "restyled.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }

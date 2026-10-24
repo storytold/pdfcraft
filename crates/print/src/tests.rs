@@ -71,8 +71,10 @@ fn page_selection() {
     assert_eq!(select_pages(1, None, &[], Subset::Even, false), Err(PrintError::NoPages));
     // An explicit list (selected thumbnails): positions, never labels, in the order given.
     assert_eq!(select_listed(5, &[1, 3], Subset::All, false).unwrap(), [1, 3]);
-    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Even, false).unwrap(), [2]);
-    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Odd, true).unwrap(), [4, 0]);
+    // Picked pages keep their page numbers: pages 1, 3 and 5 are all odd.
+    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Even, false), Err(PrintError::NoPages));
+    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Odd, true).unwrap(), [4, 2, 0]);
+    assert_eq!(select_listed(5, &[1, 2, 3], Subset::Even, false).unwrap(), [1, 3]);
     assert_eq!(select_listed(5, &[1, 5], Subset::All, false), Err(PrintError::OutOfRange(6, 5)));
     assert!(matches!(select_listed(0, &[usize::MAX], Subset::All, false), Err(PrintError::OutOfRange(_, 0))));
     assert_eq!(select_listed(5, &[], Subset::All, false), Err(PrintError::NoPages));
@@ -939,4 +941,23 @@ fn text_direction_reads_on_past_a_refused_form() {
     let content = b"/X Do BT 0 1 -1 0 0 0 Tm (a) Tj ET";
     text_direction(&doc, content, &res, Matrix::IDENTITY, 0, &mut score, &mut DecodeBudget::new(1 << 20, 0));
     assert_eq!(score, 1);
+}
+
+/// #3984: odd and even are page numbers, as Acrobat counts them, not places in the range.
+#[test]
+fn odd_and_even_pages_are_page_numbers_not_places_in_the_range() {
+    let even = |range: &str| select_pages(12, Some(range), &[], Subset::Even, false).unwrap();
+    let odd = |range: &str| select_pages(12, Some(range), &[], Subset::Odd, false).unwrap();
+    // Adobe Acrobat DC Help (11/28/2019), Options in the Print dialog box, p. 515: "if you set the
+    // range to 2, 7–10 and choose Even Pages Only, only pages 2, 8, and 10 print".
+    assert_eq!(even("2, 7-10"), [1, 7, 9]);
+    // The report: 4–11 and 3–11 both print pages 4, 6, 8 and 10 as Even pages only.
+    assert_eq!(even("4-11"), [3, 5, 7, 9]);
+    assert_eq!(even("3-11"), [3, 5, 7, 9]);
+    assert_eq!(odd("4-11"), [4, 6, 8, 10]);
+    // Typed order is kept, and Reverse turns it round.
+    assert_eq!(even("10, 3, 4"), [9, 3]);
+    assert_eq!(select_pages(12, Some("10, 3, 4"), &[], Subset::Even, true).unwrap(), [3, 9]);
+    // A range with no page of the kind prints nothing.
+    assert_eq!(select_pages(12, Some("3, 5"), &[], Subset::Even, false), Err(PrintError::NoPages));
 }

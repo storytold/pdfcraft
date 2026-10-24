@@ -310,7 +310,7 @@
 	Black and white	Alb-negru
 	Bold	Aldin
 	Booklet	Broșură
-	Booklet subset:	Subset broșură:
+	Booklet subset:	Selecție broșură:
 	Bookmark options	Opțiuni semne de carte
 	Bookmarks Panel and Page	Panoul Semne de carte și pagina
 	Border Color:	Culoare chenar:
@@ -1101,7 +1101,7 @@
 	Split into files…	Împărțire în fișiere…
 	Square	Pătrat
 	Standard Business	Afaceri standard
-	Start	Start
+	Start	Începe de la
 	Start Checking	Pornire verificare
 	Start page number	Număr pagină de început
 	Status	Stare
@@ -1109,7 +1109,7 @@
 	Strength: {s}	Putere: {s}
 	Style	Stil
 	Subject	Subiect
-	Subset	Subset
+	Subset	Selecție
 	Summarize Options	Opțiuni rezumat
 	Summary	Rezumat
 	Switch to List view to change the pages it takes.	Treceți la vizualizarea Listă pentru a schimba paginile pe care le ia.
@@ -2687,69 +2687,69 @@ theme	Appearance	Aspect
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Vizualizați versiunea semnată a „{from}” (revizia {rev}). Este o copie instantanee: modificările făcute aici nu afectează originalul.
 	the name is not a plain file name	numele nu este un nume simplu de fișier
 # Untranslated: English text until a translator fills these in.
-	Zoom — type a percentage and press Enter	Zoom — type a percentage and press Enter
-	Calculation order	Calculation order
-	Fix order	Fix order
-	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
-	Earlier in calculation order	Earlier in calculation order
-	Later in calculation order	Later in calculation order
-	Too early	Too early
-	Reads {name}, which calculates later, so it shows an old value.	Reads {name}, which calculates later, so it shows an old value.
-	Loop	Loop
-	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
-	Not in order	Not in order
-	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
-	Back to Prepare a form	Back to Prepare a form
-	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.
-	{names} and {last}	{names} and {last}
-	{field} reads no other field	{field} reads no other field
-	{field} reads {fields}	{field} reads {fields}
-	No field reads it	No field reads it
-	The order saved in the PDF needs tidying	The order saved in the PDF needs tidying
-	Moves only what must move	Moves only what must move
-	Every field calculates after the fields it reads.	Every field calculates after the fields it reads.
-	Every field outside a loop calculates after the fields it reads.	Every field outside a loop calculates after the fields it reads.
-	{field} reads its own value	{field} reads its own value
-	{fields} read each other	{fields} read each other
-	No order can fix a loop. Change one of the formulas.	No order can fix a loop. Change one of the formulas.
-	Edit {field}'s formula	Edit {field}'s formula
-	Order · top calculates first	Order · top calculates first
+	Zoom — type a percentage and press Enter	Zoom — tastați un procent și apăsați Enter
+	Calculation order	Ordine de calcul
+	Fix order	Corectare ordine
+	Move only what must move, so every field calculates after the fields it reads.	Mută doar ce trebuie mutat, astfel încât fiecare câmp să se calculeze după câmpurile pe care le citește.
+	Earlier in calculation order	Mai devreme în ordinea de calcul
+	Later in calculation order	Mai târziu în ordinea de calcul
+	Too early	Prea devreme
+	Reads {name}, which calculates later, so it shows an old value.	Citește {name}, care se calculează mai târziu, deci afișează o valoare veche.
+	Loop	Buclă
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Citește {names}, care îl citesc la rândul lor. Nicio ordine nu poate rezolva o buclă: modificați una dintre formule.
+	Not in order	În afara ordinii
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Lipsește din ordinea de calcul salvată în PDF: alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.
+	Back to Prepare a form	Înapoi la Pregătire formular
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Niciun câmp din acest formular nu își calculează încă valoarea. Adăugați un calcul unui câmp în fila Calcul din proprietățile lui și va apărea aici.
+	{names} and {last}	{names} și {last}
+	{field} reads no other field	{field} nu citește niciun alt câmp
+	{field} reads {fields}	{field} citește {fields}
+	No field reads it	Niciun câmp nu îl citește
+	The order saved in the PDF needs tidying	Ordinea salvată în PDF trebuie corectată
+	Moves only what must move	Mută doar ce trebuie mutat
+	Every field calculates after the fields it reads.	Fiecare câmp se calculează după câmpurile pe care le citește.
+	Every field outside a loop calculates after the fields it reads.	Fiecare câmp din afara unei bucle se calculează după câmpurile pe care le citește.
+	{field} reads its own value	{field} își citește propria valoare
+	{fields} read each other	{fields} se citesc reciproc
+	No order can fix a loop. Change one of the formulas.	Nicio ordine nu poate rezolva o buclă. Modificați una dintre formule.
+	Edit {field}'s formula	Editare formulă {field}
+	Order · top calculates first	Ordine · cel de sus se calculează primul
 	Script	Script
-	Links on page	Links on page
-	Show on the page which fields each field reads	Show on the page which fields each field reads
-	Drag a field to move it, or select it and press {up} or {down}.	Drag a field to move it, or select it and press {up} or {down}.
-	Set calculation order	Set calculation order
-@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calculation now uses the new name.|{n} calculations now use the new name.|{n} calculations now use the new name.
-@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.|The calculation order has {n} entries that calculate nothing. Fix order removes them.
-@plural	{fields} reads it|{fields} read it	{fields} reads it|{fields} read it|{fields} read it
-@plural	{n} field shows an old value|{n} fields show old values	{n} field shows an old value|{n} fields show old values|{n} fields show old values
-@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.
-@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} more field calculates too early.|{n} more fields calculate too early.|{n} more fields calculate too early.
-@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.
-	Bulleted list	Bulleted list
-	Numbered list	Numbered list
-	Alignment	Alignment
-	Superscript	Superscript
-	Subscript	Subscript
-	Paragraph spacing	Paragraph spacing
-	Less	Less
-	Other options	Other options
-	Shrink the page content to make room for the header and footer	Shrink the page content to make room for the header and footer
-	Printer default	Printer default
-	Layer options	Layer options
-	Reset to Initial Visibility	Reset to Initial Visibility
-	Reading the printer's settings…	Reading the printer's settings…
-	The document's security settings don't allow printing	The document's security settings don't allow printing
-	Always use my default zoom and page layout	Always use my default zoom and page layout
-	Thumbnail size	Thumbnail size
-	Smaller thumbnails	Smaller thumbnails
-	Larger thumbnails	Larger thumbnails
-	Reshape comment	Reshape comment
-	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	The signature's signed attributes have no content type, which CMS requires; it was read anyway.
-	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
-	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
-	Remove {standard} identification	Remove {standard} identification
+	Links on page	Legături pe pagină
+	Show on the page which fields each field reads	Arată pe pagină ce câmpuri citește fiecare câmp
+	Drag a field to move it, or select it and press {up} or {down}.	Trageți un câmp pentru a-l muta sau selectați-l și apăsați {up} sau {down}.
+	Set calculation order	Setare ordine de calcul
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calcul folosește acum noul nume.|{n} calcule folosesc acum noul nume.|{n} de calcule folosesc acum noul nume.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Ordinea de calcul are {n} intrare care nu calculează nimic. Corectare ordine o elimină.|Ordinea de calcul are {n} intrări care nu calculează nimic. Corectare ordine le elimină.|Ordinea de calcul are {n} de intrări care nu calculează nimic. Corectare ordine le elimină.
+@plural	{fields} reads it|{fields} read it	{fields} îl citește|{fields} îl citesc|{fields} îl citesc
+@plural	{n} field shows an old value|{n} fields show old values	{n} câmp afișează o valoare veche|{n} câmpuri afișează valori vechi|{n} de câmpuri afișează valori vechi
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calculează înaintea câmpului {fields}, pe care îl citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Încă {n} câmp se calculează prea devreme.|Încă {n} câmpuri se calculează prea devreme.|Încă {n} de câmpuri se calculează prea devreme.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} lipsește din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.
+	Bulleted list	Listă cu marcatori
+	Numbered list	Listă numerotată
+	Alignment	Aliniere
+	Superscript	Exponent
+	Subscript	Indice
+	Paragraph spacing	Spațiere între paragrafe
+	Less	Mai puțin
+	Other options	Alte opțiuni
+	Shrink the page content to make room for the header and footer	Micșorează conținutul paginii pentru a face loc antetului și subsolului
+	Printer default	Implicit pentru imprimantă
+	Layer options	Opțiuni straturi
+	Reset to Initial Visibility	Revenire la vizibilitatea inițială
+	Reading the printer's settings…	Se citesc setările imprimantei…
+	The document's security settings don't allow printing	Setările de securitate ale documentului nu permit imprimarea
+	Always use my default zoom and page layout	Folosește întotdeauna zoomul și aspectul de pagină implicite
+	Thumbnail size	Dimensiunea miniaturilor
+	Smaller thumbnails	Miniaturi mai mici
+	Larger thumbnails	Miniaturi mai mari
+	Reshape comment	Remodelare comentariu
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Atributele semnate ale semnăturii nu au tipul de conținut cerut de CMS; au fost citite oricum.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Această semnătură folosește o cheie RSA mai scurtă de 2048 de biți, care nu mai este considerată suficient de puternică pentru semnături. Se validează în continuare, dar nu ar trebui să vă bazați pe ea.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Atributele semnate ale semnăturii nu au rezumatul mesajului, deci semnătura nu acoperă documentul.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Atributele semnate ale semnăturii indică alt tip de conținut decât „data”, deci nu este o semnătură a documentului.
+	Remove {standard} identification	Eliminare identificare {standard}
 
 # Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
 	Add text field table	Adăugare tabel de câmpuri text

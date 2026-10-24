@@ -37,6 +37,28 @@ fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     }
 }
 
+/// Whether a widget's field has a value: its `/V`, or the nearest one inherited through `/Parent`
+/// (ISO 32000-2 §12.7.4.1). An empty string or array is no value. Past the depth limit the answer
+/// is yes: a value that wasn't checked must not be removed.
+fn has_value(doc: &Document, widget: &Dict) -> bool {
+    let mut d = widget.clone();
+    let mut seen = HashSet::new();
+    for _ in 0..64 {
+        if let Some(v) = d.get(b"V") {
+            return match &*doc.resolve(v) {
+                Object::Null => false,
+                Object::String(s) => !s.to_text().is_empty(),
+                Object::Array(a) => !a.is_empty(),
+                _ => true,
+            };
+        }
+        let Some(parent) = d.reference(b"Parent").filter(|p| seen.insert(*p)) else { return false };
+        let Some(next) = doc.get(parent).as_dict().cloned() else { return false };
+        d = next;
+    }
+    true
+}
+
 /// Algorithm 8.1: the matrix that maps the form's bounding box onto the annotation rectangle.
 fn placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<[f64; 6]> {
     let bbox = nums(doc, form.get(b"BBox")).filter(|b| b.len() == 4)?;
@@ -220,13 +242,14 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             // left on the page. A widget stays when it has no appearance to draw at all (none
             // stored, or none for its selected state): removing it would lose the field's value
             // with nothing in its place (#1794). One whose appearance draws nothing (an empty
-            // stream) shows nothing anywhere, so flattening still removes it.
+            // stream) shows nothing anywhere, so flattening still removes it, and so does one whose
+            // field has no value: there is nothing to lose (#4017).
             if !drew {
-                let no_appearance = appearance(doc, d).is_none();
-                if no_appearance && let Some(r) = entry.as_ref() {
+                let keep = appearance(doc, d).is_none() && (!widget || has_value(doc, d));
+                if keep && let Some(r) = entry.as_ref() {
                     undrawn.insert(r);
                 }
-                if !widget || no_appearance {
+                if !widget || keep {
                     continue;
                 }
             }

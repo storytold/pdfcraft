@@ -373,6 +373,31 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
     }
 }
 
+/// A visible digital signature reads upright as the page is displayed on every page rotation:
+/// its picture, alone in the box, shows its quadrants where they are in the image.
+#[test]
+fn visible_signatures_keep_displayed_orientation_on_rotated_pages() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let picture = image::load_from_memory(&quadrant_png()).unwrap().to_rgba8();
+    let graphic = sign::Graphic::Image { width: picture.width(), height: picture.height(), rgba: Arc::new(picture.into_raw()) };
+    let bare = sign::Appearance { name: false, date: false, reason: false, location: false, distinguished_name: false, labels: false };
+    for degrees in [0, 90, 180, 270] {
+        // After the test certificate's start date (2026-10-02).
+        let mut session = Session::new().with_clock(|| 1_800_000_000);
+        let blank = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open_new("contract.pdf", blank).unwrap();
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        // The picture's proportions (2:1) as displayed, centred at (100, 100).
+        let rect = displayed_rect(&info, 100.0, 100.0, 80.0, 40.0);
+        let opts = SignOptions { page: 0, rect: Some(rect), graphic: Some(graphic.clone()), appearance: bare.clone(), ..SignOptions::default() };
+        let signed = session.sign(id, &digital_id, opts).unwrap();
+        let reopened = session.open("signed.pdf", None, signed, None).unwrap();
+        assert_upright_quadrants(&session, reopened, degrees);
+    }
+}
+
 /// #1398: a PDF page used as a stamp stays upright, at its natural size and in an explicit box.
 #[test]
 fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
@@ -403,6 +428,48 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
         assert!(left[0] > 200 && left[1] < 40, "rotation {degrees}, natural {natural}: left {left:?} should be red");
         assert!(right.iter().all(|c| *c > 240), "rotation {degrees}, natural {natural}: right {right:?} should be paper");
     }
+}
+
+/// #4077: a PDF page stamped into a box of another shape is fitted inside it, keeping its shape
+/// and centred, and stays vector: a form XObject, not a picture of it.
+#[test]
+fn pdf_page_stamps_fit_inside_an_explicit_box() {
+    let bytes = Arc::new(half_red_page());
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("text.pdf", blank).unwrap();
+    // 483 pt wide (a text column) and 300 pt tall: the 80 × 40 page is 483 × 241.5, centred.
+    let stamp = |rect| Edit::AddCustomStamp {
+        page: 0,
+        rect,
+        name: "Diagram".into(),
+        file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
+        author: "Test".into(),
+    };
+    session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
+    // A box too tall and narrow: the width limits it, and it is centred vertically.
+    session.apply(id, stamp([100.0, 100.0, 140.0, 300.0])).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[1].rect, [100.0, 190.0, 140.0, 210.0]);
+
+    let doc = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap());
+    let first = annots.as_array().unwrap()[0].as_ref().unwrap();
+    let annot = doc.get(first);
+    let annot = annot.as_dict().unwrap();
+    let pdfcraft_cos::Object::Stream(picture) = doc.get(annot.reference(b"PCPicture").unwrap()).as_ref().clone() else {
+        panic!("the picture is a stream")
+    };
+    assert_eq!(picture.dict.name(b"Subtype"), Some(&b"Form"[..]), "the page is kept as a form XObject");
+    let ap = doc.resolve(annot.get(b"AP").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap()).as_ref().clone() else {
+        panic!("an appearance stream")
+    };
+    let bbox: Vec<f64> = normal.dict.get(b"BBox").unwrap().as_array().unwrap().iter().filter_map(pdfcraft_cos::Object::as_f64).collect();
+    assert_eq!(bbox, [56.0, 429.25, 539.0, 670.75]);
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    assert!(content.contains("/Pic Do") && !content.contains("BI"), "{content}");
 }
 
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
@@ -1886,6 +1953,34 @@ fn permissions_password_restricts_others_but_not_this_session() {
     // The owner password lifts everything.
     let id3 = s2.open("r.pdf", None, saved, Some("boss")).unwrap();
     assert!(s2.get(id3).unwrap().allows_security_change());
+}
+
+/// Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted document
+/// it needs the same rights as removing security, not just the right to make changes (#3921).
+#[test]
+fn convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document() {
+    let pdfa = || Edit::ConvertPdfA { level: pdfcraft_preflight::Level::A2b };
+    let refused = Err(EditError::NotPermitted("removing the encryption, which PDF/A forbids"));
+    // Changes allowed; printing (bit 3) and copying (bit 5) withheld.
+    let bytes = protected("pw", "owner", !((1 << 2) | (1 << 4)));
+    let mut s = Session::new();
+    let id = s.open("x.pdf", None, bytes.clone(), Some("pw")).unwrap();
+    assert!(s.get(id).unwrap().allows_modification());
+    assert_eq!(s.apply(id, pdfa()), refused);
+    // Nor inside a batch.
+    let batch = Edit::Batch { label: "x".into(), edits: vec![Edit::RotatePages { pages: vec![0], degrees: 90 }, pdfa()] };
+    assert_eq!(s.apply(id, batch), refused);
+    // Nothing was applied: no undo step, and saving gives back the encrypted original.
+    assert!(s.get(id).unwrap().can_undo().is_none());
+    assert_eq!(s.save_bytes(id).unwrap().as_slice(), bytes.as_slice());
+    // The owner's password allows it, and the result is no longer encrypted.
+    let id2 = s.open("x.pdf", None, bytes, Some("owner")).unwrap();
+    s.apply(id2, pdfa()).unwrap();
+    let saved = s.save_bytes(id2).unwrap();
+    assert!(pdfcraft_cos::Document::open(saved).unwrap().trailer().get(b"Encrypt").is_none());
+    // An unencrypted document needs nothing more.
+    let (mut s, id) = session_with(1);
+    s.apply(id, pdfa()).unwrap();
 }
 
 #[test]
@@ -4074,6 +4169,20 @@ fn form_javascript_validates_calculates_and_formats() {
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("500".into()) }).unwrap();
     assert_eq!(value(&s, "total"), ["12"]);
     assert!(s.run_javascript(id, "1", None).is_err());
+}
+
+/// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
+/// each of their scripts, and alert when either is missing.
+#[test]
+fn scripts_in_an_xfa_form_see_the_xfa_plugin_installed() {
+    let check = "typeof xfa_installed + ' ' + typeof xfa_version + ' ' + xfa_version";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let xfa = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3))), None).unwrap();
+    let o = s.run_javascript(xfa, check, None).unwrap();
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("boolean number 3.5")));
+    let plain = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let o = s.run_javascript(plain, check, None).unwrap();
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("undefined number 3.5")));
 }
 
 #[test]

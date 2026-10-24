@@ -16,7 +16,7 @@ fn fields() -> Vec<FieldState> {
 }
 
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())] }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {
@@ -990,6 +990,9 @@ mod formcalc {
         assert_eq!(calc("Round(PV(100, 0.01, 12), 2)"), "1125.51");
         assert_eq!(calc(r#"UnitValue("2in", "mm")"#), "50.8");
         assert_eq!(calc(r#"UnitType("2.5cm")"#), "cm");
+        assert_eq!(calc(r#"UnitValue("72points", "in")"#), "1");
+        assert_eq!(calc(r#"UnitValue("25.4millimeters", "inches")"#), "1");
+        assert_eq!(calc(r#"UnitValue("1in", "points")"#), "72");
         assert_eq!(calc(r#"Encode("a b&c", "url")"#), "a%20b%26c");
         assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
@@ -1450,4 +1453,30 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert_eq!(read.error, None);
     assert_eq!(read.value, "undefined:4:false");
     assert!(read.changed.is_empty());
+}
+
+/// The check XFA forms run on opening: without both globals, or with a version below 2.8, it
+/// alerts that the viewer can't show the form.
+const XFA_CHECK: &str = "if (typeof(xfa_installed) == 'undefined' || typeof(xfa_version) == 'undefined' || xfa_version < 2.8) app.alert('old viewer'); \
+                         event.value = typeof xfa_installed + ' ' + typeof xfa_version + ' ' + xfa_version;";
+
+/// An XFA form sees `xfa_installed` (true) and `xfa_version` (3.5), so the check passes.
+#[test]
+fn an_xfa_form_sees_the_xfa_plugin_installed() {
+    let xfa = DocInfo { xfa: true, ..doc() };
+    let o = run(XFA_CHECK, &Event::doc("Open"), &xfa, &fields(), &[], Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "boolean number 3.5");
+    assert!(o.alerts.is_empty(), "{:?}", o.alerts);
+    let o = run("event.value = String(xfa_installed);", &Event::doc("Open"), &xfa, &fields(), &[], Limits::default());
+    assert_eq!(o.value, "true");
+}
+
+/// A form without XFA sees `xfa_version` but no `xfa_installed`, so the check alerts.
+#[test]
+fn a_plain_form_sees_the_xfa_version_but_not_installed() {
+    let o = go(XFA_CHECK, &Event::doc("Open"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "undefined number 3.5");
+    assert_eq!(o.alerts, ["old viewer"]);
 }

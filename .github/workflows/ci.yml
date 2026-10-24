@@ -1,152 +1,89 @@
 name: CI
 
+# Quality gates for every push to main and every pull request (`cargo xtask ci`), through the
+# suite's shared gate workflow in craft-common-actions. Nightly fuzzing is in fuzz.yml.
 on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` so that adding `full-ci` to an open PR starts a run with Windows in it.
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * *" # nightly fuzzing
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+# The token is only used to check out the code: no job writes to the repository.
+permissions:
+  contents: read
 
+# A newer push to a PR branch cancels its older run; every push to main runs to the end. Adding
+# any label but `full-ci` gets a group of its own, so it neither runs the gate nor cancels a run.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: line-tables-only
-    strategy:
-      fail-fast: false
-      matrix:
-        # No macOS on PRs, main or nightly: the org's 5 macOS slots are kept for release builds,
-        # and release.yml builds macOS (a failing release is fixed and rebuilt).
-        os: [ubuntu-latest, windows-latest]
+  # The shared gate doesn't check where git dependencies come from; release.yml runs the same job.
+  git-sources:
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    name: Git dependencies come from storytold
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # The optional craft-fonts build input (Japanese fonts), so the Japanese font tests run on
-      # Linux; Windows tests the build without it. See craftrules standards/fonts.md.
-      - name: Check out craft-fonts (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: storytold/craft-fonts
-          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
-          path: craft-fonts
-
-      - name: Configure craft-fonts (Linux)
-        if: runner.os == 'Linux'
+          persist-credentials: false
+      - name: Git dependencies come from storytold
         run: |
-          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
-          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+          set -euo pipefail
+          test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
+          # Source replacement, patches and path overrides in cargo config never show up
+          # in Cargo.lock. Parsed rather than grepped: TOML has many spellings of one key.
+          # Cargo still reads the legacy .cargo/config.
+          python3 - <<'PY'
+          import os, sys, tomllib
+          for path in (".cargo/config", ".cargo/config.toml"):
+              if not os.path.exists(path):
+                  continue
+              config = tomllib.load(open(path, "rb"))
+              replaced = [name for name, source in config.get("source", {}).items()
+                          if isinstance(source, dict) and "replace-with" in source]
+              if replaced or "patch" in config or "paths" in config:
+                  print(f"{path} replaces, patches or overrides a source")
+                  sys.exit(1)
+          PY
+          # Fails when Cargo.lock is out of date with the manifests.
+          cargo metadata --locked --format-version 1 > /dev/null
+          python3 - <<'PY'
+          import sys, tomllib
+          lock = tomllib.load(open("Cargo.lock", "rb"))
+          bad = sorted({p["source"] for p in lock.get("package", [])
+                        if p.get("source", "").startswith("git+")
+                        and not p["source"].startswith("git+https://github.com/storytold/")})
+          if bad:
+              print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
+              sys.exit(1)
+          PY
 
-      - name: Install Linux system dependencies (egui/winit/rfd) and the oracles
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
-            libgl1-mesa-dev libgtk-3-dev \
-            qpdf poppler-utils
-
-      # The independent oracles (crates/oracle) are only worth having when they run. With this
-      # set, a missing one fails the job instead of printing a skip notice that reads as a pass.
-      # Only the tools the job actually uses are installed above.
-      - name: Require the oracles (Linux)
-        if: runner.os == 'Linux'
-        run: echo "PDFCRAFT_ORACLES_REQUIRED=1" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
-
-      - name: Require Windows executable resources
-        if: runner.os == 'Windows'
-        run: Add-Content -Path $env:GITHUB_ENV -Value 'PDFCRAFT_REQUIRE_WINRES=1'
-        shell: pwsh
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Format
-        if: runner.os == 'Linux'
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        if: runner.os != 'Linux'
-        run: cargo test --workspace
-
-      - name: Test (with craft-fonts)
-        if: runner.os == 'Linux'
-        run: cargo test --workspace
-
-      - name: Layering
-        if: runner.os == 'Linux'
-        run: cargo xtask layers
-
-      - name: Assets (licences and attribution)
-        if: runner.os == 'Linux'
-        run: cargo xtask assets
-
-      - name: CLI without the MCP server still builds
-        if: runner.os == 'Linux'
-        run: cargo check -p pdfcraft-cli --no-default-features
-
-  wasm:
-    name: wasm32 check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: wasm32
-      - name: Check library crates for wasm32
-        run: cargo xtask wasm
-
-  deny:
-    name: dependency licences and advisories
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check
-
-  fuzz:
-    name: fuzz (mutation, 15 min)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: fuzz
-      - name: Fetch the pdf.js corpus (seeds)
-        run: cargo xtask corpus
-      - name: Fuzz
-        run: cargo xtask fuzz --time 900 --seed ${{ github.run_number }}
-      - name: Upload findings
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: fuzz-findings
-          path: fuzz-out/findings
-          if-no-files-found: ignore
+  gate:
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      # Windows on main, manual runs and pull requests labelled `full-ci`. No macOS on PRs or main:
+      # the org's 5 macOS slots are kept for release builds, and release.yml builds macOS.
+      os: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-24.04","windows-latest"]' || '["ubuntu-24.04"]' }}
+      # Same craft-fonts commit as release.yml and freebsd.yml.
+      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+      # egui/winit/rfd, and the independent oracles (crates/oracle).
+      packages: >-
+        libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+        libgtk-3-dev qpdf poppler-utils
+      # cargo-deny for the deny step of `cargo xtask ci`, which requires it under CI.
+      tools: cargo-nextest@0.9.149,cargo-deny@0.20.2
+      # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
+      linux-env: PDFCRAFT_ORACLES_REQUIRED=1
+      windows-env: PDFCRAFT_REQUIRE_WINRES=1
+      # Windows checks what differs by platform: the build (with resources) and the tests.
+      windows-command: |
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        cargo test --workspace --locked

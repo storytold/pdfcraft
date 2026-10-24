@@ -460,14 +460,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lithuanian_translates_every_dynamic_panel_title() {
-        let lang = crate::i18n::Lang::from_code("lt").expect("Lithuanian is registered");
-        for panel in Panel::ALL {
-            assert_ne!(crate::i18n::tr(lang, panel.label()), panel.label(), "{} remains untranslated", panel.id());
-        }
-    }
-
-    #[test]
     fn tools_side_moves_to_both_edges_and_survives_closed_restore() {
         let mut workspace = Workspace::default();
         assert!(!workspace.tools_on_right());

@@ -1289,6 +1289,30 @@ fn formats_validation_and_calculations_run_like_acrobat() {
     assert_eq!(field(&fields(&doc), "Price").actions.format, Format::None);
 }
 
+/// A Calculate script that spells the notation's markers in a string, not in a comment, is kept
+/// as a script and runs: the form used to calculate the string's notation instead.
+#[test]
+fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
+    struct Ran;
+    impl Scripts for Ran {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &text, Some("a")).unwrap();
+    add_field(&mut doc, 0, [50.0, 660.0, 250.0, 680.0], &text, Some("total")).unwrap();
+    let js = "var note = \"BVCALC a EVCALC\"; event.value = 7;";
+    set_field_script(&mut doc, "total", "calculate", Some(js)).unwrap();
+    set_value(&mut doc, "a", &FieldValue::Text("5".into())).unwrap();
+    let all = fields(&doc);
+    let total = &field(&all, "total").actions;
+    assert_eq!((&total.calculate, total.scripts.calculate.as_deref()), (&af::Calculate::None, Some(js)));
+    recalculate_with(&mut doc, &mut Ran).unwrap();
+    assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
+}
+
 /// Renaming a field renames it in the calculations that read it: a sum dropped it, notation
 /// read it as 0 and a script read a field that no longer existed.
 #[test]

@@ -477,3 +477,20 @@ fn removing_an_inline_encrypt_dictionary_leaves_an_unencrypted_file() {
         assert!(hayro_syntax::Pdf::new(plain).is_ok(), "{alg:?}");
     }
 }
+
+/// A content stream that calls itself `/Type /XRef` is still encrypted: only reading trusts the label.
+#[test]
+fn a_stream_labelled_xref_is_encrypted_when_saved() {
+    let mut doc = Document::open(Arc::new(fixture_with(" /Type /XRef"))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "u",
+        owner_password: "o",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the labelled stream was written in the clear");
+}

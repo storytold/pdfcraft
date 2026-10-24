@@ -243,6 +243,8 @@ impl PdfCraftApp {
     ) {
         let Some(doc) = self.session.get(id) else { return };
         let (before, name) = (doc.bytes.len(), format!("{} ({}).pdf", stem(&doc.name), kind.suffix()));
+        #[cfg(not(target_arch = "wasm32"))]
+        let folder = doc.path.clone();
         let (bytes, detail) = match result {
             Ok(r) => r,
             Err(e) => {
@@ -284,6 +286,7 @@ impl PdfCraftApp {
                 Some(p) => write(self, p),
                 None => {
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(&name);
+                    let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, p| write(app, p.to_string_lossy().into_owned()));
                 }
             }

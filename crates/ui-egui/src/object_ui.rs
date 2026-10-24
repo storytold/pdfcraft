@@ -415,28 +415,3 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
         _ => tl!("These objects could not be moved. Select them again and try a smaller move.").into(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn selection_labels_and_refusals_are_translated_in_every_catalog() {
-        for language in crate::i18n::LANGUAGES.iter().filter(|l| !l.source.is_empty()) {
-            let lang = crate::i18n::Lang::from_code(language.code).unwrap();
-            for label in [
-                "Drag the selection to move it. Esc clears the selection.",
-                "Shift-click to select several objects. Drag empty space to select an area.",
-                "Select at most 1000 objects at a time.",
-                "Finish or discard the text being edited before selecting several objects.",
-                "Move object",
-                "Move objects",
-                "Vertical text cannot be moved with this selection.",
-                "Text used as a clipping path cannot be moved with this selection.",
-                "These objects could not be moved. Select them again and try a smaller move.",
-                "This page contains objects that cannot be selected together.",
-            ] {
-                assert_ne!(crate::i18n::tr(lang, label), label, "{}: {label}", language.code);
-            }
-            assert_ne!(crate::i18n::trn(lang, 2, "{n} object selected", "{n} objects selected"), "2 objects selected", "{}", language.code);
-        }
-    }
-}

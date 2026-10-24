@@ -716,6 +716,8 @@ fn num_text(n: f64) -> String {
 fn fixed(v: f64, decimals: usize) -> String {
     let k = 10f64.powi(decimals.min(20) as i32);
     let scaled = (v * k).round() / k;
+    // A small negative value rounds to -0.0, which would print as "-0".
+    let scaled = if scaled == 0.0 { 0.0 } else { scaled };
     format!("{:.decimals$}", if scaled.is_finite() { scaled } else { v })
 }
 
@@ -2520,10 +2522,10 @@ impl Interp<'_> {
                 let v = parse_num(&s).unwrap_or(0.0);
                 let unit: String = s.trim().chars().skip_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+').collect();
                 let per_in = |u: &str| match u.trim().to_ascii_lowercase().as_str() {
-                    "mm" => 25.4,
-                    "cm" => 2.54,
-                    "pt" => 72.0,
-                    "pc" => 6.0,
+                    "mm" | "millimeter" | "millimeters" => 25.4,
+                    "cm" | "centimeter" | "centimeters" => 2.54,
+                    "pt" | "point" | "points" => 72.0,
+                    "pc" | "pica" => 6.0,
                     _ => 1.0,
                 };
                 let target = if to.trim().is_empty() { unit.clone() } else { to };
@@ -2626,6 +2628,14 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_does_not_print_negative_zero() {
+        assert_eq!(fixed(-0.4, 0), "0");
+        assert_eq!(fixed(-0.004, 2), "0.00");
+        assert_eq!(fixed(-0.0, 0), "0");
+        assert_eq!(fixed(-1.5, 0), "-2");
+    }
 
     #[test]
     fn dates_round_trip_through_formcalc_day_numbers() {

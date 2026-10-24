@@ -1468,7 +1468,15 @@ fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    Segments on the same baseline that nearly touch are merged (text drawn out of order).
 /// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
-///    that overlaps it vertically (so columns read left, then right).
+///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
+///    the nearest block below the last one, overlapping it horizontally and at most 2.5 heights of
+///    its last line below it, comes next, unless an unread block sits above it in its own span, sits
+///    beside it on its left, or shares its first line (the first lines overlap by at least 30% of the
+///    taller one: a table or form row, which reads across, even with labels and values in different
+///    sizes or on shifted baselines).
+///    Known limit: when a paragraph in the next column starts on the same line as the continuation
+///    (text on a baseline grid), it counts as a row and the top-most rule applies, so the column
+///    order of #3658 is lost there. Telling prose from a row in that case needs more evidence.
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
 ///    text comes out in logical order.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
@@ -1632,19 +1640,65 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
 
     // 3. Block order.
     let mut remaining: Vec<usize> = (0..blocks.len()).collect();
-    let mut block_order = Vec::with_capacity(blocks.len());
+    let mut block_order: Vec<usize> = Vec::with_capacity(blocks.len());
+    // A block to the left of `cb` that shares at least half the height of the shorter one: it reads first.
+    let beside_left = |cb: &[f32; 4], lb: &[f32; 4]| {
+        let v = lb[3].min(cb[3]) - lb[1].max(cb[1]);
+        lb[2] <= cb[0] + 1.0 && v > 0.5 * (lb[3] - lb[1]).min(cb[3] - cb[1])
+    };
+    // The box of a block's first line. Every block is created with one segment, so the block's own box is a fallback
+    // that is never used.
+    let first_line = |b: usize| blocks[b].0.first().and_then(|&s| segs.get(s)).map_or(blocks[b].1, |s| s.bbox);
     while let Some(&top) = remaining.iter().min_by(|a, b| blocks[**a].1[1].total_cmp(&blocks[**b].1[1])) {
-        let tb = blocks[top].1;
-        let pick = remaining
-            .iter()
-            .copied()
-            .filter(|c| {
-                let cb = blocks[*c].1;
-                let v = cb[3].min(tb[3]) - cb[1].max(tb[1]);
-                cb[2] <= tb[0] + 1.0 && v > 0.5 * (cb[3] - cb[1]).min(tb[3] - tb[1])
-            })
-            .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
-            .unwrap_or(top);
+        // A column goes on past a paragraph gap (#3658): the nearest block below the one just read that overlaps it
+        // horizontally comes next, if the gap above it is at most two and a half heights of the last line read (a
+        // footer, a footnote or a caption under a figure is further) and no other unread block
+        // - sits above it in its own horizontal span (the rest of a column above a full-width heading or footnote),
+        // - is beside it on its left, or
+        // - shares its first line: their first lines overlap by at least 30% of the taller one (a table or form row,
+        //   which reads across, even with labels and values in different sizes or on shifted baselines; a line that
+        //   only touches it, or a small superscript or footnote marker, is not a row).
+        let next_in_column = block_order.last().and_then(|&prev| {
+            let pb = blocks[prev].1;
+            // The gap is measured in the height of the block's last line, which borders it.
+            let pl = blocks[prev].0.last().and_then(|&s| segs.get(s)).map_or(pb, |s| s.bbox);
+            let tol = (pl[3] - pl[1]).max(0.1) * 0.5;
+            let c = remaining
+                .iter()
+                .copied()
+                .filter(|&c| {
+                    let cb = blocks[c].1;
+                    let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
+                    let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
+                    cb[1] >= pb[3] - tol && overlap > minw * 0.3
+                })
+                .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
+            let cb = blocks[c].1;
+            if cb[1] - pb[3] >= tol * 5.0 {
+                return None;
+            }
+            let cl = first_line(c);
+            let blocked = remaining.iter().any(|&r| {
+                if r == c {
+                    return false;
+                }
+                let rb = blocks[r].1;
+                let rl = first_line(r);
+                let shared = rl[3].min(cl[3]) - rl[1].max(cl[1]);
+                let row = shared > 0.3 * (rl[3] - rl[1]).max(cl[3] - cl[1]);
+                (rb[1] < cb[1] && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb) || row
+            });
+            (!blocked).then_some(c)
+        });
+        let pick = next_in_column.unwrap_or_else(|| {
+            let tb = blocks[top].1;
+            remaining
+                .iter()
+                .copied()
+                .filter(|c| beside_left(&tb, &blocks[*c].1))
+                .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+                .unwrap_or(top)
+        });
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
     }
@@ -2566,6 +2620,190 @@ mod tests {
         word(&mut v, "Right2", 200.0, 24.0, 6.0);
         let t = layout(v);
         assert_eq!(t.plain_text(), "Left1\nLeft2\nRight1\nRight2");
+    }
+
+    /// Lays out one-word lines, each `(text, x, y)`, 10 pt high: 14 pt apart is a line in a paragraph, 24 pt a
+    /// paragraph gap.
+    fn lines(at: &[(&str, f32, f32)]) -> String {
+        let mut v = Vec::new();
+        for &(s, x, y) in at {
+            word(&mut v, s, x, y, 6.0);
+        }
+        layout(v).plain_text()
+    }
+
+    #[test]
+    fn a_column_reads_on_past_a_paragraph_gap() {
+        // #3658: a heading and paragraph A at the top of the left column, a paragraph gap, then paragraph B, which
+        // goes on at the top of the right column, and paragraph C below it.
+        let two = [
+            ("Heading", 10.0, 10.0),
+            ("A1", 10.0, 30.0),
+            ("A2", 10.0, 44.0),
+            ("A3", 10.0, 58.0),
+            ("B1", 10.0, 82.0),
+            ("B2", 10.0, 96.0),
+            ("B3", 200.0, 30.0),
+            ("B4", 200.0, 44.0),
+            ("C1", 200.0, 68.0),
+            ("C2", 200.0, 82.0),
+        ];
+        assert_eq!(lines(&two), "Heading\nA1\nA2\nA3\nB1\nB2\nB3\nB4\nC1\nC2");
+        // Three columns, each with a gap at a different height.
+        let three = [
+            ("A1", 10.0, 10.0),
+            ("A2", 10.0, 24.0),
+            ("B1", 10.0, 48.0),
+            ("C1", 150.0, 10.0),
+            ("D1", 150.0, 38.0),
+            ("D2", 150.0, 52.0),
+            ("E1", 290.0, 10.0),
+            ("E2", 290.0, 24.0),
+            ("E3", 290.0, 38.0),
+            ("F1", 290.0, 62.0),
+        ];
+        assert_eq!(lines(&three), "A1\nA2\nB1\nC1\nD1\nD2\nE1\nE2\nE3\nF1");
+    }
+
+    #[test]
+    fn a_column_reads_on_past_a_line_that_only_touches_it() {
+        // The #3658 page with a right-column paragraph whose first line touches B1's by 1 pt or 0.1 pt, or whose
+        // second line carries a 6 pt footnote marker reaching up beside B2: none of them is a row with B1.
+        let page = |extra: &[(&str, f32, f32, f32)]| {
+            let mut v = Vec::new();
+            let left = [("H", 10.0, 10.0), ("A1", 10.0, 30.0), ("A2", 10.0, 44.0), ("A3", 10.0, 58.0), ("B1", 10.0, 82.0), ("B2", 10.0, 96.0)];
+            for &(s, x, y) in left.iter().chain(&[("R1", 200.0, 30.0), ("R2", 200.0, 44.0)]) {
+                word(&mut v, s, x, y, 6.0);
+            }
+            for &(s, x, y, h) in extra {
+                for (i, c) in s.chars().enumerate() {
+                    let x0 = x + i as f32 * h * 0.6;
+                    v.push(em_box(&c.to_string(), x0, y, x0 + h * 0.6, y + h));
+                }
+            }
+            layout(v).plain_text().replace('\n', " ")
+        };
+        assert_eq!(page(&[("S1", 200.0, 91.0, 10.0), ("S2", 200.0, 105.0, 10.0)]), "H A1 A2 A3 B1 B2 R1 R2 S1 S2", "1 pt touch");
+        assert_eq!(page(&[("S1", 200.0, 72.1, 10.0), ("S2", 200.0, 86.1, 10.0)]), "H A1 A2 A3 B1 B2 R1 R2 S1 S2", "0.1 pt touch");
+        let marker = page(&[("S1", 200.0, 68.0, 10.0), ("x", 200.0, 96.0, 10.0), ("9", 206.5, 90.0, 6.0), ("S2y", 214.0, 96.0, 10.0)]);
+        assert!(marker.starts_with("H A1 A2 A3 B1 B2 R1 R2 S1 "), "footnote marker: {marker}");
+    }
+
+    #[test]
+    fn a_full_width_line_ends_the_columns_above_it() {
+        // Two columns, a full-width heading, two more columns and a full-width footnote. The left column stops at the
+        // heading and the footnote: the right column above each one reads first.
+        let page = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 48.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 38.0),
+            ("Fullwidthheading", 10.0, 80.0),
+            ("L4", 10.0, 110.0),
+            ("L5", 10.0, 124.0),
+            ("L6", 10.0, 148.0),
+            ("R3", 200.0, 110.0),
+            ("R4", 200.0, 138.0),
+            ("Fullwidthfootnote", 10.0, 200.0),
+        ];
+        // The two full-width lines run past the right column (x = 286 and 304) at 18 pt a letter.
+        let mut v = Vec::new();
+        for &(s, x, y) in &page {
+            word(&mut v, s, x, y, if s.len() > 2 { 18.0 } else { 6.0 });
+        }
+        assert_eq!(layout(v).plain_text(), "L1\nL2\nL3\nR1\nR2\nFullwidthheading\nL4\nL5\nL6\nR3\nR4\nFullwidthfootnote");
+    }
+
+    #[test]
+    fn table_rows_apart_still_read_across() {
+        // Rows a paragraph gap apart whose cells start level read row by row, as before #3658.
+        let rows = [("Name", 10.0, 10.0), ("Qty", 100.0, 10.0), ("Apple", 10.0, 34.0), ("12", 100.0, 34.0), ("Pear", 10.0, 58.0), ("7", 100.0, 58.0)];
+        assert_eq!(lines(&rows), "Name\nQty\nApple\n12\nPear\n7");
+    }
+
+    #[test]
+    fn form_rows_in_mixed_sizes_still_read_across() {
+        // 8 pt labels beside 12 pt values on one baseline, rows 30 pt apart: the tops differ by 4 pt, but the first
+        // lines overlap, so each row reads label then value.
+        let mut v = Vec::new();
+        let sized = |v: &mut Vec<TextGlyph>, s: &str, x: f32, base: f32, h: f32| {
+            for (i, c) in s.chars().enumerate() {
+                let x0 = x + i as f32 * h * 0.6;
+                v.push(em_box(&c.to_string(), x0, base - h, x0 + h * 0.6, base));
+            }
+        };
+        for (i, (label, value)) in [("Name", "Alice"), ("Street", "Main"), ("City", "Oslo")].into_iter().enumerate() {
+            let base = 20.0 + 30.0 * i as f32;
+            sized(&mut v, label, 10.0, base, 8.0);
+            sized(&mut v, value, 100.0, base, 12.0);
+        }
+        assert_eq!(layout(v).plain_text(), "Name\nAlice\nStreet\nMain\nCity\nOslo");
+        // Values drawn 6 pt below their labels, rows a paragraph gap apart.
+        let offset =
+            [("Name", 10.0, 10.0), ("Val1", 100.0, 16.0), ("Addr", 10.0, 40.0), ("Val2", 100.0, 46.0), ("City", 10.0, 70.0), ("Val3", 100.0, 76.0)];
+        assert_eq!(lines(&offset), "Name\nVal1\nAddr\nVal2\nCity\nVal3");
+    }
+
+    #[test]
+    fn a_column_does_not_jump_to_a_distant_footer_footnote_or_caption() {
+        // A page number far below the left column reads after the right column.
+        let footer = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 48.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 24.0),
+            ("R3", 200.0, 48.0),
+            ("Pg7", 10.0, 400.0),
+        ];
+        assert_eq!(lines(&footer), "L1\nL2\nR1\nR2\nL3\nR3\nPg7");
+        // So does a footnote under the left column only, with the page number under the right one.
+        let footnote = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 48.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 24.0),
+            ("R3", 200.0, 48.0),
+            ("Note", 10.0, 380.0),
+            ("Pg7", 200.0, 400.0),
+        ];
+        assert_eq!(lines(&footnote), "L1\nL2\nR1\nR2\nL3\nR3\nNote\nPg7");
+        // A caption under a full-width figure (no text from 70 to 250), as narrow as the left column, reads after both
+        // columns above the figure and before the columns below it.
+        let caption = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 38.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 24.0),
+            ("R3", 200.0, 38.0),
+            ("Cap", 10.0, 260.0),
+            ("M1", 10.0, 290.0),
+            ("M2", 10.0, 304.0),
+            ("N1", 200.0, 290.0),
+            ("N2", 200.0, 304.0),
+        ];
+        assert_eq!(lines(&caption), "L1\nL2\nL3\nR1\nR2\nR3\nCap\nM1\nM2\nN1\nN2");
+    }
+
+    #[test]
+    fn many_column_paragraphs_order_in_bounded_time() {
+        // 2000 paragraphs in two columns, the right one offset by half a paragraph: every block is a column
+        // continuation, and choosing each one scans the remaining blocks.
+        let mut v = Vec::new();
+        for i in 0..1000u16 {
+            let y = 10.0 + 24.0 * f32::from(i);
+            word(&mut v, "L", 10.0, y, 6.0);
+            word(&mut v, "R", 200.0, y + 12.0, 6.0);
+        }
+        let start = std::time::Instant::now();
+        let text = layout(v).plain_text();
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        // Compared without printing 4000 characters on failure.
+        let expected = format!("{}{}", "L\n".repeat(1000), "R\n".repeat(999) + "R");
+        assert!(text == expected, "the first R reads after {:?} lines, not 1000", text.find('R').map(|i| i / 2));
     }
 
     #[test]

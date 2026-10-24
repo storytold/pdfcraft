@@ -117,7 +117,7 @@ impl Automation {
                 .iter()
                 .find(|link| link.page == page && link.index == index)
                 .ok_or_else(|| failed(format!("page {page_number} has no link {index_number} (see link_list)")))?;
-            let LinkTarget::RemoteGoTo { file, destination, new_window } = &link.target else {
+            let LinkTarget::RemoteGoTo { file, destination, new_window, .. } = &link.target else {
                 return Err(bad("the selected link is not a supported local PDF GoToR link"));
             };
             (source.path.clone(), file.clone(), destination.clone(), *new_window)

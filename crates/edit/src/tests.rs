@@ -611,6 +611,55 @@ fn flattening_keeps_a_valued_widget_it_cannot_draw() {
     assert_eq!(value(6), Some(Object::name("Yes")));
 }
 
+/// #4017: a widget with no appearance whose field has no value (none, or an empty string) has
+/// nothing to lose, so flattening removes it instead of leaving a fillable field behind. One whose
+/// value it inherits from its parent field still stays (#1794).
+#[test]
+fn flattening_removes_an_empty_widget_it_cannot_draw() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 9 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (no_value) /Rect [10 10 150 40] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (empty) /V () /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (drawn) /Rect [10 90 150 120] /F 4 /AP << /N 10 0 R >> >>",
+        "<< /FT /Tx /T (parent) /V (Ada) /Kids [9 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 130 150 160] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only the field with an appearance is drawn");
+    let doc = reopen(&doc);
+    let refs = |o: &Object| -> Vec<u32> { doc.resolve(o).as_array().unwrap().iter().filter_map(|f| f.as_ref()).map(|r| r.num).collect() };
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert_eq!(refs(p.dict.get(b"Annots").unwrap()), [9], "only the widget with an inherited value stays on the page");
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    assert_eq!(refs(af.as_dict().unwrap().get(b"Fields").unwrap()), [8], "and its field in the form");
+}
+
+/// #4017: when the walk up the parent fields reaches its limit before finding a value, the widget
+/// stays: an unverified value must not be removed. Here `/V` sits on the 64th ancestor.
+#[test]
+fn flattening_keeps_a_widget_whose_value_is_past_the_parent_limit() {
+    let page = stream("", " ");
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [69 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>".into(),
+        page,
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 10 150 40] /F 4 >>".into(),
+    ];
+    objs.extend((6..69).map(|n| format!("<< /Parent {} 0 R /Kids [{} 0 R] >>", n + 1, n - 1)));
+    objs.push("<< /FT /Tx /T (deep) /V (Ada) /Kids [68 0 R] >>".into());
+    let mut doc = build(&objs.iter().map(String::as_str).collect::<Vec<_>>());
+    flatten(&mut doc, &[0], false, true).unwrap();
+    let doc = reopen(&doc);
+    let annots = pdfcraft_model::pages(&doc)[0].dict.get(b"Annots").map(|a| doc.resolve(a).as_array().map_or(0, Vec::len));
+    assert_eq!(annots, Some(1), "the widget stays");
+}
+
 /// #1794: a reply this builder cannot draw stays on the page even when the comment it replies to
 /// is flattened; the comment's pop-up still goes with it.
 #[test]
@@ -6406,6 +6455,24 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
             "Ordinary body text. Still the same paragraph.",
         ]
     );
+}
+
+/// Text set larger than the widest page PDF allows (14 400 pt) panicked when its paragraph was given
+/// a width: the width is clamped between the font size and 14 400 pt, and `f64::clamp` panics when
+/// its minimum is the larger. The width is now capped at 14 400 pt whatever the font size: from the
+/// file (`Tf`, or a small `Tf` scaled up by `Tm`) or asked for (the automation tools pass it through).
+#[test]
+fn width_on_a_paragraph_set_larger_than_a_page_is_capped_not_a_panic() {
+    let wide = text::BlockStyle { width: Some(200.0), ..Default::default() };
+    let huge = text::BlockStyle { size: Some(20_000.0), width: Some(200.0), ..Default::default() };
+    for (content, style) in [
+        ("BT /F2 20000 Tf 72 700 Td (ab) Tj ET", &wide),
+        ("BT /F2 1 Tf 20000 0 0 20000 72 700 Tm (ab) Tj ET", &wide),
+        ("BT /F2 12 Tf 72 700 Td (ab) Tj ET", &huge),
+    ] {
+        let mut doc = text_page(content);
+        text::rewrite_block(&mut doc, 0, 0, None, style).unwrap();
+    }
 }
 
 #[test]

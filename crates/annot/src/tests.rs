@@ -1688,3 +1688,56 @@ fn cloud_outline_has_a_bump_budget() {
     let bumps = appearance::cloud_path(&pts, 1.0).lines().filter(|l| l.ends_with(" c")).count();
     assert!((pts.len()..=appearance::MAX_CLOUD_BUMPS + 2 * pts.len()).contains(&bumps), "{bumps} bumps");
 }
+
+/// A note's drawn icon (its built appearance's content) for `/Name` (none when `None`) and `/C`.
+fn note_drawing(name: Option<&str>, color: [f64; 3]) -> Vec<u8> {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Text"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 20.0, 20.0].map(Object::Real).to_vec()));
+    d.set(b"C".to_vec(), Object::Array(color.map(Object::Real).to_vec()));
+    if let Some(n) = name {
+        d.set(b"Name".to_vec(), Object::name(n));
+    }
+    crate::appearance::build(&d).expect("a note is drawn").decoded().unwrap()
+}
+
+/// ISO 32000-2 §12.5.6.4, Table 175: a viewer shall provide icons for the seven standard names,
+/// and may support more. Each of the fourteen names PdfCraft offers draws a shape of its own, so
+/// a note shows the icon it names; a name it doesn't know, and a note without one, draw `Note`
+/// (the table's default).
+#[test]
+fn every_note_icon_draws_its_own_shape() {
+    let yellow = [1.0, 0.82, 0.0];
+    let drawn: Vec<Vec<u8>> = NoteIcon::ALL.iter().map(|i| note_drawing(Some(i.name()), yellow)).collect();
+    for (i, a) in drawn.iter().enumerate() {
+        for (j, b) in drawn.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "{} and {} look alike", NoteIcon::ALL[i].name(), NoteIcon::ALL[j].name());
+        }
+    }
+    let note = note_drawing(Some("Note"), yellow);
+    assert_eq!(note_drawing(Some("Sparkle"), yellow), note, "an unknown name");
+    assert_eq!(note_drawing(None, yellow), note, "no name");
+    for icon in NoteIcon::ALL {
+        assert_eq!(NoteIcon::from_name(icon.name()), Some(icon));
+    }
+}
+
+/// A note named with one of the further icons reads as that icon, and a colour change redraws it
+/// as itself, not as a page.
+#[test]
+fn a_star_note_keeps_its_star_when_recoloured() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [100 100 120 120] /Name /Star /C [1 0.82 0] /F 4 >>",
+    ]);
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.icon), Some(NoteIcon::Star));
+    set_style(&mut doc, 0, 0, Some([0.0, 0.0, 1.0]), None, None, None, &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[0];
+    assert_eq!(d.name(b"Name"), Some(&b"Star"[..]));
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!() };
+    assert_eq!(s.decoded().unwrap(), note_drawing(Some("Star"), [0.0, 0.0, 1.0]));
+}

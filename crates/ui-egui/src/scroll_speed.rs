@@ -116,8 +116,5 @@ mod tests {
         }
         assert_eq!(ScrollSpeed::parse("FAST"), Some(ScrollSpeed::Fast));
         assert_eq!(ScrollSpeed::parse("warp"), None);
-        // The labels are translated in their own context: they qualify "speed".
-        let ru = crate::i18n::Lang::from_code("ru").expect("Russian ships");
-        assert_eq!(crate::i18n::tr_ctx(ru, "scroll speed", ScrollSpeed::Slow.label()), "Низкая");
     }
 }

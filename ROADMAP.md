@@ -190,6 +190,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
 
@@ -207,6 +209,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-17 (M8, gap 6, #2662):** A filled cover over a long line counts when it hides half of any one word, not only 40% of the line's words or box, so a black box over one number in a long line — or an unapplied redaction mark over it — no longer audits clean while the number is still extractable; a sliver under half of every word it touches and under 40% of the line is still not flagged
 - **2026-10-13 (M10, #1757):** Office export keeps each dotted-leader contents entry in one paragraph, with its page number, instead of inferring table cells from its separate text objects.
+- **2026-10-22 (M6, calculation scripts):** The Calculate tab and a rename read simplified field notation only from a comment, where Acrobat writes it: a string that spells `BVCALC … EVCALC` is no longer taken for the notation, or rewritten by a rename. A `/` after the condition of `if`, `while`, `for` or `with` starts a regular expression, so a rename no longer rewrites a name inside one, and a quote inside one no longer hides the `getField` calls after it. Both found in review of #3550. A `//` comment ends at `\r`, U+2028 or U+2029 as well as `\n`, so in a script with `\r` line endings the code after one is no longer hidden from a rename, or taken for the notation. Estimates unchanged.
 - **2026-10-20 (M6, calculation order page):** Prepare a form ▸ Calculation order, a page of its own, lists the calculated fields in the order they calculate with their formulas and values, moved with Up/Down arrows (as Acrobat's Set Field Calculation Order), Alt+↑/↓ or by dragging. A card says what is wrong with the order and holds Fix order; a loop has a card of its own that opens one of its formulas. On the page, each calculated field shows its step, and arrows show what the field in focus reads and what reads it. Estimates unchanged.
 - **2026-10-20 (M6, calculation order):** The order a form's fields calculate in (`/CO`) is read, checked, fixed and set headlessly with `form_calculation_order`: it says which fields read one calculated later (they show stale values), which read each other in a loop, and which the PDF's order leaves out; Fix order moves only what must move, in one undo step, and the form recalculates. Editing a formula no longer moves its field to the end of the order, and a field the order lists twice calculates once. Estimates unchanged.
 - **2026-10-20 (M2, #3574):** Forms without Resources use page Properties for ActualText and layer visibility. Synthetic tests cover boundaries, nested/shared forms, and save/reopen. Estimates unchanged.
@@ -637,6 +640,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | M4, #3916 partial: document edits and Undo/Redo cancel Organize drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |
 | 2026-10-20 | minor | M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged. |

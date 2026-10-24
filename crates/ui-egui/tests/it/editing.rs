@@ -3090,6 +3090,45 @@ fn switching_straight_to_another_box_applies_the_open_paragraph() {
     assert_eq!(ed.text, "Bottom");
 }
 
+// Regression test for #811: text typed into an open paragraph was not counted as unsaved work, so
+// closing the tab or quitting discarded it without the save prompt.
+#[test]
+fn text_typed_into_an_open_paragraph_counts_as_unsaved_work() {
+    let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("box.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 300.0;
+    let block = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0).into_iter().next().expect("one editable box")
+    };
+    let center = egui::pos2(
+        r.left() + ((block.rect[0] + block.rect[2]) / 2.0) as f32 * k,
+        r.top() + (300.0 - (block.rect[1] + block.rect[3]) / 2.0) as f32 * k,
+    );
+    click_at(&mut h, center);
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Top"), "the paragraph is open for typing");
+    assert_eq!(h.state().first_dirty(), None, "opening a paragraph changes nothing");
+
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Top, and a draft not applied yet".into();
+    h.run_steps(1);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "the document itself is untouched until the draft is applied");
+    assert_eq!(h.state().first_dirty(), Some(0), "the draft in the open paragraph is unsaved work");
+
+    // Typing the original text back leaves nothing to lose.
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Top".into();
+    h.run_steps(1);
+    assert_eq!(h.state().first_dirty(), None, "a draft equal to the page text is not unsaved work");
+}
+
 /// Dark pixels in `r`: glyph ink on a white page.
 fn ink(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
     let (x0, y0, x1, y1) = (r.left().max(0.0) as u32, r.top().max(0.0) as u32, r.right() as u32, r.bottom() as u32);

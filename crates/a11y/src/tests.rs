@@ -367,6 +367,103 @@ fn reachable_tag_properties_round_trip_and_reject_unrelated_objects() {
     assert!(matches!(set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(4, 1), TagProperty::Title, Some("No")), Err(TagError::NotATag(_))));
 }
 
+/// A table (object 4) with a header cell (6) and a data cell (7); `th` is the header cell's
+/// dictionary and `extra` more objects from 8 on, of which the Document element (3) lists `kids`
+/// after the table. The role map maps /MyTable to /Table.
+fn table_doc(th: &str, extra: &[&str], kids: &str) -> Document {
+    let mut objs = vec![
+        "<< /Type /Catalog /StructTreeRoot 2 0 R >>".to_string(),
+        "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /MyTable /Table >> >>".to_string(),
+        format!("<< /S /Document /K [4 0 R {kids}] >>"),
+        "<< /S /Table /K [5 0 R] >>".to_string(),
+        "<< /S /TR /K [6 0 R 7 0 R] >>".to_string(),
+        th.to_string(),
+        "<< /S /TD >>".to_string(),
+    ];
+    objs.extend(extra.iter().map(|s| s.to_string()));
+    pdf(&objs, "")
+}
+
+/// The attribute objects of tag `r`'s /A entry as written (one object or an array).
+fn attributes(doc: &Document, r: pdfcraft_cos::ObjRef) -> Option<pdfcraft_cos::Object> {
+    doc.get(r).as_dict()?.get(b"A").cloned()
+}
+
+#[test]
+fn a_table_summary_is_a_table_attribute() {
+    let mut doc = table_doc("<< /S /TH >>", &["<< /S /MyTable >>"], "8 0 R");
+    let (table, th) = (pdfcraft_cos::ObjRef::new(4, 0), pdfcraft_cos::ObjRef::new(6, 0));
+    set_tag_property(&mut doc, table, TagProperty::Summary, Some("Opening hours by day")).unwrap();
+    let a = attributes(&doc, table).unwrap();
+    let a = a.as_dict().unwrap();
+    assert_eq!(a.name(b"O"), Some(&b"Table"[..]));
+    assert_eq!(
+        a.get(b"Summary").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(),
+        Some("Opening hours by day")
+    );
+    assert_eq!(tags(&doc).iter().find(|t| t.object == table).unwrap().summary.as_deref(), Some("Opening hours by day"));
+    // Only a table takes one (after the role map: /MyTable is a table).
+    assert!(matches!(set_tag_property(&mut doc, th, TagProperty::Summary, Some("No")), Err(TagError::WrongTagType(..))));
+    set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(8, 0), TagProperty::Summary, Some("Mapped")).unwrap();
+    // Cleared, the attribute object has nothing left and goes.
+    set_tag_property(&mut doc, table, TagProperty::Summary, None).unwrap();
+    assert_eq!(attributes(&doc, table), None);
+}
+
+#[test]
+fn a_header_cell_scope_keeps_its_other_attributes() {
+    // The cell's /A holds a layout attribute object, then a table one with a revision number.
+    let mut doc = table_doc("<< /S /TH /A [ << /O /Layout /Placement /Block >> << /O /Table /ColSpan 2 >> 1 ] >>", &[], "");
+    let th = pdfcraft_cos::ObjRef::new(6, 0);
+    set_tag_property(&mut doc, th, TagProperty::Scope, Some("Column")).unwrap();
+    let Some(pdfcraft_cos::Object::Array(items)) = attributes(&doc, th) else { panic!("{:?}", attributes(&doc, th)) };
+    assert_eq!(items.len(), 3, "{items:?}");
+    assert_eq!(items[0].as_dict().and_then(|d| d.name(b"O")), Some(&b"Layout"[..]));
+    let table = items[1].as_dict().unwrap();
+    assert_eq!((table.int(b"ColSpan"), table.name(b"Scope")), (Some(2), Some(&b"Column"[..])));
+    assert_eq!(items[2].as_int(), Some(1), "the revision number stays with its object");
+    assert_eq!(tags(&doc).iter().find(|t| t.object == th).unwrap().scope.as_deref(), Some("Column"));
+    // Cleared, the span stays.
+    set_tag_property(&mut doc, th, TagProperty::Scope, None).unwrap();
+    let Some(pdfcraft_cos::Object::Array(items)) = attributes(&doc, th) else { panic!() };
+    assert_eq!(items[1].as_dict().map(|d| (d.int(b"ColSpan"), d.contains(b"Scope"))), Some((Some(2), false)));
+    // A scope is Row, Column or Both, and only header cells have one.
+    for bad in ["row", "Sideways", " Both"] {
+        assert!(matches!(set_tag_property(&mut doc, th, TagProperty::Scope, Some(bad)), Err(TagError::InvalidScope)), "{bad}");
+    }
+    assert!(matches!(set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(7, 0), TagProperty::Scope, Some("Row")), Err(TagError::WrongTagType(..))));
+}
+
+/// With two Table attribute objects, the one holding the value is the one set and cleared
+/// (#4130 review): a value in the second isn't left behind or shadowed.
+#[test]
+fn the_table_attribute_object_holding_a_value_is_the_one_edited() {
+    let mut doc = table_doc("<< /S /TH /A [ << /O /Table /ColSpan 2 >> << /O /Table /Scope /Row >> ] >>", &[], "");
+    let th = pdfcraft_cos::ObjRef::new(6, 0);
+    let scopes = |doc: &Document| -> Vec<Option<Vec<u8>>> {
+        let Some(pdfcraft_cos::Object::Array(items)) = attributes(doc, th) else { return vec![] };
+        items.iter().map(|i| i.as_dict().and_then(|d| d.name(b"Scope")).map(<[u8]>::to_vec)).collect()
+    };
+    set_tag_property(&mut doc, th, TagProperty::Scope, Some("Column")).unwrap();
+    assert_eq!(scopes(&doc), [None, Some(b"Column".to_vec())]);
+    assert_eq!(tags(&doc).iter().find(|t| t.object == th).unwrap().scope.as_deref(), Some("Column"));
+    set_tag_property(&mut doc, th, TagProperty::Scope, None).unwrap();
+    assert_eq!(scopes(&doc), [None], "the second object had only the scope: {:?}", attributes(&doc, th));
+    assert_eq!(tags(&doc).iter().find(|t| t.object == th).unwrap().scope, None);
+}
+
+#[test]
+fn a_shared_attribute_object_is_not_changed_for_other_tags() {
+    // Both cells point at attribute object 8.
+    let mut doc = table_doc("<< /S /TH /A 8 0 R >>", &["<< /O /Table /Scope /Row >>"], "");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |d| d.set(b"A".to_vec(), pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(8, 0)))).unwrap();
+    set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(6, 0), TagProperty::Scope, Some("Both")).unwrap();
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(8, 0)).as_dict().and_then(|d| d.name(b"Scope")), Some(&b"Row"[..]));
+    let a = attributes(&doc, pdfcraft_cos::ObjRef::new(6, 0)).unwrap();
+    assert_eq!(a.as_dict().and_then(|d| d.name(b"Scope")), Some(&b"Both"[..]), "the cell's own copy: {a:?}");
+    assert_eq!(attributes(&doc, pdfcraft_cos::ObjRef::new(7, 0)), Some(pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(8, 0))));
+}
+
 #[test]
 fn tag_hierarchy_keeps_indirect_parent_through_inline_tags() {
     let doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /Sect /K << /S /Div /K 5 0 R >> >>".into(), "<< /S /Figure >>".into()]);

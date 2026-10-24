@@ -1,6 +1,6 @@
 # PdfCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (shared print spooler; Windows CI passes) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (xtask ci: translation gaps report) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft is built today. The design rationale and the planned crates live in
 `plan/architecture.md` and `plan/adr/` (local-only); this file describes what is on `main`. Each
@@ -99,7 +99,10 @@ Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
 
 ## Build and quality gates
 
-`cargo xtask ci` runs fmt, clippy (`-D warnings`), tests, the layering check, the WASM check,
+`cargo xtask ci` runs fmt, clippy (`-D warnings`), a check of `pdfcraft-cli` without default
+features, the tests (`xtask test`: cargo-nextest when installed, else `cargo test`, then the
+doctests), `xtask i18n-report` (the strings each interface language has no translation for; it
+never fails), the layering check, the WASM check (one `cargo check` over every crate below L8),
 `xtask assets` (asset licences and hashes), `xtask parity` (checklist claims must cite real commands,
 tools and tests) and `xtask deny` (dependency licences). Other tasks: `xtask fuzz`, `xtask corpus` and `xtask check` (robustness
 sweep over the pinned pdf.js corpus), `xtask text-oracle` (word F1 and reading order against `pdftotext`),
@@ -110,4 +113,6 @@ built by `.github/workflows/release.yml` ([releasing.md](releasing.md)).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | `xtask ci` prints the translation gaps (`xtask i18n-report`); a missing translation never fails it |
+| 2026-10-23 | minor | `xtask ci` runs nextest and doctests, checks the CLI without default features, and checks wasm in one call |
 | 2026-10-10 | major | Created from the code on main (crate list, `xtask/src/layers.rs`, crate READMEs, `vendor/README.md`) |
