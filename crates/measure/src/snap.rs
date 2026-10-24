@@ -857,15 +857,18 @@ pub enum Outline {
     Path { points: Vec<Point>, closed: bool },
     /// An oval in its box.
     Ellipse { rect: [f64; 4] },
+    /// A text box without a border: its corners, the middles of its sides and its centre snap, to
+    /// line things up with the text, but its sides, which aren't drawn, don't.
+    TextBox { rect: [f64; 4] },
 }
 
 /// At most this many comments of a page snap.
 const MAX_OUTLINES: usize = 10_000;
 
 /// The outlines of the comments on a page drawn with lines (lines and arrows, connected lines,
-/// polygons and clouds, rectangles, ovals, the frames of text with a border), each with its place
-/// in the page's `/Annots`, where they are drawn: inside `/RD` and half the border width in from
-/// `/Rect` for a rectangle, an oval or a frame. Hidden comments, freehand drawing and malformed entries are left out.
+/// polygons and clouds, rectangles, ovals, the frames of text with a border) and the boxes of
+/// text without one, each with its place in the page's `/Annots`, where they are drawn: inside
+/// `/RD` and half the border width in from `/Rect` for a rectangle, an oval or a frame. Hidden comments, freehand drawing and malformed entries are left out.
 pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize, Outline)>> {
     let p = crate::page(doc, page_index)?;
     let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
@@ -900,16 +903,20 @@ pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize,
                     .unwrap_or(1.0)
                     .max(0.0);
                 // A text box's, typewriter text's or callout's frame, where it has a border: its box,
-                // a callout's inside /RD. Text without a border has no line to snap to.
-                if kind == b"FreeText" && (!(d.contains(b"BS") || d.contains(b"Border")) || w <= 0.0) {
-                    continue;
-                }
-                let kind = if kind == b"FreeText" { b"Square".as_slice() } else { kind };
+                // a callout's inside /RD. Without a border, only its box's points snap.
+                let unframed = kind == b"FreeText" && (!(d.contains(b"BS") || d.contains(b"Border")) || w <= 0.0);
+                let (kind, w) = match kind {
+                    b"FreeText" if unframed => (b"TextBox".as_slice(), 0.0),
+                    b"FreeText" => (b"Square".as_slice(), w),
+                    other => (other, w),
+                };
                 <[f64; 4]>::try_from(r).ok().map(|r| {
                     let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
                     let h = w / 2.0;
                     let rect = [x0 + rd[0] + h, y0 + rd[1] + h, x1 - rd[2] - h, y1 - rd[3] - h];
-                    if kind == b"Square" {
+                    if kind == b"TextBox" {
+                        Outline::TextBox { rect }
+                    } else if kind == b"Square" {
                         let [a, b, c, e] = rect;
                         Outline::Path { points: vec![[a, b], [c, b], [c, e], [a, e]], closed: true }
                     } else {
@@ -921,7 +928,7 @@ pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize,
         };
         if let Some(outline) = outline.filter(|o| match o {
             Outline::Path { points, .. } => check_points(points).is_ok(),
-            Outline::Ellipse { rect } => rect.iter().all(|v| v.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1],
+            Outline::Ellipse { rect } | Outline::TextBox { rect } => rect.iter().all(|v| v.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1],
         }) {
             out.push((i, outline));
         }
@@ -966,6 +973,13 @@ pub fn outline_geometry<'a>(outlines: impl IntoIterator<Item = &'a Outline>) -> 
                     g.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
                     a = d;
                 }
+                g.centres.push([cx, cy]);
+            }
+            Outline::TextBox { rect } => {
+                let [x0, y0, x1, y1] = *rect;
+                let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                g.endpoints.extend([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+                g.midpoints.extend([[cx, y0], [x1, cy], [cx, y1], [x0, cy]]);
                 g.centres.push([cx, cy]);
             }
         }
