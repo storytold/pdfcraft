@@ -791,6 +791,8 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let fallback = Rc::new(Metrics::fallback());
     let mut stack: Vec<Gs> = Vec::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
+    // `Some(false)` while a text object's clipping glyphs are all being removed.
+    let mut clip_text: Option<bool> = None;
     let fonts_res = res_dict(doc, resources, b"Font");
     let ext_gstates = res_dict(doc, resources, b"ExtGState");
     let mut xobjects = res_dict(doc, resources, b"XObject");
@@ -926,6 +928,21 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 b"BT" => {
                     tm = Matrix::IDENTITY;
                     tlm = Matrix::IDENTITY;
+                    clip_text = None;
+                }
+                // A text object whose glyphs were the clipping path, and which has none left: the
+                // clip it set is empty, and an empty text clip is read two ways (#3451). Saying it
+                // with a path leaves no room for that -- every reader then clips everything away,
+                // which is what the glyphs now say, rather than flooding what they used to mask
+                // (#3644).
+                b"ET" if clip_text == Some(false) && scope.mode == Mode::Apply => {
+                    changed = true;
+                    ops.push(op);
+                    ops.push(Op::new("re", vec![num(0.0), num(0.0), num(0.0), num(0.0)]));
+                    ops.push(Op::new("W", vec![]));
+                    ops.push(Op::new("n", vec![]));
+                    clip_text = None;
+                    continue;
                 }
                 b"Tf" => {
                     gs.size = op.num(1).unwrap_or(gs.size);
@@ -1001,6 +1018,12 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                         out.vertical = true;
                     }
                     let (new_items, removed) = show(scope, &gs, &mut tm, &items);
+                    // Whether this text object still has a glyph that clips: `None` until one is
+                    // shown in a clipping mode, then `false` while they are all being removed.
+                    if (4..=7).contains(&gs.render_mode) && items.iter().any(|o| matches!(o, Object::String(t) if !t.bytes.is_empty())) {
+                        let kept = new_items.iter().any(|o| matches!(o, Object::String(t) if !t.bytes.is_empty()));
+                        clip_text = Some(clip_text.unwrap_or(false) || kept);
+                    }
                     if removed == 0 {
                         ops.push(op);
                         continue;
@@ -1158,7 +1181,13 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
                     let hit = match scope.hidden_text {
-                        // Invisible (Tr 3) and clip-only (Tr 7) text, or text wholly off the page.
+                        // Invisible (Tr 3) and clip-only (Tr 7) text, or text wholly off the
+                        // page. A clipping mode paints nothing itself, so such text is hidden
+                        // from the eye while staying extractable and searchable -- which is what
+                        // this pass exists to remove. Taking its glyphs leaves the clip the text
+                        // object set empty, and readers disagree about an empty text clip (#3451:
+                        // CoreGraphics admits nothing, pdf.js admits everything), so the rewrite
+                        // at `ET` says "nothing" in a way they all honour (#3644).
                         Some(page) => {
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
