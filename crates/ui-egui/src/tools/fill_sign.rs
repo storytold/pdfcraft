@@ -581,7 +581,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 r.request_focus();
                 t.focus = false;
             }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Taken here: the same press must not also leave the tool (one step back per press).
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 cancel = true;
             } else if r.lost_focus() {
                 commit = true;

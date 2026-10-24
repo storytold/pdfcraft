@@ -159,6 +159,33 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
     assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
 }
 
+/// Escape steps back out of a Fill & Sign tool as out of a comment tool: the first press closes
+/// the open type box, the next one leaves the Text tool for Select, so a click opens no new box.
+#[test]
+fn escape_leaves_the_fill_and_sign_tools() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    assert!(h.state().views[0].fill_text.is_some(), "a box is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].fill_text.is_none(), "the first Escape closes the box");
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Text), "the tool stays for the next box");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "the next Escape leaves the tool");
+    click(&mut h, 50.0, 150.0);
+    assert!(h.state().views[0].fill_text.is_none(), "no new box");
+    assert!(items(&h).is_empty(), "nothing was added: {:?}", items(&h));
+    // A mark tool too.
+    h.state_mut().execute("sign.fill.check");
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
 #[test]
 fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     let mut h = harness();
