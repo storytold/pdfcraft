@@ -780,53 +780,169 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
 
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
-    for spec in commands::menu(menu) {
-        let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
-        let label = crate::i18n::menu_label(spec.id, &label);
-        // Open Recent is a submenu of the live recent list, not one action: disabled while the
-        // list is empty, otherwise each entry opens its file (or focuses the tab showing it), and
-        // Clear Recent Files at the foot empties the list (#430).
-        if spec.id == "file.open_recent" {
-            if app.recent.is_empty() {
-                ui.add_enabled(false, egui::Button::new(label));
-                continue;
+    match layout(menu) {
+        Some(sections) => sectioned_menu(app, ui, menu, sections),
+        None => {
+            for spec in commands::menu(menu) {
+                menu_command(app, ui, spec);
             }
-            let mut open: Option<String> = None;
-            let mut clear = false;
-            ui.menu_button(label, |ui| {
-                crate::chrome::scroll_menu(ui, |ui| {
-                    for r in &app.recent {
-                        if ui.button(&r.name).on_hover_text(&r.path).clicked() {
-                            open = Some(r.path.clone());
-                            ui.close();
-                        }
-                    }
-                    ui.separator();
-                    if ui.button(tl!("Clear Recent Files")).clicked() {
-                        clear = true;
-                        ui.close();
-                    }
-                })
-            });
-            if let Some(p) = open {
-                app.open_recent(&p);
-                ui.close();
-            }
-            if clear {
-                app.execute("file.clear_recent");
-                ui.close();
-            }
-            continue;
-        }
-        let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
-        let enabled = app.command_enabled(spec);
-        let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
-        if resp.clicked() {
-            app.execute(spec.id);
-            ui.close();
         }
     }
     let _ = widgets::menu_item;
+}
+
+/// The sections a top-level menu is drawn in, for the menus laid out like Acrobat's; others list
+/// their commands in registry order.
+fn layout(menu: &str) -> Option<&'static [&'static [&'static str]]> {
+    match menu {
+        "File" => Some(FILE_MENU),
+        "Edit" => Some(EDIT_MENU),
+        _ => None,
+    }
+}
+
+/// Where File ▸ Create and File ▸ Export to sit in [`FILE_MENU`].
+const CREATE: &str = "@create";
+const EXPORT: &str = "@export";
+
+/// The File menu in Acrobat's order, one slice per section (separated): open and create; save;
+/// save as other and export; security; revert and close; properties (with Word count, which
+/// Acrobat lacks); print.
+const FILE_MENU: &[&[&str]] = &[
+    &["file.open", "file.open_recent", "file.pin_folder", CREATE],
+    &["file.save", "file.save_as"],
+    &["optimize.reduce", "optimize.advanced", EXPORT],
+    &["protect.password", "protect.remove", "protect.properties"],
+    &["file.revert", "file.close", "file.close_all"],
+    &["file.properties", "file.word_count"],
+    &["print.dialog"],
+];
+
+/// File ▸ Create, in Acrobat's order and groups (separated): PDFs from a source, PDFs from several
+/// files, then a blank page.
+const CREATE_MENU: &[&[&str]] =
+    &[&["create.file", "create.images", "create.clipboard"], &["page.combine", "create.multiple", "create.multiple_separate"], &["create.blank"]];
+
+/// File ▸ Export to, in Acrobat's order (separated): Word, PowerPoint, image and HTML; the other
+/// formats; the document's images.
+const EXPORT_MENU: &[&[&str]] =
+    &[&["export.docx", "export.pptx", "export.image", "export.html"], &["export.rtf", "export.text"], &["export.all_images"]];
+
+/// The Edit menu in Acrobat's order, one slice per section (separated): undo; selecting and
+/// copying (Acrobat's Cut, Copy, Paste); changing content (Edit PDF, Add Text); search;
+/// preferences.
+const EDIT_MENU: &[&[&str]] = &[
+    &["edit.undo", "edit.redo"],
+    &["edit.copy", "edit.column_select", "edit.snapshot"],
+    &["form.clear"],
+    &["edit.find", "edit.advanced_search"],
+    &["app.preferences"],
+];
+
+/// A top-level menu drawn from `sections`, with separators between them.
+fn sectioned_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str, sections: &[&[&str]]) {
+    for (i, section) in sections.iter().enumerate() {
+        if i > 0 {
+            ui.separator();
+        }
+        for &id in *section {
+            match id {
+                CREATE => submenu(app, ui, tl!("Create"), CREATE_MENU),
+                EXPORT => submenu(app, ui, tl!("Export to"), EXPORT_MENU),
+                _ => {
+                    if let Some(spec) = commands::command(id) {
+                        menu_command(app, ui, spec);
+                    }
+                }
+            }
+        }
+    }
+    // A command of this menu missing from the layout still appears, in a last section.
+    let listed = |id: &str| sections.iter().chain(CREATE_MENU).chain(EXPORT_MENU).any(|s| s.contains(&id));
+    let mut rest = commands::menu(menu).filter(|s| !listed(s.id)).peekable();
+    if rest.peek().is_some() {
+        ui.separator();
+    }
+    for spec in rest {
+        menu_command(app, ui, spec);
+    }
+}
+
+/// A submenu of registered commands, one slice per group (separated), as Acrobat's File ▸ Create
+/// and File ▸ Export to.
+fn submenu(app: &mut PdfCraftApp, ui: &mut egui::Ui, label: &str, groups: &[&[&str]]) {
+    let mut run: Option<&'static str> = None;
+    ui.menu_button(label, |ui| {
+        for (i, group) in groups.iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for spec in group.iter().filter_map(|id| commands::command(id)) {
+                if command_button(app, ui, spec) {
+                    run = Some(spec.id);
+                }
+            }
+        }
+    });
+    if let Some(id) = run {
+        app.execute(id);
+        ui.close();
+    }
+}
+
+/// One menu entry: a command button, or the Open Recent submenu.
+fn menu_command(app: &mut PdfCraftApp, ui: &mut egui::Ui, spec: &CommandSpec) {
+    // Open Recent is a submenu of the live recent list, not one action: disabled while the
+    // list is empty, otherwise each entry opens its file (or focuses the tab showing it), and
+    // Clear Recent Files at the foot empties the list (#430).
+    if spec.id == "file.open_recent" {
+        let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
+        let label = crate::i18n::menu_label(spec.id, &label);
+        if app.recent.is_empty() {
+            ui.add_enabled(false, egui::Button::new(label));
+            return;
+        }
+        let mut open: Option<String> = None;
+        let mut clear = false;
+        ui.menu_button(label, |ui| {
+            crate::chrome::scroll_menu(ui, |ui| {
+                for r in &app.recent {
+                    if ui.button(&r.name).on_hover_text(&r.path).clicked() {
+                        open = Some(r.path.clone());
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button(tl!("Clear Recent Files")).clicked() {
+                    clear = true;
+                    ui.close();
+                }
+            })
+        });
+        if let Some(p) = open {
+            app.open_recent(&p);
+            ui.close();
+        }
+        if clear {
+            app.execute("file.clear_recent");
+            ui.close();
+        }
+        return;
+    }
+    if command_button(app, ui, spec) {
+        app.execute(spec.id);
+        ui.close();
+    }
+}
+
+/// One registered command as a menu button with its live label, shortcut and enablement.
+/// Returns whether it was clicked.
+fn command_button(app: &PdfCraftApp, ui: &mut egui::Ui, spec: &CommandSpec) -> bool {
+    let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
+    let label = crate::i18n::menu_label(spec.id, &label);
+    let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
+    let enabled = app.command_enabled(spec);
+    ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut)).clicked()
 }
 
 #[cfg(test)]
@@ -855,6 +971,23 @@ mod tests {
         assert_eq!(command_shortcut_label(&ctx, "view.read_mode"), "⌃⌘H");
         assert_eq!(command_modifier_label(&ctx), "⌘");
         crate::i18n::set_current(previous);
+    }
+
+    #[test]
+    fn laid_out_menus_list_each_of_their_commands_once() {
+        for menu in ["File", "Edit"] {
+            let sections = layout(menu).unwrap();
+            let submenus: &[&[&str]] = if menu == "File" { &[CREATE_MENU, EXPORT_MENU].concat() } else { &[] };
+            let listed: Vec<&str> =
+                sections.iter().chain(submenus).flat_map(|s| s.iter().copied()).filter(|id| ![CREATE, EXPORT].contains(id)).collect();
+            for id in &listed {
+                assert!(commands::command(id).is_some_and(|s| s.menu == Some(menu)), "{id} is a {menu} command");
+                assert_eq!(listed.iter().filter(|x| *x == id).count(), 1, "{id} listed once");
+            }
+            for spec in commands::menu(menu) {
+                assert!(listed.contains(&spec.id), "{} has a place in the {menu} menu layout", spec.id);
+            }
+        }
     }
 
     /// Next and previous tab step one place and wrap around at either end; from no tab they go
