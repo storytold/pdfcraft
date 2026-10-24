@@ -1149,9 +1149,18 @@ fn short_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
-/// Offer bytes as a browser download.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// Set by [`crate::set_host_download`]: a host page takes the files instead of the browser.
+    pub(crate) static HOST_DOWNLOAD: std::cell::RefCell<Option<crate::HostDownloadFn>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Offer bytes as a browser download (or hand them to the host page, when there is one).
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    if let Some(sent) = HOST_DOWNLOAD.with(|h| h.borrow().as_ref().map(|f| f(name, bytes))) {
+        return sent;
+    }
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let array = js_sys::Uint8Array::from(bytes);
