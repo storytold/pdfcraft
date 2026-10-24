@@ -6,6 +6,49 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <!-- UI catalogs are embedded TSVs rather than .lproj resources. Tell AppKit which languages
+       the app supports so native Open/Save panels can follow the user's preferred languages.
+       Keep in sync with i18n::LANGUAGES (checked by macos_localizations.rs). -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>ja</string>
+    <string>zh-Hans</string>
+    <string>zh-Hant</string>
+    <string>cs</string>
+    <!-- The UI uses its Brazilian catalog for every Portuguese locale. Include the base
+         language too: pt-PT otherwise falls back to English rather than pt-BR in AppKit. -->
+    <string>pt</string>
+    <string>pt-BR</string>
+    <string>de</string>
+    <string>es</string>
+    <string>fr</string>
+    <string>ru</string>
+    <string>kk</string>
+    <string>bg</string>
+    <string>te</string>
+    <string>hu</string>
+    <string>uk</string>
+    <string>it</string>
+    <string>ar</string>
+    <string>pl</string>
+    <string>sl</string>
+    <string>el</string>
+    <string>tr</string>
+    <string>lt</string>
+    <string>vi</string>
+    <string>ckb</string>
+    <string>id</string>
+    <string>fi</string>
+    <string>sq</string>
+    <string>th</string>
+    <string>ca</string>
+    <string>ro</string>
+    <string>lo</string>
+    <string>hi</string>
+    <string>ko</string>
+    <string>nb</string>
+  </array>
   <key>CFBundleDisplayName</key>
   <string>PdfCraft</string>
   <key>CFBundleName</key>

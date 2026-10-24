@@ -1,10 +1,20 @@
 # Interface language
 
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (#2668 item 1: native macOS file-panel language declarations; overall localization remains partial)
+
 Choose **Menu > Edit > Preferences…** (Command-comma on macOS, Ctrl-comma elsewhere) **> Interface language** and select **Auto**, **English**, **日本語**, **简体中文**, **繁體中文**, **Čeština**, **Português (Brasil)**, **Deutsch**, **Español**, **Français**, **Русский**, **Қазақша**, **Български**, **తెలుగు**, **Magyar**, **Українська**, **Italiano**, **العربية**, **کوردیی ناوەندی**, **Polski**, **Slovenščina**, **Ελληνικά**, **Türkçe**, **Lietuvių**, **Tiếng Việt**, **Suomi**, **Shqip**, **Català**, **Română** or **Norsk bokmål**. The change applies immediately and persists between launches. Command ids, document contents and file names are unchanged.
 
 Displayed keyboard shortcuts use the same active interface language. For example, German shows `Strg+K` and `Strg+Umschalt+S` in the toolbar, menus, command palette, tooltips and Keyboard shortcuts dialog; macOS keeps its modifier symbols (`⌘`, `⇧`, `⌃`). Key names have their own `key` catalog context, so the Delete key can read `Entf` while the command remains `Löschen`. A missing key-name entry falls back to the English key name. Actual bindings and machine-facing command ids remain stable.
 
 **Auto** (the default) follows the system language: `LC_ALL`, `LC_MESSAGES` or `LANG`, then the preferred-languages list on macOS. Any Portuguese locale (`pt_BR`, `pt_PT`) uses the Brazilian catalog, any French locale (`fr`, `fr_FR`, `fr_CA`, `fr_BE`) the French one, any German locale (`de`, `de_DE`, `de_AT`, `de_CH`) the German one, and Chinese locales for Taiwan, Hong Kong and Macau (`zh_TW`, `zh_HK`, `zh_MO`, `zh-Hant`) the Traditional Chinese one; other Chinese locales (`zh`, `zh_CN`, `zh_SG`, `zh-Hans`) the Simplified Chinese one. Telugu locales (`te`, `te_IN`) use the Telugu catalog, Bulgarian locales (`bg`, `bg_BG`) the Bulgarian one, and Hungarian locales (`hu`, `hu_HU`) the Hungarian one, and Ukrainian locales (`uk`, `uk_UA`) the Ukrainian one, and Italian locales (`it`, `it_IT`, `it_CH`) the Italian one, and Arabic locales (`ar`, `ar_MA`, `ar_EG`, `ar_SA`, …) the Arabic one, and Turkish locales (`tr`, `tr_TR`) the Turkish one, and Slovenian locales (`sl`, `sl_SI`) the Slovenian one, Vietnamese locales (`vi`, `vi_VN`) the Vietnamese one, Albanian locales (`sq`, `sq_AL`, `sq_XK`, …) the Albanian one, Catalan locales (`ca`, `ca_ES`, `ca_AD`, `ca_ES@valencia`, …) the Catalan one, and Romanian locales (`ro`, `ro_RO`, `ro-RO`, `ro_MD`) the Romanian one. Norwegian Bokmål locales (`nb`, `nb_NO`) use the Bokmål catalog, and so do general Norwegian (`no`, `no_NO`) and Nynorsk (`nn`, `nn_NO`), which have no catalog of their own. A system language without a catalog shows English. On Windows, **Auto** uses the Windows display languages, in preference order, when no supported locale is selected by those environment variables. Neutral `C`/`POSIX` locale values (including `C.UTF-8`) inherited from a launcher do not override the Windows display language; explicitly named supported locales such as `fr_FR.UTF-8` still do. The query asks Windows directly (`GetUserPreferredUILanguages`, through the `sys-locale` crate) without starting a process, and is cached for the process. If detection fails or the display language has no catalog, PdfCraft shows English.
+
+On macOS, the native Open and Save panels use macOS's preferred application languages at launch,
+among the languages declared in the app bundle (`CFBundleLocalizations`). The bundle declares
+the UI catalog languages, plus base `pt` because the UI uses its Brazilian Portuguese catalog
+for other Portuguese locales too; unsupported preferences fall back to English. The panels'
+standard labels come from AppKit. Changing PdfCraft's interface-language preference changes
+its own labels immediately, but does not change macOS's language preference or retitle native
+panels. No system-language setting is written by PdfCraft.
 
 The control channel exposes the setting through `ui.set`:
 
@@ -93,6 +103,16 @@ Error details that come from the operating system, and faults rather than mistak
 
 1. Copy the header of `ja.tsv` into `xx.tsv` and translate entries.
 2. Add one row to `LANGUAGES` in `crates/ui-egui/src/i18n/mod.rs`: code, native name, catalog and plural rule.
-3. Add an `ATTRIBUTION.toml` entry for the catalog (`kind = "translation"`, no `sha256`), then run `cargo xtask assets --write` (it regenerates `ATTRIBUTION.md` only) and `cargo xtask assets`.
+3. Add the same BCP 47 language code to `CFBundleLocalizations` in `packaging/macos/Info.plist.in`.
+   Keep base `pt` alongside `pt-BR` for the Portuguese locale fallback. The
+   `macos_bundle_declares_ui_languages_and_english_fallback` integration test checks the declaration
+   against the registry; macOS packaging also validates the plist with `plutil`.
+4. Add an `ATTRIBUTION.toml` entry for the catalog (`kind = "translation"`), with the catalog's `sha256sum` as `sha256`, then run `cargo xtask assets --write` (it regenerates `ATTRIBUTION.md` only) and `cargo xtask assets`.
 
 The Preferences dropdown, the system-language match, the catalog tests (format, duplicates, placeholders, plural forms, command ids) and the translation gaps report then pick it up.
+
+## Revision history
+
+| Date | Change | Summary |
+| --- | --- | --- |
+| 2026-10-17 | minor | #2668 item 1: declare native macOS file-panel languages, retain English fallback and document the distinction from the in-app preference. |
