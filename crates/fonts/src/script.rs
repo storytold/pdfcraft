@@ -158,6 +158,26 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
     bounded_outline(&font, gid, width)
 }
 
+/// Whether `face` can draw every character of `text`: a cmap lookup and an advance per character,
+/// with no outline taken. Lets a caller keep one line in one face — a line drawn half in a Japanese
+/// and half in a Chinese face mixes two sets of vertical metrics — instead of finding out one
+/// character at a time that a face cannot draw it.
+///
+/// The advance is checked the way [`japanese_glyph_from`] checks it, so a character that is in the
+/// cmap but draws nothing (a combining mark) counts as missing here as it does there.
+pub fn covers_text(face: &crate::CraftFont, text: &str) -> bool {
+    let Ok(font) = FontRef::new(face.bytes) else { return false };
+    let loc = LocationRef::default();
+    let scale = 1.0 / font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
+    let charmap = font.charmap();
+    let advances = font.glyph_metrics(Size::unscaled(), loc);
+    text.chars().all(|ch| {
+        let Some(gid) = charmap.map(ch) else { return false };
+        let width = advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
+        width.is_finite() && width > 0.0 && width <= 2.0
+    })
+}
+
 /// Glyph `gid` of `font` in em units with advance `width`, bounded like [`japanese_glyph`].
 pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Result<GlyphOutline, GlyphError> {
     let loc = LocationRef::default();

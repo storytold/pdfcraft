@@ -152,6 +152,41 @@ pub fn document_japanese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'stati
     document_faces(CRAFT_FONTS, serif, bold)
 }
 
+/// Every `Hans` face that can stand in for the document text, the best match for the style first
+/// (a serif source keeps a serif stand-in, a sans source a sans one, the requested weight before
+/// Regular), then the others. Not every face has every glyph, so a caller can move on to the next
+/// one.
+///
+/// Empty without craft-fonts, and empty in every official build until craft-fonts carries a
+/// Chinese face: AGENTS.md §1.1 keeps Source Han and Noto CJK out. Where it is empty, Han text
+/// still falls back to the Japanese faces alone, which have no glyph for the Simplified-only
+/// characters (联 U+8054, 频 U+9891, 专 U+4E13 …); #2095.
+pub fn document_chinese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'static CraftFont> {
+    document_hans_faces(CRAFT_FONTS, serif, bold)
+}
+
+fn document_hans_faces(faces: &[CraftFont], serif: bool, bold: bool) -> Vec<&CraftFont> {
+    let hans = || faces.iter().filter(|f| f.covers("Hans"));
+    let style = if bold { "Bold" } else { "Regular" };
+    let mut preferred = Vec::new();
+    preferred.extend(hans().find(|f| f.style == style && is_serif_family(f.family) == serif));
+    preferred.extend(hans().find(|f| f.style == style));
+    preferred.extend(hans().find(|f| f.style == "Regular" && is_serif_family(f.family) == serif));
+    let mut out: Vec<&CraftFont> = Vec::new();
+    for face in preferred.into_iter().chain(hans().filter(|f| f.style == "Regular")).chain(hans()) {
+        if !out.iter().any(|f| std::ptr::eq(*f, face)) {
+            out.push(face);
+        }
+    }
+    out
+}
+
+/// Whether a family name reads as a serif design ("Noto Serif SC", "Songti SC" …): the manifest
+/// says nothing else about how a face is drawn.
+fn is_serif_family(family: &str) -> bool {
+    family.contains("Serif") || family.contains("Song")
+}
+
 /// The scripts the bundled Inter faces are for.
 static LATIN_SCRIPTS: &[&str] = &["Latn", "Cyrl", "Grek"];
 
@@ -346,6 +381,28 @@ mod tests {
         }
         assert_eq!(document_latin_fonts(false)[0].style, "Regular");
         assert_eq!(document_latin_fonts(true)[0].style, "SemiBold");
+    }
+
+    /// The `Hans` faces a build has, serif with a serif source and sans with a sans one, the
+    /// requested weight first: a 宋体 line must not be redrawn in a sans face (#2095).
+    #[test]
+    fn chinese_document_faces_follow_the_style_and_weight() {
+        static HANS_LATN: &[&str] = &["Hans", "Latn"];
+        static JPAN: &[&str] = &["Jpan"];
+        let faces = [
+            CraftFont { family: "FakeSansSC", style: "Bold", scripts: HANS_LATN, bytes: b"sans-bold" },
+            CraftFont { family: "FakeSansSC", style: "Regular", scripts: HANS_LATN, bytes: b"sans" },
+            CraftFont { family: "FakeSerifSC", style: "Regular", scripts: HANS_LATN, bytes: b"serif" },
+            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: JPAN, bytes: b"japanese" },
+        ];
+        let bytes_of = |serif, bold| -> Vec<&[u8]> { document_hans_faces(&faces, serif, bold).iter().map(|f| f.bytes).collect() };
+        assert_eq!(bytes_of(false, false), [&b"sans"[..], &b"serif"[..], &b"sans-bold"[..]]);
+        assert_eq!(bytes_of(true, false), [&b"serif"[..], &b"sans"[..], &b"sans-bold"[..]]);
+        assert_eq!(bytes_of(false, true), [&b"sans-bold"[..], &b"sans"[..], &b"serif"[..]]);
+        // Japanese faces are never a Chinese stand-in, and a build without a `Hans` face — every
+        // official one today — gets none.
+        assert!(document_hans_faces(&faces[3..], false, false).is_empty());
+        assert_eq!(document_chinese_fonts_for_style(false, false).len(), CRAFT_FONTS.iter().filter(|f| f.covers("Hans")).count());
     }
 
     #[test]
