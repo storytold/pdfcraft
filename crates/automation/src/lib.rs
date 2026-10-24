@@ -1308,7 +1308,7 @@ impl Automation {
         };
         let target = match a.opt_int("target_bytes")? {
             None => None,
-            Some(t) if t >= 1 => Some(t as usize),
+            Some(t) if t >= 1 => Some(usize::try_from(t).map_err(|_| ToolError::InvalidArgs(format!("target_bytes {t} is too large")))?),
             Some(t) => return Err(ToolError::InvalidArgs(format!("target_bytes must be at least 1, not {t}"))),
         };
         let (mut bytes, mut r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
