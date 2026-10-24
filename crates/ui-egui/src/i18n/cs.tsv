@@ -2563,6 +2563,8 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Převedeno z knihy EPUB. Podrobnosti uvádějí, jak byla rozvržena a co bylo vynecháno.
 	Attach a file…	Připojit soubor…
 	Delete attachment	Odstranit přílohu
 	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici

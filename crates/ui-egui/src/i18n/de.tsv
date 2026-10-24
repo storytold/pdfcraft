@@ -2490,6 +2490,8 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Aus einem EPUB-Buch konvertiert. Details zeigt, wie es gesetzt wurde und was weggelassen wurde.
 	Attach a file…	Datei anhängen…
 	Delete attachment	Anhang löschen
 	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar

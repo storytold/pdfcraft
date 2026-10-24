@@ -1078,8 +1078,10 @@ pub enum OpenOutcome {
 
 impl PdfCraftApp {
     pub fn new() -> Self {
+        let mut session = Session::new();
+        session.set_book_paper(create_ui::regional_paper());
         Self {
-            session: Session::new(),
+            session,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -1453,6 +1455,14 @@ impl PdfCraftApp {
             open_worker::ResultKind::Failed(reason) => {
                 self.notify_fmt("Couldn't open {name}: {reason}", &[("name", &pending.name), ("reason", &reason)]);
             }
+            open_worker::ResultKind::Book(book) => match self.open_book(&pending.name, book) {
+                Ok(()) => {
+                    if let Some(command) = pending.then {
+                        self.execute(command);
+                    }
+                }
+                Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
+            },
             open_worker::ResultKind::Conversion(bytes) => match self.open_converted(&pending.name, &bytes) {
                 Some(Ok(())) => {
                     if let Some(command) = pending.then {

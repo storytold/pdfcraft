@@ -6888,6 +6888,18 @@ evidence = ["crates/create/src/tests.rs::bmp_gif_and_multi_page_tiff_images", "c
 notes = "every page; 1-bit scans stay 1-bit; resolution from the TIFF; classic TIFF and BigTIFF"
 
 [[feature]]
+id = "create.from-epub"
+title = "Create PDF from an EPUB book"
+area = "J"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["create.file"]
+tools = ["doc_create"]
+evidence = ["crates/create/src/epub/tests.rs::a_reflowable_book_becomes_pages_with_its_contents_links_and_metadata", "crates/create/src/epub/tests.rs::a_fixed_layout_book_is_a_page_per_document_at_its_viewport", "crates/create/src/epub/tests.rs::a_protected_book_is_refused_with_a_plain_reason", "crates/create/src/epub/tests.rs::an_obfuscated_book_font_is_undone_and_embedded", "crates/create/src/epub/zip.rs::a_zip_bomb_stops_at_the_cap", "crates/create/src/epub/zip.rs::names_that_leave_the_book_are_refused", "crates/create/src/epub/layout.rs::paragraphs_wrap_justify_and_turn_pages", "crates/engine/src/books.rs::a_book_opens_with_its_text_title_and_notes", "crates/automation/tests/it/automation.rs::creating_a_pdf_from_an_epub_book", "crates/ui-egui/tests/it/create.rs::opening_an_epub_book_converts_it_and_says_so"]
+notes = "Not an Acrobat feature (#493, #2620). EPUB 2 and 3: our own block layout, no browser engine. Reflowable books on the region's paper (US Letter in US/PR/CA/MX, A4 elsewhere; said in the repair log), 54 pt margins; paragraphs, headings, lists, blockquotes, pre, simple tables (equal columns), images scaled to the text width, rules, page breaks; inline bold/italic/underline/strike/sub/sup, colour, links (internal as destinations, external as URI actions). CSS subset: style sheets and style=\"\", type/class/id/universal selectors with descendant and child combinators, specificity, !important, @font-face; font-size/weight/style/family, text-align, text-indent, margins and padding, line-height, colour, page breaks, display:none, text-transform, list-style-type, direction. Line breaking by UAX #14 (unicode-linebreak), bidi by UAX #9, shaping by harfrust; the book's fonts (IDPF and Adobe font obfuscation undone), the standard 14, Inter, then craft-fonts faces. Fixed-layout books: a page per content document at its viewport; a page that is one picture fills it, positioned boxes are placed, anything else is reflowed on pages of that size (noted). Contents (nav or NCX) become bookmarks; title, authors and language go to Info, XMP and /Lang; right-to-left page progression sets /Direction R2L. A DRM-protected book (encryption other than font obfuscation, rights.xml, LCP) is refused. The container reader caps entry count and sizes (zip bombs) and refuses names that leave the book. Not converted, and said in the repair log: scripts, MathML, audio/video, inline SVG drawings, SVG text, WOFF fonts, floats/columns/grids, vertical writing, characters no font has."
+
+[[feature]]
 id = "create.from-text"
 title = "Create PDF from plain text"
 area = "J"

@@ -8434,6 +8434,56 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A one-chapter EPUB (`drm` adds encryption that isn't font obfuscation).
+fn tiny_epub(drm: bool) -> Vec<u8> {
+    let mut z = pdfcraft_export::Zip::default();
+    z.add("mimetype", b"application/epub+zip", false);
+    z.add(
+        "META-INF/container.xml",
+        br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        true,
+    );
+    if drm {
+        z.add(
+            "META-INF/encryption.xml",
+            br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="a.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>"#,
+            true,
+        );
+    }
+    z.add(
+        "c.opf",
+        br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="i"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="i">urn:uuid:0</dc:identifier><dc:title>Tiny Book</dc:title><dc:language>en</dc:language></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>"#,
+        true,
+    );
+    z.add(
+        "a.xhtml",
+        br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>a</title></head><body><h1>First Chapter</h1><p>It was a bright cold day.</p></body></html>"#,
+        true,
+    );
+    z.finish()
+}
+
+#[test]
+fn creating_a_pdf_from_an_epub_book() {
+    let dir = workdir("epub-book");
+    std::fs::write(dir.join("tiny.epub"), tiny_epub(false)).unwrap();
+    std::fs::write(dir.join("locked.epub"), tiny_epub(true)).unwrap();
+    let mut a = auto(&dir);
+    let r = ok(&mut a, "doc_create", json!({ "from": "epub", "path": "tiny.epub", "paper": "a4" }));
+    assert_eq!(r["name"], "tiny.pdf");
+    assert!(r["notes"][0].as_str().unwrap().contains("A4"), "{r}");
+    let doc = r["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["title"], "Tiny Book");
+    assert!(!info["repairs"].as_array().unwrap().is_empty());
+    let text = ok(&mut a, "text_extract", json!({ "doc": doc }));
+    assert!(text.to_string().contains("bright cold day"), "{text}");
+    // A book protected by DRM is refused, saying so.
+    let err = a.call("doc_create", &json!({ "from": "epub", "path": "locked.epub" })).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("DRM"), "{err}");
+    assert!(a.call("doc_create", &json!({ "from": "epub", "path": "tiny.epub", "paper": "legal" })).is_err());
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

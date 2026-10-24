@@ -14,6 +14,7 @@
 
 pub mod actions;
 pub mod autotag;
+pub mod books;
 pub mod build_info;
 pub mod camera;
 pub mod camera_clean;
@@ -55,7 +56,7 @@ pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
+pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, paper_for_region, region_of, source_kind};
 pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
     text_width as added_text_width,
@@ -410,6 +411,8 @@ pub struct Document {
     pub password: Option<String>,
     /// `true` when there are edits that have not been saved.
     pub dirty: bool,
+    /// Converted from an EPUB book this session; its repair log holds the conversion's notes.
+    pub from_book: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
     generation: u64,
     /// The generation last handed out by `autosave_snapshots`.
@@ -3225,6 +3228,8 @@ pub struct Session {
     date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
     date_language: Option<String>,
+    /// The paper reflowed EPUB books are set on (`books`); US Letter when unset.
+    book_paper: Option<(f64, f64)>,
 }
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -3233,6 +3238,8 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    /// The paper an EPUB opened through this context is set on.
+    book_paper: (f64, f64),
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -3253,6 +3260,21 @@ impl OpenContext {
         guard(|| Session::prepare_open_unguarded(self, name, path, bytes, password))
             .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))))
     }
+}
+
+/// A new file's bytes, its modification date `now`.
+fn write_dated(doc: &pdfcraft_cos::Document, now: Option<i64>) -> Result<Arc<Vec<u8>>, EditError> {
+    let opts = SaveOptions { mod_date: now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+    write_full(doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+}
+
+/// A new file written and checked like a save (see [`Session::write_new`]), dated `now`.
+pub(crate) fn write_checked(doc: &pdfcraft_cos::Document, now: Option<i64>) -> Result<Arc<Vec<u8>>, EditError> {
+    let bytes = write_dated(doc, now)?;
+    let expected = pdfcraft_organize::page_count(doc)?;
+    pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
+    pdfcraft_render::check_pages(bytes.clone(), None, expected).map_err(|e| EditError::Reopen(e.to_string()))?;
+    Ok(bytes)
 }
 
 /// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
@@ -3629,7 +3651,7 @@ impl Session {
 
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone() }
+        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), book_paper: self.book_paper() }
     }
 
     /// Prepare a document without adding it to this session.
@@ -3912,6 +3934,7 @@ impl Session {
             renderer,
             password: render_password,
             dirty: false,
+            from_book: false,
             generation: 0,
             snapshot_generation: 0,
             read_only_reason,
@@ -4657,7 +4680,7 @@ impl Session {
     /// (it must open and allow copying pages) and returned as it is.
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
-            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
+            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image, a .txt file or an EPUB book")));
         };
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
@@ -4665,6 +4688,7 @@ impl Session {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
+            SourceKind::Epub => self.create_from_epub(name, bytes).map(|(pdf, _notes)| pdf),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
@@ -4676,7 +4700,7 @@ impl Session {
     pub fn as_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
         let pdf = match source_kind(name, bytes) {
             Some(SourceKind::Pdf) => true,
-            Some(SourceKind::Image | SourceKind::Text) => false,
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Epub) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
         if pdf { Ok(bytes.clone()) } else { self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf) }
@@ -5093,20 +5117,16 @@ impl Session {
     /// A new file (Combine, Extract, Split, Create) as bytes, checked like a save before anyone
     /// writes it (#1698, #2166): it reopens, and shows the pages it was built from.
     fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
-        let bytes = self.write_unchecked(doc)?;
-        let expected = pdfcraft_organize::page_count(doc)?;
-        pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
-        pdfcraft_render::check_pages(bytes.clone(), None, expected).map_err(|e| EditError::Reopen(e.to_string()))?;
-        Ok(bytes)
+        let doc = writable(doc)?;
+        write_checked(&doc, self.now())
     }
 
     /// [`Self::write_new`] without the check, for bytes nobody writes: measuring a part's size.
     /// Like a save, a new file never carries a typed Password-field value (#3926): Extract and
     /// Split copy the fields of the pages they take.
     fn write_unchecked(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         let doc = writable(doc)?;
-        write_full(&doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+        write_dated(&doc, self.now())
     }
 
     /// Whether a changed document still needs a recovery snapshot. This does not consume it.

@@ -2781,6 +2781,7 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Convertit d'un llibre EPUB. Els detalls expliquen com s'ha disposat i què s'ha deixat fora.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
