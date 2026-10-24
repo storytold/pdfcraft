@@ -958,8 +958,8 @@ impl PdfCraftApp {
             space_hand: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
-            theme: ThemeKind::Light,
-            theme_preference: ThemePreference::Light,
+            theme: ThemeKind::Light, // fallback until the first frame resolves the system theme
+            theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
             #[cfg(target_os = "linux")]
             desktop_theme: None,

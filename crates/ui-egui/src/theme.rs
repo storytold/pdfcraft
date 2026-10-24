@@ -14,10 +14,12 @@ pub enum ThemeKind {
 }
 
 /// The saved user choice, independent of the light/dark colours currently displayed.
+/// The default follows the system: a fresh install matches the OS light/dark setting
+/// instead of always starting in light mode. A theme menu choice overrides it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ThemePreference {
-    System,
     #[default]
+    System,
     Light,
     Dark,
 }
