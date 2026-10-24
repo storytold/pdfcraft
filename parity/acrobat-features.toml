@@ -2070,8 +2070,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.image"]
 tools = ["page_add_image"]
-evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable"]
-notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only)"
+evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/ui-egui/tests/it/content.rs::image_files_on_the_clipboard_are_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable"]
+notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way, and image files copied in Explorer, Finder or a file manager each in its own format, as is an image copied with Copy Image in its original format (desktop only). Several pasted files are placed one over the other, one undo step each; at most 50 files of up to 256 MB each, and 512 MB together, are taken per paste"
 
 [[feature]]
 id = "edit.image-replace"

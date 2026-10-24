@@ -331,6 +331,95 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
 
+/// #1289: ⌘V / Ctrl+V with image files copied in Explorer or Finder places them on the current
+/// page in their own format; copied files that aren't pictures are left alone.
+#[test]
+fn image_files_on_the_clipboard_are_pasted_onto_the_page() {
+    use pdfcraft_ui_egui::Clip;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-paste-image-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("folder.png")).unwrap();
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 30, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[90u8; 1800]).unwrap();
+    }
+    std::fs::write(dir.join("Copied.PNG"), &png).unwrap();
+    std::fs::write(dir.join("second.png"), &png).unwrap();
+    std::fs::write(dir.join("notes.pdf"), include_bytes!("../data/form.pdf")).unwrap();
+    let mut h = harness();
+    let paste = |h: &mut Harness<'static, PdfCraftApp>, files: &[&str]| {
+        h.state_mut().toast = None;
+        h.state_mut().clipboard_override = Some(Clip::Files(files.iter().map(|f| dir.join(f)).collect()));
+        h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.run_steps(3);
+        // The files are read on a worker thread and placed on a later frame.
+        for _ in 0..500 {
+            if !h.state().paste_reading() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            h.run_steps(1);
+        }
+        assert!(!h.state().paste_reading(), "the copied files were read");
+        h.run_steps(2);
+    };
+    let toast = |h: &Harness<'static, PdfCraftApp>| h.state().toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    // A PDF and a folder (even one named like a picture) are not pictures for the page.
+    paste(&mut h, &["notes.pdf", "folder.png"]);
+    assert!(added(&h).is_empty());
+    assert_eq!(h.state().views.len(), 1, "nothing opens");
+    assert!(toast(&h).starts_with("None of the copied files is a picture"), "{}", toast(&h));
+    // So do folders alone.
+    paste(&mut h, &["folder.png"]);
+    assert!(toast(&h).starts_with("None of the copied files is a picture"), "{}", toast(&h));
+    // A copied file that is gone says so, and that isn't hidden by the PDF beside it.
+    paste(&mut h, &["notes.pdf", "missing.png"]);
+    assert!(added(&h).is_empty());
+    assert!(toast(&h).starts_with("Couldn't read"), "{}", toast(&h));
+    paste(&mut h, &["notes.pdf", "Copied.PNG"]);
+    let a = added(&h);
+    assert_eq!(a.len(), 1, "only the image file");
+    let pdfcraft_engine::AddedContent::Image(img) = &a[0].content else { panic!("an image was added") };
+    assert_eq!(img.rect, [135.0, 190.0, 165.0, 210.0], "in the middle of the page, at its own size");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    // Two at once: both placed, the last one selected.
+    paste(&mut h, &["Copied.PNG", "second.png"]);
+    // A document that doesn't allow changes says so, once, and that isn't hidden by the notice
+    // for a paste with no pictures.
+    {
+        let app = h.state_mut();
+        let protected = app.session.create_from_text("restricted", "no changes").unwrap();
+        app.open_bytes("restricted.pdf", None, protected.to_vec()).unwrap();
+        let id = app.views[1].id;
+        app.session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+                    permissions_password: Some("owner".into()),
+                    changes: pdfcraft_engine::Changes::None,
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let bytes = app.session.save_bytes(id).unwrap();
+        app.open_bytes("restricted-saved.pdf", None, bytes.as_ref().clone()).unwrap();
+    }
+    h.run_steps(3);
+    let restricted = h.state().views[2].id;
+    assert!(!h.state().session.get(restricted).unwrap().allows_modification());
+    paste(&mut h, &["Copied.PNG", "second.png"]);
+    assert!(h.state().session.get(restricted).unwrap().added().is_empty());
+    assert!(!toast(&h).is_empty() && !toast(&h).starts_with("None of the copied files"), "{}", toast(&h));
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(added(&h).len(), 3, "{}", toast(&h));
+    assert_eq!(h.state().views[0].content.selected, Some((0, 2)));
+}
+
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
 /// written to the page as `?` (or lost).
 #[test]
