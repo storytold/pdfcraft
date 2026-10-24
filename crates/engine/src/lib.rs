@@ -1466,12 +1466,14 @@ pub enum Edit {
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
     /// and centred in it (#4077).
+    /// `line` is a text line under the picture, already filled in ([`Session::stamp_line`]).
     AddCustomStamp {
         page: usize,
         rect: [f64; 4],
         name: String,
         file: MarkFile,
         author: String,
+        line: Option<String>,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
@@ -2522,9 +2524,12 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
-        Edit::AddCustomStamp { page, rect, name, file, author } => {
+        Edit::AddCustomStamp { page, rect, name, file, author, line } => {
             let src = mark_source(doc, file)?;
-            let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
+            let line = line.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(MAX_STAMP_LINE).collect::<String>());
+            let picture = (src.size.0.max(1.0), src.size.1.max(1.0));
+            // A text line adds its band under the picture, and widens the stamp to fit (#1741).
+            let (sw, sh) = pdfcraft_annot::custom_stamp_size(picture, line.as_deref());
             let natural = rect[2] == rect[0] && rect[3] == rect[1];
             let rotation = pdfcraft_organize::page_rotation(doc, *page)?;
             // The picture as displayed: a quarter turn swaps its sides in user space.
@@ -2536,7 +2541,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             } else {
                 fit_picture(*rect, dw, dh)
             };
-            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
+            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: picture, line };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
@@ -3077,6 +3082,9 @@ impl From<pdfcraft_sign::SignError> for EditError {
     }
 }
 
+/// How long a custom stamp's text line may be, in characters (#1741).
+pub const MAX_STAMP_LINE: usize = 200;
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<Document>,
@@ -3465,20 +3473,54 @@ impl Session {
         return None;
     }
 
-    /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
-    /// is taken as local time.
     /// A dynamic stamp's second line: "By Ada at 2:14 pm, Oct 02, 2026" (local time).
     pub fn stamp_by_line(&self, author: &str) -> String {
+        let (date, time) = self.stamp_date_time();
+        let who = if author.trim().is_empty() { String::new() } else { format!("By {} ", author.trim()) };
+        format!("{who}at {time}, {date}")
+    }
+
+    /// A custom stamp's text line (#1741): `template` with `{name}` (the author), `{date}`
+    /// ("Oct 02, 2026") and `{time}` ("2:14 pm") filled in now, in local time, as the dynamic
+    /// stamps' "By" line has them. Cut to [`MAX_STAMP_LINE`] characters.
+    pub fn stamp_line(&self, template: &str, author: &str) -> String {
+        let (date, time) = self.stamp_date_time();
+        // One pass over the template, so a placeholder the author's name happens to contain
+        // (`Ada {date}`) stays as written rather than being filled in too.
+        let mut filled = String::new();
+        let mut rest = template.trim();
+        while let Some(c) = rest.chars().next() {
+            if let Some(after) = rest.strip_prefix("{name}") {
+                filled.push_str(author.trim());
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("{date}") {
+                filled.push_str(&date);
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("{time}") {
+                filled.push_str(&time);
+                rest = after;
+            } else {
+                filled.push(c);
+                rest = rest.get(c.len_utf8()..).unwrap_or_default();
+            }
+        }
+        filled.chars().take(MAX_STAMP_LINE).collect()
+    }
+
+    /// Now, as the stamps write it: ("Oct 02, 2026", "2:14 pm"), local time.
+    fn stamp_date_time(&self) -> (String, String) {
         let offset = self.local_offset();
         let d = self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).unwrap_or_default();
         let num = |a: usize, b: usize| d.get(a..b).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
         let (y, mo, day, hh, mm) = (num(2, 6), num(6, 8), num(8, 10), num(10, 12), num(12, 14));
         const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         let h12 = if hh % 12 == 0 { 12 } else { hh % 12 };
-        let who = if author.trim().is_empty() { String::new() } else { format!("By {} ", author.trim()) };
-        format!("{who}at {h12}:{mm:02} {}, {} {day:02}, {y}", if hh < 12 { "am" } else { "pm" }, MONTHS[(mo.clamp(1, 12) - 1) as usize])
+        let month = MONTHS.get(mo.clamp(1, 12) as usize - 1).copied().unwrap_or("Jan");
+        (format!("{month} {day:02}, {y}"), format!("{h12}:{mm:02} {}", if hh < 12 { "am" } else { "pm" }))
     }
 
+    /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
+    /// is taken as local time.
     pub fn today(&self) -> (i64, u32, u32) {
         let offset = self.local_offset();
         self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))

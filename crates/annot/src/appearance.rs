@@ -291,7 +291,9 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let (what, text) = match d.name(b"Subtype")? {
         b"FreeText" => ("the comment's text", text(b"Contents")?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
-        b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
+        b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) || d.contains(b"PCPicture") => {
+            ("the stamp's \"By\" line", text(b"PCByLine")?)
+        }
         // Drawn in Helvetica when the redaction is applied: refused when it is marked.
         b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
         _ => return None,
@@ -574,19 +576,58 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // bounding box to `/Rect` (ISO 32000-2 §12.5.5), so it reads upright as displayed.
             if let Some(pic) = d.get(b"PCPicture").and_then(Object::as_ref) {
                 let [x0, y0, x1, y1] = rect;
-                let (w, h) = (x1 - x0, y1 - y0);
                 let image = matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true)));
-                let place = if image {
-                    format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0))
-                } else {
-                    let size = nums(d, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0)?;
-                    format!("{} 0 0 {} {} {} cm", n(w / size[0]), n(h / size[1]), n(x0), n(y0))
+                let size = nums(d, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0);
+                // A text line (#1741) takes the bottom of the rectangle, and the picture keeps its
+                // shape, centred above it. Without one the picture fills the rectangle.
+                let line = d.get(b"PCByLine").and_then(Object::as_string).map(PdfString::to_text).filter(|l| !l.trim().is_empty());
+                let band = if line.is_some() { (y1 - y0) * crate::CUSTOM_LINE_BAND } else { 0.0 };
+                let (w, h) = (x1 - x0, y1 - y0 - band);
+                let place = match (&line, &size) {
+                    (Some(_), Some(sz)) => {
+                        let k = (w / sz[0]).min(h / sz[1]).max(0.0);
+                        let (pw, ph) = (sz[0] * k, sz[1] * k);
+                        let (px, py) = (x0 + (w - pw) / 2.0, y0 + band + (h - ph) / 2.0);
+                        if image {
+                            format!("{} 0 0 {} {} {} cm", n(pw), n(ph), n(px), n(py))
+                        } else {
+                            format!("{} 0 0 {} {} {} cm", n(k), n(k), n(px), n(py))
+                        }
+                    }
+                    _ if image => format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0 + band)),
+                    _ => {
+                        let sz = size?;
+                        format!("{} 0 0 {} {} {} cm", n(w / sz[0]), n(h / sz[1]), n(x0), n(y0 + band))
+                    }
                 };
                 c.push_str(&format!("q {place} /Pic Do Q\n"));
+                // Bytes from here: the line is WinAnsi, not UTF-8.
+                let mut content = c.into_bytes();
+                if let Some(l) = &line {
+                    // Centred in the band, at its usual size unless the stamp was made narrower.
+                    let mut size = band * crate::CUSTOM_LINE_TEXT;
+                    let tw = text_width(l, size);
+                    if tw > w - 4.0 && tw > 0.0 {
+                        size *= ((w - 4.0) / tw).max(0.0);
+                    }
+                    let tw = text_width(l, size);
+                    let ty = y0 + (band - size * 0.72) / 2.0;
+                    content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x0 + (w - tw) / 2.0), n(ty)).bytes());
+                    content.extend(literal(&win_ansi(l)));
+                    content.extend_from_slice(b" Tj\nET\n");
+                    let mut f = Dict::new();
+                    f.set(b"Type".to_vec(), Object::name("Font"));
+                    f.set(b"Subtype".to_vec(), Object::name("Type1"));
+                    f.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+                    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                    let mut fonts = Dict::new();
+                    fonts.set(b"Helv".to_vec(), Object::Dict(f));
+                    res.set(b"Font".to_vec(), Object::Dict(fonts));
+                }
                 let mut xo = Dict::new();
                 xo.set(b"Pic".to_vec(), Object::Ref(pic));
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
-                let mut stream = form(rect, c.as_bytes(), res);
+                let mut stream = form(rect, &content, res);
                 let turn = picture_turn(d);
                 if image && turn != 0 {
                     // The page's view matrix without its offset: display axes in user space.

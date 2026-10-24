@@ -3367,6 +3367,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         name: cs.name.clone(),
                         file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
                         author: author.clone(),
+                        line: cs.line.as_deref().map(|t| app.session.stamp_line(t, &author)),
                     });
                     stamp_placed = true;
                 }

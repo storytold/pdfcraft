@@ -701,6 +701,7 @@ impl Automation {
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
+        let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let edit = Edit::AddCustomStamp {
             page,
             rect,
@@ -710,7 +711,16 @@ impl Automation {
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,
             },
-            author: a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string(),
+            line: None,
+            author: author.clone(),
+        };
+        // A dynamic line (#1741): `{name}`, `{date}` and `{time}` filled in now.
+        let edit = match (edit, a.opt_str("line")?) {
+            (Edit::AddCustomStamp { page, rect, name, file, author, .. }, Some(t)) if !t.trim().is_empty() => {
+                let line = Some(self.session().stamp_line(t, &author));
+                Edit::AddCustomStamp { page, rect, name, file, author, line }
+            }
+            (edit, _) => edit,
         };
         self.apply(a, edit)
     }

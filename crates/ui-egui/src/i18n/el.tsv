@@ -2072,6 +2072,8 @@
 	initials	μονογραφή
 	signature	υπογραφή
 	Create Custom Stamp	Δημιουργία προσαρμοσμένης σφραγίδας
+	Add a line filled in when the stamp is placed	Προσθήκη γραμμής που συμπληρώνεται όταν τοποθετείται η σφραγίδα
+	{name}, {date} and {time} become your name, the date and the time.	Τα {name}, {date} και {time} γίνονται το όνομά σας, η ημερομηνία και η ώρα.
 	From {file}	Από το {file}
 	Category:	Κατηγορία:
 	e.g. My stamps	π.χ. Οι σφραγίδες μου

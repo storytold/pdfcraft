@@ -23,7 +23,14 @@ pub struct CustomStamp {
     pub page: usize,
     #[serde(with = "b64")]
     pub data: Arc<Vec<u8>>,
+    /// A line under the picture, filled in when the stamp is placed (#1741): `{name}`,
+    /// `{date}` and `{time}` become the author and now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
 }
+
+/// The line a new dynamic custom stamp offers: what the built-in dynamic stamps write.
+pub const DEFAULT_LINE: &str = "By {name} at {time}, {date}";
 
 mod b64 {
     use std::sync::Arc;
@@ -48,6 +55,9 @@ pub struct StampDraft {
     pub data: Arc<Vec<u8>>,
     pub category: String,
     pub name: String,
+    /// Add a line filled in when the stamp is placed, and its template.
+    pub dynamic: bool,
+    pub line: String,
 }
 
 pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
@@ -81,8 +91,15 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
         ui.add(crate::widgets::line(&mut d.name).desired_width(200.0)).labelled_by(l.id);
         ui.end_row();
     });
+    ui.add_space(8.0);
+    // A dynamic stamp (#1741): a line under the picture, filled in when it is placed.
+    ui.add(widgets::checkbox(&mut d.dynamic, tl!("Add a line filled in when the stamp is placed")));
+    if d.dynamic {
+        ui.add(crate::widgets::line(&mut d.line).desired_width(320.0).char_limit(pdfcraft_engine::MAX_STAMP_LINE));
+        ui.label(egui::RichText::new(tl!("{name}, {date} and {time} become your name, the date and the time.")).small().color(t.text_muted));
+    }
     ui.add_space(12.0);
-    let ok = !d.category.trim().is_empty() && !d.name.trim().is_empty();
+    let ok = !d.category.trim().is_empty() && !d.name.trim().is_empty() && (!d.dynamic || !d.line.trim().is_empty());
     let (mut save, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
@@ -163,14 +180,22 @@ impl PdfCraftApp {
         }
         let name = file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string();
         let category = self.custom_stamps.last().map(|s| s.category.clone()).unwrap_or_else(|| "My stamps".into());
-        self.stamp_draft = crate::stamps_ui::StampDraft { file, data: Arc::new(bytes), category, name };
+        self.stamp_draft = crate::stamps_ui::StampDraft { file, data: Arc::new(bytes), category, name, dynamic: false, line: DEFAULT_LINE.into() };
         self.dialog = Some(Dialog::CreateStamp);
     }
 
     /// Save the dialog's stamp in the library and choose it.
     pub(crate) fn save_custom_stamp(&mut self) {
         let d = std::mem::take(&mut self.stamp_draft);
-        self.custom_stamps.push(CustomStamp { category: d.category.trim().into(), name: d.name.trim().into(), file: d.file, page: 0, data: d.data });
+        let line = d.dynamic.then(|| d.line.trim().to_string()).filter(|l| !l.is_empty());
+        self.custom_stamps.push(CustomStamp {
+            category: d.category.trim().into(),
+            name: d.name.trim().into(),
+            file: d.file,
+            page: 0,
+            data: d.data,
+            line,
+        });
         self.quick_tool = QuickTool::CustomStamp(self.custom_stamps.len() - 1);
     }
 }

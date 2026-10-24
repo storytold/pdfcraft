@@ -775,6 +775,8 @@
 	initials	iniciales
 	signature	firma
 	Create Custom Stamp	Crear sello personalizado
+	Add a line filled in when the stamp is placed	Añadir una línea que se rellena al colocar el sello
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} y {time} se convierten en su nombre, la fecha y la hora.
 	From {file}	De {file}
 	Category:	Categoría:
 	e.g. My stamps	p. ej., Mis sellos

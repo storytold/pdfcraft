@@ -2750,3 +2750,5 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Add a line filled in when the stamp is placed	스탬프를 배치할 때 채워지는 줄 추가
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date}, {time}은(는) 이름, 날짜, 시간으로 바뀝니다.

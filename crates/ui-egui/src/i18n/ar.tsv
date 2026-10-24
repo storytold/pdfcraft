@@ -781,6 +781,8 @@
 	initials	أحرف أولى
 	signature	توقيع
 	Create Custom Stamp	إنشاء ختم مخصص
+	Add a line filled in when the stamp is placed	إضافة سطر يُملأ عند وضع الختم
+	{name}, {date} and {time} become your name, the date and the time.	‏{name} و{date} و{time} تصبح اسمك والتاريخ والوقت.
 	From {file}	من {file}
 	Category:	الفئة:
 	e.g. My stamps	مثلًا: أختامي

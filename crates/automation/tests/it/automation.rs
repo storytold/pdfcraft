@@ -8078,6 +8078,39 @@ fn text_box_and_callout_fill_and_border_through_tools() {
     }
 }
 
+/// A custom stamp can carry a dynamic line (#1741): `{name}`, `{date}` and `{time}` are filled in
+/// when it is placed and drawn under the picture, which keeps its shape; the stamp widens to fit
+/// the line; a line too long is cut.
+#[test]
+fn a_custom_stamp_line_is_filled_in_when_placed() {
+    let dir = workdir("stamp_line");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 2, "path": "b.pdf", "file_page": 2, "at": [100, 150], "name": "Plain" }));
+    ok(
+        &mut a,
+        "stamp_custom",
+        json!({ "doc": doc, "page": 1, "path": "b.pdf", "file_page": 2, "at": [100, 150], "name": "Logo", "author": "Ada", "line": "Received {date} {time} by {name}" }),
+    );
+    // The clock is 2023-11-14 22:13:20, taken as local time.
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(text.contains("Received Nov 14, 2023 10:13 pm by Ada"), "{text}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let rect = |page: u64| {
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["page"] == page).unwrap();
+        let r: Vec<f64> = c["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        (r[2] - r[0], r[3] - r[1])
+    };
+    let ((pw, ph), (lw, lh)) = (rect(2), rect(1));
+    // The stamp stays within the natural 200 pt. Its line, at its usual size, is wider than the
+    // picture, so the stamp is wider than the picture's shape with the band added.
+    assert!(lw / lh > pw / ph * (1.0 - 0.22) + 0.01, "widened for the line: {pw}x{ph} vs {lw}x{lh}");
+    // A line past the limit is cut, not refused.
+    let long = "x".repeat(500);
+    ok(&mut a, "stamp_custom", json!({ "doc": doc, "page": 3, "path": "b.pdf", "file_page": 2, "at": [100, 150], "line": long }));
+    assert!(page_text(&mut a, doc)[2].matches('x').count() <= 200);
+}
+
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
 /// of #2516. A third Alpha row brings its last baseline within 2.5 × size of Bravo's, so the next
 /// read groups the two as one paragraph.

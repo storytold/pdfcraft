@@ -737,6 +737,8 @@
 	initials	paraf
 	signature	imza
 	Create Custom Stamp	Özel Damga Oluştur
+	Add a line filled in when the stamp is placed	Damga yerleştirildiğinde doldurulan bir satır ekle
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} ve {time} adınız, tarih ve saat olur.
 	From {file}	{file} dosyasından
 	Category:	Kategori:
 	e.g. My stamps	ör. Damgalarım

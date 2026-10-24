@@ -2774,3 +2774,5 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Add a line filled in when the stamp is placed	Adaugă un rând completat la plasarea ștampilei
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} și {time} devin numele dvs., data și ora.

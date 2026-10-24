@@ -778,6 +778,8 @@
 	initials	iniziali
 	signature	firma
 	Create Custom Stamp	Crea timbro personalizzato
+	Add a line filled in when the stamp is placed	Aggiungi una riga compilata quando il timbro viene posizionato
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} e {time} diventano il tuo nome, la data e l’ora.
 	From {file}	Da {file}
 	Category:	Categoria:
 	e.g. My stamps	es. I miei timbri

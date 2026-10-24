@@ -416,6 +416,8 @@
 	Counterclockwise 90 degrees	90 laipsnių prieš laikrodžio rodyklę
 	Country/Region	Šalis / regionas
 	Create Custom Stamp	Kurti pasirinktinį antspaudą
+	Add a line filled in when the stamp is placed	Pridėti eilutę, užpildomą uždedant spaudą
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} ir {time} tampa jūsų vardu, data ir laiku.
 	Create Link	Kurti saitą
 	Create PDF Comment Summary	Kurti PDF komentarų suvestinę
 	Create PDF comment summary…	Kurti PDF komentarų suvestinę…

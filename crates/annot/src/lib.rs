@@ -434,13 +434,17 @@ pub enum Shape {
         contours: Vec<Vec<[f64; 2]>>,
     },
     /// A custom stamp: a picture already in the document (an image XObject, or a form XObject
-    /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`.
+    /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`. With `line`, a
+    /// line of text under the picture (#1741): a dynamic stamp's name, date and time, filled in
+    /// when it was placed; the picture then fills the rectangle above it
+    /// ([`CUSTOM_LINE_BAND`]).
     CustomStamp {
         rect: [f64; 4],
         name: String,
         picture: ObjRef,
         image: bool,
         size: (f64, f64),
+        line: Option<String>,
     },
     /// A redaction mark (§12.5.6.23) over quadrilaterals (text) or one rectangle as a quad
     /// (areas, pages). `overlay` is the text shown on the box once applied, drawn with `look`.
@@ -1220,12 +1224,15 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let list = contours.iter().filter(|c| c.len() > 2).map(|c| num_array(&c.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<_>>())).collect();
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
-        Shape::CustomStamp { name, picture, image, size, .. } => {
+        Shape::CustomStamp { name, picture, image, size, line, .. } => {
             let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
             d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
             d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
+            if let Some(l) = line.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+                d.set(b"PCByLine".to_vec(), PdfString::text(l));
+            }
             // An image signature's rectangle is in user space; on a turned page its appearance is
             // turned back (see `appearance::build`), so it reads upright as displayed.
             if *image && matches!(clean.as_str(), "Signature" | "Initials") {
@@ -1364,6 +1371,22 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     }
     set_annots(doc, page, list)?;
     Ok(index)
+}
+
+/// The share of a custom stamp's height its text line takes (the rest is the picture).
+pub const CUSTOM_LINE_BAND: f64 = 0.22;
+
+/// A custom stamp line's text height as a share of its band.
+pub const CUSTOM_LINE_TEXT: f64 = 0.62;
+
+/// The natural size of a custom stamp whose picture is `picture` points (#1741): with `line`,
+/// the band under the picture is added, and the stamp is as wide as the line at its usual size
+/// when that is wider than the picture.
+pub fn custom_stamp_size(picture: (f64, f64), line: Option<&str>) -> (f64, f64) {
+    let Some(line) = line else { return picture };
+    let h = picture.1 / (1.0 - CUSTOM_LINE_BAND);
+    let text = appearance::text_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
+    (picture.0.max(text), h)
 }
 
 /// Counterrotate a newly placed picture stamp's appearance into displayed-page axes.

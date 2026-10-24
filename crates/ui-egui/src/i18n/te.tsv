@@ -756,6 +756,8 @@ comment menu	Edit	సవరించు
 	initials	పొడి అక్షరాలు
 	signature	సంతకం
 	Create Custom Stamp	అనుకూల స్టాంప్‌ను సృష్టించు
+	Add a line filled in when the stamp is placed	స్టాంప్ ఉంచినప్పుడు నింపబడే పంక్తిని జోడించండి
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} మరియు {time} మీ పేరు, తేదీ మరియు సమయంగా మారతాయి.
 	From {file}	{file} నుండి
 	Category:	వర్గం:
 	e.g. My stamps	ఉదా. నా స్టాంప్‌లు

@@ -775,6 +775,8 @@
 	initials	инициалы
 	signature	подпись
 	Create Custom Stamp	Создать свой штамп
+	Add a line filled in when the stamp is placed	Добавить строку, заполняемую при размещении штампа
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} и {time} заменяются вашим именем, датой и временем.
 	From {file}	Из {file}
 	Category:	Категория:
 	e.g. My stamps	например, Мои штампы

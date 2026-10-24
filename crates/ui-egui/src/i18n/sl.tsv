@@ -487,6 +487,8 @@
 	Country/Region	Država/regija
 	Create	Ustvari
 	Create Custom Stamp	Ustvari lasten žig
+	Add a line filled in when the stamp is placed	Dodaj vrstico, ki se izpolni ob postavitvi žiga
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} in {time} postanejo vaše ime, datum in čas.
 	Create Link	Ustvari povezavo
 	Create PDF Comment Summary	Ustvari povzetek komentarjev PDF
 	Create PDF comment summary…	Ustvari povzetek komentarjev PDF…

@@ -459,6 +459,8 @@
 	initials	姓名首字母
 	signature	签名
 	Create Custom Stamp	创建自定义图章
+	Add a line filled in when the stamp is placed	添加一行，在放置图章时填入
+	{name}, {date} and {time} become your name, the date and the time.	{name}、{date} 和 {time} 会变成你的姓名、日期和时间。
 	From {file}	来自 {file}
 	Category:	类别：
 	e.g. My stamps	例如：我的图章
