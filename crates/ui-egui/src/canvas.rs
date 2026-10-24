@@ -468,6 +468,7 @@ pub struct DocView {
     /// The selection whose action bar was closed by its Copy button: the bar stays hidden
     /// until the selection changes, as it does once a markup button consumes the selection.
     actions_dismissed: Option<Selection>,
+    pub(crate) translation_popup: Option<crate::translate::TranslationPopup>,
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
@@ -776,6 +777,7 @@ impl DocView {
             find: None,
             selection: None,
             actions_dismissed: None,
+            translation_popup: None,
             selection_drag: false,
             clicks: 0,
             last_press_time: 0.0,
@@ -1161,6 +1163,7 @@ impl DocView {
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
         self.actions_dismissed = None;
+        self.translation_popup = None;
     }
 
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
@@ -4049,6 +4052,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
     }
+    if let Some(popup) = &mut view.translation_popup
+        && !popup.show(ui, avail)
+    {
+        view.translation_popup = None;
+    }
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
     // Pan-settle debounce for tiled pages: each tile costs a full page interpret, so holding
@@ -4422,6 +4430,7 @@ enum SelectionAction {
     Markup(comments::CommentTool),
     Replace,
     Copy,
+    Translate,
 }
 
 /// Actions on an existing text selection, next to the selected words.
@@ -4475,6 +4484,9 @@ fn selection_actions(
                 if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
                     chosen = Some(SelectionAction::Copy);
                 }
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Translate"))).clicked() {
+                    chosen = Some(SelectionAction::Translate);
+                }
             });
         });
     });
@@ -4483,6 +4495,11 @@ fn selection_actions(
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
         view.actions_dismissed = Some(selection);
         return true;
+    }
+    if let SelectionAction::Translate = action {
+        view.actions_dismissed = Some(selection);
+        view.translation_popup = Some(crate::translate::TranslationPopup::new(selected, pos2(x, y)));
+        return false;
     }
     let Some((page, quads)) = view.selection_quads(info) else { return false };
     let last = quads.last().copied().unwrap_or_default();
@@ -4512,8 +4529,8 @@ fn selection_actions(
                 author: prefs.author.clone(),
             }));
         }
-        // Copy is dispatched through the app after the view borrow ends.
-        SelectionAction::Copy => {}
+        // Copy is dispatched through the app after the view borrow ends. Translate opens popup directly.
+        SelectionAction::Copy | SelectionAction::Translate => {}
     }
     false
 }
