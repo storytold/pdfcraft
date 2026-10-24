@@ -225,7 +225,7 @@ impl Automation {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
             }
-            "page_render" => return self.page_render(&a).map(|c| vec![c]),
+            "page_render" => return self.page_render(&a),
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,
@@ -329,7 +329,7 @@ impl Automation {
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,
-            "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
+            "render_preview" => return self.render_preview(&a),
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();
@@ -2023,7 +2023,9 @@ impl Automation {
         Ok(&mut entry.1)
     }
 
-    fn page_render(&mut self, a: &Args) -> Result<Content> {
+    /// The page as a PNG, followed by a JSON part listing the render warnings when there are any,
+    /// so a caller can tell that the picture is incomplete, as `pdfcraft-cli render` does (#4340).
+    fn page_render(&mut self, a: &Args) -> Result<Vec<Content>> {
         let id = self.doc(a)?.id;
         let page = self.page(a)?;
         let dpi = a.opt_num("dpi")?.unwrap_or(DEFAULT_DPI);
@@ -2056,8 +2058,7 @@ impl Automation {
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
-        let data = encode_png(out.width, out.height, &out.rgba)?;
-        Ok(Content::Png { data, width: out.width, height: out.height })
+        rendered_content(&out, page)
     }
 
     /// A page as RGBA pixels, without encoding a PNG. `page` is 1-based and `scale` is pixels
@@ -2731,6 +2732,29 @@ fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
 /// A rendered raster as PNG, through the engine's encoder (Export ▸ Image writes the same).
 fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {
     pdfcraft_engine::export::encode_png(width, height, premultiplied).map_err(failed)
+}
+
+/// The output of a page-rendering tool: the PNG of the 0-based `page`, followed by a JSON part
+/// listing its render warnings when there are any. Without warnings it is the PNG alone, as it
+/// always was.
+fn rendered_content(out: &pdfcraft_render::RenderedPage, page: usize) -> Result<Vec<Content>> {
+    let data = encode_png(out.width, out.height, &out.rgba)?;
+    let mut content = vec![Content::Png { data, width: out.width, height: out.height }];
+    if !out.warnings.is_empty() {
+        // Sentences, like the other tools' `warnings`, so command_run can add its own to the list.
+        let warnings: Vec<&str> = out.warnings.iter().map(|&w| render_warning_text(w)).collect();
+        content.push(Content::Json(json!({ "page": page.saturating_add(1), "warnings": warnings })));
+    }
+    Ok(content)
+}
+
+/// What a render warning means, in the words `pdfcraft-cli render` prints for it.
+fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
+    use pdfcraft_render::RenderWarning;
+    match warning {
+        RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
+        RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
+    }
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.

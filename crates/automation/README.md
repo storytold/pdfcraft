@@ -181,6 +181,12 @@ working document unchanged.
 `content_list` or `object_list`. It removes only that item in a read-only preview and is
 mutually exclusive with `hide_text_block`.
 
+When the renderer reports a warning for the page, `page_render` and `render_preview` return a
+JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
+`pdfcraft-cli render` prints: "content past the page's safety budget was skipped" and "a colour
+that could not be computed was painted in a fallback colour". A page without warnings returns
+the PNG alone.
+
 
 ## Existing text and document fonts
 
