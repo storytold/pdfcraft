@@ -109,6 +109,7 @@ mod panels;
 mod pickers;
 pub mod prepare;
 mod print_ui;
+pub mod rulers;
 mod signature_drag;
 pub mod units;
 mod web_print;
@@ -693,6 +694,8 @@ pub struct PdfCraftApp {
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
+    /// Whether canvas rulers are shown along the top and left of the document viewport (`view.rulers`).
+    pub show_rulers: bool,
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
@@ -1065,6 +1068,7 @@ pub enum OpenOutcome {
 }
 
 impl PdfCraftApp {
+    /// Constructs a new [`PdfCraftApp`] with default session and user interface state.
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -1112,6 +1116,7 @@ impl PdfCraftApp {
             printer_source: None,
             options_source: None,
             print_tasks: print_ui::PrintTasks::default(),
+            show_rulers: false,
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
@@ -2603,6 +2608,7 @@ impl PdfCraftApp {
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["show_rulers"] = serde_json::Value::Bool(self.show_rulers);
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
@@ -2635,6 +2641,9 @@ impl PdfCraftApp {
         // Clamped like any grid zoom when the grid next shows; nonsense keeps the usual size.
         if let Some(zoom) = v["organize_zoom"].as_f64().map(|z| z as f32).filter(|z| z.is_finite()) {
             self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
+        }
+        if let Some(show) = v.get("show_rulers").and_then(serde_json::Value::as_bool) {
+            self.show_rulers = show;
         }
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
@@ -2905,6 +2914,13 @@ impl PdfCraftApp {
                 }
             }
             ("tools", _) => self.all_tools_expanded = value != "collapsed",
+            ("rulers", _) => {
+                self.show_rulers = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("rulers must be on or off".into()),
+                };
+            }
             ("palette", _) => {
                 self.palette_open = true;
                 self.palette_query = value.to_string();
