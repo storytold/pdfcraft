@@ -324,9 +324,8 @@ fn deleted_pages_are_not_kept_by_what_points_at_them() {
     delete_pages(&mut doc, &[1, 2]).unwrap();
     let out = full_roundtrip(&doc);
     assert_eq!(labels(&out), ["A1"]);
-    // The bookmark and A1's link now go nowhere instead of to a missing page.
-    let mark = out.get(bookmarks(&out)[0].obj).as_dict().cloned().unwrap();
-    assert!(!mark.contains(b"Dest") && !mark.contains(b"A"), "{mark:?}");
+    // The bookmark is gone with its page, and A1's link goes nowhere instead of to a missing page.
+    assert!(bookmarks(&out).is_empty());
     let link = &annots(&out, 0)[0];
     assert!(!link.contains(b"A") && !link.contains(b"Dest"), "{link:?}");
     let mut page_objects = 0;
@@ -668,6 +667,80 @@ fn full_save_drops_unreachable_objects() {
     assert!(full.object_numbers().len() < doc.object_numbers().len());
     assert_eq!(info(&full, "Title").as_deref(), Some("Original"));
     assert_eq!(hayro_syntax::Pdf::new(bytes).unwrap().pages().len(), 1);
+}
+
+#[test]
+fn deleting_a_page_removes_its_bookmarks() {
+    // #2902: one bookmark per page; deleting A2 must take its bookmark out of the outline.
+    let mut doc = doc_a();
+    for (i, title) in ["One", "Two", "Three"].into_iter().enumerate() {
+        add_bookmark(&mut doc, &[], i, title, i).unwrap();
+    }
+    delete_pages(&mut doc, &[1]).unwrap();
+    for d in [&doc, &full_roundtrip(&doc)] {
+        assert_eq!(titles(&bookmarks(d)), ["One", "Three"]);
+        let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+        assert_eq!(count_of(d, root), Some(2));
+        let b = bookmarks(d);
+        let (one, three) = (d.get(b[0].obj).as_dict().cloned().unwrap(), d.get(b[1].obj).as_dict().cloned().unwrap());
+        assert_eq!((one.reference(b"Next"), three.reference(b"Prev")), (Some(b[1].obj), Some(b[0].obj)));
+    }
+}
+
+#[test]
+fn deleting_a_page_keeps_a_parent_bookmark_as_a_heading() {
+    // A bookmark to A2 with a child going to A3: deleting A2 keeps it, destinationless, for its child.
+    let mut doc = doc_a();
+    add_bookmark(&mut doc, &[], 0, "Part", 1).unwrap();
+    add_bookmark(&mut doc, &[0], 0, "Section", 2).unwrap();
+    delete_pages(&mut doc, &[1]).unwrap();
+    let out = full_roundtrip(&doc);
+    assert_eq!(titles(&bookmarks(&out)), ["Part[Section]"]);
+    let part = out.get(bookmarks(&out)[0].obj).as_dict().cloned().unwrap();
+    assert!(!part.contains(b"Dest") && !part.contains(b"A"), "{part:?}");
+}
+
+#[test]
+fn deleting_a_page_removes_a_parent_whose_children_all_went_with_it() {
+    // A bookmark to A2 whose only child also goes to A2: neither is left as an empty heading.
+    let mut doc = doc_a();
+    add_bookmark(&mut doc, &[], 0, "Chapter", 1).unwrap();
+    add_bookmark(&mut doc, &[0], 0, "Section", 1).unwrap();
+    delete_pages(&mut doc, &[1]).unwrap();
+    for d in [&doc, &full_roundtrip(&doc)] {
+        assert!(bookmarks(d).is_empty());
+    }
+}
+
+#[test]
+fn deleting_a_page_removes_a_chain_of_bookmarks_to_it() {
+    // Three levels all going to A2, beside a bookmark to A1: only the latter is left.
+    let mut doc = doc_a();
+    add_bookmark(&mut doc, &[], 0, "Keep", 0).unwrap();
+    add_bookmark(&mut doc, &[], 1, "Part", 1).unwrap();
+    add_bookmark(&mut doc, &[1], 0, "Chapter", 1).unwrap();
+    add_bookmark(&mut doc, &[1, 0], 0, "Section", 1).unwrap();
+    delete_pages(&mut doc, &[1]).unwrap();
+    for d in [&doc, &full_roundtrip(&doc)] {
+        assert_eq!(titles(&bookmarks(d)), ["Keep"]);
+        let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+        assert_eq!(count_of(d, root), Some(1));
+    }
+}
+
+#[test]
+fn deleting_the_last_child_page_later_removes_the_kept_heading() {
+    // Deleting A2 keeps "Part" as a heading for its child to A3; deleting A3 next leaves it empty.
+    let mut doc = doc_a();
+    add_bookmark(&mut doc, &[], 0, "Keep", 0).unwrap();
+    add_bookmark(&mut doc, &[], 1, "Part", 1).unwrap();
+    add_bookmark(&mut doc, &[1], 0, "Section", 2).unwrap();
+    delete_pages(&mut doc, &[1]).unwrap();
+    assert_eq!(titles(&bookmarks(&doc)), ["Keep", "Part[Section]"]);
+    delete_pages(&mut doc, &[1]).unwrap();
+    for d in [&doc, &full_roundtrip(&doc)] {
+        assert_eq!(titles(&bookmarks(d)), ["Keep"]);
+    }
 }
 
 #[test]

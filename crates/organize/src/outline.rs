@@ -422,6 +422,25 @@ pub(crate) fn children(doc: &Document, parent: ObjRef) -> Vec<ObjRef> {
     children_of(doc, parent, &mut HashSet::from([parent]))
 }
 
+/// Take the `gone` items out of the outline: each parent's remaining children are relinked
+/// around them, then every `/Count` is recomputed. Items not in the outline are ignored.
+pub(crate) fn unlink_items(doc: &mut Document, gone: &[ObjRef]) -> Result<()> {
+    if gone.is_empty() {
+        return Ok(());
+    }
+    let Some(root) = outline_root(doc) else { return Ok(()) };
+    let gone: HashSet<ObjRef> = gone.iter().copied().collect();
+    let parents: Vec<ObjRef> = std::iter::once(root).chain(items(doc)).collect();
+    for p in parents {
+        let kids = children(doc, p);
+        if kids.iter().any(|k| gone.contains(k)) {
+            let kept: Vec<ObjRef> = kids.into_iter().filter(|k| !gone.contains(k)).collect();
+            relink(doc, p, &kept)?;
+        }
+    }
+    recount(doc)
+}
+
 /// [`relink`] `kids` under `parent`, then recompute every `/Count`.
 pub(crate) fn relink_and_recount(doc: &mut Document, parent: ObjRef, kids: &[ObjRef]) -> Result<()> {
     relink(doc, parent, kids)?;

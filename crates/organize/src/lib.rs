@@ -292,9 +292,12 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
 
 /// Bookmarks, and links on the `keep` pages, that go to one of the `gone` pages lose that
 /// destination (/Dest, or a GoTo /A), rather than pointing at nothing; so does the catalog's /OpenAction.
+/// A bookmark left with no destination and no surviving children is removed from the outline; one
+/// with surviving children stays as a heading for them.
 fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
     let dead_names = drop_named_destinations(doc, gone)?;
     let mut holders = outline::items(doc);
+    let outline_items: std::collections::HashSet<ObjRef> = holders.iter().copied().collect();
     for (p, _) in keep {
         let annots = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| doc.resolve(&a).as_array().cloned().unwrap_or_default());
         holders.extend(
@@ -341,6 +344,24 @@ fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Di
             d.remove(key);
         })?;
     }
+    // Every destinationless item, not only those that just lost theirs: a heading kept by an
+    // earlier deletion goes too once its last child does.
+    let candidates: Vec<ObjRef> =
+        outline_items.iter().copied().filter(|h| doc.get(*h).as_dict().is_some_and(|d| !d.contains(b"Dest") && !d.contains(b"A"))).collect();
+    // An item is an orphan once every child of it is one too, so removal cascades up any depth.
+    let mut orphans: std::collections::HashSet<ObjRef> = std::collections::HashSet::new();
+    loop {
+        let before = orphans.len();
+        for &h in &candidates {
+            if !orphans.contains(&h) && outline::children(doc, h).iter().all(|k| orphans.contains(k)) {
+                orphans.insert(h);
+            }
+        }
+        if orphans.len() == before {
+            break;
+        }
+    }
+    outline::unlink_items(doc, &orphans.into_iter().collect::<Vec<_>>())?;
     Ok(())
 }
 
