@@ -744,6 +744,28 @@ fn crop_image(
     Ok(())
 }
 
+/// The number of marked-content sequences open around each operator: `BMC` and `BDC` open one,
+/// `EMC` closes it. An operator inside a sequence belongs to that element's tag and cannot
+/// leave it.
+fn marked_depths(ops: &[Op]) -> Vec<usize> {
+    let mut depths = Vec::with_capacity(ops.len());
+    let mut depth = 0usize;
+    for op in ops {
+        match op.op.as_slice() {
+            b"BMC" | b"BDC" => {
+                depths.push(depth);
+                depth = depth.saturating_add(1);
+            }
+            b"EMC" => {
+                depths.push(depth);
+                depth = depth.saturating_sub(1);
+            }
+            _ => depths.push(depth),
+        }
+    }
+    depths
+}
+
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.
 /// Splice only the chosen Do operators and preserve all other bytes and stream dictionaries.
 pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
@@ -767,6 +789,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     }
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
+    let marked = marked_depths(&ops);
     let mut inside_text = false;
     for (index, op) in ops.iter().enumerate() {
         if op.is("BT") {
@@ -775,6 +798,9 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
             inside_text = false;
         } else if inside_text && plans.contains_key(&index) {
             return Err(EditError::Invalid("an image inside a text object cannot be moved in a group".into()));
+        }
+        if plans.contains_key(&index) && marked.get(index).is_some_and(|depth| *depth > 0) {
+            return Err(EditError::Invalid("an image inside marked content cannot be moved".into()));
         }
     }
     // Images alone in their own `q re W n cm Do Q` take the clip with them.

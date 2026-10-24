@@ -2966,6 +2966,19 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
 }
 
 #[test]
+fn translating_an_image_inside_marked_content_is_refused() {
+    // The image's `Do` sits inside a marked-content sequence (`BDC … EMC`).
+    // Moving it must be refused: `translate_images` never inspects BDC/EMC,
+    // so the move silently crosses the boundary and leaves the image tagged
+    // with the wrong MCID while its own sequence is empty.
+    let content = "BT /F1 12 Tf 72 700 Td (Caption) Tj ET /MC0 BDC q 200 0 0 100 100 100 cm /Im0 Do Q EMC";
+    let mut doc = image_page_with(content);
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+    let moved = images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]);
+    assert!(moved.is_err(), "an image inside marked content must not be moved: {moved:?}");
+}
+
+#[test]
 fn page_images_move_turn_replace_and_delete() {
     let mut doc = image_page();
     let imgs = images::page_images(&doc, 0).unwrap();
