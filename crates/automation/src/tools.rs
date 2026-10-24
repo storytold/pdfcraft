@@ -576,6 +576,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "collate": { "type": "boolean" },
                 "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge", "printer"], "description": "Two-sided printing (default off); printer sends no setting, so the printer's own default applies." },
                 "grayscale": { "type": "boolean" },
+                "area": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Print a selected area: [x0, y0, x1, y1] in points from the top-left of the displayed page, of the one page in pages, sized by layout fit/actual/shrink/custom." },
                 "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey." },
                 "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution for as_image (default 300)." },
                 "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },

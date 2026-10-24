@@ -1586,8 +1586,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.snapshot"]
 tools = ["page_render"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot"]
-notes = "copies the area at the current zoom to the clipboard as an image"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_area_prints_alone_or_saves_as_an_image"]
+notes = "copies the area at the current zoom to the clipboard as an image; the area then stays outlined with Print area… and Save as image… (PNG) under it until another tool is chosen (print.selected-area)"
 
 [[feature]]
 id = "view.copy-image"
@@ -8038,6 +8038,18 @@ commands = ["print.dialog"]
 tools = ["doc_print"]
 evidence = ["crates/print/src/tests.rs::page_selection", "crates/automation/tests/it/automation.rs::printing_through_tools"]
 notes = "all, current, ranges with labels and open ends"
+
+[[feature]]
+id = "print.selected-area"
+title = "Print a selected area"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["edit.snapshot", "print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/print/src/tests.rs::a_selected_area_prints_alone_fitted_or_at_actual_size", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_area_prints_alone_or_saves_as_an_image", "crates/automation/tests/it/automation.rs::doc_print_a_selected_area"]
+notes = "Requested in #2051. The area Take a Snapshot copies stays outlined with a small menu under it, Print area… and Save as image…; Print then offers Selected area (page N, size), printed alone as a page of that size with Fit, Actual size, Shrink or a custom scale, clipped to the area. Multiple, Booklet, Poster and Label are for pages: the dialog offers only Size while the area is chosen and the print crate refuses the others. Print as image, the paper and the printer's options apply as usual. doc_print takes area [x0, y0, x1, y1] in points from the top-left of the displayed page, with one page in pages. Missing: an area spanning two pages, drawing the area from inside the Print dialog, and adjusting it after it is drawn."
 
 [[feature]]
 id = "print.odd-even-reverse"

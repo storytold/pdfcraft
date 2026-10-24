@@ -1149,6 +1149,31 @@ fn short_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
+/// The MIME type a download of `name` is offered as, from its extension.
+#[doc(hidden)]
+pub fn download_mime_type(name: &str) -> &'static str {
+    let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "tif" | "tiff" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "csv" => "text/csv",
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "xml" => "application/xml",
+        "json" => "application/json",
+        "xfdf" => "application/vnd.adobe.xfdf",
+        "fdf" => "application/vnd.fdf",
+        "rtf" => "application/rtf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -1157,7 +1182,7 @@ pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::of1(&array);
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/pdf");
+    opts.set_type(download_mime_type(name));
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(err)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;

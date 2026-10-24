@@ -25,6 +25,8 @@ pub enum Which {
     Range,
     /// The pages picked in the Pages panel or the organize grid when the dialog opened.
     Selected,
+    /// Only the area chosen with Snapshot (`PrintDraft::area`).
+    Area,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +59,8 @@ pub struct PrintDraft {
     pub range: String,
     /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
     pub selected: Vec<usize>,
+    /// The area Snapshot's Print area… asked for: (page, rectangle in display space, points, y up).
+    pub area: Option<(usize, [f64; 4])>,
     pub subset: Subset,
     pub reverse: bool,
     pub handling: Handling,
@@ -118,6 +122,7 @@ impl Default for PrintDraft {
             which: Which::All,
             range: String::new(),
             selected: Vec::new(),
+            area: None,
             subset: Subset::All,
             reverse: false,
             handling: Handling::Size,
@@ -176,11 +181,34 @@ impl PrintDraft {
 
     /// The engine settings for this draft (page count and labels from the document).
     pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
+        let size = Layout::Size(match self.size {
+            SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
+            m => m,
+        });
+        let paper = PAPERS[self.paper.min(PAPERS.len() - 1)].1;
+        let raster = self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale });
+        // A selected area prints alone, its one page sized like a page of its own: Size is its
+        // only handling (the dialog offers no other while it is chosen).
+        if self.which == Which::Area {
+            let Some((page, area)) = self.area.filter(|(p, _)| *p < count) else {
+                return Err("The selected area is no longer on a page of this document.".into());
+            };
+            return Ok(print::Settings {
+                pages: vec![page],
+                paper,
+                orientation: self.orientation,
+                layout: size,
+                content: self.content,
+                raster,
+                crops: Vec::new(),
+                area: Some(area),
+            });
+        }
         if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All | Which::Selected | Which::Current => None,
+            Which::All | Which::Selected | Which::Current | Which::Area => None,
             Which::Range => Some(self.range.clone()),
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
@@ -188,16 +216,13 @@ impl PrintDraft {
         let pages = match self.which {
             Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
             Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
-            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
+            Which::All | Which::Range | Which::Area => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.
         .map_err(|e| e.said(&crate::i18n::words))?;
         let layout = match self.handling {
-            Handling::Size => Layout::Size(match self.size {
-                SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
-                m => m,
-            }),
+            Handling::Size => size,
             Handling::Multiple => match Layout::multiple(self.per_sheet) {
                 Layout::Multiple { cols, rows, per_sheet, .. } => {
                     Layout::Multiple { cols, rows, per_sheet, order: self.order, border: self.border, auto_rotate: self.auto_rotate }
@@ -210,12 +235,13 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper,
             orientation: self.orientation,
             layout,
             content: self.content,
-            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+            raster,
             crops: self.crops.clone(),
+            area: None,
         })
     }
 
@@ -385,7 +411,7 @@ impl PdfCraftApp {
         // left over from another document falls back to the whole document.
         let which = match (selected.is_empty(), keep.which) {
             (false, _) => Which::Selected,
-            (true, Which::Selected) => Which::All,
+            (true, Which::Selected | Which::Area) => Which::All,
             (true, other) => other,
         };
         self.print_draft = PrintDraft {
@@ -400,6 +426,7 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            area: None,
             ..keep
         };
         self.dialog = Some(crate::Dialog::Print);
@@ -1055,7 +1082,7 @@ pub(crate) fn body(
                     }
                 });
                 // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER {
+                if d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
                     d.paper_before_label = Some(before);
                     d.handling = Handling::Label;
                     d.sheet = 0;
@@ -1113,6 +1140,17 @@ pub(crate) fn body(
                     d.which = Which::Range;
                 }
             });
+            // Offered only when an area was chosen with Snapshot (its menu's Print area…).
+            if let Some((page, a)) = d.area {
+                let label = crate::i18n::fmt(
+                    tl!("Selected area (page {page}, {size})"),
+                    &[("page", &(page + 1).to_string()), ("size", &d.units.size(a[2] - a[0], a[3] - a[1]))],
+                );
+                if widgets::radio_value(ui, &mut d.which, Which::Area, label).clicked() {
+                    // Leaving Label this way gives back the paper it replaced, as its tabs do.
+                    d.set_handling(Handling::Size);
+                }
+            }
             // Offered only when pages were picked before the dialog opened.
             if !d.selected.is_empty() {
                 let label = format!("{} ({})", tl!("Selected pages"), d.selected.len());
@@ -1139,7 +1177,9 @@ pub(crate) fn body(
                     (Handling::Booklet, tl!("Booklet")),
                     (Handling::Label, tl!("Label")),
                 ] {
-                    if widgets::mode_tab(ui, label, d.handling == h).clicked() {
+                    // A selected area prints only with Size.
+                    let offered = d.which != Which::Area || h == Handling::Size;
+                    if ui.add_enabled_ui(offered, |ui| widgets::mode_tab(ui, label, d.handling == h)).inner.clicked() {
                         d.set_handling(h);
                     }
                 }

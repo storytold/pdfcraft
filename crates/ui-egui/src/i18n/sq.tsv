@@ -2507,6 +2507,11 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Print area…	Zona e printimit…
+	Save as image	Ruaj si imazh
+	Save as image…	Ruaj si imazh…
+	Selected area (page {page}, {size})	Zona e zgjedhur (faqja {page}, {size})
+	The selected area is no longer on a page of this document.	Zona e zgjedhur nuk është më në një faqe të këtij dokumenti.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

@@ -2757,6 +2757,11 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Print area…	प्रिंट क्षेत्र…
+	Save as image	छवि के रूप में सहेजें
+	Save as image…	छवि के रूप में सहेजें…
+	Selected area (page {page}, {size})	चयनित क्षेत्र (पृष्ठ {page}, {size})
+	The selected area is no longer on a page of this document.	चयनित क्षेत्र अब इस दस्तावेज़ के किसी पृष्ठ पर नहीं है।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

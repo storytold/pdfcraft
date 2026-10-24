@@ -2563,6 +2563,11 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Print area…	Tisk oblasti…
+	Save as image…	Uložit jako obrázek…
+	Save as image	Uložit jako obrázek
+	Selected area (page {page}, {size})	Vybraná oblast (stránka {page}, {size})
+	The selected area is no longer on a page of this document.	Vybraná oblast už není na žádné stránce tohoto dokumentu.
 	Attach a file…	Připojit soubor…
 	Delete attachment	Odstranit přílohu
 	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici

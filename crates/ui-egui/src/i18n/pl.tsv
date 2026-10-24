@@ -2465,6 +2465,11 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Print area…	Drukuj obszar…
+	Save as image…	Zapisz jako obraz…
+	Save as image	Zapisz jako obraz
+	Selected area (page {page}, {size})	Zaznaczony obszar (strona {page}, {size})
+	The selected area is no longer on a page of this document.	Zaznaczony obszar nie znajduje się już na żadnej stronie tego dokumentu.
 	Attach a file…	Dołącz plik…
 	Delete attachment	Usuń załącznik
 	Attaching files is not available on the web yet	Dołączanie plików nie jest jeszcze dostępne w wersji webowej

@@ -2766,6 +2766,11 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Print area…	طباعة المنطقة…
+	Save as image…	حفظ كصورة…
+	Save as image	حفظ كصورة
+	Selected area (page {page}, {size})	المنطقة المحددة (صفحة {page}، {size})
+	The selected area is no longer on a page of this document.	لم تعد المنطقة المحددة على أي صفحة من هذا المستند.
 	Attach a file…	إرفاق ملف…
 	Delete attachment	حذف المرفق
 	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد

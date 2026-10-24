@@ -2439,6 +2439,11 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Print area…	列印區域…
+	Save as image…	另存為圖片…
+	Save as image	另存為圖片
+	Selected area (page {page}, {size})	所選區域（第 {page} 頁，{size}）
+	The selected area is no longer on a page of this document.	所選區域已不在此文件的任何頁面上。
 	Attach a file…	附加檔案…
 	Delete attachment	刪除附件
 	Attaching files is not available on the web yet	網頁版尚不支援附加檔案

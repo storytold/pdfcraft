@@ -2487,6 +2487,11 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Print area…	Аймақты басып шығару…
+	Save as image…	Кескін ретінде сақтау…
+	Save as image	Кескін ретінде сақтау
+	Selected area (page {page}, {size})	Таңдалған аймақ ({page}-бет, {size})
+	The selected area is no longer on a page of this document.	Таңдалған аймақ енді осы құжаттың ешбір бетінде жоқ.
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз

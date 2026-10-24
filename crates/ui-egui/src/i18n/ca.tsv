@@ -2781,6 +2781,11 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Print area…	Àrea d'impressió…
+	Save as image	Desa com a imatge
+	Save as image…	Desa com a imatge…
+	Selected area (page {page}, {size})	Àrea seleccionada (pàgina {page}, {size})
+	The selected area is no longer on a page of this document.	L'àrea seleccionada ja no és en cap pàgina d'aquest document.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

@@ -2701,6 +2701,11 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Print area…	Stampa area…
+	Save as image…	Salva come immagine…
+	Save as image	Salva come immagine
+	Selected area (page {page}, {size})	Area selezionata (pagina {page}, {size})
+	The selected area is no longer on a page of this document.	L'area selezionata non è più su una pagina di questo documento.
 	Attach a file…	Allega un file…
 	Delete attachment	Elimina allegato
 	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web

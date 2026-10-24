@@ -2488,6 +2488,11 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Print area…	Terület nyomtatása…
+	Save as image…	Mentés képként…
+	Save as image	Mentés képként
+	Selected area (page {page}, {size})	Kijelölt terület ({page}. oldal, {size})
+	The selected area is no longer on a page of this document.	A kijelölt terület már nincs a dokumentum egyik oldalán sem.
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el
