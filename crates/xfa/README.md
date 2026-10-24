@@ -58,6 +58,15 @@ that warning and keeps the existing layout and accepted widget values.
   filled there shows them here. The engine does both: values on open (recorded in the
   document's warnings), the packet after every form edit.
 
+For fixed page text, a span that WinAnsi cannot encode uses the existing bundled Inter Regular
+when that face covers the whole span and has a usable advance. Rejected zero-advance spans
+do not allocate a font. The complete Unicode font is embedded once and reused
+across pages and validated relayouts, including save/reopen. The span is fitted horizontally to
+its measured standard-font advance, preserving wrapping, alignment and link bounds. Other spans
+keep their standard face. This is a Regular fallback, not source-font/style fidelity or complex
+script shaping; uncovered spans keep the existing question-mark warning. Field appearances
+remain the forms crate's responsibility. Previously saved layouts need a relayout to benefit.
+
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
 
