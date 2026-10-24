@@ -1358,12 +1358,20 @@ impl Automation {
                         let lower = font.to_lowercase();
                         let thai_fonts = pdfcraft_fonts::available_thai_fonts();
                         let found = thai_fonts.iter().any(|e| {
-                            e.file_name.to_lowercase() == lower
+                            let matches_name = e.file_name.to_lowercase() == lower
                                 || e.name.to_lowercase() == lower
                                 || e.family.to_lowercase() == lower
                                 || e.file_name.to_lowercase().contains(&lower)
                                 || e.name.to_lowercase().contains(&lower)
-                                || e.family.to_lowercase().contains(&lower)
+                                || e.family.to_lowercase().contains(&lower);
+                            if !matches_name {
+                                return false;
+                            }
+                            if e.path.as_os_str().is_empty() {
+                                return true;
+                            }
+                            self.check_roots(&e.file_name, &e.path, file_access::Access::Read).is_ok()
+                                && self.root.as_ref().map_or(true, |r| e.path.starts_with(r))
                         });
                         if found {
                             hf.font_name = Some(font.to_string());
