@@ -1971,9 +1971,10 @@ mod tests {
     fn text_after_an_inline_image_survives_a_non_ascii_byte_before_a_later_ei() {
         // Everyday content both ways: a string with a byte above 0x7F, and a later word holding
         // a capital "EI". The end-of-data look-ahead used to read the string's bytes as image
-        // data, so the image swallowed the rest of the page.
+        // data, so the image swallowed the rest of the page. The image is filtered, so its
+        // length isn't known up front and the look-ahead decides.
         let pdf = marked_pages(&[
-            "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \0 EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
+            "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray /F /AHx ID 00> EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
         ]);
 
         assert!(marked_text(&pdf, 0).plain_text().contains("EINGANG"), "the text after the inline image was not extracted");

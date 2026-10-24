@@ -1061,8 +1061,9 @@ mod tests {
     #[test]
     fn an_inline_image_ends_at_its_own_ei_when_later_text_holds_a_non_ascii_byte() {
         // `(Grüße)` in WinAnsi, then a word holding a capital "EI": both are everyday content,
-        // and the look-ahead used to read the non-ASCII bytes of the string as image data.
-        let data = b"BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \x00 EI BT /F1 12 Tf (Gr\xFC\xDFe) Tj (EINGANG) Tj ET";
+        // and the look-ahead used to read the non-ASCII bytes of the string as image data. The
+        // image is filtered, so its length isn't known up front and the look-ahead decides.
+        let data = b"BI /W 1 /H 1 /BPC 8 /CS /DeviceGray /F /AHx ID 00> EI BT /F1 12 Tf (Gr\xFC\xDFe) Tj (EINGANG) Tj ET";
 
         assert_eq!(
             operators(data),
