@@ -313,8 +313,7 @@ impl PdfCraftApp {
         let mut edits = Vec::new();
         let author = self.comment_prefs.author.clone();
         for (page, page_info) in doc.info.pages.iter().enumerate() {
-            let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
-            let Some(text) = out.text else { continue };
+            let Ok(text) = r.redaction_text(page) else { continue };
             let hits = match d.mode {
                 SearchMode::Patterns => text.find_with(|c| pdfcraft_engine::find_pattern(d.pattern, c)),
                 _ => needles.iter().flat_map(|w| text.find_opts(w, d.case_sensitive, d.whole_words)).collect(),

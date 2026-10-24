@@ -3595,7 +3595,8 @@ fn layered_signable_fixture() -> Vec<u8> {
         stream("[0 0 100 100]", "<< >>", "0 g 0 0 100 100 re f"),
         stream("[0 0 100 100]", helv, "BT /F1 10 Tf 5 50 Td (Signed by Test) Tj ET"),
         stream("[0 0 50 30]", "<< >>", "0.8 0.1 0.1 RG 3 w 5 5 m 20 5 l 12 22 l h S"),
-        stream("[0 21 50 30]", helv, "BT /F1 9 Tf 2 22 Td (Signature Not Verified) Tj ET"),
+        // Keep the complete caption inside its form bounds so export can preserve it.
+        stream("[0 21 50 30]", helv, "BT /F1 4 Tf 2 22 Td (Signature Not Verified) Tj ET"),
         stream("[0 0 100 100]", "<< >>", "0 g 0 0 100 100 re f"),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
         "<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 150 Td (Contract text) Tj ET\nendstream".to_string(),

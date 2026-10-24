@@ -37,6 +37,16 @@ its undo/redo history.
 
 ## Text search and cache limits
 
+Text extraction, Find and plain-text export omit glyphs wholly outside supported form bounds.
+Transformed and nested bounds apply; boundary contact keeps the complete glyph.
+The same rule applies to supported convex quadrilateral clips, including explicit rectangles.
+Mixed clipped ActualText uses surviving glyph Unicode; an unmapped survivor cannot recover part of its replacement.
+Arbitrary curved clips, masks and Office export remain separate.
+Restored sibling clips preserve extraction. Excessive live clip depth or vertex count returns an extraction error.
+Find reports that error through its existing page warnings.
+Refusal prevents an excessive clip stack from silently exposing excluded text or returning incomplete results.
+Query redaction searches clipped source text, and verification checks it. These paths bypass the visual text cache.
+
 `text_word_count` counts the current snapshot without filling the text cache. It returns totals
 and per-page Unicode word/character counts, with optional tagged-table, tagged-code and
 image/OCR exclusions. See [word count](../../docs/word-count.md) for counting rules and limits.
