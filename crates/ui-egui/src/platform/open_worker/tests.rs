@@ -75,6 +75,14 @@ fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
     let opening_label = format!("Opening {name}…");
     assert_eq!(harness.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(opening_label.as_str()));
     harness.get_by_label(&opening_label);
+    // A language change while the open is pending re-translates the notice.
+    let language = std::mem::replace(&mut harness.state_mut().language, "ja".into());
+    harness.step();
+    let japanese_label = format!("{name} を開いています…");
+    assert_eq!(harness.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(japanese_label.as_str()));
+    harness.state_mut().language = language;
+    harness.step();
+    assert_eq!(harness.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(opening_label.as_str()));
 
     let state = request(&mut harness, &client, "ui.state", json!({}));
     assert_eq!(state["documents"].as_array().map(Vec::len), Some(1));
