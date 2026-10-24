@@ -3981,7 +3981,19 @@ status = "shipped"
 commands = []
 tools = ["comment_edit"]
 evidence = ["crates/annot/src/tests.rs::lines_and_polygons_are_reshaped_by_their_points", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::comments_are_reshaped_through_the_tool"]
-notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it to 45° from the point before), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
+notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it level or plumb with the point before, comment.draw-ortho), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
+
+[[feature]]
+id = "comment.draw-ortho"
+title = "Shift holds lines level or plumb while drawing (ortho)"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add"]
+evidence = ["crates/measure/src/tests.rs::ortho_holds_a_vertex_level_or_plumb_with_the_last", "crates/ui-egui/tests/it/comments.rs::shift_holds_new_lines_and_sides_level_or_plumb", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::lines_and_corners_are_held_level_or_plumb_through_the_tool"]
+notes = "With Shift held, a new line or arrow runs level or plumb from where it starts, whichever is nearer to the pointer (a CAD drawing's ortho mode), and each new side of connected lines, a polygon or a cloud from the corner before, the rubber band included; a dragged end or corner of a drawn one is held the same way (comment.reshape). Acrobat holds lines to 45° steps instead; on drawings and plans the level and plumb lines are the ones wanted. Headless: comment_add `ortho`. Measuring tools keep their 45° steps."
 
 [[feature]]
 id = "comment.edit-comment-text"

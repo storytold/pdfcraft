@@ -48,6 +48,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Text selection, column select | yes, Alt-drag columns | reading-order selection; Alt/Option-drag or Edit ▸ Column select (#740) | shipped |
 | Select and move several objects at once | yes | on one page: Shift/Ctrl/⌘-click and marquee, one undo step (#844); not across pages, no group resize | partial |
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures; Shift on a corner keeps the proportions of comments, stamps and form fields (#2199); no Alt resize from the centre | shipped |
+| Shift while drawing a line | holds it to 45° steps | holds it level or plumb (a CAD drawing's ortho): new lines and arrows, each side of connected lines, polygons and clouds, and a dragged end or corner | shipped |
 | Arrange, align and distribute page objects | yes | fields only | partial |
 | Rulers, grids, snap to grid, guides | yes | no | planned |
 | Cursor coordinates, line weights | yes | no | planned |

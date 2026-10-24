@@ -715,6 +715,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
                 "width": { "type": "number", "minimum": 0, "description": "Line width in points." },
                 "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
+                "ortho": { "type": "boolean", "description": "line/arrow/polygon/cloud/polyline: hold each end or corner level or plumb with the one before, whichever is nearer (Shift while drawing)." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
             }),
             &["doc", "page", "type"],

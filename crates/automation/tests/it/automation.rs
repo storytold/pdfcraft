@@ -5458,6 +5458,44 @@ fn drawing_comments_through_tools() {
     assert!(matches!(png[0], Content::Png { .. }));
 }
 
+/// comment_add `ortho`, Shift's hold while drawing: a line's end is held level or plumb with its
+/// start, and each corner of connected lines or a polygon with the corner before.
+#[test]
+fn lines_and_corners_are_held_level_or_plumb_through_the_tool() {
+    let dir = workdir("ortho");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for args in [
+        json!({ "type": "line", "from": [20, 40], "to": [120, 52], "ortho": true }),
+        json!({ "type": "arrow", "from": [180, 40], "to": [170, 140], "ortho": true }),
+        json!({ "type": "polyline", "points": [[20, 200], [90, 210], [95, 260], [130, 250]], "ortho": true }),
+        json!({ "type": "line", "from": [20, 280], "to": [120, 290] }),
+    ] {
+        let mut args = args;
+        args.as_object_mut().unwrap().extend([("doc".to_string(), json!(doc)), ("page".to_string(), json!(1))]);
+        ok(&mut a, "comment_add", args);
+    }
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    // In the order added: the list isn't sorted by index.
+    let mut listed = list["comments"].as_array().unwrap().clone();
+    listed.sort_by_key(|c| c["index"].as_u64());
+    let points: Vec<Vec<[f64; 2]>> =
+        listed.iter().map(|c| c["points"].as_array().unwrap().iter().map(|p| [p[0].as_f64().unwrap(), p[1].as_f64().unwrap()]).collect()).collect();
+    let want: [&[[f64; 2]]; 4] = [
+        &[[20.0, 40.0], [120.0, 40.0]],
+        &[[180.0, 40.0], [180.0, 140.0]],
+        &[[20.0, 200.0], [90.0, 200.0], [90.0, 260.0], [130.0, 260.0]],
+        &[[20.0, 280.0], [120.0, 290.0]],
+    ];
+    assert_eq!(points.len(), want.len(), "{points:?}");
+    for (got, want) in points.iter().zip(want) {
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        assert!(got.iter().zip(want).all(|(g, w)| (g[0] - w[0]).abs() < 0.01 && (g[1] - w[1]).abs() < 0.01), "{got:?} for {want:?}");
+    }
+    let refused = a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 50, 50], "ortho": true }));
+    assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "ortho is for lines and corners: {refused:?}");
+}
+
 #[test]
 fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     let dir = workdir("signing-graphic");

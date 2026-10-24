@@ -449,6 +449,16 @@ fn listing_skips_repeated_refs_and_caps_what_it_keeps() {
     assert!(!listing.measurements.is_empty());
 }
 #[test]
+fn ortho_holds_a_vertex_level_or_plumb_with_the_last() {
+    let last = [10.0, 20.0];
+    assert_eq!(snap::ortho(last, [50.0, 27.0]), [50.0, 20.0], "mostly across: level");
+    assert_eq!(snap::ortho(last, [-30.0, 13.0]), [-30.0, 20.0], "to the left too");
+    assert_eq!(snap::ortho(last, [14.0, 80.0]), [10.0, 80.0], "mostly up: plumb");
+    assert_eq!(snap::ortho(last, [8.0, -40.0]), [10.0, -40.0], "and down");
+    assert_eq!(snap::ortho(last, [30.0, 40.0]), [30.0, 20.0], "a tie stays level");
+    assert_eq!(snap::ortho(last, last), last);
+}
+#[test]
 fn a_stream_over_the_byte_budget_uses_it_up_once() {
     // 50 references to one Flate stream that inflates past the 16 MiB budget decode once.
     let big = pdfcraft_cos::Stream::flate(Dict::new(), &vec![b' '; 17 << 20]);
