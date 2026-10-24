@@ -2527,6 +2527,19 @@ impl PageXform {
         Rect::from_two_pos(self.norm_to_screen(a.0, a.1), self.norm_to_screen(b.0, b.1))
     }
 
+    /// Whether the screen point `p` activates link `l` on `page`: inside one of its
+    /// `/QuadPoints` quadrilaterals, or its rectangle when it has none (ISO 32000-2 Table 176).
+    pub fn link_contains(&self, info: &DocInfo, page: usize, l: &pdfcraft_render::Link, p: Pos2) -> bool {
+        if l.quads.is_empty() {
+            return self.user_rect(info, page, l.rect).contains(p);
+        }
+        // The inverse of `user_rect`: screen → the displayed page's fraction → user space.
+        let Some(pg) = info.pages.get(page) else { return false };
+        let (u, v) = self.screen_to_norm(p);
+        let [x, y] = pg.view_to_user(u * pg.width, v * pg.height);
+        l.contains(x, y)
+    }
+
     /// This transform resized to a raster of `px` device pixels (width, height before the view
     /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
     /// already be on a whole pixel ([`snap_to_pixels`]).
@@ -3698,7 +3711,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 {
                     let (vx, vy) = xf.screen_to_view(p);
                     let over_text = text.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]);
-                    let over_link = info.links.iter().any(|l| l.page == i && xf.user_rect(info, i, l.rect).contains(p));
+                    let over_link = info.links.iter().any(|l| l.page == i && xf.link_contains(info, i, l, p));
                     // Column select (#740): the Column select tool, or Alt (Option on macOS) held
                     // while a drag starts, as in Acrobat.
                     let column = tool == QuickTool::ColumnSelect || ui.input(|inp| inp.modifiers.alt);
@@ -3904,8 +3917,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 && let Some(p) = pointer
             {
                 for l in info.links.iter().filter(|l| l.page == i) {
-                    let sr = xf.user_rect(info, i, l.rect);
-                    if sr.contains(p) {
+                    if xf.link_contains(info, i, l, p) {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         let label = match &l.target {
                             LinkTarget::Page(n, _) => {

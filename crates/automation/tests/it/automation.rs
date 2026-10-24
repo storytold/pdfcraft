@@ -1921,6 +1921,52 @@ fn destinations_are_listed_with_their_position() {
     assert_eq!((links["links"][2]["url"].clone(), links["links"][2].get("destination")), (json!("https://example.com"), None));
 }
 
+/// A relative URI action resolves against the catalog's `/URI /Base` (ISO 32000-2 §12.6.4.8,
+/// Table 211), and a link with `/QuadPoints` is active only there (§12.5.6.5, Table 176): both as
+/// link_list and doc_info report them.
+#[test]
+fn links_resolve_relative_addresses_and_report_their_quad_points() {
+    let dir = workdir("link-base-quads");
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /URI << /Base (https://example.com/base/) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 700 300 716] /Border [0 0 0] /A << /S /URI /URI (page.html) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 670 300 686] /QuadPoints [72 670 120 670 120 686 72 686] /Border [0 0 0] /A << /S /URI /URI (https://example.org/q) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 640 300 656] /Border [0 0 0] /A << /S /URI /URI (javascript:alert\\(1\\)) >> >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("links.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "links.pdf" }))["doc"].as_u64().unwrap();
+    let links = ok(&mut a, "link_list", json!({ "doc": doc }));
+    let [relative, quads, script] = [&links["links"][0], &links["links"][1], &links["links"][2]];
+    assert_eq!(
+        (relative["url"].clone(), relative["resolved_url"].clone()),
+        (json!("page.html"), json!("https://example.com/base/page.html")),
+        "{links}"
+    );
+    assert_eq!(relative.get("active_areas"), None, "{links}");
+    // 792 − 686 = 106 points from the top: only the first word, not the whole rect.
+    assert_eq!(quads["active_areas"], json!([[72.0, 106.0, 120.0, 122.0]]), "{links}");
+    assert_eq!(quads.get("resolved_url"), None, "an absolute address is not resolved");
+    // A base never turns a script into a web address.
+    assert_eq!((script["url"].clone(), script.get("resolved_url")), (json!("javascript:alert(1)"), None), "{links}");
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["links"][0]["target"]["uri"], "https://example.com/base/page.html", "{info}");
+}
+
 #[test]
 fn bookmarks_from_structure_through_tools() {
     let dir = workdir("bookmarks-structure");
