@@ -4243,6 +4243,17 @@ fn detecting_fields_on_a_printed_form() {
     let f = &d.form[0];
     assert!(f.widgets[0].rect[0] > 72.0 + 20.0, "{:?}", f.widgets[0].rect);
     assert!(s.detect_fields(id, &[]).is_empty(), "nothing left to detect");
+
+    // #2943: a "label, box, label, box" line names each check box after the label before it.
+    let labels_pdf = paper_form_with(
+        595,
+        842,
+        "BT /F1 10 Tf 100 534 Td (Monsieur) Tj ET 146 532 11 10 re S BT /F1 10 Tf 180 534 Td (Madame) Tj ET 222 532 11 10 re S",
+    );
+    let labels_id = s.open("labels.pdf", None, Arc::new(labels_pdf), None).unwrap();
+    let found = s.detect_fields(labels_id, &[]);
+    let names: Vec<&str> = found.iter().map(|(_, c)| c.name.as_str()).collect();
+    assert_eq!(names, ["Monsieur", "Madame"], "{found:?}");
 }
 
 /// #294, #2831: a detected field sits on a line or box the page already draws, so it gets no border
@@ -4267,18 +4278,11 @@ fn detected_fields_have_no_border_or_fill() {
     assert!(look.border.is_some() && look.fill.is_some(), "{look:?}");
 }
 
-/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
-/// label in its corner, an empty box with its label above, and two check boxes.
-fn paper_form() -> Vec<u8> {
-    let content = "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
-        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
-        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
-        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
-        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET";
+fn paper_form_with(w: u32, h: u32, content: &str) -> Vec<u8> {
     let objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>").into_bytes(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
@@ -4297,6 +4301,20 @@ fn paper_form() -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
+/// label in its corner, an empty box with its label above, and two check boxes.
+fn paper_form() -> Vec<u8> {
+    paper_form_with(
+        420,
+        300,
+        "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
+        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
+        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
+        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
+        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET",
+    )
 }
 
 /// How the paper form was scanned.

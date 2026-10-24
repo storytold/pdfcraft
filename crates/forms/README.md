@@ -37,6 +37,15 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
 
 ## Behaviour
 
+- Automatic field detection considers the first 2,000 drawn rectangles in input order for
+  combs, check boxes and empty text boxes. Check-box label detection considers at most 2,000
+  drawn/existing widget rectangles combined, before filtering or deduplication. Unusually
+  complex pages may therefore have partial proposals, returned in reading order; existing
+  widgets always exclude overlapping proposals, even beyond the label budget. A balanced
+  spatial index avoids repeated full scans, with a shared 128,000-step query budget. If
+  adversarial geometry exhausts it, unverified proposals are omitted, not accepted. As the input
+  supplies widget geometry only, any existing small square widget can reserve a nearby label.
+
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
 - Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb,
