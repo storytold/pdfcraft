@@ -71,6 +71,10 @@ fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
     let open_reply = request(&mut harness, &client, "ui.open", json!({ "path": path.to_string_lossy() }));
     assert_eq!(open_reply["pending"], true);
     started.recv_timeout(Duration::from_secs(5)).expect("worker reached prepare barrier");
+    let name = path.file_name().expect("test path has a file name").to_string_lossy();
+    let opening_label = format!("Opening {name}…");
+    assert_eq!(harness.state().opening_notice.as_ref().map(|notice| notice.label.as_str()), Some(opening_label.as_str()));
+    harness.get_by_label(&opening_label);
 
     let state = request(&mut harness, &client, "ui.state", json!({}));
     assert_eq!(state["documents"].as_array().map(Vec::len), Some(1));
@@ -87,6 +91,8 @@ fn open_prepare_keeps_control_and_existing_tabs_live_until_atomic_commit() {
     assert_eq!(app.views.len(), 2, "one prepared document commits exactly once");
     assert_eq!(app.session.get(app.views[1].id).expect("new tab").info.pages.len(), 2);
     assert_eq!(app.active, Some(1));
+    assert!(app.opening_notice.is_none(), "the opening notice clears after commit");
+    assert!(harness.query_by_label(&opening_label).is_none(), "the opening notice is no longer visible");
     let _ = std::fs::remove_file(path);
 }
 
