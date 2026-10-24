@@ -104,6 +104,9 @@ impl PdfCraftApp {
         match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
+                // A command stopped part way through closing or replacing a tab must not leave
+                // the next frame pointing past the last one (#3914).
+                self.keep_active_valid();
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }

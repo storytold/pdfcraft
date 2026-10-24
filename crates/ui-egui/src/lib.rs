@@ -95,6 +95,7 @@ mod fling;
 pub mod folders_ui;
 mod format_text_ui;
 pub mod forms_ui;
+mod frame_guard;
 mod home;
 mod icon_data;
 pub mod icons;
@@ -681,6 +682,13 @@ pub struct PdfCraftApp {
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// Frames in a row whose logic or drawing panicked, and whether this frame's did
+    /// (`frame_guard`, #3914).
+    panicking_frames: u32,
+    frame_panicked: bool,
+    /// Tests: the part of the next frame that panics on purpose.
+    #[cfg(test)]
+    panic_next: Option<frame_guard::FramePart>,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
@@ -1041,6 +1049,10 @@ impl PdfCraftApp {
             ocr_run: None,
             ocr_batch: None,
             run_inline: false,
+            panicking_frames: 0,
+            frame_panicked: false,
+            #[cfg(test)]
+            panic_next: None,
             custom_actions: Vec::new(),
             wizard: Default::default(),
             action_run: None,
@@ -3146,7 +3158,25 @@ impl eframe::App for PdfCraftApp {
         storage.set_string("pdfcraft", self.persist());
     }
 
+    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame_panicked = false;
+        self.guarded_frame(|app| app.logic_unguarded(ctx));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.guarded_frame(|app| app.ui_unguarded(ui));
+        if !self.frame_panicked {
+            self.panicking_frames = 0;
+        }
+    }
+}
+
+impl PdfCraftApp {
+    fn logic_unguarded(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        self.injected_panic(frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
@@ -3314,7 +3344,9 @@ impl eframe::App for PdfCraftApp {
         self.process_picked();
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui_unguarded(&mut self, ui: &mut egui::Ui) {
+        #[cfg(test)]
+        self.injected_panic(frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
