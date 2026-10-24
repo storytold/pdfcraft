@@ -66,6 +66,19 @@ fn retained(a: &Annotation) -> usize {
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
+/// The configuration's auto state (`/AS`): at most this many usage application dictionaries,
+/// `/OCGs` entries across them, and `/Category` names in each are read. The renderer's
+/// (vendored hayro-interpret patch (67)) have the same values.
+const MAX_AUTO_STATE_APPLICATIONS: usize = 256;
+const MAX_AUTO_STATE_GROUPS: usize = 4096;
+const MAX_AUTO_STATE_CATEGORIES: usize = 16;
+
+/// The Layers panel's rows from `/Order`: at most this many rows, nested at most this deep, and
+/// a label keeps at most this many characters.
+const MAX_LAYER_ORDER_ROWS: usize = 4096;
+const MAX_LAYER_ORDER_DEPTH: usize = 32;
+const MAX_LAYER_LABEL_CHARS: usize = 256;
+
 /// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
 /// reads only this window; the rest are listed by page through `pdfcraft_organize`.
 const OUTLINE_WINDOW: usize = 10_000;
@@ -106,6 +119,10 @@ pub struct DocInfo {
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
     pub layer_groups: Vec<Vec<(u32, u16)>>,
+    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99), a
+    /// tree of layers (indices into `layers`) and labels. A layer it doesn't list isn't presented,
+    /// though it still draws in its state; no `/Order` presents none.
+    pub layer_order: Vec<LayerRow>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
@@ -538,6 +555,23 @@ pub struct Layer {
     pub initial: bool,
 }
 
+/// One row of the Layers panel ([`DocInfo::layer_order`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerRow {
+    /// Nesting level, 0 at the top: a nested array's entries are one deeper than the layer or
+    /// label before them.
+    pub depth: usize,
+    pub item: LayerItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayerItem {
+    /// A layer, by its index in [`DocInfo::layers`].
+    Layer(usize),
+    /// A text label heading a nested array: not a layer, so it can't be selected or toggled.
+    Label(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct Attachment {
     pub name: String,
@@ -807,6 +841,7 @@ impl<'a> Inspector<'a> {
         }
         self.layers(catalog, &mut info.layers);
         info.layer_groups = self.layer_groups(catalog);
+        info.layer_order = self.layer_order(catalog, &info.layers);
         self.fonts(&mut info.fonts);
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
             if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {
@@ -1701,17 +1736,131 @@ impl<'a> Inspector<'a> {
             .and_then(|o| self.resolve(o).as_array().ok())
             .map(|a| a.iter().filter_map(|x| x.as_reference().ok()).collect())
             .unwrap_or_default();
+        let auto = config.map(|c| self.view_auto_state(c)).unwrap_or_default();
         let Ok(Object::Array(ocgs)) = props.get(b"OCGs").map(|o| self.resolve(o)) else { return };
         for g in ocgs {
             let Some(d) = self.dict(g) else { continue };
             let id = g.as_reference().ok();
+            // The View auto state, when it manages the group, then the configuration.
             let visible = match id {
+                Some(id) if let Some(&state) = auto.get(&id) => state,
                 Some(id) if off.contains(&id) => false,
                 Some(id) if on.contains(&id) => true,
                 _ => !base_off,
             };
             let Some(id) = id else { continue };
             out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
+        }
+    }
+
+    /// The state the configuration's auto state (`/AS`) gives each group it manages for the View
+    /// event (ISO 32000-2 §8.11.4.4, Table 101), which overrides `/BaseState`, `/ON` and `/OFF`
+    /// as the document opens. Keep in step with the renderer's (vendored hayro-interpret patch
+    /// (67), `apply_view_auto_state`): each usage application with `/Event /View` and `/View` in
+    /// its `/Category` recommends the `/ViewState` of each group in its `/OCGs` whose `/Usage`
+    /// gives one; a group is on only if all its recommendations are. Groups with none are absent.
+    /// Other categories (`/Zoom`, `/User`, `/Language`) give no recommendation here.
+    fn view_auto_state(&self, config: &Dictionary) -> HashMap<ObjectId, bool> {
+        let mut out: HashMap<ObjectId, bool> = HashMap::new();
+        let Some(applications) = config.get(b"AS").ok().and_then(|o| self.resolve(o).as_array().ok()) else { return out };
+        let mut groups_left = MAX_AUTO_STATE_GROUPS;
+        for application in applications.iter().take(MAX_AUTO_STATE_APPLICATIONS) {
+            let Some(application) = self.dict(application) else { continue };
+            if self.name(application, b"Event").as_deref() != Some("View") {
+                continue;
+            }
+            let views = application.get(b"Category").ok().and_then(|o| self.resolve(o).as_array().ok()).is_some_and(|categories| {
+                categories.iter().take(MAX_AUTO_STATE_CATEGORIES).any(|c| matches!(c, Object::Name(n) if n.as_slice() == b"View"))
+            });
+            if !views {
+                continue;
+            }
+            let Some(groups) = application.get(b"OCGs").ok().and_then(|o| self.resolve(o).as_array().ok()) else { continue };
+            for g in groups {
+                if groups_left == 0 {
+                    return out;
+                }
+                groups_left -= 1;
+                let Ok(id) = g.as_reference() else { continue };
+                let state = self
+                    .dict(g)
+                    .and_then(|d| d.get(b"Usage").ok())
+                    .and_then(|o| self.dict(o))
+                    .and_then(|u| u.get(b"View").ok())
+                    .and_then(|o| self.dict(o))
+                    .and_then(|v| self.name(v, b"ViewState"));
+                let on = match state.as_deref() {
+                    Some("ON") => true,
+                    Some("OFF") => false,
+                    _ => continue,
+                };
+                let entry = out.entry(id).or_insert(true);
+                *entry &= on;
+            }
+        }
+        out
+    }
+
+    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99). Its
+    /// entries are groups, shown by name, and nested arrays, shown as a tree one level deeper;
+    /// a nested array may start with a text string, a label that is not a group. Groups not
+    /// listed aren't presented, and `/Order` defaults to the empty array in the default
+    /// configuration, so a document without one presents no layers. An entry that is neither a
+    /// group in `/OCGs` nor an array is skipped. Bounded by `MAX_LAYER_ORDER_*`, and an indirect
+    /// array is read once, so a cycle ends.
+    fn layer_order(&self, catalog: &Dictionary, layers: &[Layer]) -> Vec<LayerRow> {
+        let mut out = Vec::new();
+        let Some(config) = catalog.get(b"OCProperties").ok().and_then(|o| self.dict(o)).and_then(|p| p.get(b"D").ok()).and_then(|o| self.dict(o))
+        else {
+            return out;
+        };
+        let Some(order) = config.get(b"Order").ok() else { return out };
+        let index: HashMap<ObjectId, usize> = layers.iter().enumerate().map(|(i, l)| ((l.id.0, l.id.1), i)).collect();
+        let mut seen = HashSet::new();
+        if let Object::Reference(id) = order {
+            seen.insert(*id);
+        }
+        if let Ok(items) = self.resolve(order).as_array() {
+            self.layer_order_rows(items, 0, &index, &mut seen, &mut out);
+        }
+        out
+    }
+
+    fn layer_order_rows(
+        &self,
+        items: &'a [Object],
+        depth: usize,
+        index: &HashMap<ObjectId, usize>,
+        seen: &mut HashSet<ObjectId>,
+        out: &mut Vec<LayerRow>,
+    ) {
+        if depth > MAX_LAYER_ORDER_DEPTH {
+            return;
+        }
+        for item in items {
+            if out.len() >= MAX_LAYER_ORDER_ROWS {
+                return;
+            }
+            if let Object::Reference(id) = item {
+                if let Some(&layer) = index.get(id) {
+                    out.push(LayerRow { depth, item: LayerItem::Layer(layer) });
+                    continue;
+                }
+                // An indirect nested array, read once.
+                if !seen.insert(*id) {
+                    continue;
+                }
+            }
+            let Ok(nested) = self.resolve(item).as_array() else { continue };
+            let rest = match nested.split_first() {
+                Some((first, rest)) if let Object::String(bytes, _) = self.resolve(first) => {
+                    let label: String = text_string(bytes).chars().take(MAX_LAYER_LABEL_CHARS).collect();
+                    out.push(LayerRow { depth, item: LayerItem::Label(label) });
+                    rest
+                }
+                _ => nested.as_slice(),
+            };
+            self.layer_order_rows(rest, depth.saturating_add(1), index, seen, out);
         }
     }
 
@@ -2883,6 +3032,95 @@ trailer << /Root 1 0 R >>
         let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
         let layers: Vec<_> = info.layers.iter().map(|l| (l.name.as_str(), l.initial)).collect();
         assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
+    }
+
+    /// ISO 32000-2 Table 99 `/Order`: the Layers panel presents the groups it lists, as a tree,
+    /// with nested arrays one level deeper and a leading text string as a label. Groups it
+    /// doesn't list are not presented (they stay in `layers` and keep their state), and without
+    /// `/Order` none are. Malformed entries are skipped; cycles and depth are bounded.
+    #[test]
+    fn the_layers_panel_presents_the_order_tree() {
+        let rows = |order: &str, extra: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /D << /OFF [8 0 R] {order} >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (A) >> endobj
+6 0 obj << /Type /OCG /Name (B) >> endobj
+7 0 obj << /Type /OCG /Name (C) >> endobj
+8 0 obj << /Type /OCG /Name (D) >> endobj
+9 0 obj << /Type /OCG /Name (Unlisted) >> endobj
+{extra}
+trailer << /Root 1 0 R >>
+%%EOF"
+            );
+            let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+            assert_eq!(info.layers.len(), 4, "every group in /OCGs keeps its state: {order}");
+            info.layer_order
+                .iter()
+                .map(|r| match &r.item {
+                    LayerItem::Layer(i) => format!("{}{}", " ".repeat(r.depth), info.layers.get(*i).map_or("?", |l| l.name.as_str())),
+                    LayerItem::Label(s) => format!("{}[{s}]", " ".repeat(r.depth)),
+                })
+                .collect::<Vec<_>>()
+        };
+        // A layer with sublayers, and a group not listed (D) that isn't presented.
+        assert_eq!(rows("/Order [5 0 R 6 0 R [7 0 R]]", ""), ["A", "B", " C"]);
+        // A labelled collection heads its own level, with a nested array under B.
+        assert_eq!(rows("/Order [5 0 R [(Set) 6 0 R [7 0 R]] 8 0 R]", ""), ["A", "[Set]", " B", "  C", "D"]);
+        // Without /Order, or with an empty one, nothing is presented.
+        assert!(rows("", "").is_empty());
+        assert!(rows("/Order []", "").is_empty());
+        // An indirect /Order and nested array; a group outside /OCGs, a missing object and junk
+        // are skipped.
+        assert_eq!(rows("/Order 10 0 R", "10 0 obj [5 0 R 11 0 R 9 0 R 12 0 R 1 (x) /N] endobj\n11 0 obj [6 0 R] endobj"), ["A", " B"]);
+        // Cycles: an array holding itself, and an /Order holding itself.
+        assert_eq!(rows("/Order 10 0 R", "10 0 obj [5 0 R 10 0 R 11 0 R] endobj\n11 0 obj [6 0 R 11 0 R 10 0 R] endobj"), ["A", " B"]);
+        // Nesting past the limit is cut off; a long label is cut short.
+        let deep = format!("/Order [5 0 R {}6 0 R{}]", "[".repeat(40), "]".repeat(40));
+        assert_eq!(rows(&deep, ""), ["A"]);
+        let long = format!("/Order [[({}) 5 0 R]]", "x".repeat(1000));
+        let got = rows(&long, "");
+        assert_eq!(got.first().map(|s| s.len()), Some(MAX_LAYER_LABEL_CHARS + 2));
+        // Many rows stop at the cap.
+        let many = format!("/Order [{}]", "5 0 R ".repeat(MAX_LAYER_ORDER_ROWS + 10));
+        assert_eq!(rows(&many, "").len(), MAX_LAYER_ORDER_ROWS);
+    }
+
+    /// ISO 32000-2 §8.11.4.4: the View auto state (`/AS`) decides the initial state of the groups
+    /// it manages, over `/ON` and `/OFF`; the others keep the configuration's. Malformed entries
+    /// are ignored.
+    #[test]
+    fn initial_layer_visibility_applies_the_view_auto_state() {
+        let initial = |config: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D {config} >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (ViewOff) /Usage << /View << /ViewState /OFF >> >> >> endobj
+6 0 obj << /Type /OCG /Name (ViewOn) /Usage 8 0 R >> endobj
+7 0 obj << /Type /OCG /Name (Plain) >> endobj
+8 0 obj << /View << /ViewState /ON >> >> endobj
+9 0 obj 9 0 R endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            );
+            let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+            // Opened, so each is shown as it starts.
+            info.layers.iter().inspect(|l| assert_eq!(l.initial, l.visible, "{}", l.name)).map(|l| l.initial).collect::<Vec<_>>()
+        };
+        let managed = "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R 6 0 R 7 0 R] >>]";
+        assert_eq!(initial(&format!("<< /OFF [6 0 R 7 0 R] {managed} >>")), [false, true, false]);
+        assert_eq!(initial("<< /OFF [6 0 R 7 0 R] >>"), [true, false, false], "without /AS");
+        assert_eq!(initial("<< /OFF [6 0 R] /AS [<< /Event /Print /Category [/View] /OCGs [5 0 R 6 0 R] >>] >>"), [true, false, true], "Print event");
+        assert_eq!(initial("<< /AS [<< /Event /View /Category [/Zoom] /OCGs [5 0 R] >>] >>"), [true, true, true], "Zoom only");
+        for bad in
+            ["/AS 9 0 R", "/AS [9 0 R 1 null]", "/AS [<< /Event /View /OCGs [5 0 R] >>]", "/AS [<< /Event /View /Category [/View] /OCGs 9 0 R >>]"]
+        {
+            assert_eq!(initial(&format!("<< {bad} >>")), [true, true, true], "{bad}");
+        }
     }
 
     const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7

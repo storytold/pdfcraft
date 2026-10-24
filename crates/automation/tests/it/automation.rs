@@ -7289,6 +7289,38 @@ fn doc_info_describes_set_layer_links() {
         })
     );
     assert_eq!(info["layers"], json!([{ "name": "Red", "visible": true, "initial": true }, { "name": "Green", "visible": false, "initial": false }]));
+    // No /Order: the Layers panel presents none (ISO 32000-2 Table 99), though both are layers.
+    assert_eq!(info["layer_order"], json!([]));
+}
+
+/// `doc_info`'s `layer_order` follows the default configuration's /Order (ISO 32000-2 Table 99):
+/// a group by its 1-based position in `layers` and its name, a nested array one level deeper,
+/// a label that starts one, and a group /Order does not list left out.
+#[test]
+fn doc_info_lists_the_layer_order_tree() {
+    let dir = workdir("layer-order");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R 6 0 R 7 0 R] /D << /Order [6 0 R [(Inks) 4 0 R [5 0 R]]] >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /OCG /Name (Red) >>",
+        "<< /Type /OCG /Name (Green) >>",
+        "<< /Type /OCG /Name (Blue) >>",
+        "<< /Type /OCG /Name (Unlisted) >>",
+    ]);
+    std::fs::write(dir.join("order.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "order.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(
+        info["layer_order"],
+        json!([
+            { "depth": 0, "layer": 3, "name": "Blue" },
+            { "depth": 0, "label": "Inks" },
+            { "depth": 1, "layer": 1, "name": "Red" },
+            { "depth": 2, "layer": 2, "name": "Green" },
+        ])
+    );
 }
 
 mod close_argument_tests {

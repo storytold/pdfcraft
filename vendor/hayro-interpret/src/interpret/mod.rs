@@ -111,6 +111,11 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
+    /// PdfCraft patch (67): apply the default configuration's auto state for the View event
+    /// (`/AS` usage applications with `/Event /View`, ISO 32000-2 §8.11.4.4) before
+    /// `ocg_overrides`. On by default: that is the state for viewing. Off for output made for
+    /// printing, which the View event is not.
+    pub view_auto_state: bool,
     /// PdfCraft patch: once this is `true`, interpretation stops before the next content
     /// operator. What was drawn is then incomplete, so only set it when the output will be
     /// thrown away (a viewer's render whose result nobody can receive any more).
@@ -140,6 +145,7 @@ impl Default for InterpreterSettings {
             render_annotations: true,
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
+            view_auto_state: true,
             cancelled: None,
             preview: false,
         }

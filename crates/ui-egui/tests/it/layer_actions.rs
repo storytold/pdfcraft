@@ -9,9 +9,14 @@ use pdfcraft_ui_egui::PdfCraftApp;
 /// One page with layers Red (on) and Green (off), a radio-button group, each drawing a band;
 /// a "show-red" push button turns Red on and a link toggles Green.
 fn fixture() -> Vec<u8> {
+    fixture_with("")
+}
+
+/// [`fixture`] with `order` added to the default configuration.
+fn fixture_with(order: &str) -> Vec<u8> {
     let content = "/OC /R BDC 1 0 0 rg 20 300 260 40 re f EMC /OC /G BDC 0 1 0 rg 20 240 260 40 re f EMC";
     let objs = [
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> /OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] /RBGroups [[5 0 R 6 0 R]] >> >> >>".to_string(),
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> /OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] /RBGroups [[5 0 R 6 0 R]] {order} >> >> >>"),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 4 0 R /Resources << /Properties << /R 5 0 R /G 6 0 R >> >> /Annots [7 0 R 8 0 R] >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
@@ -36,10 +41,14 @@ fn fixture() -> Vec<u8> {
 }
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    harness_with(fixture(), setup)
+}
+
+fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("layers.pdf", None, fixture()).unwrap();
+        app.open_bytes("layers.pdf", None, pdf).unwrap();
         app.set_option("zoom", "150").unwrap();
         setup(&mut app);
         app
@@ -123,4 +132,29 @@ fn layer_options_reset_to_initial_visibility() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(!doc.dirty, "showing and hiding layers doesn't change the document");
     assert_eq!(doc.can_undo(), None, "nor is it an edit to undo");
+}
+
+/// ISO 32000-2 Table 99 `/Order`: the Layers panel shows the tree it gives, a leading text
+/// string as a label, and not the groups it leaves out, which still draw in their state. Without
+/// `/Order` it presents none.
+#[test]
+fn the_layers_panel_shows_the_order_tree() {
+    let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option("panel", "layers").unwrap());
+    h.run_steps(2);
+    let label = h.get_by_label("Colours").rect();
+    let red = h.get_by_label("Red").rect();
+    assert!(red.min.y > label.max.y - 1.0, "Red is listed under its label");
+    assert!(h.query_by_label("Green").is_none(), "Green isn't in /Order, so it isn't presented");
+    assert_eq!(shown(&h), layers(true, false), "but it is still a layer, in its state");
+    // Clicking the label changes nothing; clicking Red hides it.
+    h.get_by_label("Colours").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h), layers(true, false));
+    h.get_by_label("Red").click();
+    h.run_steps(3);
+    assert_eq!(shown(&h), layers(false, false));
+
+    let h = harness(|app| app.set_option("panel", "layers").unwrap());
+    assert!(h.query_by_label("Red").is_none() && h.query_by_label("Green").is_none(), "no /Order: none presented");
+    h.get_by_label("This document lists no layers to show.");
 }
