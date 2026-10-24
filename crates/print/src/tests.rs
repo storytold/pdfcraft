@@ -961,3 +961,46 @@ fn odd_and_even_pages_are_page_numbers_not_places_in_the_range() {
     // A range with no page of the kind prints nothing.
     assert_eq!(select_pages(12, Some("3, 5"), &[], Subset::Even, false), Err(PrintError::NoPages));
 }
+
+/// #2630: a Windows installation without the print DLLs is told so, before anything calls into
+/// a delay-loaded DLL that is not there.
+#[cfg(windows)]
+#[test]
+fn missing_print_dlls_are_named() {
+    use crate::spool::{PRINT_DLLS, missing_print_dll_in};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[0]));
+    std::fs::write(dir.join(PRINT_DLLS[0]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), Some(PRINT_DLLS[1]));
+    std::fs::write(dir.join(PRINT_DLLS[1]), b"").unwrap();
+    assert_eq!(missing_print_dll_in(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #2630: on a Windows without the print DLLs, the public entry points answer before any call
+/// into the delay-loaded DLLs: no printers, and printing refused naming the DLL. The job names a
+/// printer that doesn't exist and the bytes aren't a PDF, so a missing guard fails here with
+/// another error rather than reaching a real printer.
+#[cfg(windows)]
+#[test]
+fn printing_without_the_print_dlls_is_refused_before_the_spooler() {
+    use crate::spool::{PRINT_DLLS, SYSTEM32_FOR_TEST, printers, submit, submit_with_progress};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-print-no-dlls-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = Some(dir.clone()));
+    let job = crate::spool::Job { printer: Some("PdfCraft test: no such printer".into()), ..Default::default() };
+    let named = |r: Result<String, crate::PrintError>| match r {
+        Err(crate::PrintError::Spool(m)) => m.contains(PRINT_DLLS[0]),
+        _ => false,
+    };
+    assert!(named(submit(b"not a PDF", &job)), "submit names the missing DLL");
+    let mut called = false;
+    assert!(named(submit_with_progress(b"not a PDF", &job, &mut |_, _| called = true)), "submit_with_progress names it");
+    assert!(!called, "no sheet reached a spooler");
+    assert!(printers().is_empty(), "no printers are listed");
+    SYSTEM32_FOR_TEST.with(|d| *d.borrow_mut() = None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

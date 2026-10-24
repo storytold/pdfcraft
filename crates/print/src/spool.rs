@@ -3,8 +3,56 @@
 
 pub use craft_print::{
     Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
+    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
 };
+
+/// Windows: the in-box DLLs printing draws and describes jobs with. The executables delay-load
+/// them (`apps/pdfcraft{,-cli}/build.rs`, the same list) so a Windows installation without them
+/// still starts (#2630); a call into a missing delay-loaded DLL would end the process, so
+/// printing checks for them first.
+#[cfg(windows)]
+pub(crate) const PRINT_DLLS: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
+
+/// The first print DLL missing from `system32`, if any.
+#[cfg(windows)]
+pub(crate) fn missing_print_dll_in(system32: &std::path::Path) -> Option<&'static str> {
+    PRINT_DLLS.into_iter().find(|dll| !system32.join(dll).is_file())
+}
+
+#[cfg(all(windows, test))]
+thread_local! {
+    /// Tests: the folder the print DLLs are looked for in, instead of the system's, so the
+    /// public entry points can be checked against a Windows that lacks them.
+    pub(crate) static SYSTEM32_FOR_TEST: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The first print DLL this Windows installation lacks. `None` when all are there, and when the
+/// system folder is unknown (the loader then decides, as before).
+fn missing_print_dll() -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        #[cfg(test)]
+        if let Some(dir) = SYSTEM32_FOR_TEST.with(|d| d.borrow().clone()) {
+            return missing_print_dll_in(&dir);
+        }
+        let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"))?;
+        missing_print_dll_in(&std::path::Path::new(&root).join("System32"))
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+fn unavailable(dll: &str) -> crate::PrintError {
+    crate::PrintError::Spool(format!("printing needs {dll}, which this Windows installation lacks; use Save as PDF instead"))
+}
+
+/// The system's printers; none on a Windows installation without the print DLLs.
+pub fn printers() -> Vec<Printer> {
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    craft_print::printers()
+}
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
@@ -144,12 +192,18 @@ pub(crate) fn printer_options_via_within(
 }
 
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
     craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
+    if let Some(dll) = missing_print_dll() {
+        return Err(unavailable(dll));
+    }
     craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
