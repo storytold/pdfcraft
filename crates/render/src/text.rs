@@ -393,9 +393,12 @@ struct TextDevice {
     actual: Option<(usize, String, Vec<Drawn>)>,
     /// Every `/ActualText` replacement made on the page.
     replaced: Vec<Replaced>,
+    /// Visible page bounds in view space (`intersected_crop_box` after `initial_transform`).
+    page: Rect,
     filter: TextFilter,
     excluded_depth: Option<usize>,
     actual_filtered: bool,
+    actual_cropped: bool,
     partial_replacement: bool,
 }
 
@@ -475,9 +478,11 @@ impl TextDevice {
             depth: 0,
             actual: None,
             replaced: Vec::new(),
+            page: Rect::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY),
             filter: TextFilter::default(),
             excluded_depth: None,
             actual_filtered: false,
+            actual_cropped: false,
             partial_replacement: false,
         }
     }
@@ -492,10 +497,15 @@ impl TextDevice {
     /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all.
     fn end_actual_text(&mut self) {
         let Some((_, text, drawn)) = self.actual.take() else { return };
+        let cropped = std::mem::take(&mut self.actual_cropped);
         if std::mem::take(&mut self.actual_filtered) {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
+            return;
+        }
+        if cropped {
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
             return;
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
@@ -682,7 +692,13 @@ impl<'a> Device<'a> for TextDevice {
         let b = corners.iter().fold(Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, p| {
             Rect::new(b.x0.min(p.x), b.y0.min(p.y), b.x1.max(p.x), b.y1.max(p.y))
         });
-        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
+        let outside_crop = b.x0.max(self.page.x0) >= b.x1.min(self.page.x1) || b.y0.max(self.page.y0) >= b.y1.min(self.page.y1);
+        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite())
+            || b.width() > 10_000.0
+            || b.height() > 10_000.0
+            || outside_crop
+        {
+            self.actual_cropped |= replaced && outside_crop;
             return;
         }
         let length = dx.hypot(dy);
@@ -740,8 +756,10 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     // as in Acrobat, and match what other extractors report.
     let settings = settings.clone();
     let initial = p.initial_transform(true).to_kurbo();
-    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
+    let c = p.intersected_crop_box();
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
+    dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.
@@ -3499,5 +3517,80 @@ mod tests {
         let expected = "Rückfragen für Überhitzungsschutz: können, weiß, Café";
         assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
         assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
+    }
+
+    #[test]
+    fn text_outside_the_crop_box_is_clipped() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let ops = [
+            "BT /F1 12 Tf 1 0 0 1 100 200 Tm (Inside crop) Tj ET",
+            "BT /F1 12 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (ActualIn)>> BDC (in) Tj EMC ET",
+            // Keep every glyph of OutSpan outside the crop; a boundary-crossing glyph remains visible.
+            "BT /F1 12 Tf 1 0 0 1 -100 125 Tm /Span <</ActualText (CroppedSpan KeptSpan)>> BDC (OutSpan) Tj 1 0 0 1 100 125 Tm (KeptSpan) Tj EMC ET",
+            "BT /F1 12 Tf 1 0 0 1 5 200 Tm (LeftOut) Tj ET",
+            "BT /F1 12 Tf 1 0 0 1 360 200 Tm (RightOut) Tj ET",
+            "BT /F1 12 Tf 1 0 0 1 100 20 Tm (BelowOut) Tj ET",
+            "BT /F1 12 Tf 1 0 0 1 100 370 Tm (AboveOut) Tj ET",
+            "BT /F1 12 Tf 1 0 0 1 100 20 Tm /Span <</ActualText (ActualOut)>> BDC (out) Tj EMC ET",
+            "BT /F1 12 Tf 1 0 0 1 46 100 Tm (A) Tj ET",
+        ]
+        .join("\n");
+        for rotate in [0, 90, 180, 270] {
+            for unit in [1, 2] {
+                let mut doc = Document::with_version("1.7");
+                let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+                let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
+                let pages = doc.new_object_id();
+                let page = doc.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages,
+                    "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
+                    "CropBox" => vec![Object::Integer(50), Object::Integer(60), Object::Integer(350), Object::Integer(340)],
+                    "Rotate" => rotate,
+                    "UserUnit" => unit,
+                    "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+                    "Contents" => content,
+                });
+                doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+                let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+                doc.trailer.set("Root", catalog);
+                let mut bytes = Vec::new();
+                doc.save_to(&mut bytes).unwrap();
+                let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+                let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+                assert_eq!(text.plain_text(), "Inside crop\nActualIn\nKeptSpan\nA", "rotate={rotate} unit={unit}");
+                assert!(!text.find("Inside").is_empty(), "rotate={rotate} unit={unit}");
+                assert!(!text.find("ActualIn").is_empty(), "rotate={rotate} unit={unit}");
+                assert!(!text.find("KeptSpan").is_empty(), "rotate={rotate} unit={unit}");
+                for hidden in ["LeftOut", "RightOut", "BelowOut", "AboveOut", "ActualOut", "CroppedSpan", "OutSpan"] {
+                    assert!(text.find(hidden).is_empty(), "{hidden} must be clipped at rotate={rotate} unit={unit}");
+                }
+            }
+        }
+
+        // A CropBox that is zero-area or disjoint from the MediaBox leaves an empty visible region,
+        // even when a glyph straddles the clamped intersection point.
+        for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+            let mut doc = Document::with_version("1.7");
+            let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+            let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
+            let pages = doc.new_object_id();
+            let page = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages,
+                "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
+                "CropBox" => crop.map(Object::Integer).to_vec(),
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+                "Contents" => content,
+            });
+            doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+            let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+            doc.trailer.set("Root", catalog);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+            let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+            assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
+        }
     }
 }
