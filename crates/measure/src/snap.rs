@@ -863,9 +863,9 @@ pub enum Outline {
 const MAX_OUTLINES: usize = 10_000;
 
 /// The outlines of the comments on a page drawn with lines (lines and arrows, connected lines,
-/// polygons and clouds, rectangles, ovals), each with its place in the page's `/Annots`, where
-/// they are drawn: inside `/RD` and half the border width in from `/Rect` for a rectangle or an
-/// oval. Hidden comments, freehand drawing and malformed entries are left out.
+/// polygons and clouds, rectangles, ovals, the frames of text with a border), each with its place
+/// in the page's `/Annots`, where they are drawn: inside `/RD` and half the border width in from
+/// `/Rect` for a rectangle, an oval or a frame. Hidden comments, freehand drawing and malformed entries are left out.
 pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize, Outline)>> {
     let p = crate::page(doc, page_index)?;
     let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
@@ -889,7 +889,7 @@ pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize,
             b"Line" => Some(nums(d, b"L")).filter(|l| l.len() == 4).map(|l| Outline::Path { points: pairs(l), closed: false }),
             b"PolyLine" => Some(pairs(nums(d, b"Vertices"))).filter(|v| v.len() >= 2).map(|points| Outline::Path { points, closed: false }),
             b"Polygon" => Some(pairs(nums(d, b"Vertices"))).filter(|v| v.len() >= 2).map(|points| Outline::Path { points, closed: true }),
-            kind @ (b"Square" | b"Circle") => {
+            kind @ (b"Square" | b"Circle" | b"FreeText") => {
                 let r = nums(d, b"Rect");
                 let rd = Some(nums(d, b"RD")).filter(|r| r.len() == 4 && r.iter().all(|v| *v >= 0.0)).unwrap_or(vec![0.0; 4]);
                 let w = d
@@ -899,6 +899,12 @@ pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize,
                     .or_else(|| Some(nums(d, b"Border")).filter(|b| b.len() >= 3).map(|b| b[2]))
                     .unwrap_or(1.0)
                     .max(0.0);
+                // A text box's, typewriter text's or callout's frame, where it has a border: its box,
+                // a callout's inside /RD. Text without a border has no line to snap to.
+                if kind == b"FreeText" && (!(d.contains(b"BS") || d.contains(b"Border")) || w <= 0.0) {
+                    continue;
+                }
+                let kind = if kind == b"FreeText" { b"Square".as_slice() } else { kind };
                 <[f64; 4]>::try_from(r).ok().map(|r| {
                     let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
                     let h = w / 2.0;

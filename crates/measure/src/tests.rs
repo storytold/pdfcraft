@@ -653,6 +653,31 @@ fn a_centre_out_of_range_is_no_snap_target() {
     assert!(g.centres.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1e9), "{:?}", g.centres);
     assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
 }
+/// Text with a border is drawn with lines too: a text box's or typed text's frame snaps by its
+/// corners, side middles and centre, a callout's box inside /RD. Text without a border doesn't.
+#[test]
+fn framed_text_snaps_by_its_frame() {
+    let annots = "/Annots [\
+        << /Subtype /FreeText /Rect [100 100 200 140] /BS << /W 2 >> >> \
+        << /Subtype /FreeText /Rect [300 100 400 140] >> \
+        << /Subtype /FreeText /Rect [100 500 220 560] /RD [10 10 10 10] /CL [50 450 100 500 110 510] /BS << /W 2 >> >> ]";
+    let d = fixture("", annots, &[]);
+    let outlines = snap::comment_outlines(&d, 0).unwrap();
+    let places: Vec<usize> = outlines.iter().map(|(i, _)| *i).collect();
+    assert_eq!(places, [0, 2], "text without a border is left out");
+    assert_eq!(outlines[0].1, snap::Outline::Path { points: vec![[101.0, 101.0], [199.0, 101.0], [199.0, 139.0], [101.0, 139.0]], closed: true });
+    assert_eq!(
+        outlines[1].1,
+        snap::Outline::Path { points: vec![[111.0, 511.0], [209.0, 511.0], [209.0, 549.0], [111.0, 549.0]], closed: true },
+        "a callout's box inside /RD"
+    );
+    let g = snap::outline_geometry(outlines.iter().map(|(_, o)| o));
+    let hit = |at: Point| g.snap(at, 3.0, snap::SnapOptions::default()).unwrap().map(|s| (s.point, s.kind));
+    use snap::SnapKind::*;
+    assert_eq!(hit([200.0, 140.0]), Some(([199.0, 139.0], Endpoint)), "the frame's corner");
+    assert_eq!(hit([151.0, 121.0]), Some(([150.0, 120.0], Centre)), "and its centre");
+}
+
 #[test]
 fn comments_drawn_with_lines_snap_by_their_ends_middles_and_centres() {
     let annots = "/Annots [\
