@@ -222,6 +222,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.

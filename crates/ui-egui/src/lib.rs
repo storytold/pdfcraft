@@ -147,6 +147,7 @@ mod tab_context;
 pub mod theme;
 pub mod ui_scale;
 pub mod updates;
+pub mod viewer_prefs;
 mod wheel_boost;
 mod wheel_pager;
 mod widgets;
@@ -972,6 +973,9 @@ pub struct PdfCraftApp {
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
     /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
     pub pending_full_screen: Option<DocId>,
+    /// A document just opened asks for its window to fit its first page or to be centred
+    /// (`FitWindow`, `CenterWindow`): done once the page is laid out.
+    pub pending_window: Option<viewer_prefs::PendingWindow>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
 }
@@ -1241,6 +1245,7 @@ impl PdfCraftApp {
             last_opened_url: None,
             pending_link: None,
             pending_full_screen: None,
+            pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
@@ -1544,7 +1549,8 @@ impl PdfCraftApp {
         self.apply_initial_view(self.views.len() - 1, &initial);
         // Where the reader left off wins over the file's own initial view (#1767).
         self.apply_last_view(self.views.len() - 1);
-        // After both, so full screen shows one fitted page and leaving it comes back to them.
+        self.apply_viewer_preferences(self.views.len() - 1, &initial, activate);
+        // After all of them, so full screen shows one fitted page and leaving it comes back to them.
         if self.full_screen
             && let Some(view) = self.views.last_mut()
         {
@@ -3595,8 +3601,13 @@ impl eframe::App for PdfCraftApp {
             window_controls::resize_edges(&ctx);
         }
         chrome::tab_strip(self, ui);
-        chrome::mode_bar(self, ui);
-        if self.active.is_some() {
+        // A document can hide the toolbars, the menu and the panels around it in its tab (ISO
+        // 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
+        let hidden = self.hidden_interface();
+        if !hidden.mode_bar() {
+            chrome::mode_bar(self, ui);
+        }
+        if self.active.is_some() && !hidden.window_ui {
             chrome::right_rail(self, ui);
             // Read mode hides the tools, not the navigation panes: the rail stays visible
             // there, so its buttons (Bookmarks, Page thumbnails, ...) must open their panels.
@@ -3612,7 +3623,7 @@ impl eframe::App for PdfCraftApp {
         }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::Read {
+            if self.mode == Mode::Read || hidden.window_ui {
                 match self.active {
                     None if self.combine_showing() => combine_ui::page(self, ui),
                     None => home::show(self, ui),
@@ -3625,6 +3636,8 @@ impl eframe::App for PdfCraftApp {
                 docking::show(self, ui);
             }
         });
+        // FitWindow and CenterWindow, once the document just opened is laid out.
+        self.window_preferences_frame(&ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
