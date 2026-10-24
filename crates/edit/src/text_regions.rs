@@ -1023,7 +1023,12 @@ pub(super) fn rewrite_styled_block(
         block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { o.bt_op };
-    let data = splice(&pieces, &ops, |i| (if i == at { std::mem::take(&mut block_ops) } else { Vec::new() }, !drop.contains(&i)));
+    let data = splice(&pieces, &ops, |i| {
+        let mut insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
+        let keep = !drop.contains(&i);
+        insert.extend(dropped_side_effects(&ops, i, keep, split.then_some(start)));
+        (insert, keep)
+    });
     let contents = rewritten_contents(doc, &streams, data);
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {

@@ -5913,6 +5913,45 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
 
+/// `'` moves to the next line before it shows its text, and `"` also sets the word and character
+/// spacing (ISO 32000-2 §9.4.3, Table 107). Rewriting a paragraph drawn with them drops the
+/// operator but must keep what it did: text after it, positioned from that line or using that
+/// spacing, stays exactly where and how it was. Both the single-style paragraph path and the
+/// region path (a draft with a line break) are checked.
+#[test]
+fn rewriting_a_paragraph_drawn_with_quote_operators_keeps_their_line_move_and_spacing() {
+    let cases = [
+        // The next line is placed relative to the line `'` moved to.
+        "BT /F1 12 Tf 14 TL 72 714 Td (Target line here) ' 0 -100 Td (Footer stays put) Tj ET",
+        // The same with `"`, whose spacing the footer also inherits.
+        "BT /F1 12 Tf 14 TL 72 714 Td 3 2 (Target line here) \" 0 -100 Td (Footer stays put) Tj ET",
+        // Spacing set by `"` carries over into the next text object.
+        "BT /F1 12 Tf 14 TL 72 714 Td 3 2 (Target line here) \" ET BT 72 600 Td (Footer stays put) Tj ET",
+        // A split text object: text before the paragraph stays first, then the `'` lines go.
+        "BT /F1 12 Tf 14 TL 72 760 Td (Heading words) Tj 0 -46 Td (Target line here) Tj (more target) ' 0 -100 Td (Footer stays put) Tj ET",
+        // Split at a `'`: the rewrite's `Tm` there is already past its line move.
+        "BT /F1 12 Tf 14 TL 72 760 Td (Heading words) Tj 0 -32 Td (Target line here) ' (more target) ' 0 -100 Td (Footer stays put) Tj ET",
+    ];
+    for content in cases {
+        let footer = |doc: &Document| {
+            let lines = text::text_lines(doc, 0).unwrap();
+            let f = lines.iter().find(|l| l.text == "Footer stays put").unwrap_or_else(|| panic!("no footer in {content}"));
+            (f.rect, f.ink.clone())
+        };
+        let original = text_page(content);
+        let before = footer(&original);
+        let target = text::text_blocks(&original, 0).unwrap().iter().position(|b| b.text.starts_with("Target")).unwrap();
+        for draft in ["NEW TEXT", "NEW\nTEXT"] {
+            let mut doc = original.clone();
+            text::replace_block(&mut doc, 0, target, draft).unwrap();
+            let doc = reopen(&doc);
+            assert_eq!(footer(&doc), before, "{content} with {draft:?}");
+            let texts: Vec<String> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+            assert!(texts.iter().any(|t| t.contains("NEW")) && !texts.iter().any(|t| t.contains("Target")), "{content} with {draft:?}: {texts:?}");
+        }
+    }
+}
+
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
 /// other, and its commit writes what a one-shot rewrite writes, whatever was laid out before.
 #[test]

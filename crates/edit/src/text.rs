@@ -650,6 +650,32 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
     Ok(out)
 }
 
+/// What a text-showing operator does besides showing text (ISO 32000-2 §9.4.3, Table 107): `'`
+/// moves to the next line (`T*`), and `"` first sets the word and character spacing (`aw Tw`,
+/// `ac Tc`). Text after it relies on both, so a dropped `'` or `"` leaves these in its place.
+pub(crate) fn show_side_effects(op: &Op) -> Vec<Op> {
+    let mut out = Vec::new();
+    if op.is("\"") {
+        out.extend(op.num(0).map(|aw| Op::new("Tw", vec![pdfcraft_content::num(aw)])));
+        out.extend(op.num(1).map(|ac| Op::new("Tc", vec![pdfcraft_content::num(ac)])));
+    }
+    if op.is("'") || op.is("\"") {
+        out.push(Op::new("T*", vec![]));
+    }
+    out
+}
+
+/// For a paragraph or region rewrite: what dropped operator `i` must leave behind
+/// ([`show_side_effects`]), so the text after it keeps its line and spacing. `split_at` is the
+/// operator the text object was split at: the rewrite's `Tm` and state there already include
+/// that operator's effects.
+pub(crate) fn dropped_side_effects(ops: &[Op], i: usize, keep: bool, split_at: Option<usize>) -> Vec<Op> {
+    if keep || split_at == Some(i) {
+        return Vec::new();
+    }
+    ops.get(i).map(show_side_effects).unwrap_or_default()
+}
+
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
 /// to insert before operator `i` of `ops` (parsed from the joined pieces) and whether to keep it.
 /// Everything else is copied byte for byte. A page's streams are one stream in pieces, split
@@ -2303,16 +2329,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let reused = font.as_ref().filter(|m| source_encodes(m, &shown));
     let mut substituted = None;
     let mut replacement: Vec<Op> = Vec::new();
-    // ' and " also move to the next line; keep that.
-    match ops[first].op.as_slice() {
-        b"'" => replacement.push(Op::new("T*", vec![])),
-        b"\"" => {
-            replacement.push(Op::new("Tw", vec![ops[first].operands.first().cloned().unwrap_or(Object::Int(0))]));
-            replacement.push(Op::new("Tc", vec![ops[first].operands.get(1).cloned().unwrap_or(Object::Int(0))]));
-            replacement.push(Op::new("T*", vec![]));
-        }
-        _ => {}
-    }
+    // ' and " also move to the next line (and " sets the spacing); keep that.
+    replacement.extend(show_side_effects(&ops[first]));
     match reused {
         Some(metrics) => replacement.extend(source_show(
             metrics,
@@ -2511,13 +2529,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
         }
         let mut replacement = Vec::new();
         if let Some(op) = ops.get(s.op) {
-            if op.is("\"") {
-                replacement.push(Op::new("Tw", vec![op.operands.first().cloned().unwrap_or(Object::Int(0))]));
-                replacement.push(Op::new("Tc", vec![op.operands.get(1).cloned().unwrap_or(Object::Int(0))]));
-            }
-            if op.is("'") || op.is("\"") {
-                replacement.push(Op::new("T*", vec![]));
-            }
+            replacement.extend(show_side_effects(op));
         }
         replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         patches.insert(s.op, replacement);
@@ -3042,8 +3054,10 @@ fn rewrite_block_from(
     }
     let at = if split { start } else { emit.bt_op };
     let new_data = splice(&pieces, &ops, |i| {
-        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, !drop.contains(&i))
+        let mut insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
+        let keep = !drop.contains(&i);
+        insert.extend(dropped_side_effects(&ops, i, keep, split.then_some(start)));
+        (insert, keep)
     });
     let contents = rewritten_contents(doc, &streams, new_data);
     if new_font {
