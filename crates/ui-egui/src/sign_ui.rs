@@ -1649,7 +1649,7 @@ mod tests {
                 assert_eq!(ours, tr(lang, source), "{code}: {field}");
             }
         }
-        for code in ["zh-hans", "zh-hant", "ja", "ru", "uk", "bg", "kk", "el", "te", "cs", "lt", "ar"] {
+        for code in ["zh-hans", "zh-hant", "ja", "ru", "uk", "bg", "kk", "el", "te", "cs", "lt", "ar", "he"] {
             assert_eq!(appearance_labels(Lang::from_code(code).unwrap()), (english.clone(), true), "{code}");
         }
         for lang in Lang::all() {

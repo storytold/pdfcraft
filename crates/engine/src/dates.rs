@@ -61,9 +61,14 @@ const CKB_MONTHS: [&str; 12] =
     ["کانوونی دووەم", "شوبات", "ئازار", "نیسان", "ئایار", "حوزەیران", "تەممووز", "ئاب", "ئەیلوول", "تشرینی یەکەم", "تشرینی دووەم", "کانوونی یەکەم"];
 const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەممە", "چوارشەممە", "پێنجشەممە", "هەینی", "شەممە"];
 
+const HE_MONTHS: [&str; 12] = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+/// After a day number the month takes the preposition ב ("7 במרץ 2026").
+const HE_MONTHS_WITH_DAY: [&str; 12] =
+    ["בינואר", "בפברואר", "במרץ", "באפריל", "במאי", "ביוני", "ביולי", "באוגוסט", "בספטמבר", "באוקטובר", "בנובמבר", "בדצמבר"];
+
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 34] = [
+pub static DATE_LANGUAGES: [DateLanguage; 35] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -266,6 +271,17 @@ pub static DATE_LANGUAGES: [DateLanguage; 34] = [
         months_short: CKB_MONTHS,
         days: CKB_DAYS,
         days_short: CKB_DAYS,
+    },
+    // Hebrew abbreviates with a geresh (׳); the short weekdays are the letters that number the days
+    // of the week (א׳ Sunday … ו׳ Friday) and ש׳ for Shabbat.
+    DateLanguage {
+        code: "he",
+        name: "עברית",
+        months: HE_MONTHS,
+        months_with_day: Some(HE_MONTHS_WITH_DAY),
+        months_short: ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"],
+        days: ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "שבת"],
+        days_short: ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"],
     },
     DateLanguage {
         code: "pl",
@@ -866,6 +882,10 @@ mod tests {
         assert_eq!(in_lang("ddd d mmm", "it"), "sab 7 mar");
         assert_eq!(in_lang("dddd, d mmmm", "te"), "శనివారం, 7 మార్చి");
         assert_eq!(in_lang("dddd, d mmmm", "ar"), "السبت, 7 مارس");
+        // Hebrew: the month takes ב after a day number, not in a heading; abbreviations end in a geresh.
+        assert_eq!(in_lang("dddd, d mmmm yyyy", "he"), "שבת, 7 במרץ 2026");
+        assert_eq!(in_lang("mmmm yyyy", "he"), "מרץ 2026");
+        assert_eq!(in_lang("ddd d mmm", "he"), "ש׳ 7 מרץ");
         assert_eq!(in_lang("yyyy\\年mmmmd\\日 dddd", "ja"), "2026年3月7日 土曜日");
         assert_eq!(in_lang("yyyy\\年mmmmd\\日 dddd", "zh-hans"), "2026年三月7日 星期六");
         assert_eq!(in_lang("ddd", "zh-hant"), "週六");

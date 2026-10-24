@@ -10097,8 +10097,8 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::date_languages_are_the_interface_languages", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language"]
-notes = "The UI offers 22 non-English catalogs plus English fallback (entry counts vary by language), and the selected language persists. Partial because the languages are not all usable yet: Chinese shows tofu in releases (#826, #688), the release-pinned craft-fonts has no Telugu face, Arabic is not mirrored (misc.rtl-ui), and strings missing from a catalog fall back to English (localization-parity.md). The language can be set through the UI control channel (`set language`) but not through an automation tool, so pdfcraft-cli run and MCP cannot change it."
+evidence = ["crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::date_languages_are_the_interface_languages", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::hebrew_lookups_are_in_display_order", "crates/ui-egui/src/i18n/mod.rs::hebrew_labels_have_glyphs"]
+notes = "The UI offers 34 non-English catalogs plus English fallback (entry counts vary by language), and the selected language persists. Partial because the languages are not all usable yet: Chinese shows tofu in releases (#826, #688), the release-pinned craft-fonts has no Telugu or Hebrew face (the Hebrew interface draws with an installed face on desktop and as boxes on the web, #3196), Arabic, Central Kurdish and Hebrew are not mirrored (misc.rtl-ui), and strings missing from a catalog fall back to English (localization-parity.md). The language can be set through the UI control channel (`set language`) but not through an automation tool, so pdfcraft-cli run and MCP cannot change it."
 
 [[feature]]
 id = "misc.rtl-ui"
@@ -10110,7 +10110,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = "Only a first step exists: Arabic and Hebrew file names and paths in the tab strip, the recent-files list and Properties have glyphs (a craft-fonts Arab face, or an installed font on desktop) and are shown in display order (crates/ui-egui/src/bidi.rs). Missing: multi-line text (bookmarks, comments, search results), text input, a mirrored layout and a right-to-left interface language."
+notes = "Only a first step exists: Arabic and Hebrew file names and paths in the tab strip, the recent-files list and Properties have glyphs (a craft-fonts Arab face, or an installed font on desktop) and are shown in display order (crates/ui-egui/src/bidi.rs), and the Arabic, Central Kurdish and Hebrew interface catalogs are put into display order when they load (bidi::display_rtl), so single-line labels read right to left. Missing: multi-line text (bookmarks, comments, search results, wrapped labels), text input, a mirrored layout."
 
 [[feature]]
 id = "misc.installers"

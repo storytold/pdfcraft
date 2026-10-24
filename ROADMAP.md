@@ -2,6 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (M14: Hebrew interface and date language, right to left through the Arabic path; estimates unchanged)
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
 > **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M3, #3808: the Pages inspector has an independent 50–150% thumbnail size slider and buttons; selection and current-page following are retained, with headless ui.set coverage. Estimates unchanged.)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M11 #3507: image merging preserves content stream boundaries; estimates unchanged)
@@ -170,8 +171,9 @@ Portuguese and Spanish vs the current union). Detail and script notes: [localiza
 | Vietnamese | `vi` | 100% of current union | partial (dialogs / tooltips; no help) |
 
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
-Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Romanian and Czech: **15 more catalogs**
-(24 interface languages including English).
+Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Romanian, Czech, Central Kurdish, Finnish,
+Albanian, Catalan, Norwegian Bokmål, Thai, Lao and Hebrew (right to left through the Arabic path):
+**23 more catalogs** (34 catalogs; 35 interface languages including English).
 
 ## Upcoming
 
@@ -191,6 +193,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-24 (M14, Hebrew localization):** Added Hebrew (`he`, עברית) as an interface and date language: a 2,762-entry catalog covering every key of the current union, begun from the clean-room catalog contributed in #3743; registered right to left through the Arabic path (`bidi::display_rtl` at load; the layout is not mirrored), two plural forms (CLDR's `two` reads like `other` after a numeral), Hebrew month and weekday names with ב after a day number, and `he`/`iw` locale tags. No build embeds a Hebrew face: desktop builds draw the interface with an installed Hebrew face (checked by `hebrew_labels_have_glyphs` where one exists), the web build shows boxes until craft-fonts gains a `Hebr` face (#3196). AI-assisted, not yet reviewed line by line by a native speaker. Estimates unchanged.
 - **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
