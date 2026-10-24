@@ -2077,6 +2077,13 @@
 	Change {what}	تغيير {what}
 	Cut and stack	قص وتكديس
 	Default workspace mode	وضع مساحة العمل الافتراضي
+	Tools shown in All tools	الأدوات المعروضة في «كل الأدوات»
+	Preset	إعداد مسبق
+	Read and comment	القراءة والتعليق
+	Forms and signing	النماذج والتوقيع
+	Custom selection	اختيار مخصص
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	تبقى الأدوات المخفية متاحة من القوائم وعلامات تبويب الأوضاع واختصارات لوحة المفاتيح.
+	No tools are shown. Choose them in Preferences.	لا توجد أدوات معروضة. اخترها من التفضيلات.
 	Documents and view	المستندات والعرض
 	Open email app	فتح تطبيق البريد
 	Open link	فتح الرابط

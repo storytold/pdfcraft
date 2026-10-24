@@ -2037,6 +2037,13 @@ action wizard	Start	Inicia
 	Change {what}	Canvia {what}
 	Cut and stack	Cascada i apilat
 	Default workspace mode	Mode d'espai de treball per defecte
+	Tools shown in All tools	Eines que es mostren a «Totes les eines»
+	Preset	Configuració predefinida
+	Read and comment	Llegir i comentar
+	Forms and signing	Formularis i signatura
+	Custom selection	Selecció personalitzada
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Les eines amagades continuen disponibles des dels menús, les pestanyes de mode i les dreceres de teclat.
+	No tools are shown. Choose them in Preferences.	No es mostra cap eina. Trieu-les a Preferències.
 	Documents and view	Documents i visualització
 	Open email app	Obre l'aplicació de correu
 	Open link	Obre l'enllaç

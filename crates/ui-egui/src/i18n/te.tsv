@@ -1997,6 +1997,13 @@ action wizard	Start	ప్రారంభించు
 	Change {what}	{what} మార్చు
 	Cut and stack	కత్తిరించి పేర్చడం
 	Default workspace mode	డిఫాల్ట్ వర్క్‌స్పేస్ మోడ్
+	Tools shown in All tools	"అన్ని సాధనాలు"లో చూపించే సాధనాలు
+	Preset	ప్రీసెట్
+	Read and comment	చదవడం & వ్యాఖ్యానించడం
+	Forms and signing	ఫారమ్‌లు & సంతకం
+	Custom selection	అనుకూల ఎంపిక
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	దాచిన సాధనాలు మెనూలు, మోడ్ ట్యాబ్‌లు మరియు కీబోర్డ్ షార్ట్‌కట్‌ల నుండి అందుబాటులోనే ఉంటాయి.
+	No tools are shown. Choose them in Preferences.	ఏ సాధనాలూ చూపబడటం లేదు. వాటిని ప్రాధాన్యతలలో ఎంచుకోండి.
 	Documents and view	పత్రాలు, వీక్షణ
 	Open email app	ఇమెయిల్ యాప్‌ను తెరువు
 	Open link	లింక్‌ను తెరువు

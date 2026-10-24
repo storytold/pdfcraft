@@ -2008,6 +2008,13 @@
 	Change {what}	Modifier {what}
 	Cut and stack	Couper et empiler
 	Default workspace mode	Mode d'espace de travail par défaut
+	Tools shown in All tools	Outils affichés dans Tous les outils
+	Preset	Préréglage
+	Read and comment	Lire et commenter
+	Forms and signing	Formulaires et signature
+	Custom selection	Sélection personnalisée
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Les outils masqués restent accessibles depuis les menus, les onglets de mode et les raccourcis clavier.
+	No tools are shown. Choose them in Preferences.	Aucun outil affiché. Choisissez-les dans les Préférences.
 	Documents and view	Documents et affichage
 	Open email app	Ouvrir l'application de courrier
 	Open link	Ouvrir le lien

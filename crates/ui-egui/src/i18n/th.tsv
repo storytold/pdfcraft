@@ -2089,6 +2089,13 @@
 	DPI sets the printed page size without resampling the image.	DPI กำหนดขนาดหน้าที่พิมพ์โดยไม่สุ่มตัวอย่างรูปภาพใหม่
 	Default page display	การแสดงหน้าเริ่มต้น
 	Default workspace mode	โหมดพื้นที่ทำงานเริ่มต้น
+	Tools shown in All tools	เครื่องมือที่แสดงใน «เครื่องมือทั้งหมด»
+	Preset	ค่าที่กำหนดไว้ล่วงหน้า
+	Read and comment	อ่านและแสดงความคิดเห็น
+	Forms and signing	แบบฟอร์มและการลงนาม
+	Custom selection	การเลือกแบบกำหนดเอง
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	เครื่องมือที่ซ่อนไว้ยังใช้ได้จากเมนู แท็บโหมด และแป้นพิมพ์ลัด
+	No tools are shown. Choose them in Preferences.	ไม่มีเครื่องมือที่แสดง เลือกได้ในการตั้งค่า
 	Default zoom	ระดับการย่อ/ขยายเริ่มต้น
 	Display name	ชื่อที่แสดง
 	Distribute fields	กระจายช่อง

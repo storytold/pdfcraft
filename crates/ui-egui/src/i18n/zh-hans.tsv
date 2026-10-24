@@ -2128,6 +2128,13 @@
 	Change {what}	更改{what}
 	Cut and stack	裁切后堆叠
 	Default workspace mode	默认工作区模式
+	Tools shown in All tools	在“所有工具”中显示的工具
+	Preset	预设
+	Read and comment	阅读与注释
+	Forms and signing	表单与签名
+	Custom selection	自定义选择
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	隐藏的工具仍可通过菜单、模式标签页和键盘快捷键使用。
+	No tools are shown. Choose them in Preferences.	未显示任何工具。请在首选项中选择。
 	Default page display	默认页面显示
 	Default zoom	默认缩放
 	Documents and view	文档与视图

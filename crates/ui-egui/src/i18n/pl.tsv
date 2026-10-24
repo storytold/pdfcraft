@@ -2138,6 +2138,13 @@
 	DPI sets the printed page size without resampling the image.	DPI określa rozmiar drukowanej strony bez zmiany rozdzielczości obrazu.
 	Default page display	Domyślne wyświetlanie stron
 	Default workspace mode	Domyślny tryb obszaru roboczego
+	Tools shown in All tools	Narzędzia pokazywane w sekcji Wszystkie narzędzia
+	Preset	Ustawienie wstępne
+	Read and comment	Czytanie i komentowanie
+	Forms and signing	Formularze i podpisywanie
+	Custom selection	Własny wybór
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Ukryte narzędzia pozostają dostępne z menu, kart trybów i skrótów klawiszowych.
+	No tools are shown. Choose them in Preferences.	Żadne narzędzia nie są widoczne. Wybierz je w Preferencjach.
 	Default zoom	Domyślne powiększenie
 	Display name	Nazwa wyświetlana
 	Distribute fields	Rozmieść pola równomiernie

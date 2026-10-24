@@ -1787,11 +1787,11 @@ title = "Customise the quick-action toolbar and pinned tools"
 area = "B"
 tier = "P2"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/tool_visibility.rs::a_preset_tidies_all_tools_and_the_palette_but_ui_set_still_opens_a_hidden_tool", "crates/ui-egui/tests/it/tool_visibility.rs::home_recommends_only_shown_tools_and_keeps_open_file", "crates/ui-egui/tests/it/tool_visibility.rs::preferences_checkboxes_and_preset_change_the_list", "crates/ui-egui/src/tool_visibility.rs::hidden_tools_survive_a_restart", "crates/engine/src/catalog.rs::a_hidden_list_names_its_preset_whatever_the_order"]
+notes = "Preferences chooses which tools All tools, the ⌘K palette and Home list (presets All tools, Read and comment, Forms and signing, or one checkbox per tool; ui.set tool-preset / hidden-tools). Hidden tools stay in the menus, mode tabs and shortcuts. Still missing: customising the quick-action toolbar, pinning tools, reordering."
 
 [[feature]]
 id = "view.restriction-notice"

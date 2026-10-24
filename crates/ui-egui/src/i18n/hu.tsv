@@ -1998,6 +1998,13 @@
 	Change {what}	{what} módosítása
 	Cut and stack	Vágás és halmozás
 	Default workspace mode	Alapértelmezett munkaterület
+	Tools shown in All tools	A Minden eszköz listában megjelenő eszközök
+	Preset	Sablon
+	Read and comment	Olvasás és megjegyzések
+	Forms and signing	Űrlapok és aláírás
+	Custom selection	Egyéni kiválasztás
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	A rejtett eszközök továbbra is elérhetők a menükből, a módfülekről és billentyűparancsokkal.
+	No tools are shown. Choose them in Preferences.	Nincs megjelenített eszköz. A Beállításokban választhatók ki.
 	Documents and view	Dokumentumok és nézet
 	Open email app	E-mail alkalmazás megnyitása
 	Open link	Hivatkozás megnyitása

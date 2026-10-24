@@ -2040,6 +2040,13 @@
 	Change {what}	گۆڕینی {what}
 	Cut and stack	بڕین و کەڵەکەکردن
 	Default workspace mode	دۆخی بنەڕەتی شوێنی کار
+	Tools shown in All tools	ئامرازە پیشاندراوەکان لە «هەموو ئامرازەکان»
+	Preset	ڕێکخستنی ئامادە
+	Read and comment	خوێندنەوە و تێبینی
+	Forms and signing	فۆڕمەکان و واژۆکردن
+	Custom selection	هەڵبژاردنی تایبەت
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	ئامرازە شاراوەکان لە لیستەکان، تابەکانی دۆخ و کورتەڕێگاکانی تەختەکلیلەوە بەردەست دەمێننەوە.
+	No tools are shown. Choose them in Preferences.	هیچ ئامرازێک پیشان نادرێت. لە هەڵبژاردەکان هەڵیانبژێرە.
 	Documents and view	بەڵگەنامەکان و بینین
 	Open email app	کردنەوەی ئەپی ئیمەیڵ
 	Open link	کردنەوەی بەستەر

@@ -446,6 +446,13 @@ theme	Appearance	Giao diện
 	Default	Mặc định
 	Default Value:	Giá trị mặc định:
 	Default workspace mode	Chế độ không gian làm việc mặc định
+	Tools shown in All tools	Công cụ hiển thị trong Tất cả công cụ
+	Preset	Mẫu thiết lập
+	Read and comment	Đọc và bình luận
+	Forms and signing	Biểu mẫu và ký
+	Custom selection	Lựa chọn tùy chỉnh
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Công cụ bị ẩn vẫn dùng được từ menu, các thẻ chế độ và phím tắt.
+	No tools are shown. Choose them in Preferences.	Không có công cụ nào được hiển thị. Hãy chọn trong Tùy chọn.
 	Default:	Mặc định:
 	Delete page {label}	Xóa trang {label}
 	Delete pages (Delete)	Xóa trang (Delete)

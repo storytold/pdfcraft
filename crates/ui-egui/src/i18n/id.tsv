@@ -436,6 +436,13 @@
 	Default	Bawaan
 	Default Value:	Nilai Bawaan:
 	Default workspace mode	Mode ruang kerja bawaan
+	Tools shown in All tools	Alat yang ditampilkan di «Semua alat»
+	Preset	Prasetel
+	Read and comment	Baca dan komentari
+	Forms and signing	Formulir dan tanda tangan
+	Custom selection	Pilihan kustom
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Alat yang disembunyikan tetap tersedia dari menu, tab mode, dan pintasan keyboard.
+	No tools are shown. Choose them in Preferences.	Tidak ada alat yang ditampilkan. Pilih di Preferensi.
 	Default:	Bawaan:
 	Delete page {label}	Hapus halaman {label}
 	Delete pages (Delete)	Hapus halaman (Hapus)

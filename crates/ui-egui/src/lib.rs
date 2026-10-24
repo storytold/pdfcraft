@@ -144,6 +144,7 @@ pub mod scroll_speed;
 mod system_fonts;
 mod tab_context;
 pub mod theme;
+mod tool_visibility;
 pub mod ui_scale;
 pub mod updates;
 mod wheel_boost;
@@ -581,6 +582,8 @@ pub struct PdfCraftApp {
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
+    /// Preferences: tools All tools, the palette and Home leave out (menus and tabs keep them).
+    pub(crate) hidden_tools: tool_visibility::HiddenTools,
     pub recent: Vec<RecentFile>,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
@@ -989,6 +992,7 @@ impl PdfCraftApp {
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
+            hidden_tools: tool_visibility::HiddenTools::default(),
             recent: Vec::new(),
             reopen_last_session: false,
             last_session: Default::default(),
@@ -2438,6 +2442,7 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["hidden_tools"] = self.hidden_tools.to_json();
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -2536,6 +2541,8 @@ impl PdfCraftApp {
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
+        // Settings are untrusted: unknown tool ids are dropped, and a value that isn't a list hides nothing.
+        self.hidden_tools = tool_visibility::HiddenTools::from_json(&v["hidden_tools"]).unwrap_or_default();
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
@@ -2678,6 +2685,14 @@ impl PdfCraftApp {
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
+            ("tool-preset", _) => {
+                let preset = pdfcraft_engine::catalog::preset(value).ok_or_else(|| {
+                    let ids: Vec<&str> = pdfcraft_engine::catalog::TOOL_PRESETS.iter().map(|p| p.id).collect();
+                    format!("tool-preset must be one of {}", ids.join(", "))
+                })?;
+                self.hidden_tools = tool_visibility::HiddenTools::of_preset(preset);
+            }
+            ("hidden-tools", _) => self.hidden_tools = tool_visibility::HiddenTools::parse(value)?,
             ("date-format", _) => self.session.set_date_format(value)?,
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
             ("tool", _) => {

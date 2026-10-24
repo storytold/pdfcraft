@@ -550,6 +550,37 @@ pub fn group(id: &str) -> Option<&'static ToolGroup> {
     TOOL_GROUPS.iter().find(|g| g.id == id)
 }
 
+/// A named choice of the tools All tools lists. A UI that hides a tool only tidies its lists; the
+/// tool's commands stay reachable from menus, shortcuts and automation.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolPreset {
+    pub id: &'static str,
+    /// The tools it shows, by [`ToolGroup::id`]. `None` shows every tool, including ones added later.
+    pub shows: Option<&'static [&'static str]>,
+}
+
+pub static TOOL_PRESETS: &[ToolPreset] = &[
+    ToolPreset { id: "all", shows: None },
+    ToolPreset { id: "read-comment", shows: Some(&["comment", "fill_sign", "stamp", "compare"]) },
+    ToolPreset { id: "forms-sign", shows: Some(&["fill_sign", "form", "certificate", "stamp", "comment"]) },
+];
+
+pub fn preset(id: &str) -> Option<&'static ToolPreset> {
+    TOOL_PRESETS.iter().find(|p| p.id == id)
+}
+
+impl ToolPreset {
+    /// The tools it hides, in catalogue order.
+    pub fn hidden(&self) -> impl Iterator<Item = &'static str> + '_ {
+        TOOL_GROUPS.iter().map(|g| g.id).filter(|id| self.shows.is_some_and(|shows| !shows.contains(id)))
+    }
+}
+
+/// The preset that hides exactly the tools `hidden` names, whatever their order or repeats.
+pub fn preset_hiding(hidden: &[&str]) -> Option<&'static ToolPreset> {
+    TOOL_PRESETS.iter().find(|p| p.hidden().all(|id| hidden.contains(&id)) && hidden.iter().all(|id| p.hidden().any(|h| h == *id)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,5 +651,33 @@ mod tests {
         {
             assert!(reachable.contains(id), "{id} is in no tool menu");
         }
+    }
+
+    #[test]
+    fn presets_show_real_tools_and_all_hides_none() {
+        let mut seen = HashSet::new();
+        for p in TOOL_PRESETS {
+            assert!(seen.insert(p.id), "duplicate preset id {}", p.id);
+            for id in p.shows.unwrap_or_default() {
+                assert!(group(id).is_some(), "{}: no tool {id}", p.id);
+            }
+        }
+        assert_eq!(preset("all").map(|p| p.hidden().count()), Some(0));
+        let read = preset("read-comment").expect("read-comment preset");
+        assert_eq!(read.hidden().count(), TOOL_GROUPS.len() - 4);
+        assert!(read.hidden().any(|id| id == "compress") && !read.hidden().any(|id| id == "comment"));
+    }
+
+    #[test]
+    fn a_hidden_list_names_its_preset_whatever_the_order() {
+        assert_eq!(preset_hiding(&[]).map(|p| p.id), Some("all"));
+        let mut hidden: Vec<&str> = preset("forms-sign").expect("forms-sign preset").hidden().collect();
+        assert_eq!(preset_hiding(&hidden).map(|p| p.id), Some("forms-sign"));
+        hidden.reverse();
+        hidden.push(hidden[0]);
+        assert_eq!(preset_hiding(&hidden).map(|p| p.id), Some("forms-sign"));
+        hidden.retain(|id| *id != "redact");
+        assert_eq!(preset_hiding(&hidden).map(|p| p.id), None);
+        assert_eq!(preset_hiding(&["compress"]).map(|p| p.id), None);
     }
 }

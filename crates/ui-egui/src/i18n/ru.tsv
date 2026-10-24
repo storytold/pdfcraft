@@ -2078,6 +2078,13 @@
 	Change {what}	Изменить: {what}
 	Cut and stack	Вырезать и наложить
 	Default workspace mode	Режим рабочей среды по умолчанию
+	Tools shown in All tools	Инструменты в списке «Все инструменты»
+	Preset	Набор
+	Read and comment	Чтение и комментирование
+	Forms and signing	Формы и подпись
+	Custom selection	Свой выбор
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Скрытые инструменты остаются доступны из меню, вкладок режимов и сочетаний клавиш.
+	No tools are shown. Choose them in Preferences.	Нет показанных инструментов. Выберите их в настройках.
 	Documents and view	Документы и вид
 	Open email app	Открыть почтовое приложение
 	Open link	Открыть ссылку

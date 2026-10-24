@@ -2124,6 +2124,13 @@ key	Space	Mezerník
 	Change {what}	Změnit: {what}
 	Cut and stack	Rozřezat a stohovat
 	Default workspace mode	Výchozí režim pracovní plochy
+	Tools shown in All tools	Nástroje zobrazené v seznamu Všechny nástroje
+	Preset	Šablona
+	Read and comment	Čtení a komentování
+	Forms and signing	Formuláře a podpisy
+	Custom selection	Vlastní výběr
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Skryté nástroje zůstávají dostupné z nabídek, karet režimů a klávesových zkratek.
+	No tools are shown. Choose them in Preferences.	Nejsou zobrazeny žádné nástroje. Vyberte je v Předvolbách.
 	Documents and view	Dokumenty a zobrazení
 	Open email app	Otevřít e-mailovou aplikaci
 	Open link	Otevřít odkaz

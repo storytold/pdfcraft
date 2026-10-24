@@ -445,6 +445,13 @@
 	Default	Implicit
 	Default Value:	Valoare implicită:
 	Default workspace mode	Mod implicit al spațiului de lucru
+	Tools shown in All tools	Instrumente afișate în „Toate instrumentele”
+	Preset	Presetare
+	Read and comment	Citire și comentarii
+	Forms and signing	Formulare și semnare
+	Custom selection	Selecție personalizată
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Instrumentele ascunse rămân disponibile din meniuri, filele de mod și comenzile rapide de la tastatură.
+	No tools are shown. Choose them in Preferences.	Nu este afișat niciun instrument. Alegeți-le în Preferințe.
 	Default:	Implicit:
 	Delete page {label}	Ștergere pagina {label}
 	Delete pages (Delete)	Ștergere pagini (Delete)
