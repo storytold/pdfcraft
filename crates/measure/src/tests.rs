@@ -461,3 +461,62 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     assert!(g.truncated);
     assert_eq!(g.segments.len(), 1, "the parts before it still snap");
 }
+
+#[test]
+fn blank_unit_labels_from_cad_exports_are_readable() {
+    let measure = "<< /Type /Measure /Subtype /RL /R ( ) /X [<< /C 0.5 /U ( ) >>] /D [<< /C 1 /U ( ) >>] /A [<< /C 1 /U ( ) >>] >>";
+    let viewport = format!("<< /Type /Viewport /BBox [0 0 100 100] /Measure {measure} >>");
+    let d = fixture("", "/VP [6 0 R]", &["[]", &viewport]);
+    let scale = scale_at(&d, 0, [50.0, 50.0]).expect("a blank unit label must not make the scale unreadable");
+    close(scale.x, 0.5);
+    assert_eq!(scale.unit, "in");
+    let scale = scale_at_or(&d, 0, [50.0, 50.0], 25.4 / 72.0, "mm").unwrap();
+    assert_eq!((scale.unit.as_str(), scale.area_unit.as_str()), ("mm", "mm^2"));
+    close(scale.x, 0.5);
+}
+/// A blank area label is the coordinate unit squared, not the linear display unit: with metres
+/// on both axes a 3-by-4 rectangle is 12 square metres, whatever unit the viewer displays.
+#[test]
+fn a_blank_area_label_is_the_coordinate_unit_squared_after_save() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1:1) /X [<< /C 1 /U (m) >>] /D [<< /C 1 /U (m) >>] /A [<< /C 1 /U () >>] >>";
+    let viewport = format!("<< /Type /Viewport /BBox [0 0 100 100] /Measure {measure} >>");
+    let mut d = fixture("", "/VP [6 0 R]", &["[]", &viewport]);
+    let mut m = new(Kind::Area, vec![[10.0, 10.0], [13.0, 10.0], [13.0, 14.0], [10.0, 14.0]]);
+    m.scale = scale_at_or(&d, 0, m.points[0], 25.4 / 72.0, "mm").unwrap();
+    assert_eq!(m.scale.area_unit, "m^2");
+    add(&mut d, &m, &Meta::default()).unwrap();
+    let d = Document::open(Arc::new(write_full(&d, &SaveOptions::default()).unwrap())).unwrap();
+    let listing = list(&d);
+    assert_eq!(listing.measurements[0].reading.label, "12.00 m^2");
+    let (_, dict) = annot(&d, 0, 0).unwrap();
+    let ap = d.resolve(dict.get(b"AP").unwrap());
+    let normal = d.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+    let Object::Stream(stream) = normal.as_ref() else { panic!("appearance missing") };
+    let stream = String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned();
+    assert!(stream.contains("(12.00 m^2) Tj"), "{stream}");
+}
+/// A scale panel may store a viewport over the page only when no other viewport would be hidden:
+/// the scale under the point is the only one the page shows.
+#[test]
+fn a_sole_scale_is_one_no_other_viewport_shows_beside() {
+    let vp = |bbox: &str| {
+        format!(
+            "<< /Type /Viewport /BBox [{bbox}] /Measure << /Type /Measure /Subtype /RL /R (1:1) /X [<< /C 1 /U (m) >>] /D [<< /C 1 /U (m) >>] /A [<< /C 1 /U (m^2) >>] >> >>"
+        )
+    };
+    let (page, plan) = (vp("0 0 612 792"), vp("100 100 300 300"));
+    let sole = |vps: &[&str], at: Point| {
+        let refs: Vec<String> = (0..vps.len()).map(|i| format!("{} 0 R", 6 + i)).collect();
+        let mut extra = vec!["[]"];
+        extra.extend_from_slice(vps);
+        sole_scale_at(&fixture("", &format!("/VP [{}]", refs.join(" ")), &extra), 0, at).unwrap()
+    };
+    assert!(sole_scale_at(&fixture("", "", &[]), 0, [50.0, 50.0]).unwrap(), "no viewports");
+    assert!(sole(&[&page], [50.0, 50.0]), "one viewport under the point");
+    assert!(!sole(&[&plan], [50.0, 50.0]), "the point is outside the page's one viewport");
+    assert!(sole(&[&plan, &page], [150.0, 150.0]), "a later viewport covers the earlier one");
+    // A CAD sheet: the whole sheet, then a drawing at 1:50 inside it. Both show.
+    assert!(!sole(&[&page, &plan], [50.0, 50.0]));
+    assert!(!sole(&[&page, &plan], [150.0, 150.0]));
+    assert!(sole_scale_at(&fixture("", "", &[]), 0, [f64::NAN, 0.0]).is_err());
+}

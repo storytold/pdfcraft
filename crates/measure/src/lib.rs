@@ -175,6 +175,10 @@ impl Scale {
     /// Single-unit decimal scales are editable. Compound/fractional and non-rectilinear
     /// imports are refused explicitly; their dictionaries and appearance remain untouched.
     pub fn read(doc: &Document, object: &Object) -> Result<Self> {
+        Self::read_or(doc, object, "units")
+    }
+    /// [`Scale::read`], naming a blank unit label (common in CAD exports) `blank_unit`.
+    pub fn read_or(doc: &Document, object: &Object, blank_unit: &str) -> Result<Self> {
         let o = doc.resolve(object);
         let d = o.as_dict().ok_or_else(|| invalid("invalid measure dictionary"))?;
         if d.name(b"Subtype").is_some_and(|n| n != b"RL") {
@@ -198,7 +202,10 @@ impl Scale {
             };
             Ok((text(f, b"U"), f.get(b"C").and_then(Object::as_f64).ok_or_else(|| invalid("missing conversion factor"))?, precision as u8))
         };
+        // CAD exports often write a blank unit label; keep the factor and name the unit generically.
+        let named = |unit: String| if unit.trim().is_empty() { blank_unit.to_owned() } else { unit };
         let (unit, x, _) = format(b"X")?;
+        let unit = named(unit);
         let y = if d.contains(b"Y") {
             let (_, y, _) = format(b"Y")?;
             y * d.get(b"CYX").and_then(Object::as_f64).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
@@ -206,10 +213,13 @@ impl Scale {
             x
         };
         let (distance_unit, distance_factor, precision) = format(b"D")?;
-        if unit != distance_unit {
+        if unit != named(distance_unit) {
             return Err(invalid("different coordinate and distance units are not supported yet"));
         }
         let (area_unit, area_factor, _) = format(b"A")?;
+        // Areas convert from squared X units (ISO 32000-1 table 262), so a blank area label is
+        // the coordinate unit squared, never the linear display unit.
+        let area_unit = if area_unit.trim().is_empty() { format!("{unit}^2") } else { area_unit };
         let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(d, b"R") };
         out.validate()?;
         Ok(out)
@@ -541,32 +551,52 @@ pub fn scale_at(doc: &Document, page_index: usize, at: Point) -> Result<Scale> {
 pub fn scale_at_or(doc: &Document, page_index: usize, at: Point, per_point: f64, unit: &str) -> Result<Scale> {
     check_points(&[at])?;
     let p = page(doc, page_index)?;
-    if let Some(o) = p.dict.get(b"VP") {
-        let o = doc.resolve(o);
-        let arr = o.as_array().ok_or_else(|| invalid("invalid page viewports"))?;
-        // The last viewports win; a page holds at most MAX_VIEWPORTS of its own.
-        for viewport in arr.iter().rev().take(MAX_VIEWPORTS) {
-            let o = doc.resolve(viewport);
-            let Some(d) = o.as_dict() else { continue };
-            if let Some(bbox) = d.get(b"BBox") {
-                let o = doc.resolve(bbox);
-                let b: Option<Vec<f64>> = o.as_array().filter(|a| a.len() == 4).and_then(|a| {
-                    #[cfg(test)]
-                    VIEWPORT_NUMBERS_READ.with(|n| n.set(n.get() + a.len()));
-                    a.iter().map(|v| doc.resolve(v).as_f64()).collect()
-                });
-                if let Some(b) = b.filter(|b| b.len() == 4 && b.iter().all(|v| v.is_finite()))
-                    && at[0] >= b[0].min(b[2])
-                    && at[0] <= b[0].max(b[2])
-                    && at[1] >= b[1].min(b[3])
-                    && at[1] <= b[1].max(b[3])
-                {
-                    return Scale::read(doc, d.get(b"Measure").ok_or_else(|| invalid("viewport has no measurement scale"))?);
-                }
-            }
+    // The last viewports win; a page holds at most MAX_VIEWPORTS of its own.
+    for o in viewports(doc, &p)?.iter().rev() {
+        let Some(d) = o.as_dict() else { continue };
+        if viewport_box(doc, d).is_some_and(|b| contains(b, at)) {
+            return Scale::read_or(doc, d.get(b"Measure").ok_or_else(|| invalid("viewport has no measurement scale"))?, unit);
         }
     }
     Scale::new(p.user_unit(doc) * per_point, unit, 2)
+}
+/// Whether the scale at `at` is the only one the page sets: no viewport other than the one
+/// there shows anywhere (a viewport inside a later one's box is hidden by it). A scale panel
+/// showing it may then store a viewport over the page without hiding another scale.
+pub fn sole_scale_at(doc: &Document, page_index: usize, at: Point) -> Result<bool> {
+    check_points(&[at])?;
+    let p = page(doc, page_index)?;
+    let boxes: Vec<[f64; 4]> = viewports(doc, &p)?.iter().filter_map(|o| o.as_dict().and_then(|d| viewport_box(doc, d))).collect();
+    let mut shown = boxes.iter().enumerate().filter(|(i, b)| !boxes.iter().skip(i.saturating_add(1)).any(|later| covers(*later, **b)));
+    Ok(match (shown.next(), shown.next()) {
+        (None, _) => true,
+        (Some((_, b)), None) => contains(*b, at),
+        _ => false,
+    })
+}
+/// The page's own viewport dictionaries in drawing order: the last MAX_VIEWPORTS of `/VP`.
+fn viewports(doc: &Document, p: &pdfcraft_model::Page) -> Result<Vec<std::sync::Arc<Object>>> {
+    let Some(o) = p.dict.get(b"VP") else { return Ok(Vec::new()) };
+    let o = doc.resolve(o);
+    let arr = o.as_array().ok_or_else(|| invalid("invalid page viewports"))?;
+    let skip = arr.len().saturating_sub(MAX_VIEWPORTS);
+    Ok(arr.iter().skip(skip).map(|v| doc.resolve(v)).filter(|o| o.as_dict().is_some()).collect())
+}
+/// A viewport's `/BBox`, when it is four finite numbers.
+fn viewport_box(doc: &Document, d: &Dict) -> Option<[f64; 4]> {
+    let o = doc.resolve(d.get(b"BBox")?);
+    let a = o.as_array().filter(|a| a.len() == 4)?;
+    #[cfg(test)]
+    VIEWPORT_NUMBERS_READ.with(|n| n.set(n.get() + a.len()));
+    let b: Vec<f64> = a.iter().map(|v| doc.resolve(v).as_f64()).collect::<Option<_>>()?;
+    let b: [f64; 4] = b.try_into().ok()?;
+    b.iter().all(|v| v.is_finite()).then_some(b)
+}
+fn covers(outer: [f64; 4], inner: [f64; 4]) -> bool {
+    contains(outer, [inner[0], inner[1]]) && contains(outer, [inner[2], inner[3]])
+}
+fn contains(b: [f64; 4], at: Point) -> bool {
+    at[0] >= b[0].min(b[2]) && at[0] <= b[0].max(b[2]) && at[1] >= b[1].min(b[3]) && at[1] <= b[1].max(b[3])
 }
 /// Add a named rectangular viewport. Existing viewports are preserved in drawing order.
 pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &str, scale: &Scale) -> Result<()> {

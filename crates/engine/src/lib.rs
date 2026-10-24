@@ -594,6 +594,11 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::scale_at_or(&e.cos, page, at, per_point, unit).map_err(|e| e.to_string())
     }
+    /// Whether the scale at `at` is the only one `page` sets ([`measure::sole_scale_at`]).
+    pub fn measurement_scale_is_sole(&self, page: usize, at: measure::Point) -> Result<bool, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::sole_scale_at(&e.cos, page, at).map_err(|e| e.to_string())
+    }
     pub fn measurement_to_user(&self, page: usize, point: measure::Point) -> Result<measure::Point, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::view_to_user(&e.cos, page, point).map_err(|e| e.to_string())
