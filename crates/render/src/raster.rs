@@ -386,6 +386,8 @@ fn render_page<'a>(
         // Previews render at low detail (tiny images are skipped); finals always draw all.
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
+        // A print preview shows what prints, and printing is not the View event.
+        preview_settings.view_auto_state &= req.tag & PRINT_TAG == 0;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
         Ok((w.into(), h.into(), pixels, None))
     }));
@@ -3650,6 +3652,20 @@ trailer << /Root 1 0 R >>
         assert!(auto_state_red(pdf.clone(), on), "toggled on in the Layers panel");
         assert!(auto_state_red(pdf.clone(), RenderConfig { for_print: true, ..Default::default() }), "printed: its configured state");
         assert!(!auto_state_red(pdf, RenderConfig::default()), "on screen: hidden");
+    }
+
+    /// A print preview ([`PRINT_TAG`], with or without the canvas's scale and grayscale bits)
+    /// shows what prints, so the View auto state is not applied to it either.
+    #[test]
+    fn print_previews_are_not_the_view_auto_state() {
+        let pdf = Arc::new(auto_state_pdf(VIEW_OFF, &format!("<< {AS_VIEW} >>"), ""));
+        let mut r = PageRenderer::new(pdf, RenderConfig::default());
+        for tag in [PRINT_TAG, PRINT_TAG | 1 << 59 | 7] {
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag, ..Default::default() });
+            assert_eq!(p.rgba.get(..4), Some(&[255, 0, 0, 255][..]), "tag {tag:#x}: printed state");
+        }
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 7, ..Default::default() });
+        assert_ne!(p.rgba.get(..4), Some(&[255, 0, 0, 255][..]), "on screen: hidden");
     }
 
     /// Malformed auto state is ignored without a panic, and the walk is bounded.
