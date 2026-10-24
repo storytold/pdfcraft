@@ -499,6 +499,12 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Pending keyboard scrolling sideways, in points right (negative: left): → / ← on a page
+    /// wider than the window.
+    pub key_side: f32,
+    /// As last drawn: whether the view was at its left and at its right edge (both when the
+    /// pages fit across), so → / ← turn the page there and scroll sideways elsewhere.
+    side_edges: Option<(bool, bool)>,
     /// Single-page view, as last drawn: the page shown and whether the view was at its top and
     /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
     single_edges: Option<(usize, bool, bool)>,
@@ -930,6 +936,8 @@ impl DocView {
             goto: None,
             goto_point: None,
             key_scroll: 0.0,
+            key_side: 0.0,
+            side_edges: None,
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
@@ -1626,7 +1634,7 @@ fn draw_pages(
     // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
     // until after the text widgets when a selection owns that drag.
     let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + coarse_scroll };
-    let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
+    let delta = auto_delta + edge_delta - vec2(key_side, key_scroll) + wheel_delta + glide;
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
@@ -2750,7 +2758,7 @@ fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> V
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
     let interrupted = glide_interrupted(ui);
-    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+    if !may_glide || interrupted || key_scroll != 0.0 || key_side != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
     }
     let glide = view.fling.step(now);
@@ -2832,7 +2840,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
-    if key_scroll != 0.0 {
+    let key_side = std::mem::take(&mut app.views[index].key_side);
+    if key_scroll != 0.0 || key_side != 0.0 {
         app.views[index].end_find_following();
     }
     // The Search panel closed: its search moves to the find bar.
@@ -3098,6 +3107,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
         (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
+    // Within a point, as above.
+    let max_x = (out.content_size.x - out.inner_rect.width()).max(0.0);
+    view.side_edges = Some((out.state.clamped_offset().x <= 1.0, out.state.clamped_offset().x >= max_x - 1.0));
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);

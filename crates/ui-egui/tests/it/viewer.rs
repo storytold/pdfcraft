@@ -1485,6 +1485,43 @@ fn up_and_down_turn_pages_in_single_page_view() {
 }
 
 #[test]
+fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
+    // A plan zoomed in: → / ← turned the page (#185) and so never showed its other side; the
+    // view moved sideways only by the scroll bar, the wheel or the Hand.
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].set_zoom(12.0);
+    h.run_steps(6);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        (v.current, v.page_screen_rect(v.current).map(|r| r.left()))
+    };
+    let start = h.state().views[0].page_screen_rect(0).map(|r| r.left()).expect("on screen");
+    let (page, left) = press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert_eq!(page, 0, "→ scrolls the wide page rather than turning it");
+    assert!(left.is_some_and(|l| l < start - 10.0), "the page moved left: {left:?} from {start}");
+    // At its right edge the next → turns the page.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowRight).0 == 0 {
+        n += 1;
+        assert!(n < 500, "→ never reached the right edge");
+    }
+    assert!(n > 3, "→ scrolled across page 1 before turning ({n} presses)");
+    assert_eq!(h.state().views[0].current, 1);
+    // ← scrolls back on page 2, ⌘→ turns at once.
+    let (page, _) = press(&mut h, Modifiers::NONE, Key::ArrowLeft);
+    assert_eq!(page, 1, "← scrolls back rather than turning");
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 2, "⌘→ turns the page at once");
+    // A page that fits across: → turns pages as before.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(6);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 3);
+}
+
+#[test]
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
     use egui::{Key, Modifiers};
