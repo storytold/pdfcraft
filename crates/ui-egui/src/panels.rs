@@ -1295,7 +1295,6 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
     }
 }
 
-/// Size controls stay above the scroll area, so they remain reachable on long documents.
 /// Page tools in the Pages panel's header (#4415): a menu, as Bookmark options is in its panel,
 /// to insert a blank page or pages from a file, rotate, extract and delete. Each runs its
 /// command on the selected pages (the current page when none is), so it does what Pages ▸ …
@@ -1328,6 +1327,7 @@ fn page_tools(ui: &mut egui::Ui, enabled: bool) -> Option<&'static str> {
     picked
 }
 
+/// Size controls stay above the scroll area, so they remain reachable on long documents.
 fn thumbnail_size(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, enabled: bool) {
     let before = view.thumbnail_zoom();
     let mut zoom = before;
