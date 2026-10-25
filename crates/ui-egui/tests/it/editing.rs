@@ -5323,6 +5323,21 @@ fn paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline() {
     click_at(&mut h, p);
     assert!(h.state().views[0].line_editor.is_none());
     h.get_by_label("1 object selected");
+    // Once the text is changed, a press on the frame doesn't take the box (selecting it would
+    // drop the typing): it applies the typing like any click off the text, so the pointer doesn't
+    // offer the move arrow there either.
+    let mut h = harness(1, |_| {});
+    let (_, bx) = start(&mut h);
+    click_at(&mut h, bx.center());
+    h.state_mut().views[0].line_editor.as_mut().expect("open for typing").text = "Page one".into();
+    h.run_steps(2);
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "no move arrow where a press can't take the box");
+    click_at(&mut h, p);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the click applies the typing, as any click off the text does");
+    assert!(h.query_all_by_label_contains("object selected").next().is_none(), "and doesn't take the box");
 }
 
 #[test]
