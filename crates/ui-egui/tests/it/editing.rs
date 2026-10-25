@@ -5996,7 +5996,7 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
     };
     for page_index in 0..pages {
         h.state_mut().views[0].go_to_page(page_index);
-        h.state_mut().session.apply(id, Edit::RegisterTextFont { page: page_index, bytes: font.clone() }).unwrap();
+        h.state_mut().session.apply(id, Edit::RegisterTextFont { page: page_index, bytes: font.clone(), grant: Default::default() }).unwrap();
         h.run_steps(4);
         let doc = h.state().session.get(id).unwrap();
         let (index, block) = doc

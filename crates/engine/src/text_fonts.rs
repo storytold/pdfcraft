@@ -1,4 +1,5 @@
 //! Explicit document-font discovery. Interface fallbacks never enter this catalogue.
+use pdfcraft_fonts::embedding::FontGrant;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -32,9 +33,10 @@ pub fn installed_directories() -> Vec<PathBuf> {
     }
 }
 
-/// Bounded, symlink-free scan. Only standalone, openly licensed, embeddable faces are listed.
-/// The caller controls roots (automation resolves confinement before calling this).
-pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
+/// Bounded, symlink-free scan. Only standalone faces that `grant` lets into a PDF are listed:
+/// openly licensed ones, or with [`FontGrant::InstalledEmbeddable`] any that permit editable
+/// embedding. The caller controls roots (automation resolves confinement before calling this).
+pub fn discover(roots: &[PathBuf], grant: FontGrant) -> Vec<FontFile> {
     use std::io::Read;
     let mut pending: Vec<_> = roots.iter().take(16).map(|r| (r.clone(), 0usize)).collect();
     let mut files = Vec::new();
@@ -62,7 +64,7 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
             budget = budget.saturating_sub(meta.len());
             let mut bytes = Vec::new();
             let read = std::fs::File::open(&path).and_then(|f| f.take((16 << 20) + 1).read_to_end(&mut bytes));
-            if read.is_err() || pdfcraft_fonts::embedding::validate_document_input(&bytes).is_err() {
+            if read.is_err() || pdfcraft_fonts::embedding::validate_document_input(&bytes, grant).is_err() {
                 continue;
             }
             if let Ok((family, face)) = pdfcraft_fonts::embedding::names(&bytes) {
