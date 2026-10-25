@@ -934,13 +934,16 @@ fn decode_raster(
             }))
         }
     } else {
-        let components = get_components(
+        let mut components = get_components(
             &ctx.decoded.data,
             ctx.width,
             height,
             &ctx.color_space,
             ctx.bits_per_component,
         )?;
+        // PdfCraft patch (67): missing samples are raw zeros, decoded like the rest (under
+        // `/Decode [0.5 1]`, 0.5), as the fast path above pads its raw data.
+        fix_image_length(&mut components, ctx.width, height, 0, &ctx.color_space)?;
 
         // PdfCraft patch (28): an image with few possible pixel values converts each of them once.
         let mut rgb_data = if let Some(rgb) = rgb_via_lookup(
@@ -1044,7 +1047,7 @@ fn decode_raster(
 }
 
 fn decode_mask_bytes(
-    mut decoded_data: Cow<'_, [u8]>,
+    decoded_data: Cow<'_, [u8]>,
     width: u32,
     height: u32,
     color_space: &ColorSpace,
@@ -1057,23 +1060,28 @@ fn decode_mask_bytes(
     let fast_path = bits_per_component == 8
         && (decode_arr == default_decode.as_slice() || decode_arr == inverted_default.as_slice());
 
+    // PdfCraft patch (67): missing samples are raw zeros, padded before the mask is decoded or
+    // inverted (under `/Decode [1 0]` they are opaque).
     let mut data = if fast_path {
         let should_invert = invert ^ (decode_arr == inverted_default.as_slice());
+        let mut data = decoded_data.into_owned();
+        fix_image_length(&mut data, width, height, 0, color_space)?;
         if should_invert {
-            for b in decoded_data.to_mut() {
+            for b in &mut data {
                 *b = 255 - *b;
             }
         }
 
-        decoded_data.into_owned()
+        data
     } else {
-        let components = get_components(
+        let mut components = get_components(
             &decoded_data,
             width,
             height,
             color_space,
             bits_per_component,
         )?;
+        fix_image_length(&mut components, width, height, 0, color_space)?;
 
         let f32_data =
             apply_decode_array(&components, color_space, bits_per_component, decode_arr)?;
@@ -1360,9 +1368,9 @@ fn decode_sample(sample: u16, bits_per_component: u8, (d_min, d_max): (f32, f32)
 const MAX_LOOKUP_BITS: usize = 16;
 
 /// PdfCraft patch (28): the RGB of an image whose pixels hold at most [`MAX_LOOKUP_BITS`] bits
-/// of samples, converted once per possible pixel value rather than once per pixel, at the
-/// height `fix_image_length` gives. `None` when the table would not pay off (the image has no
-/// more pixels than it has entries) or does not apply; the caller then converts every pixel.
+/// of samples, converted once per possible pixel value rather than once per pixel. `None` when
+/// the table would not pay off (the image has no more pixels than it has entries), does not
+/// apply, or `components` falls short of the image's size; the caller then converts every pixel.
 ///
 /// The colour of a pixel depends only on its own samples, so the result is the per-pixel one,
 /// except where a tint transform gives the wrong number of components. The per-pixel batch then
@@ -1391,15 +1399,11 @@ fn rgb_via_lookup(
     if n == 0 || bits == 0 || bits > MAX_LOOKUP_BITS || bpc > 16 || decode.len() < n {
         return None;
     }
-    // The length rules of `fix_image_length`: extra samples are dropped, and missing ones are
-    // decoded zeros (patch 67). With no samples at all, the caller's `fix_image_length` leaves
-    // the image out.
-    if components.is_empty() {
-        return None;
-    }
     let pixels = usize::try_from(width).ok()?.checked_mul(usize::try_from(height).ok()?)?;
     let total = pixels.checked_mul(n)?;
-    let used = total.min(components.len());
+    // Every pixel's samples: the caller pads or cuts them to the image's size first
+    // (`fix_image_length`, patch 67).
+    let samples = components.get(..total)?;
     let entries = 1usize << bits;
     if pixels <= entries {
         return None;
@@ -1418,32 +1422,10 @@ fn rgb_via_lookup(
     convert_each(cs, &table_input, n, &mut table);
 
     let mut data = vec![0; pixels.checked_mul(3)?];
-    let whole = used / n;
-    let samples = components.get(..whole * n)?;
     for (pixel, rgb) in samples.chunks_exact(n).zip(data.chunks_exact_mut(3)) {
         let code = pixel.iter().fold(0usize, |code, s| (code << bpc) | (usize::from(*s) & mask));
         if let Some(colour) = table.get(code * 3..code * 3 + 3) {
             rgb.copy_from_slice(colour);
-        }
-    }
-    // The pixels past the samples present: the one they stop in, from its samples and decoded
-    // zeros, and every one after it, all decoded zeros, in one colour converted once rather
-    // than once a pixel (they can be most of the image).
-    if whole < pixels {
-        let begun: Vec<f32> = (whole * n..(whole + 1) * n)
-            .map(|i| match (components.get(i), decode.get(i % n)) {
-                (Some(s), Some(range)) if i < used => decode_sample(*s, bits_per_component, *range),
-                _ => 0.0,
-            })
-            .collect();
-        let _ = cs.convert_f32(&begun, data.get_mut(whole * 3..(whole + 1) * 3)?, false);
-        let rest = data.get_mut((whole + 1) * 3..)?;
-        if !rest.is_empty() {
-            let (zeros, mut zero) = (vec![0.0; n], [0u8; 3]);
-            let _ = cs.convert_f32(&zeros, &mut zero, false);
-            for rgb in rest.chunks_exact_mut(3) {
-                rgb.copy_from_slice(&zero);
-            }
         }
     }
 
