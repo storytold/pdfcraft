@@ -2143,6 +2143,45 @@ fn the_pages_panel_tools_act_on_the_selected_pages() {
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "each is one undo step");
 }
 
+/// CodeRabbit on #4583: the Page tools menu's file items work from the menu too. Insert pages
+/// from a file puts the picked file's pages after the selection; Extract the selected pages
+/// opens Extract for the selection and writes it.
+#[test]
+fn the_pages_panel_tools_insert_from_a_file_and_extract() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-page-tools-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let more = dir.join("more.pdf");
+    std::fs::write(&more, PAGES).unwrap();
+    let mut h = harness(&[("panel", "pages")]);
+    let id = h.state().views[0].id;
+    let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.len();
+    let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools in the Pages panel").click();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    };
+    assert_eq!(count(&h), 3);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.state_mut().pick_override = Some(vec![more.to_string_lossy().into_owned()]);
+    tool(&mut h, "Insert pages from a file after the selection…");
+    h.run_steps(3);
+    assert_eq!(count(&h), 6, "the picked file's three pages are inserted");
+
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    h.state_mut().export_dir_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    tool(&mut h, "Extract the selected pages…");
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Extract), "Extract opens for the selection");
+    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, ..Default::default() };
+    h.get_all_by_label("Extract").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 2, "the two selected pages, each a file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The Pages panel's Page tools are greyed out on a document whose security doesn't allow
 /// page changes: the menu doesn't open, and nothing changes.
 #[test]
