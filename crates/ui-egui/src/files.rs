@@ -155,9 +155,25 @@ pub enum SplitPlan {
     Bookmarks,
 }
 
+/// The source pages chosen in the Extract Pages dialog.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExtractPages {
+    /// Existing thumbnail selection, or the current page when no thumbnails are selected.
+    #[default]
+    Selection,
+    /// Every physical page, before applying the odd/even filter.
+    All,
+    /// Physical page numbers from the typed range.
+    Range,
+}
+
 /// Organize ▸ Extract options.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExtractDraft {
+    /// Keep manual selection as the default extraction workflow.
+    pub selection: ExtractPages,
+    /// Filter by physical page number, independently of where a range begins.
+    pub parity: pdfcraft_engine::PageParity,
     /// Each page as its own file.
     pub separate: bool,
     /// Delete the pages after extracting them.
@@ -172,21 +188,33 @@ pub struct ExtractDraft {
 }
 
 impl ExtractDraft {
-    /// The pages to extract (0-based, in the order typed, each once) from a document of `count`
-    /// pages: the typed [`Self::pages`] ranges, or `selected` when none are typed. Says what is
-    /// wrong with a range that can't be read or takes no page.
+    /// Resolve the chosen extraction mode and physical parity, preserving main's typed order
+    /// and deduplication for dialog ranges. Callers reject empty results.
     pub fn pages_to_extract(&self, selected: Vec<usize>, count: usize) -> Result<Vec<usize>, String> {
-        if self.pages.trim().is_empty() {
-            return Ok(selected);
-        }
-        match pdfcraft_engine::print::select_pages(count, Some(&self.pages), &[], pdfcraft_engine::print::Subset::All, false) {
-            Ok(p) if p.is_empty() => Err(tl!("No pages selected").to_string()),
-            Ok(p) => {
-                let mut seen = std::collections::HashSet::new();
-                Ok(p.into_iter().filter(|page| seen.insert(*page)).collect())
-            }
-            Err(e) => Err(e.to_string()),
-        }
+        self.pages(count, &selected).map_err(|e| e.said(&|s| crate::i18n::t(s).to_string()))
+    }
+}
+
+impl ExtractDraft {
+    /// Resolve extraction targets without changing the thumbnail selection or document.
+    /// Invalid ranges fail; an empty result must be rejected before extracting or deleting.
+    pub fn pages(&self, count: usize, selected: &[usize]) -> Result<Vec<usize>, pdfcraft_engine::print::PrintError> {
+        // Keep main's typed order, with the shared parser bounding work before allocation.
+        let typed = if self.selection != ExtractPages::All && !self.pages.trim().is_empty() {
+            // Validate input and total expansion before the legacy order-preserving parser allocates.
+            let _ = pdfcraft_engine::page_selection::parse(&self.pages, count)?;
+            let pages = pdfcraft_engine::print::select_pages(count, Some(&self.pages), &[], pdfcraft_engine::print::Subset::All, false)?;
+            let mut seen = std::collections::HashSet::new();
+            Some(pages.into_iter().filter(|page| seen.insert(*page)).collect::<Vec<_>>())
+        } else {
+            None
+        };
+        let pages = match self.selection {
+            ExtractPages::Selection => Some(typed.as_deref().unwrap_or(selected)),
+            ExtractPages::All => None,
+            ExtractPages::Range => Some(typed.as_deref().unwrap_or(&[])),
+        };
+        pdfcraft_engine::page_selection::select(count, pages, None, self.parity)
     }
 }
 
@@ -627,26 +655,34 @@ impl PdfCraftApp {
         }
     }
 
-    /// Show Extract pages, its file name filled in with the active document's (#737) and no
-    /// page ranges typed, so it takes the selected pages until some are (#3593).
+    /// Open extraction with the current manual selection and the active document's file name.
     pub fn open_extract_dialog(&mut self) {
+        self.extract_draft.selection = ExtractPages::Selection;
+        self.extract_draft.parity = pdfcraft_engine::PageParity::Both;
         self.extract_draft.name =
             self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
         self.extract_draft.pages.clear();
         self.dialog = Some(crate::Dialog::Extract);
     }
 
-    /// Copy the pages typed in Extract pages, else the selected pages (or the current page), into
-    /// a new unsaved document tab.
+    /// Extract validated manual/all/range targets, optionally filtered by physical page parity.
+    /// Commit pending edits first; reject invalid/empty targets before extraction output or deletion.
     pub fn extract_selection(&mut self) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
         }
+
         let Some((i, id)) = self.active_ids() else { return };
         let opts = self.extract_draft.clone();
-        let pages = match opts.pages_to_extract(self.views[i].target_pages(), self.views[i].page_count()) {
-            Ok(pages) => pages,
+        let Some(doc) = self.session.get(id) else { return };
+        let Some(view) = self.views.get(i) else { return };
+        let pages = match opts.pages_to_extract(view.target_pages(), doc.info.pages.len()) {
+            Ok(pages) if !pages.is_empty() => pages,
+            Ok(_) => {
+                self.notify_tr("No pages selected");
+                return;
+            }
             Err(e) => {
                 self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e)]);
                 return;

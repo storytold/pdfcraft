@@ -2811,8 +2811,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog"]
-notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied. The dialog's Pages field takes page ranges (\"1-5, 8, 11-13\", in the order typed, each page once) instead of the selection (#3593); page labels are not accepted there yet."
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_selection_restores_manual_pages_after_a_typed_range", "crates/ui-egui/tests/it/editing.rs::extract_upstream_typed_order_survives_odd_even_filtering", "crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog", "crates/ui-egui/tests/it/editing.rs::extract_all_pages_resolves_targets_after_pending_edits", "crates/ui-egui/tests/it/editing.rs::extract_dialog_accepts_ranges_and_physical_page_subsets", "crates/ui-egui/tests/it/editing.rs::extract_dialog_rejects_invalid_and_empty_ranges_without_side_effects", "crates/automation/tests/it/automation.rs::extract_page_ranges_and_subsets_preserve_source_and_explicit_order", "crates/automation/tests/it/automation.rs::extract_page_ranges_refuse_invalid_selections_before_output"]
+notes = "Extract offers manual selection/current page, all pages or typed physical ranges plus odd/even filters (#3726); page_extract exposes range/subset with matching validation. Dialog ranges preserve typed order and remove duplicates; headless range selections are sorted and deduplicated. Logical page labels are not interpreted. Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied. Typing ranges selects Range mode; choosing Selection clears them and restores the manual selection (#3593)."
 
 [[feature]]
 id = "organize.extract-separate-files"
@@ -2823,7 +2823,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/it/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/it/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/it/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/it/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog", "crates/ui-egui/tests/it/editing.rs::extract_ranges_to_separate_files_delete_only_selected_pages_and_undo"]
 notes = "The dialog has a File name field (#737), filled in with the document's name: pages are written as `<name> (page N).pdf` into the chosen folder, and one renamed page as `<name>.pdf`. Extracting into a new tab names the tab (and so Save As) after it."
 
 [[feature]]
@@ -2835,7 +2835,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/it/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/it/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/it/editing.rs::extract_ranges_to_separate_files_delete_only_selected_pages_and_undo"]
 notes = "undoable"
 
 [[feature]]

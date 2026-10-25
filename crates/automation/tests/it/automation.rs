@@ -8641,6 +8641,58 @@ fn text_box_and_callout_fill_and_border_through_tools() {
     }
 }
 
+/// #3726: physical page ranges and odd/even filters work through the existing extraction tool.
+#[test]
+fn extract_page_ranges_and_subsets_preserve_source_and_explicit_order() {
+    let dir = workdir("extract-ranges-3726");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+    for (selector, expected) in [
+        (json!({"range":"1-2, 3", "subset":"odd"}), "Page 1\nPage 3"),
+        (json!({"subset":"even"}), "Page 2"),
+        (json!({"range":"2-3", "subset":"odd"}), "Page 3"),
+        (json!({"pages":[3,1,3]}), "Page 3\nPage 1\nPage 3"),
+    ] {
+        let mut args = selector;
+        args["doc"] = json!(doc);
+        let extracted = ok(&mut a, "page_extract", args)["document"]["doc"].as_u64().unwrap();
+        let content = page_text(&mut a, extracted).join("\n");
+        assert_eq!(content, expected);
+    }
+    assert!(std::sync::Arc::ptr_eq(&before, &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes));
+    assert!(!a.session().get(pdfcraft_engine::DocId(doc)).unwrap().dirty);
+}
+
+/// Bad selectors fail before file/directory creation or deletion, including an empty parity result.
+#[test]
+fn extract_page_ranges_refuse_invalid_selections_before_output() {
+    let dir = workdir("extract-invalid-3726");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let bytes = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+    for selector in [
+        json!({}),
+        json!({"range":"4"}),
+        json!({"range":""}),
+        json!({"range":"1,2","pages":[1]}),
+        json!({"range":"1","subset":"even"}),
+        json!({"subset":"bad"}),
+        json!({"range":123}),
+        json!({"pages":[]}),
+    ] {
+        let mut args = selector;
+        args["doc"] = json!(doc);
+        args["separate"] = json!(true);
+        args["delete"] = json!(true);
+        args["out_dir"] = json!("must-not-exist");
+        assert!(a.call("page_extract", &args).is_err(), "{args}");
+        assert!(!dir.join("must-not-exist").exists());
+        assert!(std::sync::Arc::ptr_eq(&bytes, &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes));
+        assert!(!a.session().get(pdfcraft_engine::DocId(doc)).unwrap().dirty);
+    }
+}
+
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
 /// of #2516. A third Alpha row brings its last baseline within 2.5 × size of Bravo's, so the next
 /// read groups the two as one paragraph.

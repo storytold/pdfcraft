@@ -29,6 +29,7 @@ pub mod js;
 pub mod links;
 pub mod ocr;
 pub mod optimizer;
+pub mod page_selection;
 pub mod print_raster;
 pub mod printcheck;
 mod scan_colours;

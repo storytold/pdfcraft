@@ -93,3 +93,12 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 `doc.text_edit_preview(page, block)` prepares a read-only page background with the selected
 paragraph’s glyphs removed, preserving text positioning, images and colours. It shares the
 working document’s render configuration and never enters the undo history.
+
+## Physical page selections
+
+`page_selection::parse` parses bounded 1-based physical page lists/ranges into a sorted,
+unique set of 0-based indices. Organize Pages and Extract share it.
+`page_selection::select` adds optional explicit indices and physical `PageParity` filtering;
+explicit list order/duplicates are preserved. With no selector it starts from all pages;
+with a blank typed range it returns an empty selection. Frontends reject empty extraction
+results before output or editing. Neither function interprets logical PDF page labels.

@@ -6259,6 +6259,151 @@ fn read_mode_shortcut_applies_the_open_paragraph() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().text_lines(0)[0].text, "Chapter One", "the edit is applied");
 }
 
+/// #3726: users can type disjoint ranges and choose physical odd/even pages in Extract itself.
+#[test]
+fn extract_dialog_accepts_ranges_and_physical_page_subsets() {
+    for (range, subset, expected) in [
+        (Some("1-5, 8, 12-15"), None, vec![1, 2, 3, 4, 5, 8, 12, 13, 14, 15]),
+        (Some("2-5, 8, 12-15"), Some("Odd Pages Only"), vec![3, 5, 13, 15]),
+        (None, Some("Odd Pages Only"), vec![1, 3, 5, 7, 9, 11, 13, 15]),
+        (None, Some("Even Pages Only"), vec![2, 4, 6, 8, 10, 12, 14]),
+    ] {
+        let mut h = organize(15);
+        h.state_mut().views[0].select_pages(&[6, 8]);
+        assert!(h.state_mut().execute("page.extract"));
+        h.run_steps(3);
+        if let Some(range) = range {
+            h.get_by_label("Pages:").click();
+            h.run_steps(2);
+            h.get_by_role_and_label(Role::TextInput, "Pages").click();
+            h.run_steps(1);
+            h.get_by_role_and_label(Role::TextInput, "Pages").type_text(range);
+        } else {
+            h.get_by_label("All pages").click();
+        }
+        h.run_steps(2);
+        if let Some(subset) = subset {
+            h.get_by_value("Even and Odd Pages").click();
+            h.run_steps(2);
+            h.get_by_label(subset).click();
+            h.run_steps(2);
+        }
+        if let Some(range) = range {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, "Pages").value().as_deref(), Some(range));
+        }
+        assert_eq!(h.state().views[0].target_pages(), [6, 8], "dialog choices do not replace the manual selection");
+        h.get_all_by_label("Extract").last().unwrap().click();
+        h.run_steps(4);
+        assert_eq!(texts_of(h.state(), 1), expected.iter().map(|n| format!("Page {n}")).collect::<Vec<_>>());
+        assert_eq!(texts_of(h.state(), 0).len(), 15);
+        assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    }
+}
+
+/// Invalid/empty extraction inputs disable confirmation and cannot mutate or create documents.
+#[test]
+fn extract_dialog_rejects_invalid_and_empty_ranges_without_side_effects() {
+    let mut h = organize(3);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(3);
+    h.get_by_label("Pages:").click();
+    h.run_steps(2);
+    for range in ["4", "0", "1,", "", "1--3"] {
+        let field = h.get_by_role_and_label(Role::TextInput, "Pages");
+        field.click();
+        h.run_steps(1);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.key_press(Key::Backspace);
+        h.get_by_role_and_label(Role::TextInput, "Pages").type_text(range);
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::TextInput, "Pages").value().as_deref(), Some(range));
+        assert!(h.get_all_by_label("Extract").last().unwrap().accesskit_node().is_disabled(), "{range}");
+        h.state_mut().extract_selection();
+        assert_eq!(h.state().views.len(), 1);
+        assert_eq!(texts_of(h.state(), 0).len(), 3);
+        assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    }
+}
+
+/// Upstream's typed-order workflow also accepts physical parity without reordering the result.
+#[test]
+fn extract_upstream_typed_order_survives_odd_even_filtering() {
+    let _gpu = crate::gpu();
+    let mut h = organize(6);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.pages = "5-6, 3-2, 6".into();
+    h.state_mut().extract_draft.parity = pdfcraft_engine::PageParity::Odd;
+    h.run_steps(3);
+    assert_eq!(h.state().extract_draft.selection, pdfcraft_ui_egui::ExtractPages::Range);
+    if let Ok(path) = std::env::var("PDFCRAFT_EXTRACT_REVIEW_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    h.state_mut().extract_selection();
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 1), ["Page 5", "Page 3"]);
+    assert_eq!(texts_of(h.state(), 0).len(), 6);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
+/// Returning to Selection must discard a remembered range and restore the picked thumbnails.
+#[test]
+fn extract_selection_restores_manual_pages_after_a_typed_range() {
+    let mut h = organize(6);
+    h.state_mut().views[0].select_pages(&[1, 3]);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.pages = "5-6".into();
+    h.run_steps(3);
+    assert_eq!(h.state().extract_draft.selection, pdfcraft_ui_egui::ExtractPages::Range);
+    h.get_by_label("Selection").click();
+    h.run_steps(2);
+    assert_eq!(h.state().extract_draft.selection, pdfcraft_ui_egui::ExtractPages::Selection);
+    assert!(h.state().extract_draft.pages.is_empty());
+    h.state_mut().extract_selection();
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 1), ["Page 2", "Page 4"]);
+}
+
+/// Range/subset choices also drive separate-file extraction and delete only after files exist.
+#[test]
+fn extract_ranges_to_separate_files_delete_only_selected_pages_and_undo() {
+    use pdfcraft_engine::PageParity;
+    use pdfcraft_ui_egui::ExtractPages;
+    let dir = temp_path("extract-ranges-3726");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = organize(6);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.selection = ExtractPages::Range;
+    h.state_mut().extract_draft.pages = "2-6".into();
+    h.state_mut().extract_draft.parity = PageParity::Odd;
+    h.state_mut().extract_draft.separate = true;
+    h.state_mut().extract_draft.delete = true;
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    h.state_mut().extract_selection();
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2", "Page 4", "Page 6"]);
+    for n in [3, 5] {
+        assert!(dir.join(format!("doc (page {n}).pdf")).exists());
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    h.state_mut().run_command("edit.undo");
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 0).len(), 6);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Pending edits are committed before resolving All pages against the current document.
+#[test]
+fn extract_all_pages_resolves_targets_after_pending_edits() {
+    let mut h = organize(4);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.selection = pdfcraft_ui_egui::ExtractPages::All;
+    h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+    h.state_mut().extract_selection();
+    assert_eq!(h.state().views.len(), 2, "extract from the committed three-page source");
+    assert_eq!(texts_of(h.state(), 1), ["Page 2", "Page 3", "Page 4"]);
+}
+
 /// #3061: a paragraph running past its page's bottom edge (an HTML converter relying on the
 /// page clip) opens in an editor that draws on its page only. It covered the next page.
 #[test]

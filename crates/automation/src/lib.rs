@@ -1795,11 +1795,28 @@ impl Automation {
         Ok(json!({ "files": out }))
     }
 
+    /// Resolve bounded physical ranges or legacy page lists before extracting, writing or deleting.
     fn page_extract(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, name) = (doc.id, format!("{} (extract)", doc.name));
         let stem = Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "page".into());
-        let pages = self.pages(a, "pages")?;
+        let range = a.opt_str("range")?;
+        let subset = a.opt_str("subset")?;
+        let explicit = a.opt_ints("pages")?.map(|_| self.pages(a, "pages")).transpose()?;
+        if explicit.is_none() && range.is_none() && subset.is_none() {
+            return Err(ToolError::InvalidArgs("choose pages, range, or subset (all, odd, even)".into()));
+        }
+        let parity = match subset.unwrap_or("all") {
+            "all" => pdfcraft_engine::PageParity::Both,
+            "odd" => pdfcraft_engine::PageParity::Odd,
+            "even" => pdfcraft_engine::PageParity::Even,
+            value => return Err(ToolError::InvalidArgs(format!("unknown subset {value:?} (all, odd, even)"))),
+        };
+        let pages = pdfcraft_engine::page_selection::select(doc.info.pages.len(), explicit.as_deref(), range, parity)
+            .map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+        if pages.is_empty() {
+            return Err(ToolError::InvalidArgs("No pages selected".into()));
+        }
         let mut out = if a.opt_bool("separate")?.unwrap_or(false) {
             // Each page as its own file.
             let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?, true)?;
