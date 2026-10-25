@@ -870,6 +870,7 @@ pub struct FieldDraft {
     /// Actions tab: how many actions the document chains after each trigger's first one. They are
     /// kept when that first action is replaced.
     pub chained: Vec<(pdfcraft_engine::FieldTrigger, usize)>,
+    pub prior_thai_font: Option<pdfcraft_fonts::ThaiFontEntry>,
     original: Box<Option<FieldDraft>>,
 }
 
@@ -934,6 +935,7 @@ impl FieldDraft {
             new_action: ActionDraft::default(),
             editing: None,
             chained: Vec::new(),
+            prior_thai_font: pdfcraft_fonts::active_thai_font_entry(),
             original: Box::new(None),
         };
         d.original = Box::new(Some(d.clone()));
@@ -1385,6 +1387,14 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
             cancel = true;
         }
     });
+    if cancel {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(entry) = &d.prior_thai_font {
+            let _ = pdfcraft_fonts::set_active_thai_font_entry(entry);
+            let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+            ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
+        }
+    }
     (apply, cancel)
 }
 
