@@ -223,6 +223,9 @@ pub enum RenderWarning {
     /// A colour could not be computed (a colour space that cannot be read, or a Separation or
     /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
     ColourFallback,
+    /// An image was not drawn: its data is damaged or unsupported, or it is too large to decode
+    /// (#4071: past 2^30 pixels, or past 2^28 with samples over 512 MiB).
+    ImageSkipped,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -405,11 +408,13 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
     InterpreterSettings {
         warning_sink: Arc::new(move |warning| {
             // Nested forms, Type 3 glyphs and patterns are interpreted again and each reports the
-            // exhausted budget, or the colours that fell back: once per page is enough.
+            // exhausted budget, or the colours that fell back: once per page is enough. So is one
+            // skipped image, which tiles and repeated draws report again.
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
                 InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
-                InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
+                InterpreterWarning::ImageDecodeFailure => RenderWarning::ImageSkipped,
+                InterpreterWarning::UnsupportedFont => return,
             };
             let mut warnings = lock(&target);
             if !warnings.contains(&warning) {
@@ -4192,6 +4197,227 @@ trailer << /Root 1 0 R >>
         page(&format!("q 20 0 0 20 5 5 cm BI /W 4294967295 /H 2 /IM true /BPC 1 ID \u{0}\u{ff}\u{ff}\u{0} EI Q {red}"), "<< >>");
         let fax = "<< /Type /XObject /Subtype /Image /Width 81 /Height 26 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /Columns 4294967295 /Rows 26 /K -1 >> /Length 4 >> stream\n\u{0}\u{0}\u{0}\u{0}\nendstream";
         page(&format!("q 20 0 0 20 5 5 cm /Im1 Do Q {red}"), fax);
+    }
+
+    /// #4071 fixtures: a page that is image XObject `/Im1` (`dict`, stream `data`) at 600 dpi.
+    fn large_scan_pdf(width: u32, height: u32, dict: &str, data: &[u8]) -> Vec<u8> {
+        let (w, h) = (f64::from(width) * 0.12, f64::from(height) * 0.12);
+        let content = format!("q {w} 0 0 {h} 0 0 cm /Im1 Do Q");
+        let mut pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height {height} {dict} /Length {} >> stream\n",
+            content.len(),
+            data.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(data);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+        pdf
+    }
+
+    /// #4071 fixtures: a 1-bit gray FlateDecode image dark on its left half and white on its
+    /// right. All rows are the same, so it compresses to almost nothing, quickly.
+    fn half_dark_one_bit_flate(width: u32, height: u32) -> Vec<u8> {
+        use std::io::Write;
+        let mut row = vec![0u8; width.div_ceil(8) as usize];
+        for x in width / 2..width {
+            row[x as usize / 8] |= 0x80 >> (x % 8);
+        }
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        for _ in 0..height {
+            z.write_all(&row).unwrap();
+        }
+        z.finish().unwrap()
+    }
+
+    /// The fraction of a rendered page's pixels darker than mid-gray.
+    fn dark_fraction(page: &RenderedPage) -> f64 {
+        let dark = page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128).count();
+        dark as f64 / (page.width as f64 * page.height as f64)
+    }
+
+    /// #4071: a 1-bit scan of a large-format drawing (a 36 × 24 in plan at 600 dpi is 21600 ×
+    /// 14400, 311 million pixels) rendered blank with no warning: images over 2^28 pixels were
+    /// not decoded. They are now decoded reduced for the size they are drawn at (vendored
+    /// hayro-interpret patch 54). 16385 × 16384 is the first size past the limit. Each image is
+    /// dark on its left half and white on its right, so a blank, mirrored or misplaced image
+    /// fails; as a stencil mask (black where its samples are 0) it paints the same.
+    #[test]
+    fn one_bit_scans_past_the_full_size_limit_are_drawn() {
+        let gray = "/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /FlateDecode";
+        let stencil = "/ImageMask true /BitsPerComponent 1 /Filter /FlateDecode";
+        for (width, height, dict) in [(16_385, 16_384, gray), (21_600, 14_400, gray), (21_600, 14_400, stencil)] {
+            let data = half_dark_one_bit_flate(width, height);
+            let mut r = PageRenderer::new(Arc::new(large_scan_pdf(width, height, dict, &data)), RenderConfig::default());
+            let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 10.0 / 72.0, tag: 0, preview: false });
+            assert!(page.error.is_none(), "{width} × {height}: {:?}", page.error);
+            assert!(page.warnings.is_empty(), "{width} × {height}: {:?}", page.warnings);
+            let w = page.width as usize;
+            let (x_dark, x_white, y) = (w / 4, w * 3 / 4, page.height as usize / 2);
+            assert_eq!(rgb_at(&page.rgba, w, x_dark, y), [0, 0, 0], "{width} × {height}: the left half is dark");
+            assert_eq!(rgb_at(&page.rgba, w, x_white, y), [255, 255, 255], "{width} × {height}: the right half is white");
+            let dark = dark_fraction(&page);
+            assert!((0.47..=0.53).contains(&dark), "{width} × {height}: {dark} of the page is dark");
+        }
+    }
+
+    /// #4071: the same for a Group 4 fax image, the usual encoding of such scans, which the CCITT
+    /// filter now keeps at 1 bit a pixel past 2^28 pixels (a byte a pixel was 311 MB here). An
+    /// all-white Group 4 page codes each row as one V0 bit; `/Decode [1 0]` draws it black.
+    #[test]
+    fn group4_scans_past_the_full_size_limit_are_drawn() {
+        let (width, height) = (21_600u32, 14_400u32);
+        let mut data = vec![0xff; height as usize / 8];
+        data.extend_from_slice(&[0x00, 0x10, 0x01]); // EOFB
+        let dict = format!(
+            "/ColorSpace /DeviceGray /BitsPerComponent 1 /Decode [1 0] /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns {width} /Rows {height} >>"
+        );
+        let mut r = PageRenderer::new(Arc::new(large_scan_pdf(width, height, &dict, &data)), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 10.0 / 72.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+        assert!(dark_fraction(&page) > 0.99, "{} of the page is dark", dark_fraction(&page));
+    }
+
+    /// #4071: the CCITT filter decodes no more rows than the image's `/Height`, however many
+    /// `/Rows` says, and refuses a packed image whose samples would pass 512 MiB. A
+    /// 1-pixel-wide image is a byte a row packed: `/Rows` 2^30 on a 2^29-row image, or a 2^30-row
+    /// image, made 1 GiB. An image whose `/Columns` differs from its `/Width` is still decoded,
+    /// byte a pixel or packed, and a stream of unknown height stops at the limit it is decoded
+    /// within. The Group 4
+    /// fixtures are all-white rows (one V0 bit each) and EOFB; the Group 3 one is 7-pixel
+    /// all-white rows (white run 7 is `1111`).
+    #[test]
+    fn ccitt_rows_stop_at_the_height_and_output_within_its_limits() {
+        use hayro::hayro_syntax::object::stream::{ImageDecodeParams, Stream};
+
+        fn stream_of(pdf: &Pdf) -> Stream<'_> {
+            pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap()
+        }
+        let decode = |width: u32, height: u32, parms: &str, is_indexed: bool, coded_rows: usize| {
+            let mut data = vec![0xff; coded_rows / 8];
+            data.extend_from_slice(&[0x00, 0x10, 0x01]); // EOFB
+            let dict = format!("/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 {parms} >>");
+            let pdf = Pdf::new(Arc::new(large_scan_pdf(width, height, &dict, &data))).unwrap();
+            let params = ImageDecodeParams { is_indexed, bpc: Some(1), num_components: Some(1), width, height, ..Default::default() };
+            stream_of(&pdf).decoded_image(&params).map(|decoded| decoded.data.len())
+        };
+        // 16 rows coded, 4 drawn: a byte a pixel (8 × 4), or packed (a byte a row).
+        assert_eq!(decode(8, 4, "/Columns 8 /Rows 100", false, 16).ok(), Some(32));
+        assert_eq!(decode(8, 4, "/Columns 8 /Rows 100", true, 16).ok(), Some(4));
+        // Past 2^28 pixels, packed: 2^29 rows of a byte each is 512 MiB, the most taken.
+        assert_eq!(decode(1, 1 << 29, "/Columns 1 /Rows 1073741824", false, 64).ok(), Some(64));
+        assert!(decode(1, 1 << 30, "/Columns 1 /Rows 1073741824", false, 64).is_err(), "1 GiB of samples is refused");
+        assert!(decode(1, (1 << 29) + 1, "/Columns 1", false, 64).is_err(), "past 512 MiB packed is refused");
+        // `/Columns` absent is 1728, wider than `/Width 100`: drawn as before, a byte a pixel.
+        assert_eq!(decode(100, 100, "", false, 104).ok(), Some(1728 * 100));
+        // Packed with `/Columns` padded past `/Width`: drawn as before, 2050 bytes a row.
+        assert_eq!(decode(16384, 16385, "/Columns 16400", false, 64).ok(), Some(2050 * 64));
+
+        // Group 3 with no height decodes until the data ends (2000 rows here) or `/Rows`: either
+        // way no more than the limit it is decoded within.
+        for rows in ["", "/Rows 2000"] {
+            let dict = format!("/Filter /CCITTFaxDecode /DecodeParms << /K 0 /Columns 7 {rows} >>");
+            let pdf = Pdf::new(Arc::new(large_scan_pdf(7, 1, &dict, &[0xff; 1000]))).unwrap();
+            for max in [64, 7000] {
+                let len = stream_of(&pdf).decoded_within(max).map(|data| data.len());
+                assert!(len.as_ref().is_ok_and(|&len| len > 0 && len <= max), "{rows:?} within {max}: {len:?}");
+            }
+        }
+    }
+
+    /// #4071: the tiles of a page share one reduced decode of a large image: the size it is
+    /// decoded for is the size it is drawn at, which no longer counts each tile's offset.
+    #[test]
+    fn the_tiles_of_a_page_share_one_reduced_decode() {
+        let (width, height) = (16_385, 16_384);
+        let data = half_dark_one_bit_flate(width, height);
+        let dict = "/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /FlateDecode";
+        let pdf = parse(&Arc::new(large_scan_pdf(width, height, dict, &data)), None).expect("parses");
+        let cache = RenderCache::new();
+        let settings = InterpreterSettings::default();
+        let req = |x, y| RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: Some(Tile { x, y, w: 64, h: 64 }),
+            scale: 10.0 / 72.0,
+            tag: 0,
+            preview: false,
+        };
+        // Upper left (dark) and lower right (white) tiles of the 273 × 273 page.
+        let (_, _, upper_left, _) = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(0, 0)).expect("renders");
+        let (_, _, lower_right, _) = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(192, 192)).expect("renders");
+        assert_eq!(cache.decoded_image_decodes(), 1, "each tile decoded the image again");
+        assert!(upper_left.as_chunks::<4>().0.iter().all(|p| p[0] == 0), "the left of the image is dark");
+        assert!(lower_right.as_chunks::<4>().0.iter().all(|p| p[0] == 255), "the right of the image is white");
+    }
+
+    /// #4071 review: a soft mask too large for its full size is decoded reduced for the size its
+    /// image is drawn at, so the decoded-image cache keys the image by the mask's factors too: a
+    /// thumbnail's mask was kept and drawn again, blurred, at a zoom.
+    #[test]
+    fn a_reduced_soft_mask_is_decoded_again_for_another_size() {
+        let mask = half_dark_one_bit_flate(16_385, 16_384);
+        let mask_dict = format!(
+            "<< /Type /XObject /Subtype /Image /Width 16385 /Height 16384 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /FlateDecode /Length {} >>",
+            mask.len()
+        );
+        let red = [255u8, 0, 0].repeat(16);
+        let image = "<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 6 0 R /Length 48 >>";
+        let bytes = image_cache_pdf("q 130 0 0 70 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(image, &red), (&mask_dict, &mask)]);
+        let pdf = parse(&Arc::new(bytes), None).expect("parses");
+        let settings = InterpreterSettings::default();
+        let req = |scale| RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false };
+        let cache = RenderCache::new();
+        render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(0.1)).expect("the thumbnail renders");
+        let (w, _, zoomed, _) = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(4.0)).expect("the zoom renders");
+        let (_, _, fresh, _) = render_page(&pdf, &RenderCache::new(), &settings, &RenderConfig::default(), req(4.0)).expect("renders");
+        assert!(zoomed[..] == fresh[..], "the zoom drew the thumbnail's soft mask");
+        let w = w as usize;
+        assert_eq!(rgb_at(&fresh, w, w / 4, 100), [255, 255, 255], "the left of the mask is transparent");
+        assert_eq!(rgb_at(&fresh, w, w * 3 / 4, 100), [255, 0, 0], "the right of the mask shows the image");
+    }
+
+    /// #4071 review: the Flate output of an image too large for its full size stops at its
+    /// samples and a predictor tag byte per row. Twice its samples, as for other images, let a
+    /// 512 MiB gray image's stream inflate to 1 GB.
+    #[test]
+    fn flate_output_of_an_image_past_the_full_size_limit_stops_at_its_samples() {
+        use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+        use std::io::Write;
+
+        let (width, height) = (16_385u32, 16_384u32);
+        let samples = width.div_ceil(8) as usize * height as usize;
+        // Three times the samples, all zero.
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        let chunk = vec![0u8; 1 << 20];
+        for _ in 0..(3 * samples).div_ceil(chunk.len()) {
+            z.write_all(&chunk).unwrap();
+        }
+        let data = z.finish().unwrap();
+        let dict = "/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /FlateDecode";
+        let pdf = Pdf::new(Arc::new(large_scan_pdf(width, height, dict, &data))).unwrap();
+        let stream = pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap();
+        let params = ImageDecodeParams { bpc: Some(1), num_components: Some(1), width, height, ..Default::default() };
+        let decoded = stream.decoded_image(&params).unwrap();
+        assert_eq!(decoded.data.len(), samples + height as usize);
+    }
+
+    /// #4071: an image still too large to draw (here colour past 2^28 pixels, whose samples
+    /// would take 805 MB) is skipped before anything is decoded, and the render says so.
+    #[test]
+    fn images_too_large_to_decode_are_reported() {
+        let dict = "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode";
+        let mut r = PageRenderer::new(Arc::new(large_scan_pdf(16_385, 16_384, dict, b"\x78\x9c\x03\x00\x00\x00\x00\x01")), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 10.0 / 72.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(page.warnings, [RenderWarning::ImageSkipped]);
     }
 
     /// Scanners and fax services write Group 4 pages with `/Rows 0`, which ISO 32000-2 Table 11

@@ -5,6 +5,7 @@ use crate::device::Device;
 use crate::function::{Function, interpolate};
 use crate::interpret::path::get_paint;
 use crate::interpret::state::ActiveTransferFunction;
+use crate::reduce::{self, Sampling};
 use crate::{BlendMode, CacheKey, ClipPath, Image, Paint, RasterImage, StencilImage};
 use crate::{FillRule, InterpreterWarning, WarningSinkFn, interpret};
 use crate::{ImageData, LumaData, RgbData};
@@ -16,7 +17,9 @@ use hayro_syntax::object::Name;
 use hayro_syntax::object::Object;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
-use hayro_syntax::object::stream::{FilterResult, ImageColorSpace, ImageDecodeParams};
+use hayro_syntax::object::stream::{
+    FilterResult, ImageColorSpace, ImageData as StreamImageData, ImageDecodeParams,
+};
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, Rect, Shape};
 use smallvec::{SmallVec, smallvec};
@@ -518,8 +521,41 @@ impl<'a> ImageXObject<'a> {
             } else {
                 None
             },
+            // PdfCraft patch (54): an image too large for its full size is decoded reduced for
+            // the size it is drawn at, and so is a soft mask or mask decoded with it: keyed by
+            // their factors rather than the size, so sizes that reduce alike share one decode.
+            reduction: self.reduction_key(target_dimension),
+            mask_reduction: self.mask_reduction_key(target_dimension),
             preview: cache.preview,
         })
+    }
+
+    /// PdfCraft patch (54): the factors this image is reduced by for `target`, as the cache keys
+    /// them: from its dictionary's `/Width` and `/Height`, `None` when it isn't too large for its
+    /// full size. `decode_context` reduces by at least these.
+    fn reduction_key(&self, target: Option<(u32, u32)>) -> Option<(u32, u32)> {
+        reduce::is_over_full_size(self.width, self.height)
+            .then(|| self.reduction_factors(self.width, self.height, target))
+    }
+
+    /// PdfCraft patch (54): [`Self::reduction_key`] of the `/SMask` or `/Mask` stream
+    /// `resolve_alpha` and `resolve_matte` decode with this image at the same target.
+    fn mask_reduction_key(&self, target: Option<(u32, u32)>) -> Option<(u32, u32)> {
+        let dict = self.stream.dict();
+        let mask = dict
+            .get::<Stream<'_>>(SMASK)
+            .or_else(|| dict.get::<Stream<'_>>(MASK))?;
+        let mask = ImageXObject::new(
+            &mask,
+            |_| None,
+            &self.warning_sink,
+            &self.cache,
+            None,
+            true,
+            None,
+            None,
+        )?;
+        mask.reduction_key(target)
     }
 
     /// PdfCraft patch (32): whether decoding this image depends on the size it is drawn at.
@@ -532,6 +568,62 @@ impl<'a> ImageXObject<'a> {
         uses_jpx(&self.stream)
             || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s))
             || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s))
+    }
+
+    /// PdfCraft patch (54): the components and bits per component of the image's samples as
+    /// its dictionary gives them (a mask has one component; an image without a colour space is
+    /// taken to have four, the most a JPX or DCT image decodes to).
+    fn sample_format(&self) -> (u8, u8) {
+        let dict = self.stream.dict();
+        let bpc = dict
+            .get::<u8>(BPC)
+            .or_else(|| dict.get::<u8>(BITS_PER_COMPONENT))
+            .unwrap_or(if self.is_stencil_mask { 1 } else { 8 });
+        let components = if self.is_mask {
+            1
+        } else {
+            self.color_space
+                .as_ref()
+                .map_or(4, |cs| cs.num_components())
+        };
+        (components, bpc)
+    }
+
+    /// PdfCraft patch (54): how a reduced decode makes a pixel of a block: palette indices and
+    /// samples a colour key mask compares can't be averaged, so those take one pixel of it.
+    fn sampling(&self) -> Sampling {
+        let indexed = self
+            .color_space
+            .as_ref()
+            .is_some_and(|cs| cs.is_indexed());
+        if indexed || self.stream.dict().get::<Array<'_>>(MASK).is_some() {
+            Sampling::Nearest
+        } else {
+            Sampling::Average
+        }
+    }
+
+    /// PdfCraft patch (54): the factors a decoded image of `width` × `height` samples is
+    /// reduced by to be drawn at `target` (see `reduce::factors`), budgeted by the bytes a pixel
+    /// takes once reduced and once converted for drawing.
+    fn reduction_factors(
+        &self,
+        width: u32,
+        height: u32,
+        target: Option<(u32, u32)>,
+    ) -> (u32, u32) {
+        let (components, bpc) = self.sample_format();
+        let gray = self
+            .color_space
+            .as_ref()
+            .is_some_and(|cs| cs.is_device_gray());
+        let converted = if self.is_mask || gray { 1 } else { 3 };
+        let reduced = u64::from(components)
+            * match self.sampling() {
+                Sampling::Average => 1,
+                Sampling::Nearest => u64::from(bpc.div_ceil(8)),
+            };
+        reduce::factors(width, height, target, reduced.max(converted))
     }
 
     pub(crate) fn width(&self) -> u32 {
@@ -615,9 +707,18 @@ fn decode_context<'a>(
     obj: &ImageXObject<'a>,
     target_dimension: Option<(u32, u32)>,
 ) -> Option<DecodeContext<'a>> {
-    // PdfCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
-    // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
-    if !image_size_ok(obj.width, obj.height) {
+    // PdfCraft patch: images and masks over `reduce::MAX_SOURCE_PIXELS` are not decoded at all:
+    // a fuzzed `/W 4294967295` stencil mask allocated gigabytes here. PdfCraft patch (54): nor
+    // are those too large for their full size whose samples would take more than
+    // `reduce::MAX_SOURCE_BYTES` (checked again on what the filters report once decoded).
+    let over_full_size = reduce::is_over_full_size(obj.width, obj.height);
+    let reducible = || {
+        let (components, bpc) = obj.sample_format();
+        reduce::reducible(components, bpc)
+            && reduce::source_bytes(obj.width, obj.height, components, bpc)
+                <= reduce::MAX_SOURCE_BYTES
+    };
+    if !image_size_ok(obj.width, obj.height) || (over_full_size && !reducible()) {
         (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
         return None;
     }
@@ -637,24 +738,11 @@ fn decode_context<'a>(
         height: obj.height,
     };
 
-    let decoded = obj
+    let mut decoded = obj
         .stream
         .decoded_image(&decode_params)
         .map_err(|_| (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure))
         .ok()?;
-
-    let (mut scale_x, mut scale_y) = (1.0, 1.0);
-
-    let (width, height) = decoded
-        .image_data
-        .as_ref()
-        .map(|d| {
-            scale_x = obj.width as f32 / d.width as f32;
-            scale_y = obj.height as f32 / d.height as f32;
-
-            (d.width, d.height)
-        })
-        .unwrap_or((obj.width, obj.height));
 
     let color_space = color_space
         .or_else(|| {
@@ -675,12 +763,83 @@ fn decode_context<'a>(
 
     let fallback_bpc = if obj.is_stencil_mask { 1 } else { 8 };
 
-    let bits_per_component = decoded
+    let mut bits_per_component = decoded
         .image_data
         .as_ref()
         .map(|i| i.bits_per_component)
         .or(dict_bpc)
         .unwrap_or(fallback_bpc);
+
+    // PdfCraft patch (54): samples too many to draw at full size are reduced here, packed as the
+    // filters produced them, before anything expands them (see `reduce`). The reduced image
+    // reports its size as a JPX image decoded at a lower resolution does, so it is drawn over
+    // the same rectangle.
+    let (source_width, source_height) = decoded
+        .image_data
+        .as_ref()
+        .map_or((obj.width, obj.height), |d| (d.width, d.height));
+    if reduce::is_over_full_size(source_width, source_height) {
+        // The factors are those the cache key holds (`reduction_key`, from the dictionary's size
+        // and the target), raised if need be to keep the size the filters report (a CCITT image
+        // whose `/Columns` differ from its `/Width`) within budget. Both are fixed by the key, so
+        // one key always gives the same pixels.
+        let budget = obj.reduction_factors(source_width, source_height, None);
+        let factors = obj
+            .reduction_key(target_dimension)
+            .map_or(budget, |(fx, fy)| (fx.max(budget.0), fy.max(budget.1)));
+        let components = color_space.num_components();
+        // An alpha channel decoded with the image (JPX) isn't reduced with it.
+        let reduced = (decoded
+            .image_data
+            .as_ref()
+            .is_none_or(|d| d.alpha.is_none())
+            && reduce::source_bytes(
+                source_width,
+                source_height,
+                components,
+                bits_per_component,
+            ) <= reduce::MAX_SOURCE_BYTES)
+            .then(|| {
+                reduce::reduce(
+                    &decoded.data,
+                    source_width,
+                    source_height,
+                    components,
+                    bits_per_component,
+                    factors,
+                    obj.sampling(),
+                )
+            })
+            .flatten();
+        let Some(reduced) = reduced else {
+            (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+            return None;
+        };
+        bits_per_component = reduced.bits_per_component;
+        decoded = FilterResult {
+            image_data: Some(StreamImageData {
+                alpha: None,
+                color_space: decoded.image_data.and_then(|d| d.color_space),
+                bits_per_component: reduced.bits_per_component,
+                width: reduced.width,
+                height: reduced.height,
+            }),
+            data: Cow::Owned(reduced.data),
+        };
+    }
+
+    let (mut scale_x, mut scale_y) = (1.0, 1.0);
+
+    let (width, height) = decoded
+        .image_data
+        .as_ref()
+        .map(|d| {
+            scale_x = obj.width as f32 / d.width as f32;
+            scale_y = obj.height as f32 / d.height as f32;
+
+            (d.width, d.height)
+        })
+        .unwrap_or((obj.width, obj.height));
 
     let decode_arr = dict
         .get::<Array<'_>>(D)
@@ -868,13 +1027,20 @@ fn decode_raster(
 
     let mut image = image_data?;
 
-    let alpha = if let Some((alpha, matte_rgb)) =
-        resolve_matte(obj, &ctx.color_space, target_dimension)
+    let matte = resolve_matte(obj, &ctx.color_space, target_dimension);
+    let smask_in_data = obj.stream.dict().get::<u8>(SMASK_IN_DATA) == Some(1);
+    let alpha = if let Some((alpha, matte_rgb)) = &matte
         && alpha.width == ctx.width
         && alpha.height == height
     {
-        unpremultiply(&mut image, &alpha.data, &matte_rgb);
+        unpremultiply(&mut image, &alpha.data, matte_rgb);
 
+        matte.map(|(alpha, _)| alpha)
+    } else if let Some((alpha, _)) = matte
+        && !smask_in_data
+    {
+        // PdfCraft patch (54): a matted soft mask of another size than the image (one of them
+        // reduced, say) is the alpha `resolve_alpha` would decode again: keep this decode.
         Some(alpha)
     } else {
         // Use flatten here, so in case the alpha channel is invalid we can still
@@ -1315,8 +1481,10 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
     }
 }
 
-/// PdfCraft patch: whether an image or mask of `width` × `height` may be decoded (at most
-/// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
+/// PdfCraft patch: whether an image or mask of `width` × `height` may be decoded at all. Up to
+/// 2^28 pixels (the renderer's `MAX_IMAGE_PIXELS`) it is decoded at its full size; PdfCraft
+/// patch (54): past that, up to 2^30 pixels, at a reduced one (see `reduce`), when its samples
+/// fit `reduce::MAX_SOURCE_BYTES`.
 pub fn image_size_ok(width: u32, height: u32) -> bool {
-    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
+    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= reduce::MAX_SOURCE_PIXELS
 }

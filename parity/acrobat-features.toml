@@ -142,8 +142,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/filters/src/flate.rs::bomb_is_bounded", "crates/filters/src/lib.rs::limit_applies_to_intermediate_buffers"]
-notes = ""
+evidence = ["crates/filters/src/flate.rs::bomb_is_bounded", "crates/filters/src/lib.rs::limit_applies_to_intermediate_buffers", "crates/render/src/raster.rs::absurd_mask_and_fax_sizes_are_refused_before_decoding", "crates/render/src/raster.rs::one_bit_scans_past_the_full_size_limit_are_drawn", "crates/render/src/raster.rs::flate_output_of_an_image_past_the_full_size_limit_stops_at_its_samples", "crates/render/src/raster.rs::images_too_large_to_decode_are_reported"]
+notes = "Rendering: images up to 2^28 pixels decode at full size; past that, up to 2^30 pixels with at most 512 MiB of samples, they decode reduced for the size they are drawn at, within 32 MiB once converted (#4071), so a zoomed-in 600 dpi E-size scan shows at about 150 dpi. Larger images (colour past 2^28 pixels among them, and JBIG2 past 2^28) are skipped with RenderWarning::ImageSkipped, which only pdfcraft-cli render reports so far: the viewer and page_render don't show it."
 
 [[feature]]
 id = "core.open-rc4"

@@ -84,6 +84,12 @@ impl<'a> RenderCache<'a> {
             outline_cache: Rc::new(RefCell::new(HashMap::new())),
         }
     }
+
+    /// PdfCraft patch (hayro-interpret 54): how many images were decoded through this cache
+    /// (see `InterpreterCache::decoded_image_decodes`), for tests.
+    pub fn decoded_image_decodes(&self) -> usize {
+        self.interpreter_cache.decoded_image_decodes()
+    }
 }
 
 /// PdfCraft patch: replacement colours for the "reading colours" view setting (Acrobat's

@@ -36,6 +36,9 @@ impl<'a, 'b> StencilImage<'a, 'b> {
     /// mean that the resulting image will have that dimension. Instead, it allows
     /// the image decoder to extract a lower-resolution version of the image in
     /// certain cases.
+    ///
+    /// PdfCraft patch (54): an image over 2^28 pixels is always handed over reduced (for the
+    /// hint if given, else within a fixed budget), so callers must honour its `scale_factors`.
     pub fn with_stencil(
         &self,
         func: impl FnOnce(LumaData, &Paint<'a>),
@@ -76,6 +79,9 @@ impl RasterImage<'_> {
     /// mean that the resulting image will have that dimension. Instead, it allows
     /// the image decoder to extract a lower-resolution version of the image in
     /// certain cases.
+    ///
+    /// PdfCraft patch (54): an image over 2^28 pixels is always handed over reduced (for the
+    /// hint if given, else within a fixed budget), so callers must honour its `scale_factors`.
     pub fn with_rgba(
         &self,
         func: impl FnOnce(ImageData, Option<LumaData>),

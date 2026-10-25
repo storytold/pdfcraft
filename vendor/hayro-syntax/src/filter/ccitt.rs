@@ -12,6 +12,7 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    limit: usize,
 ) -> Option<FilterResult<'static>> {
     let k = params.get::<i32>(K).unwrap_or(0);
 
@@ -24,6 +25,14 @@ pub(crate) fn decode(
         .get::<u32>(ROWS)
         .filter(|&rows| rows != 0)
         .map_or(image_params.height, |rows| rows.max(image_params.height));
+    // PdfCraft patch (hayro-interpret 54): nor are more rows decoded than the image's `/Height`:
+    // rows past it are never drawn, and a 1-pixel-wide image with `/Rows 1073741824` took a byte
+    // a row in its packed output, 1 GiB.
+    let rows = if image_params.height == 0 {
+        rows
+    } else {
+        rows.min(image_params.height)
+    };
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
 
     let settings = DecodeSettings {
@@ -50,11 +59,52 @@ pub(crate) fn decode(
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted
     // into an RGBA8 image.
+    // PdfCraft patch (hayro-interpret 54): an image over 2^28 pixels stays 1-bit: hayro-interpret
+    // reduces it from its packed samples, and a byte per pixel took 311 MB for a 21600 × 14400
+    // scan (#4071).
+    let packed = image_params.is_indexed
+        || u64::from(settings.columns) * u64::from(settings.rows) > super::MAX_FULL_IMAGE_PIXELS;
 
-    let (decoded, bpc) = if image_params.is_indexed {
+    // PdfCraft patch (hayro-interpret 54): refuse a packed image whose samples (a row is
+    // `/Columns` bits, rounded up to a byte) would pass the 512 MiB hayro-interpret reduces from
+    // at most: a 1 × 2^30 image is 1 GiB packed. A drawn image is not checked against the decode
+    // limit, which comes from `/Width`: hayro-interpret draws a `/Columns` that differs from it,
+    // and a byte-a-pixel image is at most 2^28 pixels. A stream of unknown height (not drawn as
+    // an image) stops taking pixels after as many rows of its output as the decode limit holds:
+    // with `/Rows` absent a Group 3 decoder runs until the data ends (a Group 4 one decodes
+    // nothing), and an explicit `/Rows` can ask for more than the caller's limit.
+    const MAX_PACKED_BYTES: u64 = 512 << 20;
+    let row_bytes = u64::from(settings.columns.div_ceil(8));
+    if packed {
+        let samples = row_bytes.checked_mul(u64::from(settings.rows))?;
+        if samples > MAX_PACKED_BYTES {
+            warn!("packed CCITT image of {samples} bytes is past 512 MiB");
+            return None;
+        }
+    }
+    let max_rows = if image_params.height == 0 {
+        let output_row_bytes = if packed {
+            row_bytes
+        } else {
+            u64::from(settings.columns)
+        };
+        let limit = u64::try_from(limit).unwrap_or(u64::MAX);
+        let rows_in_limit =
+            u32::try_from(limit / output_row_bytes.max(1)).unwrap_or(u32::MAX);
+        if settings.rows == 0 {
+            rows_in_limit
+        } else {
+            settings.rows.min(rows_in_limit)
+        }
+    } else {
+        settings.rows
+    };
+
+    let (decoded, bpc) = if packed {
         struct BitPackDecoder {
             output: Vec<u8>,
             decoded_rows: u32,
+            max_rows: u32,
             buffer: u8,
             bit_count: u8,
         }
@@ -84,17 +134,22 @@ pub(crate) fn decode(
 
         impl Decoder for BitPackDecoder {
             fn push_pixel(&mut self, white: bool) {
-                self.push_bit(white);
+                if self.decoded_rows < self.max_rows {
+                    self.push_bit(white);
+                }
             }
 
             fn push_pixel_chunk(&mut self, white: bool, chunk_count: u32) {
+                if self.decoded_rows >= self.max_rows {
+                    return;
+                }
                 let byte = if white { 0xFF } else { 0x00 };
                 self.output
                     .extend(iter::repeat_n(byte, chunk_count as usize));
             }
 
             fn next_line(&mut self) {
-                self.decoded_rows += 1;
+                self.decoded_rows = self.decoded_rows.saturating_add(1);
                 self.flush();
             }
         }
@@ -102,6 +157,7 @@ pub(crate) fn decode(
         let mut decoder = BitPackDecoder {
             output: Vec::new(),
             decoded_rows: 0,
+            max_rows,
             buffer: 0,
             bit_count: 0,
         };
@@ -119,27 +175,34 @@ pub(crate) fn decode(
         struct Luma8Decoder {
             output: Vec<u8>,
             decoded_rows: u32,
+            max_rows: u32,
         }
 
         impl Decoder for Luma8Decoder {
             fn push_pixel(&mut self, white: bool) {
-                self.output.push(if white { 0xFF } else { 0x00 });
+                if self.decoded_rows < self.max_rows {
+                    self.output.push(if white { 0xFF } else { 0x00 });
+                }
             }
 
             fn push_pixel_chunk(&mut self, white: bool, chunk_count: u32) {
+                if self.decoded_rows >= self.max_rows {
+                    return;
+                }
                 let byte = if white { 0xFF } else { 0x00 };
                 self.output
                     .extend(iter::repeat_n(byte, chunk_count as usize * 8));
             }
 
             fn next_line(&mut self) {
-                self.decoded_rows += 1;
+                self.decoded_rows = self.decoded_rows.saturating_add(1);
             }
         }
 
         let mut decoder = Luma8Decoder {
             output: Vec::new(),
             decoded_rows: 0,
+            max_rows,
         };
         let mut context = DecoderContext::new(settings);
         let result = hayro_ccitt::decode(data, &mut decoder, &mut context);

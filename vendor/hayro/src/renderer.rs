@@ -766,8 +766,11 @@ impl Renderer {
     /// `transform`, or `None` if `draw_image` skips it: off the canvas (PdfCraft patch: see
     /// `may_paint_rect`; checked before decoding, so a tile no longer decodes every image on its
     /// page), or, in a preview, covering only a few device pixels (PdfCraft patch; final renders
-    /// always draw them). The tiny-image test measures axis lengths: the size returned maps a
-    /// point, so it includes the translation and only suits the decode hint.
+    /// always draw them). PdfCraft patch (hayro-interpret 54): the size is the lengths of the
+    /// image's axes on the device. It mapped the far corner of each axis as a point, translation
+    /// included, so the tiles of a page asked for the same image at sizes that differed by
+    /// their offsets, and an image too large for its full size, decoded reduced for that size,
+    /// was decoded again for every tile.
     fn image_draw_size(&self, width: u32, height: u32, transform: Affine) -> Option<(u32, u32)> {
         if !may_paint_rect(
             Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
@@ -777,21 +780,13 @@ impl Renderer {
         ) {
             return None;
         }
-        let target_width = (transform * Point::new(width as f64, 0.0))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
-        let target_height = (transform * Point::new(0.0, height as f64))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
-        if self.preview {
-            let c = transform.as_coeffs();
-            let tiny_w = (f64::from(width) * (c[0] * c[0] + c[1] * c[1]).sqrt()).ceil() as u32;
-            let tiny_h = (f64::from(height) * (c[2] * c[2] + c[3] * c[3]).sqrt()).ceil() as u32;
-            if tiny_w.saturating_mul(tiny_h) < PREVIEW_MIN_IMAGE_AREA {
-                return None;
-            }
+        let c = transform.as_coeffs();
+        // Float-to-int casts saturate (NaN gives 0). At least a pixel: a collapsed axis gives 0,
+        // which decoders divide by (hayro-jpeg2000 does).
+        let target_width = ((f64::from(width) * c[0].hypot(c[1])).ceil() as u32).max(1);
+        let target_height = ((f64::from(height) * c[2].hypot(c[3])).ceil() as u32).max(1);
+        if self.preview && target_width.saturating_mul(target_height) < PREVIEW_MIN_IMAGE_AREA {
+            return None;
         }
         Some((target_width, target_height))
     }
