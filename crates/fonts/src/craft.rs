@@ -1022,7 +1022,7 @@ mod tests {
     fn thai_arabic_digits_scale_to_thai_consonant_height() {
         let _guard = THAI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior_font = get_active_thai_font();
-        let prior_entry = active_thai_font_entry();
+        let prior_entry = get_active_thai_entry();
         let mut doc = pdfcraft_cos::Document::new_empty();
         for name in ["THSarabunNew.ttf", "LeelawUI.ttf", "tahoma.ttf"] {
             if set_active_thai_font_by_name(name).is_ok() {
