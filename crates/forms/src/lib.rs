@@ -1315,7 +1315,7 @@ fn password_fields(doc: &Document) -> Vec<Field> {
 /// again only makes the answer cautious. It reads only `/Ff`, `/Kids` and `/Parent`, so a save
 /// or recovery snapshot of a form without such a field doesn't build every [`Field`]. Like
 /// [`fields`], it looks at the form's field tree and at the widgets on the pages, which may be
-/// missing from `/Fields`. Each dictionary is visited once and at most 32 levels deep.
+/// missing from `/Fields`. Each dictionary is visited once and at most 64 levels deep.
 fn has_password_flag(doc: &Document) -> bool {
     let sets_it = |r: ObjRef| doc.get(r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
     let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
@@ -1323,7 +1323,7 @@ fn has_password_flag(doc: &Document) -> bool {
     let mut seen = std::collections::HashSet::new();
     while let Some((o, depth)) = stack.pop() {
         let Object::Ref(r) = o else { continue };
-        if depth > 32 || !seen.insert(r) {
+        if depth > 64 || !seen.insert(r) {
             continue;
         }
         if sets_it(r) {
