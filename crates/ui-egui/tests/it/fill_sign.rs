@@ -1846,7 +1846,9 @@ fn up_to_twenty_labelled_signatures_are_listed_chosen_placed_and_remembered() {
             d.drawing = true;
             d.strokes = vec![vec![[0.1, 0.1], [0.5, 0.2], [0.9, 0.1]]];
         }
-        h.run_steps(1);
+        // The Draw tab lays the pad out anew, and egui 0.37 takes more than one frame to
+        // settle it; a click at last frame's Apply would miss.
+        h.run_steps(3);
         h.get_by_label("Apply").click();
         h.run_steps(3);
     }
