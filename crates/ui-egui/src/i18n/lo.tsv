@@ -2448,3 +2448,27 @@ animation effects	Off	ປິດ
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້
 @plural	{n} reply|{n} replies	ການຕອບກັບ {n} ລາຍການ
+	Window	ໜ້າຕ່າງ
+	Quit {app}	ອອກຈາກ {app}
+	About {app}	ກ່ຽວກັບ {app}
+	Hide {app}	ເຊື່ອງ {app}
+	Hide Others	ເຊື່ອງອື່ນໆ
+	Show All	ສະແດງທັງໝົດ
+	Create PDF	ສ້າງ PDF
+	Export & Convert	ສົ່ງອອກ ແລະ ປ່ຽນຮູບແບບ
+	Reduce & Optimize	ຫຼຸດຂະໜາດ ແລະ ປັບແຕ່ງ
+	Password & Security	ລະຫັດຜ່ານ ແລະ ຄວາມປອດໄພ
+	Workspace modes	ໂໝດພື້ນທີ່ເຮັດວຽກ
+	Comments & Markup	ຄຳເຫັນ ແລະ ເຄື່ອງໝາຍ
+	Edit Content	ແກ້ໄຂເນື້ອຫາ
+	Sign & Certify	ເຊັນ ແລະ ຢັ້ງຢືນ
+	Bookmarks panel	ແຜງບຸກມາກ
+	Page thumbnails panel	ແຜງຮູບຫຍໍ້ໜ້າ
+	Layers panel	ແຜງເລເຢີ
+	Attachments panel	ແຜງໄຟລ໌ແນບ
+	Accessibility panel	ແຜງການເຂົ້າເຖິງ
+	Search panel	ແຜງຄົ້ນຫາ
+	Compare panel	ແຜງປຽບທຽບ
+	Edit mode	ໂໝດແກ້ໄຂ
+	Convert mode	ໂໝດປ່ຽນຮູບແບບ
+	Fill & sign mode	ໂໝດຕື່ມ ແລະ ເຊັນ

@@ -2801,3 +2801,27 @@ theme	Appearance	Aspect
 	Delete attachment	Ștergere atașament
 	Delete attachment {key}	Ștergere atașament {key}
 @plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
+	Window	Fereastră
+	Quit {app}	Ieșire din {app}
+	About {app}	Despre {app}
+	Hide {app}	Ascunde {app}
+	Hide Others	Ascunde celelalte
+	Show All	Afișează tot
+	Create PDF	Creează PDF
+	Export & Convert	Exportă și convertește
+	Reduce & Optimize	Redu și optimizează
+	Password & Security	Parolă și securitate
+	Workspace modes	Moduri spațiu de lucru
+	Comments & Markup	Comentarii și marcaje
+	Edit Content	Editează conținutul
+	Sign & Certify	Semnează și certifică
+	Bookmarks panel	Panou semne de carte
+	Page thumbnails panel	Panou miniaturi pagini
+	Layers panel	Panou straturi
+	Attachments panel	Panou atașamente
+	Accessibility panel	Panou accesibilitate
+	Search panel	Panou căutare
+	Compare panel	Panou comparare
+	Edit mode	Mod editare
+	Convert mode	Mod conversie
+	Fill & sign mode	Mod completare și semnare

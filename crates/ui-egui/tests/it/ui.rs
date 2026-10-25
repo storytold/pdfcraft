@@ -1100,6 +1100,7 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     assert_eq!(names, ["two.pdf", "one.pdf"], "subfolders included, in path order");
 }
 
+/// Verify handling of file open requests and quit events dispatched from the operating system.
 #[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.
@@ -1130,6 +1131,61 @@ fn files_and_quit_from_the_operating_system() {
     h.step();
     let closing = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
     assert!(closing);
+}
+
+/// Verify that commands received via `OsEvent::Command` execute appropriately and are blocked during modals.
+#[test]
+fn commands_from_the_operating_system() {
+    use pdfcraft_ui_egui::{Dialog, OsEvent, theme::ThemePreference};
+    let queue = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    assert_eq!(h.state().theme_preference, ThemePreference::System);
+    queue.borrow_mut().push(OsEvent::Command("view.theme.dark".to_string()));
+    h.step();
+    assert_eq!(h.state().theme_preference, ThemePreference::Dark);
+
+    // Commands that alter dialogs, modes, or documents are blocked when a modal dialog is open (issue #870 & menu guard).
+    h.state_mut().open_bytes("test.pdf", None, FIXTURE.to_vec()).unwrap();
+    assert_eq!(h.state().views.len(), 1);
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    assert!(h.state().modal_open());
+    queue.borrow_mut().push(OsEvent::Command("file.close".to_string()));
+    h.step();
+    assert_eq!(h.state().views.len(), 1, "document command must not close file behind modal");
+    queue.borrow_mut().push(OsEvent::Command("help.about".to_string()));
+    h.step();
+    assert_eq!(h.state().dialog, Some(Dialog::Preferences), "dialog command must not replace active modal");
+    let mode = h.state().mode;
+    queue.borrow_mut().push(OsEvent::Command("mode.convert".to_string()));
+    h.step();
+    assert_eq!(h.state().mode, mode, "mode command must not run behind modal");
+
+    // Full screen prompt is modal: commands must not execute behind it.
+    let active_id = h.state().active_ids().unwrap().1;
+    h.state_mut().dialog = None;
+    h.state_mut().pending_full_screen = Some(active_id);
+    assert!(h.state().modal_open());
+    queue.borrow_mut().push(OsEvent::Command("file.close".to_string()));
+    h.step();
+    assert_eq!(h.state().views.len(), 1, "document command must not close file behind full screen prompt");
+    h.state_mut().pending_full_screen = None;
+
+    // Theme changes remain allowed while a modal is open.
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    queue.borrow_mut().push(OsEvent::Command("view.theme.light".to_string()));
+    h.step();
+    assert_eq!(h.state().theme_preference, ThemePreference::Light, "theme command is modal-safe and executes");
+
+    // When no document is open on macOS, `file.close` sends ViewportCommand::Close (#869).
+    h.state_mut().dialog = None;
+    h.state_mut().views.clear();
+    h.state_mut().active = None;
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    queue.borrow_mut().push(OsEvent::Command("file.close".to_string()));
+    h.step();
+    let closing = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(closing, "file.close without open documents on macOS must close viewport");
 }
 
 #[test]

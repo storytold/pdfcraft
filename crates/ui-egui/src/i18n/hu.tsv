@@ -2539,3 +2539,27 @@ animation effects	Off	Ki
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
 @plural	{n} reply|{n} replies	{n} válasz|{n} válasz
+	Window	Ablak
+	Quit {app}	Kilépés a következőből: {app}
+	About {app}	A(z) {app} névjegye
+	Hide {app}	A(z) {app} elrejtése
+	Hide Others	A többi elrejtése
+	Show All	Az összes megjelenítése
+	Create PDF	PDF létrehozása
+	Export & Convert	Exportálás és átalakítás
+	Reduce & Optimize	Méretcsökkentés és optimalizálás
+	Password & Security	Jelszó és biztonság
+	Workspace modes	Munkaterület-módok
+	Comments & Markup	Megjegyzések és jelölések
+	Edit Content	Tartalom szerkesztése
+	Sign & Certify	Aláírás és hitelesítés
+	Bookmarks panel	Könyvjelzők panel
+	Page thumbnails panel	Oldalbélyegképek panel
+	Layers panel	Rétegek panel
+	Attachments panel	Mellékletek panel
+	Accessibility panel	Kisegítő lehetőségek panel
+	Search panel	Keresés panel
+	Compare panel	Összehasonlítás panel
+	Edit mode	Szerkesztési mód
+	Convert mode	Átalakítási mód
+	Fill & sign mode	Kitöltés és aláírás mód

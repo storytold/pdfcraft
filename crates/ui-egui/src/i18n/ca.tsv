@@ -2801,3 +2801,27 @@ theme	Appearance	Aspecte
 	Delete attachment	Elimina l'adjunt
 	Delete attachment {key}	Elimina l'adjunt {key}
 @plural	{n} reply|{n} replies	{n} resposta|{n} respostes
+	Window	Finestra
+	Quit {app}	Surt de {app}
+	About {app}	Quant al {app}
+	Hide {app}	Amaga {app}
+	Hide Others	Amaga els altres
+	Show All	Mostra-ho tot
+	Create PDF	Crea un PDF
+	Export & Convert	Exporta i converteix
+	Reduce & Optimize	Redueix i optimitza
+	Password & Security	Contrasenya i seguretat
+	Workspace modes	Modes d'espai de treball
+	Comments & Markup	Comentaris i marques
+	Edit Content	Edita el contingut
+	Sign & Certify	Signa i certifica
+	Bookmarks panel	Tauler de marcadors
+	Page thumbnails panel	Tauler de miniatures de pàgina
+	Layers panel	Tauler de capes
+	Attachments panel	Tauler d'adjunts
+	Accessibility panel	Tauler d'accessibilitat
+	Search panel	Tauler de cerca
+	Compare panel	Tauler de comparació
+	Edit mode	Mode d'edició
+	Convert mode	Mode de conversió
+	Fill & sign mode	Mode d'omplir i signar

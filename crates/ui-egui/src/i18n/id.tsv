@@ -2778,3 +2778,27 @@ theme	Appearance	Tampilan
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
 @plural	{n} reply|{n} replies	{n} balasan
+	Window	Jendela
+	Quit {app}	Keluar dari {app}
+	About {app}	Tentang {app}
+	Hide {app}	Sembunyikan {app}
+	Hide Others	Sembunyikan Lainnya
+	Show All	Tampilkan Semua
+	Create PDF	Buat PDF
+	Export & Convert	Ekspor & Konversi
+	Reduce & Optimize	Kurangi & Optimalkan
+	Password & Security	Kata Sandi & Keamanan
+	Workspace modes	Mode ruang kerja
+	Comments & Markup	Komentar & Penandaan
+	Edit Content	Edit Konten
+	Sign & Certify	Tanda Tangani & Sertifikasi
+	Bookmarks panel	Panel markah
+	Page thumbnails panel	Panel keluku halaman
+	Layers panel	Panel lapisan
+	Attachments panel	Panel lampiran
+	Accessibility panel	Panel aksesibilitas
+	Search panel	Panel pencarian
+	Compare panel	Panel perbandingan
+	Edit mode	Mode edit
+	Convert mode	Mode konversi
+	Fill & sign mode	Mode isi & tanda tangani

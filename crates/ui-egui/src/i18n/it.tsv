@@ -2772,3 +2772,27 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
 @plural	{n} reply|{n} replies	{n} risposta|{n} risposte
+	Window	Finestra
+	Quit {app}	Esci da {app}
+	About {app}	Informazioni su {app}
+	Hide {app}	Nascondi {app}
+	Hide Others	Nascondi altre
+	Show All	Mostra tutte
+	Create PDF	Crea PDF
+	Export & Convert	Esporta e converti
+	Reduce & Optimize	Riduci e ottimizza
+	Password & Security	Password e sicurezza
+	Workspace modes	Modalità area di lavoro
+	Comments & Markup	Commenti e annotazioni
+	Edit Content	Modifica contenuto
+	Sign & Certify	Firma e certifica
+	Bookmarks panel	Pannello segnalibri
+	Page thumbnails panel	Pannello miniature di pagina
+	Layers panel	Pannello livelli
+	Attachments panel	Pannello allegati
+	Accessibility panel	Pannello accessibilità
+	Search panel	Pannello di ricerca
+	Compare panel	Pannello di confronto
+	Edit mode	Modalità modifica
+	Convert mode	Modalità conversione
+	Fill & sign mode	Modalità compila e firma

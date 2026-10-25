@@ -2801,3 +2801,27 @@ theme	Appearance	Išvaizda
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
 @plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų
+	Window	Langas
+	Quit {app}	Užverti „{app}“
+	About {app}	Apie „{app}“
+	Hide {app}	Slėpti „{app}“
+	Hide Others	Slėpti kitus
+	Show All	Rodyti viską
+	Create PDF	Sukurti PDF
+	Export & Convert	Eksportuoti ir konvertuoti
+	Reduce & Optimize	Mažinti ir optimizuoti
+	Password & Security	Slaptažodis ir sauga
+	Workspace modes	Darbo srities veiksenos
+	Comments & Markup	Komentarai ir žymėjimai
+	Edit Content	Taisyti turinį
+	Sign & Certify	Pasirašyti ir patvirtinti
+	Bookmarks panel	Žymelių skydelis
+	Page thumbnails panel	Puslapių miniatiūrų skydelis
+	Layers panel	Sluoksnių skydelis
+	Attachments panel	Priedų skydelis
+	Accessibility panel	Pritaikymo neįgaliesiems skydelis
+	Search panel	Paieškos skydelis
+	Compare panel	Palyginimo skydelis
+	Edit mode	Redagavimo veiksena
+	Convert mode	Konvertavimo veiksena
+	Fill & sign mode	Pildymo ir pasirašymo veiksena

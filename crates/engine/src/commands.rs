@@ -130,6 +130,7 @@ pub struct CommandSpec {
     pub icon: &'static str,
 }
 
+/// Short constructor for a [`CommandSpec`].
 const fn c(
     id: &'static str,
     label: &'static str,
@@ -212,6 +213,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
     // View menu (where it would show twice). The palette and ⌘3 still run it.
     c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
+    c("view.actual_size", "Actual size", None, None, Document, "maximize-2"),
+    c("view.page_level", "Zoom to page level", None, None, Document, "file-text"),
+    c("view.fit_width", "Fit to width", None, None, Document, "arrow-left-right"),
+    c("view.fit_height", "Fit to height", None, None, Document, "arrow-up-down"),
+    c("view.zoom.in", "Zoom in", None, None, Document, "zoom-in"),
+    c("view.zoom.out", "Zoom out", None, None, Document, "zoom-out"),
+    c("view.rotate_cw", "Rotate view clockwise", None, None, Document, "rotate-cw"),
+    c("view.rotate_ccw", "Rotate view counterclockwise", None, None, Document, "rotate-ccw"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
     // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
     // drag with the Select tool does the same; this is the way in where the desktop takes
@@ -237,6 +246,17 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
     c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
+    c("panel.bookmarks", "Bookmarks panel", None, None, Document, "bookmark"),
+    c("panel.pages", "Page thumbnails panel", None, None, Document, "files"),
+    c("panel.layers", "Layers panel", None, None, Document, "layers"),
+    c("panel.attachments", "Attachments panel", None, None, Document, "paperclip"),
+    c("panel.accessibility", "Accessibility panel", None, None, Document, "accessibility"),
+    c("panel.search", "Search panel", None, None, Document, "search"),
+    c("panel.compare", "Compare panel", None, None, Document, "columns-2"),
+    c("mode.all_tools", "All tools", None, None, Nothing, "layout-grid"),
+    c("mode.edit", "Edit mode", None, None, Modification, "file-pen-line"),
+    c("mode.convert", "Convert mode", None, None, Nothing, "arrow-left-right"),
+    c("mode.sign", "Fill & sign mode", None, None, Nothing, "pen-tool"),
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),
@@ -385,6 +405,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
 ];
 
+/// Find a registered command specification by its ID.
 pub fn command(id: &str) -> Option<&'static CommandSpec> {
     COMMANDS.iter().find(|c| c.id == id)
 }

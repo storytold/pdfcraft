@@ -2825,3 +2825,27 @@ theme	Appearance	Aparência
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoje
 @plural	{n} reply|{n} replies	{n} resposta|{n} respostas
+	Window	Janela
+	Quit {app}	Encerrar {app}
+	About {app}	Sobre o {app}
+	Hide {app}	Ocultar {app}
+	Hide Others	Ocultar outros
+	Show All	Mostrar tudo
+	Create PDF	Criar PDF
+	Export & Convert	Exportar e converter
+	Reduce & Optimize	Reduzir e otimizar
+	Password & Security	Senha e segurança
+	Workspace modes	Modos de espaço de trabalho
+	Comments & Markup	Comentários e marcações
+	Edit Content	Editar conteúdo
+	Sign & Certify	Assinar e certificar
+	Bookmarks panel	Painel de marcadores
+	Page thumbnails panel	Painel de miniaturas de página
+	Layers panel	Painel de camadas
+	Attachments panel	Painel de anexos
+	Accessibility panel	Painel de acessibilidade
+	Search panel	Painel de pesquisa
+	Compare panel	Painel de comparação
+	Edit mode	Modo de edição
+	Convert mode	Modo de conversão
+	Fill & sign mode	Modo preencher e assinar

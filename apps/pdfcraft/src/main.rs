@@ -35,6 +35,8 @@ mod apple_events;
 mod compositor_gpu;
 mod decorations;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 #[cfg(target_os = "windows")]
 mod motion;
 mod reopen;
@@ -387,6 +389,7 @@ fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+/// Create the eframe application instance with window state and OS event handlers configured.
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
@@ -422,11 +425,6 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
-            // winit's Quit (⌘Q) ends the process without asking about unsaved changes (#1136). This
-            // menu's Quit closes the window instead, so `guard_quit` asks, as for the close button.
-            if let Err(e) = craft_quit::install_app_menu(&cc.egui_ctx, "PdfCraft") {
-                log::warn!("couldn't install the app menu, so ⌘Q quits without asking to save: {e}");
-            }
         }
         if let Some(server) = instance {
             app.os_events = Some(server.connect(&cc.egui_ctx, native_wayland(cc)));
@@ -474,6 +472,18 @@ fn app_creator<'a>(
         for (k, v) in options {
             if let Err(e) = app.set_option(&k, &v) {
                 log::warn!("--{k} {v}: {e}");
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            pdfcraft_ui_egui::i18n::set_current(pdfcraft_ui_egui::i18n::Lang::from_pref(&app.language));
+            // winit's Quit (⌘Q) ends the process without asking about unsaved changes (#1136). The
+            // native menu's Quit closes the window instead, so `guard_quit` asks, as for the close button.
+            if let Err(e) = macos_menu::install(&cc.egui_ctx, apple_events, "PdfCraft") {
+                log::warn!("couldn't install native macOS menu bar: {e}");
+                if let Err(e) = craft_quit::install_app_menu(&cc.egui_ctx, "PdfCraft") {
+                    log::warn!("couldn't install the app menu, so ⌘Q quits without asking to save: {e}");
+                }
             }
         }
         Ok(Box::new(app))

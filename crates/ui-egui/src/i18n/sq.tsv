@@ -2527,3 +2527,27 @@ animation effects	Off	Joaktiv
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
 @plural	{n} reply|{n} replies	{n} përgjigje|{n} përgjigje
+	Window	Dritarja
+	Quit {app}	Dil nga {app}
+	About {app}	Rreth {app}
+	Hide {app}	Fshih {app}
+	Hide Others	Fshih të tjerët
+	Show All	Shfaqi të gjitha
+	Create PDF	Krijo PDF
+	Export & Convert	Eksporto dhe konverto
+	Reduce & Optimize	Zvogëlo dhe optimizo
+	Password & Security	Fjalëkalimi dhe siguria
+	Workspace modes	Modalitetet e hapësirës së punës
+	Comments & Markup	Komentet dhe shënimet
+	Edit Content	Ndrysho përmbajtjen
+	Sign & Certify	Nënshkruaj dhe certifiko
+	Bookmarks panel	Paneli i faqerojtësve
+	Page thumbnails panel	Paneli i miniaturave të faqeve
+	Layers panel	Paneli i shtresave
+	Attachments panel	Paneli i bashkëngjitjeve
+	Accessibility panel	Paneli i aksesueshmërisë
+	Search panel	Paneli i kërkimit
+	Compare panel	Paneli i krahasimit
+	Edit mode	Modaliteti i redaktimit
+	Convert mode	Modaliteti i konvertimit
+	Fill & sign mode	Modaliteti i plotësimit dhe nënshkrimit

@@ -2777,3 +2777,27 @@ theme	Appearance	모양
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
 @plural	{n} reply|{n} replies	답글 {n}개
+	Window	창
+	Quit {app}	{app} 종료
+	About {app}	{app} 정보
+	Hide {app}	{app} 가리기
+	Hide Others	기타 가리기
+	Show All	모두 보기
+	Create PDF	PDF 만들기
+	Export & Convert	내보내기 및 변환
+	Reduce & Optimize	크기 축소 및 최적화
+	Password & Security	암호 및 보안
+	Workspace modes	작업 영역 모드
+	Comments & Markup	주석 및 마크업
+	Edit Content	콘텐츠 편집
+	Sign & Certify	서명 및 인증
+	Bookmarks panel	책갈피 패널
+	Page thumbnails panel	페이지 축소판 패널
+	Layers panel	레이어 패널
+	Attachments panel	첨부 파일 패널
+	Accessibility panel	접근성 패널
+	Search panel	검색 패널
+	Compare panel	비교 패널
+	Edit mode	편집 모드
+	Convert mode	변환 모드
+	Fill & sign mode	채우기 및 서명 모드

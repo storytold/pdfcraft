@@ -2716,3 +2716,27 @@ key	Space	Mellomrom
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
 @plural	{n} reply|{n} replies	{n} svar|{n} svar
+	Window	Vindu
+	Quit {app}	Avslutt {app}
+	About {app}	Om {app}
+	Hide {app}	Skjul {app}
+	Hide Others	Skjul andre
+	Show All	Vis alle
+	Create PDF	Opprett PDF
+	Export & Convert	Eksporter og konverter
+	Reduce & Optimize	Reduser og optimaliser
+	Password & Security	Passord og sikkerhet
+	Workspace modes	Arbeidsområdemoduser
+	Comments & Markup	Kommentarer og markeringer
+	Edit Content	Rediger innhold
+	Sign & Certify	Signer og sertifiser
+	Bookmarks panel	Bokmerkepanel
+	Page thumbnails panel	Sidestørrelsespanel
+	Layers panel	Lagpanel
+	Attachments panel	Vedleggspanel
+	Accessibility panel	Tilgjengelighetspanel
+	Search panel	Søkepanel
+	Compare panel	Sammenligningspanel
+	Edit mode	Redigeringsmodus
+	Convert mode	Konverteringsmodus
+	Fill & sign mode	Fyll ut og signer-modus

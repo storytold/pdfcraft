@@ -2732,3 +2732,27 @@ certificate	Version	وەشان
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ
 @plural	{n} reply|{n} replies	{n} وەڵام|{n} وەڵام
+	Window	پەنجەرە
+	Quit {app}	دەرچوون لە {app}
+	About {app}	دەربارەی {app}
+	Hide {app}	شاردنەوەی {app}
+	Hide Others	شاردنەوەی ئەوانی تر
+	Show All	پیشاندانی هەمووی
+	Create PDF	دروستکردنی PDF
+	Export & Convert	هەناردەکردن و گۆڕین
+	Reduce & Optimize	کەمکردنەوەی قەبارە و باشترکردن
+	Password & Security	وشەی نهێنی و پاراستن
+	Workspace modes	دۆخەکانی شوێنی کار
+	Comments & Markup	لێدوانەکان و نیشانەکان
+	Edit Content	دەستکاریکردنی ناوەڕۆک
+	Sign & Certify	واژووکردن و پەسەندکردن
+	Bookmarks panel	پانێڵی دڵخوازەکان
+	Page thumbnails panel	پانێڵی وێنۆکەی پەڕەکان
+	Layers panel	پانێڵی چینەکان
+	Attachments panel	پانێڵی پێوەکراوەکان
+	Accessibility panel	پانێڵی دەستڕاگەیشتن
+	Search panel	پانێڵی گەڕان
+	Compare panel	پانێڵی بەراوردکردن
+	Edit mode	دۆخی دەستکاریکردن
+	Convert mode	دۆخی گۆڕین
+	Fill & sign mode	دۆخی پڕکردنەوە و واژووکردن

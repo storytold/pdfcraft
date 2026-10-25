@@ -2806,3 +2806,27 @@ certificate	Version	Version
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui
 @plural	{n} reply|{n} replies	{n} réponse|{n} réponses
+	Window	Fenêtre
+	Quit {app}	Quitter {app}
+	About {app}	À propos de {app}
+	Hide {app}	Masquer {app}
+	Hide Others	Masquer les autres
+	Show All	Tout afficher
+	Create PDF	Créer un PDF
+	Export & Convert	Exporter et convertir
+	Reduce & Optimize	Réduire et optimiser
+	Password & Security	Mot de passe et sécurité
+	Workspace modes	Modes d'espace de travail
+	Comments & Markup	Commentaires et annotations
+	Edit Content	Modifier le contenu
+	Sign & Certify	Signer et certifier
+	Bookmarks panel	Panneau des signets
+	Page thumbnails panel	Panneau des vignettes de page
+	Layers panel	Panneau des calques
+	Attachments panel	Panneau des pièces jointes
+	Accessibility panel	Panneau d'accessibilité
+	Search panel	Panneau de recherche
+	Compare panel	Panneau de comparaison
+	Edit mode	Mode édition
+	Convert mode	Mode conversion
+	Fill & sign mode	Mode remplir et signer

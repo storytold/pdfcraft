@@ -3942,6 +3942,7 @@ dependencies = [
  "egui",
  "fmv-macos-events",
  "log",
+ "muda",
  "pdfcraft-engine",
  "pdfcraft-ui-egui",
  "pollster 1.0.1",
