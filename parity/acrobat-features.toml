@@ -6433,7 +6433,7 @@ status = "shipped"
 commands = ["sign.panel"]
 tools = []
 evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting"]
-notes = "repeats reuse the tab, whose name keeps the (signed version) suffix instead of the document title; the tab carries a notice bar naming the revision, with a Close that asks about saving first. Still missing: the snapshot is a full editable document rather than a read-only view, and there is no side-by-side compare (sign.compare-signed-version)"
+notes = "repeats reuse the tab, whose name keeps the (signed version) suffix instead of the document title; the tab carries a notice bar naming the revision, with a Close that asks about saving first. Comparing it with the current version is sign.compare-signed-version. Still missing: the snapshot is a full editable document rather than a read-only view"
 
 [[feature]]
 id = "sign.compare-signed-version"
@@ -6441,11 +6441,11 @@ title = "Compare signed version with the current one"
 area = "H"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["sign.panel"]
+tools = ["doc_revisions", "doc_open_revision", "doc_compare"]
+evidence = ["crates/ui-egui/tests/it/signing.rs::compare_signed_version_lists_what_changed_after_signing", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
+notes = "Signatures panel ▸ Compare signed version to current version opens the signed version in its own tab and runs Compare with it as the older document, side by side when the window is wide enough, so the panel lists and shades the text and visual changes made after signing. Headless: doc_revisions names the revision a signature covers, doc_open_revision opens it, doc_compare compares. The comparison is Compare's own, with its gaps (gap 21: no finer kinds of change, page n against page n)."
 
 [[feature]]
 id = "sign.verify-on-open"

@@ -673,6 +673,18 @@ impl PdfCraftApp {
             Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
         }
     }
+
+    /// Open the signed version beside the current document and compare the two, the signed
+    /// version as the older (Compare signed version to current version).
+    pub fn compare_signed_version(&mut self, len: usize, revision: usize) {
+        let Some((_, current)) = self.active_ids() else { return };
+        self.view_signed_version(len, revision);
+        // No new tab became active: opening it failed, and that was already said.
+        let Some((_, old)) = self.active_ids().filter(|(_, id)| *id != current) else { return };
+        self.active = self.views.iter().position(|v| v.id == current);
+        self.compare_old = Some(old);
+        self.run_compare();
+    }
 }
 
 /// Preferences ▸ Trusted certificates (#2613): the certificates signatures are validated
