@@ -1203,6 +1203,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
     for r in streams {
         doc.free(r);
     }
+    doc.require_full_save();
     Ok(out)
 }
 

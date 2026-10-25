@@ -2587,6 +2587,15 @@ animation effects	Off	خاموش
 	Counting words… {n} pages read	شمارش واژه‌ها… {n} صفحه خوانده شد
 	Word counting stopped unexpectedly.	شمارش واژه‌ها به‌طور غیر‌منتظره متوقف شد.
 	Word count…	شمارش واژه‌ها…
+	Collapse all tools	جمع‌کردن همه ابزارها
+	Expand all tools	گسترش همه ابزارها
+	Create & Edit	ایجاد و ویرایش
+	Customize & Automate	شخصی‌سازی و خودکارسازی
+	Forms & Signatures	فرم‌ها و امضاها
+	Protect & Standardize	محافظت و استانداردسازی
+	Review & Compare	بازبینی و مقایسه
+	No tools match your search.	هیچ ابزاری با جست‌وجوی شما مطابقت ندارد.
+@plural	{n} reply|{n} replies	{n} پاسخ|{n} پاسخ
 @id	file.word_count	شمارش واژه‌ها…
 	Standard	استاندارد
 	Mobile	موبایل

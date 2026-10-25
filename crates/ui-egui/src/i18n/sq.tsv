@@ -2420,6 +2420,14 @@ animation effects	Off	Joaktiv
 	Other options	Other options
 	Outline colour:	Outline colour:
 	Page properties	Page properties
+	Create & Edit	Krijo dhe redakto
+	Review & Compare	Rishiko dhe krahaso
+	Forms & Signatures	Formularë dhe nënshkrime
+	Protect & Standardize	Mbro dhe standardizo
+	Customize & Automate	Personalizo dhe automatizo
+	No tools match your search.	Asnjë mjet nuk përputhet me kërkimin tuaj.
+	Expand all tools	Zgjero të gjitha mjetet
+	Collapse all tools	Palos të gjitha mjetet
 	Pages counted	Pages counted
 	Pages selected	Pages selected
 	Paragraph spacing	Paragraph spacing
@@ -2518,3 +2526,4 @@ animation effects	Off	Joaktiv
 	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
+@plural	{n} reply|{n} replies	{n} përgjigje|{n} përgjigje

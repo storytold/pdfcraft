@@ -32,6 +32,7 @@ macro_rules! tl_ctx {
 
 mod a11y_ui;
 mod actions_ui;
+mod all_tools_ui;
 mod appearance;
 mod calc_order_ui;
 pub mod canvas;
@@ -101,6 +102,7 @@ pub mod icons;
 pub mod last_session;
 pub mod last_view;
 pub mod motion;
+mod page_pointer;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -376,6 +378,7 @@ pub enum PropsTab {
     Fonts,
     Custom,
     Advanced,
+    SpaceAudit,
 }
 
 /// Document Properties ▸ Custom being edited: the properties as they will be after OK, in order,
@@ -706,6 +709,12 @@ pub struct PdfCraftApp {
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
+    /// The All tools view fills the workspace (its sidebar's expand button).
+    pub all_tools_full: bool,
+    pub all_tools_query: String,
+    /// The tab that showed when the expanded All tools view opened ([`Self::shown_tab`]). Another
+    /// tab coming to the front (Home, a document, Combine files) puts the view away.
+    all_tools_tab: (Option<DocId>, bool),
     pub recent: Vec<RecentFile>,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
@@ -848,6 +857,8 @@ pub struct PdfCraftApp {
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
+    /// The document and edit generation `space_audit` was measured from.
+    pub(crate) space_audit_of: Option<(DocId, u64)>,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
     /// The combine list's field-name conflict preview (computed once per list, never saved).
@@ -979,6 +990,8 @@ pub struct PdfCraftApp {
     pub replace_draft: Option<files::ReplaceDraft>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
+    /// The home screen's community card was closed; it comes back next launch (not remembered).
+    pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
     pub pending_link: Option<PendingLink>,
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
@@ -1127,6 +1140,9 @@ impl PdfCraftApp {
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
+            all_tools_full: false,
+            all_tools_query: String::new(),
+            all_tools_tab: (None, false),
             recent: Vec::new(),
             reopen_last_session: false,
             restore_last_view: true,
@@ -1208,6 +1224,7 @@ impl PdfCraftApp {
             os_key_store_ids: false,
             cert_viewer: None,
             space_audit: Vec::new(),
+            space_audit_of: None,
             combine_draft: Vec::new(),
             combine_conflicts: Default::default(),
             combine_tab: Default::default(),
@@ -1252,6 +1269,7 @@ impl PdfCraftApp {
             control: None,
             bookmark_rename: None,
             last_opened_url: None,
+            community_card_closed: false,
             pending_link: None,
             pending_full_screen: None,
             pending_remote_link: None,
@@ -1592,6 +1610,10 @@ impl PdfCraftApp {
             && let Some(view) = self.views.last_mut()
         {
             view.open_organize();
+        }
+        // The document shows, not the expanded All tools view over it (whichever workspace opens).
+        if activate {
+            self.all_tools_full = false;
         }
         if activate && let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
@@ -2455,6 +2477,8 @@ impl PdfCraftApp {
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
     /// workspace, so opening its panel also opens the page grid (without toggling it off).
     pub(crate) fn select_tool(&mut self, id: &'static str) {
+        // The tool's panel shows, not the expanded All tools view over it.
+        self.all_tools_full = false;
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
@@ -2489,6 +2513,10 @@ impl PdfCraftApp {
     /// Edit puts the editing tools down again and applies a paragraph still open in the editor.
     pub(crate) fn enter_mode(&mut self, mode: Mode) {
         self.mode = mode;
+        // Another workspace puts the expanded All tools view away.
+        if mode != Mode::AllTools {
+            self.all_tools_full = false;
+        }
         if mode == Mode::Edit {
             self.quick_tool = QuickTool::EditText;
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
@@ -2499,6 +2527,21 @@ impl PdfCraftApp {
         if mode == Mode::Read {
             self.quick_tool = QuickTool::Select;
         }
+    }
+
+    /// Fill the workspace with the expanded All tools view, entering All tools the way the mode
+    /// bar does: leaving Read restores its right panel and leaving Edit puts the editing tool down.
+    pub(crate) fn expand_all_tools(&mut self) {
+        if self.mode != Mode::AllTools {
+            self.switch_mode(Mode::AllTools, true);
+        }
+        self.all_tools_full = true;
+        self.all_tools_tab = self.shown_tab();
+    }
+
+    /// The tab at the front: the active document, or else whether Combine files shows over Home.
+    fn shown_tab(&self) -> (Option<DocId>, bool) {
+        (self.active.and_then(|i| self.views.get(i)).map(|v| v.id), self.combine_showing())
     }
 
     /// Back to the Select tool from an editing tool. A paragraph still open in the editor is
@@ -2885,6 +2928,10 @@ impl PdfCraftApp {
                 let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
                 self.mode_override = Some(mode);
                 self.mode = mode;
+                // As switch_mode: another workspace puts the expanded All tools view away.
+                if mode != Mode::AllTools {
+                    self.all_tools_full = false;
+                }
             }
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
@@ -2896,7 +2943,12 @@ impl PdfCraftApp {
                 self.select_tool(g.id);
             }
             ("left", _) => self.left_open = value != "closed",
-            ("home", _) => self.active = None,
+            ("home", _) => {
+                self.active = None;
+                // With no document open the expanded All tools view covers Home itself, so no
+                // other tab comes forward to put it away.
+                self.all_tools_full = false;
+            }
             ("dialog", _) => {
                 self.dialog = match value {
                     "properties" => Some(Dialog::Properties(PropsTab::Description)),
@@ -2904,6 +2956,7 @@ impl PdfCraftApp {
                     "fonts" => Some(Dialog::Properties(PropsTab::Fonts)),
                     "custom" => Some(Dialog::Properties(PropsTab::Custom)),
                     "advanced" => Some(Dialog::Properties(PropsTab::Advanced)),
+                    "space-audit" => Some(Dialog::Properties(PropsTab::SpaceAudit)),
                     "shortcuts" => Some(Dialog::Shortcuts),
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
@@ -2940,7 +2993,11 @@ impl PdfCraftApp {
                     _ => Some(Dialog::About),
                 }
             }
-            ("tools", _) => self.all_tools_expanded = value != "collapsed",
+            ("tools", _) if value == "full" => self.expand_all_tools(),
+            ("tools", _) => {
+                self.all_tools_full = false;
+                self.all_tools_expanded = value != "collapsed";
+            }
             ("palette", _) => {
                 self.palette_open = true;
                 self.palette_query = value.to_string();
@@ -3653,6 +3710,10 @@ impl eframe::App for PdfCraftApp {
                     .show(ui, |ui| panels::right_panel(self, ui));
             }
         }
+        // Whichever way another tab came to the front, it shows instead of the expanded view.
+        if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
+            self.all_tools_full = false;
+        }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
             if self.mode == Mode::Read {
@@ -3664,6 +3725,8 @@ impl eframe::App for PdfCraftApp {
                         None => canvas::document_area(self, index, ui),
                     },
                 }
+            } else if self.mode == Mode::AllTools && self.all_tools_full {
+                all_tools_ui::show(self, ui);
             } else {
                 docking::show(self, ui);
             }

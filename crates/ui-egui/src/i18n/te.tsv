@@ -2398,6 +2398,14 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Create & Edit	సృష్టించు & సవరించు
+	Review & Compare	సమీక్షించు & పోల్చు
+	Forms & Signatures	ఫారమ్‌లు & సంతకాలు
+	Protect & Standardize	రక్షించు & ప్రామాణీకరించు
+	Customize & Automate	అనుకూలీకరించు & ఆటోమేట్ చేయి
+	No tools match your search.	మీ శోధనకు సరిపోలే సాధనాలు లేవు.
+	Expand all tools	అన్ని సాధనాలను విస్తరించు
+	Collapse all tools	అన్ని సాధనాలను కుదించు
 	Attach a file…	ఫైల్‌ను జోడించు…
 	Delete attachment	జోడింపును తొలగించు
 	Attaching files is not available on the web yet	వెబ్‌లో ఫైల్‌లను జోడించడం ఇంకా అందుబాటులో లేదు
@@ -2440,3 +2448,4 @@ animation effects	Off	ఆఫ్
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
+@plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు

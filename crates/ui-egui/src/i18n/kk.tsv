@@ -2487,6 +2487,14 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Create & Edit	Жасау және өңдеу
+	Review & Compare	Шолу және салыстыру
+	Forms & Signatures	Пішіндер және қолтаңбалар
+	Protect & Standardize	Қорғау және стандарттау
+	Customize & Automate	Баптау және автоматтандыру
+	No tools match your search.	Іздеуге сәйкес құралдар жоқ.
+	Expand all tools	Барлық құралдарды жаю
+	Collapse all tools	Барлық құралдарды жию
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз
@@ -2529,3 +2537,4 @@ animation effects	Off	Өшірулі
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
+@plural	{n} reply|{n} replies	{n} жауап|{n} жауап

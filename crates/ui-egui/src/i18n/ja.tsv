@@ -2489,6 +2489,14 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Create & Edit	作成と編集
+	Review & Compare	レビューと比較
+	Forms & Signatures	フォームと署名
+	Protect & Standardize	保護と標準化
+	Customize & Automate	カスタマイズと自動化
+	No tools match your search.	検索に一致するツールはありません。
+	Expand all tools	すべてのツールを展開
+	Collapse all tools	すべてのツールを折りたたむ
 	Attach a file…	ファイルを添付…
 	Delete attachment	添付ファイルを削除
 	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません
@@ -2531,3 +2539,4 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+@plural	{n} reply|{n} replies	{n} 件の返信

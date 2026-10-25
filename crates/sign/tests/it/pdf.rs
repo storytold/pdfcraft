@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pdfcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, write_incremental};
 use pdfcraft_sign::{
     Certificate, Detail, DigitalId, Modification, Name, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS, der,
     in_english, kind, pkcs12, signatures,
@@ -813,6 +813,71 @@ fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
     assert!(!allowed.contains(&kind::PAGE_CONTENT), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+/// A redaction mark and a reply to it, added to the page and removed again before signing (what
+/// clearing a mark leaves behind), are in none of the signing outputs: a signature, a timestamped
+/// one, embedded revocation evidence or a document timestamp. Nothing can take them out of a
+/// signed revision afterwards. Each output still validates.
+#[test]
+fn what_was_removed_before_signing_is_not_signed() {
+    use pdfcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let trust = TrustStore { certs: vec![anchor, tsa.id.certificate.clone()] };
+    let text = |s: &str| Object::String(PdfString::literal(s.as_bytes().to_vec()));
+    let dict = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        entries.iter().for_each(|(k, v)| d.set(k.as_bytes().to_vec(), v.clone()));
+        Object::Dict(d)
+    };
+    let cleared = |bytes: &[u8]| {
+        let mut doc = open(bytes);
+        let page = ObjRef::new(3, 0);
+        let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
+        let mark = doc.add(dict(&[
+            ("Type", Object::name("Annot")),
+            ("Subtype", Object::name("Redact")),
+            ("Rect", Object::Array([80, 140, 100, 180].map(Object::Int).to_vec())),
+            ("OverlayText", text("MARKED OVERLAY")),
+            ("T", text("Mark Author")),
+            ("P", Object::Ref(page)),
+        ]));
+        let reply = doc.add(dict(&[
+            ("Type", Object::name("Annot")),
+            ("Subtype", Object::name("Text")),
+            ("IRT", Object::Ref(mark)),
+            ("Contents", text("REPLY TO THE MARK")),
+            ("T", text("Replier")),
+        ]));
+        let mut with = annots.as_array().cloned().unwrap();
+        with.extend([Object::Ref(mark), Object::Ref(reply)]);
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(with))).unwrap();
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), annots.clone())).unwrap();
+        doc
+    };
+    let unsigned = fixture();
+    let signed = pdfcraft_sign::sign(&open(&unsigned), &id, &opts()).unwrap();
+    let evidence = Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let outputs = [
+        ("sign", &unsigned, pdfcraft_sign::sign(&cleared(&unsigned), &id, &opts()).unwrap()),
+        ("sign_with_timestamp", &unsigned, pdfcraft_sign::sign_with_timestamp(&cleared(&unsigned), &id, &opts(), &tsa).unwrap()),
+        ("dss::embed", &signed, dss::embed(&cleared(&signed), &evidence).unwrap()),
+        ("timestamp_document", &unsigned, pdfcraft_sign::timestamp_document(&cleared(&unsigned), &tsa, "D:20261006120000Z").unwrap()),
+    ];
+    for (what, input, out) in outputs {
+        assert!(out.starts_with(input), "{what}: an incremental update");
+        let holds = |s: &str| out.windows(s.len()).any(|w| w == s.as_bytes());
+        for trace in ["/Redact", "MARKED OVERLAY", "Mark Author", "REPLY TO THE MARK", "Replier"] {
+            assert!(!holds(trace), "{what} wrote {trace:?}");
+        }
+        let doc = open(&out);
+        assert!(doc.repair_log().is_empty(), "{what}: {:?}", doc.repair_log());
+        let all: Vec<_> = signatures(&doc, &out, &trust).into_iter().filter(|s| s.signed).collect();
+        assert_eq!(all.iter().filter(|s| s.doc_timestamp).count(), usize::from(what == "timestamp_document"), "{what}");
+        assert!(!all.is_empty() && all.iter().all(|s| s.status == Status::Valid), "{what}: {all:?}");
+    }
 }
 
 #[test]

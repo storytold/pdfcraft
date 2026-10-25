@@ -229,6 +229,47 @@ fn delete_takes_popup_and_reply_chain() {
     assert_eq!(delete_annotation(&mut doc, 0, 9), Err(AnnotError::NoSuchAnnotation { page: 0, index: 9 }));
 }
 
+/// A reply or pop-up written inline in `/Annots` (a file can, though the standard asks for
+/// references) goes with the comment it points at, and so does a pop-up an inline reply or an
+/// inline comment names. An unrelated inline comment stays until it is deleted itself.
+#[test]
+fn delete_takes_inline_replies_and_popups() {
+    let mut doc = fixture();
+    let mut popup = |note: &str| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Popup"));
+        d.set(b"Contents".to_vec(), PdfString::text(note));
+        doc.add(Object::Dict(d))
+    };
+    let (reply_popup, square_popup) = (popup("of the reply"), popup("of the square"));
+    let inline = |subtype: &str, links: &[(&[u8], ObjRef)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        links.iter().for_each(|(key, r)| d.set(key.to_vec(), Object::Ref(*r)));
+        Object::Dict(d)
+    };
+    let stamp = ObjRef::new(6, 0);
+    let entries = vec![
+        Object::Ref(stamp),
+        inline("Text", &[(b"IRT", stamp), (b"Popup", reply_popup)]),
+        Object::Ref(reply_popup),
+        inline("Popup", &[(b"Parent", stamp)]),
+        inline("Square", &[(b"Popup", square_popup)]),
+        Object::Ref(square_popup),
+    ];
+    doc.set(ObjRef::new(5, 0), Object::Array(entries));
+    let subtypes = |doc: &Document| -> Vec<String> {
+        list(doc, 1).iter().map(|d| String::from_utf8_lossy(d.name(b"Subtype").unwrap()).into_owned() + ":" + &text(d, b"Contents")).collect()
+    };
+    delete_annotation(&mut doc, 1, 0).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(subtypes(&doc), ["Square:", "Popup:of the square"]);
+    delete_annotation(&mut doc, 1, 0).unwrap();
+    assert!(subtypes(&reopen(&doc)).is_empty(), "the inline comment's pop-up went with it");
+}
+
 #[test]
 fn deleting_the_last_comment_removes_annots() {
     let mut doc = fixture();

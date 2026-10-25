@@ -8,6 +8,7 @@ use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -156,18 +157,24 @@ fn leave_single(view: &mut DocView) {
 
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, doc: &Document, view: &mut DocView) -> bool {
+pub(crate) fn page_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    xf: &PageXform,
+    ptr: &PagePointer,
+    page: usize,
+    doc: &Document,
+    view: &mut DocView,
+) -> bool {
     if view.objects.input_blocked {
         return true;
     }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
         let blocked = view.objects.blocked_page == Some(page);
-        let modifier_press = ui.input(|i| i.pointer.primary_pressed())
-            && modified(ui)
-            && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| xf.rect.contains(p) && ui.clip_rect().contains(p));
+        let modifier_press = ptr.pressed().is_some() && modified(ui) && ptr.pos.is_some_and(|p| xf.rect.contains(p) && ui.clip_rect().contains(p));
         if blocked || modifier_press {
             view.objects.hold_editor = true;
-            view.objects.blocked_page = ui.input(|i| i.pointer.primary_down()).then_some(page);
+            view.objects.blocked_page = ptr.primary_down.then_some(page);
             if modifier_press {
                 view.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
             }
@@ -176,14 +183,24 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
         return false;
     }
     let mut selection = std::mem::take(&mut view.objects);
-    let result = input(&mut selection, ui, resp, xf, page, doc, view);
+    let result = input(&mut selection, ui, resp, xf, ptr, page, doc, view);
     view.objects = selection;
     result
 }
 
 #[allow(clippy::too_many_arguments)]
-fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, doc: &Document, view: &mut DocView) -> bool {
-    let (pointer, pressed, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_pressed(), i.pointer.primary_down()));
+fn input(
+    s: &mut ObjectSelection,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    xf: &PageXform,
+    ptr: &PagePointer,
+    page: usize,
+    doc: &Document,
+    view: &mut DocView,
+) -> bool {
+    let pointer = ptr.pos;
+    let (pressed, down) = (ptr.pressed().is_some(), ptr.primary_down);
     let info = &doc.info;
     if s.page == Some(page)
         && let Some(mut gesture) = s.gesture

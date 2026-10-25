@@ -2494,6 +2494,14 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Create & Edit	Ustvarjanje in urejanje
+	Review & Compare	Pregled in primerjava
+	Forms & Signatures	Obrazci in podpisi
+	Protect & Standardize	Zaščita in standardizacija
+	Customize & Automate	Prilagajanje in avtomatizacija
+	No tools match your search.	Iskanju ne ustreza nobeno orodje.
+	Expand all tools	Razširi vsa orodja
+	Collapse all tools	Strni vsa orodja
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo
@@ -2536,3 +2544,4 @@ animation effects	Off	Izklopljeni
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
+@plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovori|{n} odgovorov

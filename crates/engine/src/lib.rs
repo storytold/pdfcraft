@@ -3005,7 +3005,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
 
 /// The comment list, read from the object graph (as `inspect` lists comments).
 fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation> {
-    pdfcraft_annot::summaries(doc)
+    let mut list: Vec<pdfcraft_render::Annotation> = pdfcraft_annot::summaries(doc)
         .into_iter()
         .map(|s| pdfcraft_render::Annotation {
             page: s.page,
@@ -3015,6 +3015,8 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             modified: s.modified.map(|m| pdfcraft_render::pretty_date(&m)),
             name: s.name,
             in_reply_to: s.in_reply_to,
+            parent: s.parent,
+            grouped: s.grouped,
             rect: s.rect,
             color: s.color,
             index: s.index,
@@ -3026,7 +3028,9 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             no_rotate: s.no_rotate,
             points: s.points,
         })
-        .collect()
+        .collect();
+    pdfcraft_render::link_replies(&mut list);
+    list
 }
 
 /// Seconds to add to UTC for local time (0 where unknown).
@@ -3066,16 +3070,24 @@ fn renderer_password(bytes: &[u8]) -> String {
     }
 }
 
-/// The document as it may be written to a file (#3926): a copy without the values of text fields
-/// with the Password flag, or `cos` itself when it holds none. ISO 32000-2 §12.7.5.3, Table 231
-/// (a note to the Password flag): "it is imperative that PDF processors never store the value of
-/// the text field in the PDF file if this flag is set". The open document keeps them in memory.
+/// The document as it may be written to a file (#3926, #3944): a copy without the values of text
+/// fields with the Password flag (or XFA `<passwordEdit/>` fields in the datasets), or `cos`
+/// itself when it holds none. ISO 32000-2 §12.7.5.3, Table 231 (a note to the Password flag):
+/// "it is imperative that PDF processors never store the value of the text field in the PDF file
+/// if this flag is set". The open document keeps them in memory.
 fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<'_, pdfcraft_cos::Document>, EditError> {
-    if !pdfcraft_forms::has_password_values(cos) {
+    let has_form_pw = pdfcraft_forms::has_password_values(cos);
+    let has_xfa_pw = pdfcraft_xfa::has_password_values(cos);
+    if !has_form_pw && !has_xfa_pw {
         return Ok(std::borrow::Cow::Borrowed(cos));
     }
     let mut copy = cos.clone();
-    pdfcraft_forms::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
+    if has_form_pw {
+        pdfcraft_forms::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
+    }
+    if has_xfa_pw {
+        pdfcraft_xfa::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
+    }
     Ok(std::borrow::Cow::Owned(copy))
 }
 
@@ -4461,7 +4473,8 @@ impl Session {
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
             return Ok(editor.saved.clone());
         }
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+        // What the user removed again before saving (a cleared redaction mark) stays out of the file.
+        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), drop_unlinked: true, ..SaveOptions::default() };
         // A restored snapshot can be based on an earlier revision. Append to the last saved
         // file so that revision stays in the chain. A full rewrite (redaction, new encryption,
         // a reconstructed file) still writes the current graph on its own.
@@ -4511,11 +4524,15 @@ impl Session {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
             let keys = editor.keys.clone();
-            // The saved file carries no Password-field values (#3943); the open document keeps them.
+            // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
             let typed = pdfcraft_forms::password_values(&editor.cos);
             editor.cos =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
             pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
+            if !typed.is_empty() && doc.info.xfa.is_some() {
+                let mut datasets = None;
+                let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
+            }
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
@@ -5120,17 +5137,18 @@ impl Session {
         let mut out = Vec::new();
         for d in &mut self.docs {
             if d.dirty && d.generation != d.snapshot_generation {
-                // The working bytes hold typed Password-field values (#3926): a recovery file is
-                // written from a copy without them, and none is written if that copy fails.
-                let bytes = match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos)) {
-                    Some(e) => match writable(&e.cos)
-                        .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
-                    {
-                        Ok(b) => Arc::new(b),
-                        Err(_) => continue,
-                    },
-                    None => d.bytes.clone(),
-                };
+                // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
+                // is written from a copy without them, and none is written if that copy fails.
+                let bytes =
+                    match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
+                        Some(e) => match writable(&e.cos)
+                            .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
+                        {
+                            Ok(b) => Arc::new(b),
+                            Err(_) => continue,
+                        },
+                        None => d.bytes.clone(),
+                    };
                 d.snapshot_generation = d.generation;
                 out.push(RecoverySnapshot {
                     doc: d.id,
@@ -5502,24 +5520,30 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
 /// pop-ups; the number is the comment's position on its page.
 pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort) -> String {
     use std::fmt::Write;
-    let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
+    let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.is_comment()).collect();
+    // Each reply under the annotation its `/IRT` points at, in document order, gathered once.
+    type Children<'a> = std::collections::HashMap<(usize, usize), Vec<&'a pdfcraft_render::Annotation>>;
+    let mut children = Children::new();
+    for r in all.iter().filter(|r| r.state.is_none()) {
+        if let Some(parent) = r.parent {
+            children.entry(parent).or_default().push(r);
+        }
+    }
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
     // direct parent, so following one level would leave the deeper replies out of the summary.
-    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
+    fn write_replies(out: &mut String, children: &Children<'_>, parent: &pdfcraft_render::Annotation, depth: usize) {
         use std::fmt::Write;
         if depth > 64 {
             return;
         }
-        for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
+        for r in children.get(&(parent.page, parent.index)).into_iter().flatten() {
             let indent = "    ".repeat(depth + 1);
             let _ =
                 writeln!(out, "{indent}Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
             for line in r.contents.as_deref().unwrap_or("").lines() {
                 let _ = writeln!(out, "{indent}{line}");
             }
-            if let Some(nm) = r.name.as_deref() {
-                write_replies(out, all, nm, depth + 1);
-            }
+            write_replies(out, children, r, depth + 1);
         }
     }
     let mut numbered: Vec<(usize, &pdfcraft_render::Annotation)> = Vec::new();
@@ -5558,9 +5582,7 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
         if let Some(c) = a.contents.as_deref().filter(|c| !c.is_empty()) {
             let _ = writeln!(out, "{c}");
         }
-        if let Some(nm) = a.name.as_deref() {
-            write_replies(&mut out, all, nm, 0);
-        }
+        write_replies(&mut out, &children, a, 0);
         out.push('\n');
     }
     out

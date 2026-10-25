@@ -9,6 +9,7 @@ use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, Signature
 use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -626,6 +627,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     tool: FillTool,
@@ -637,10 +639,7 @@ pub(crate) fn page_input(
     author: &str,
     date_text: &Result<String, String>,
 ) -> Option<FillAction> {
-    let pointer = ui.input(|i| i.pointer.hover_pos())?;
-    if !resp.contains_pointer() || !xf.rect.contains(pointer) {
-        return None;
-    }
+    let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
     let saved = match tool {
