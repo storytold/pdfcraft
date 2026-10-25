@@ -474,7 +474,16 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         + owned(Hidden::Attachments)
                 }
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
-                Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
+                Hidden::FormFields => {
+                    let n = pdfcraft_forms::fields(doc).len();
+                    if n > 0 {
+                        n
+                    } else if cat.contains(b"AcroForm") {
+                        1
+                    } else {
+                        0
+                    }
+                }
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).map(|(n, _)| n).unwrap_or(0),
                 Hidden::HiddenLayers => {
                     let off = hidden_layers(doc).len();
