@@ -3413,8 +3413,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
             if editing_content {
-                let page_tex = view.pages.get(&i).map(|p| p.tex.id());
-                view.move_background.paint(painter, &xf, i, info, &view.content, page_tex, pointer);
+                view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
             }
             if view.show_page_gaps {
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
@@ -3860,20 +3859,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border. Radio buttons are round, and so is theirs (as in Acrobat). Only what can
-            // be filled is marked: a read-only widget (its field's, or a radio button's own) is
-            // left as it is drawn.
+            // red border. Radio buttons and round XFA check boxes are round, and so is theirs (as
+            // in Acrobat). Only what can be filled is marked: a read-only widget (its field's, or a
+            // radio button's own) is left as it is drawn.
             if view.highlight_fields {
                 for f in form.iter() {
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
-                    let round = f.kind == pdfcraft_engine::FormFieldKind::Radio;
                     for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden && !w.read_only) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
                         let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
                         let (width, color) =
                             if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
-                        if round {
+                        if w.round {
                             let radius = sr.width().min(sr.height()) / 2.0;
                             painter.circle_filled(sr.center(), radius, tint);
                             painter.circle_stroke(sr.center(), radius - width / 2.0, Stroke::new(width, color));

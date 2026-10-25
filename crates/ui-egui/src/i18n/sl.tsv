@@ -2545,3 +2545,11 @@ animation effects	Off	Izklopljeni
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
 @plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovori|{n} odgovorov
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Orodja za strani
+	Insert pages from a file after the selection…	Vstavi strani iz datoteke za izborom…
+	Rotate the selected pages counterclockwise	Zavrti izbrane strani v nasprotni smeri urnega kazalca
+	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
+	Extract the selected pages…	Izvleci izbrane strani…
+	Delete the selected pages	Izbriši izbrane strani

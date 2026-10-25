@@ -2538,3 +2538,11 @@ animation effects	Off	Өшірулі
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
 @plural	{n} reply|{n} replies	{n} жауап|{n} жауап
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Бет құралдары
+	Insert pages from a file after the selection…	Таңдаудан кейін файлдан беттер кірістіру…
+	Rotate the selected pages counterclockwise	Таңдалған беттерді сағат тіліне қарсы бұру
+	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
+	Extract the selected pages…	Таңдалған беттерді шығарып алу…
+	Delete the selected pages	Таңдалған беттерді жою

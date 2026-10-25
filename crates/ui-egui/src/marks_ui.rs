@@ -117,8 +117,19 @@ impl Default for MarksDraft {
 
 const PAGE_FORMATS: [&str; 5] = ["<<1>>", "<<1 of n>>", "<<1/n>>", "<<Page 1>>", "<<Page 1 of n>>"];
 // New formats go last: `date_format` is an index into this list.
-const DATE_FORMATS: [&str; 8] =
-    ["<<m/d/yyyy>>", "<<mm/dd/yyyy>>", "<<d/m/yyyy>>", "<<yyyy-mm-dd>>", "<<m/d/yy>>", "<<mmmm d, yyyy>>", "<<yyyy/mm/dd>>", "<<yyyy/m/d>>"];
+const DATE_FORMATS: [&str; 11] = [
+    "<<m/d/yyyy>>",
+    "<<mm/dd/yyyy>>",
+    "<<d/m/yyyy>>",
+    "<<yyyy-mm-dd>>",
+    "<<m/d/yy>>",
+    "<<mmmm d, yyyy>>",
+    "<<yyyy/mm/dd>>",
+    "<<yyyy/m/d>>",
+    "<<dd.mm.yyyy>>",
+    "<<d.m.yyyy>>",
+    "<<dd.mm.yy>>",
+];
 const BOX_NAMES: [&str; 6] =
     ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
 

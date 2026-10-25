@@ -2546,3 +2546,11 @@ animation effects	Off	Ανενεργά
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
 @plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Εργαλεία σελίδων
+	Insert pages from a file after the selection…	Εισαγωγή σελίδων από αρχείο μετά την επιλογή…
+	Rotate the selected pages counterclockwise	Περιστροφή των επιλεγμένων σελίδων αριστερόστροφα
+	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
+	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
+	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων

@@ -1,6 +1,7 @@
 Label = "Pages"
 Label = "2"
 Button "Close" [off]
+Button "Page tools" [off]
 Label = "Thumbnail size"
 Label = "100%"
 Button "Smaller thumbnails" [off]

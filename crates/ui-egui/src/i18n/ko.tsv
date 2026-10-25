@@ -2777,3 +2777,11 @@ theme	Appearance	모양
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
 @plural	{n} reply|{n} replies	답글 {n}개
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	페이지 도구
+	Insert pages from a file after the selection…	선택 영역 뒤에 파일에서 페이지 삽입…
+	Rotate the selected pages counterclockwise	선택한 페이지를 시계 반대 방향으로 회전
+	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
+	Extract the selected pages…	선택한 페이지 추출…
+	Delete the selected pages	선택한 페이지 삭제

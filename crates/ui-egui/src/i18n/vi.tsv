@@ -2807,3 +2807,11 @@ key	Space	Space
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
 @plural	{n} reply|{n} replies	{n} câu trả lời
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Công cụ trang
+	Insert pages from a file after the selection…	Chèn trang từ tệp sau vùng chọn…
+	Rotate the selected pages counterclockwise	Xoay các trang đã chọn ngược chiều kim đồng hồ
+	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
+	Extract the selected pages…	Trích xuất các trang đã chọn…
+	Delete the selected pages	Xóa các trang đã chọn

@@ -2473,6 +2473,8 @@ struct EditCtx {
     xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     xfa_ran_away: bool,
+    /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
+    xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
@@ -2507,6 +2509,7 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
             date: now.map(pdfcraft_cos::pdf_date),
@@ -2690,7 +2693,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
+            let mut run =
+                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
             let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
@@ -3250,6 +3254,9 @@ pub struct Session {
     date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
     date_language: Option<String>,
+    /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
+    /// [`Session::with_xfa_time_scale`].
+    xfa_time_scale: Option<u32>,
 }
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -3258,6 +3265,7 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    xfa_time_scale: u32,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -3494,7 +3502,8 @@ fn image_content_type(bytes: &[u8]) -> Option<&'static str> {
 /// fields take the data's values.
 fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, calculate: bool) -> Result<(), EditError> {
     if let Some(tpl) = cx.xfa.clone() {
-        let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
+        let mut run =
+            xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
         cx.xfa_datasets = run.datasets;
@@ -3537,9 +3546,14 @@ fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, cal
 fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
     let fields = pdfcraft_forms::fields(doc);
-    let mut changed = Vec::new();
+    // The first field of each name, as a lookup by name would find it.
+    let mut by_name = std::collections::HashMap::new();
+    for f in &fields {
+        by_name.entry(f.name.as_str()).or_insert(f);
+    }
+    let mut updates = Vec::new();
     for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
-        let Some(f) = fields.iter().find(|f| f.name == name) else { continue };
+        let Some(f) = by_name.get(name.as_str()) else { continue };
         let new = match value {
             pdfcraft_xfa::FieldData::Text(t) if matches!(f.kind, pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List) => {
                 // Saved values, one per line for a multi-select list; shown text stands for
@@ -3557,13 +3571,14 @@ fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<Stri
             pdfcraft_xfa::FieldData::Radio(sel) => (f.value.first() != sel.as_ref()).then_some(FieldValue::Radio(sel)),
             pdfcraft_xfa::FieldData::None => None,
         };
-        if let Some(v) = new
-            && pdfcraft_forms::set_value(doc, &name, &v).is_ok()
-        {
-            changed.push(name);
+        if let Some(v) = new {
+            updates.push((name, v));
         }
     }
-    Ok(changed)
+    // All at once: one by one, each value would read the whole form again, which took minutes
+    // on a form with thousands of fields.
+    let Ok(results) = pdfcraft_forms::set_values(doc, &updates) else { return Ok(Vec::new()) };
+    Ok(updates.into_iter().zip(results).filter(|(_, r)| r.is_ok()).map(|((name, _), _)| name).collect())
 }
 
 /// Validate the signature fields of `cos` (written as `bytes`).
@@ -3579,6 +3594,17 @@ impl Session {
     /// Use a fixed clock (tests) instead of the system time.
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);
+        self
+    }
+
+    /// Multiply the time an XFA form's scripts may take by `factor` (tests): the 3 s the
+    /// scripts of an opening or a change share, the 5 s of a click's, the 10 s the script
+    /// engine has to start, and each script's own 1 s or 3 s. A test that checks what the
+    /// scripts do passes a large factor, so that a busy machine does not stop them. On native
+    /// builds, 0 stops every script before it starts; the wasm build has no wall clock, so
+    /// there the factor has no effect.
+    pub fn with_xfa_time_scale(mut self, factor: u32) -> Self {
+        self.xfa_time_scale = Some(factor);
         self
     }
 
@@ -3654,7 +3680,7 @@ impl Session {
 
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone() }
+        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
     }
 
     /// Prepare a document without adding it to this session.
@@ -3783,7 +3809,13 @@ impl Session {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
                     let ran = guard(|| {
-                        let mut run = xfa::XfaRun { page_count: pages, out: &mut script_output, datasets: None, ran_away: false };
+                        let mut run = xfa::XfaRun {
+                            page_count: pages,
+                            out: &mut script_output,
+                            datasets: None,
+                            ran_away: false,
+                            time_scale: context.xfa_time_scale,
+                        };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
                             ran_away = true;
@@ -3967,6 +3999,7 @@ impl Session {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
         let name = doc.name.clone();
@@ -3976,6 +4009,7 @@ impl Session {
         if !js_off {
             cx.xfa = doc.xfa_template.clone();
         }
+        cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
@@ -4073,7 +4107,13 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
-                let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
+                let mut run = xfa::XfaRun {
+                    page_count: cx.pages,
+                    out: &mut cx.xfa_out,
+                    datasets: cx.xfa_datasets,
+                    ran_away: false,
+                    time_scale: cx.xfa_time_scale,
+                };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
                 let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
