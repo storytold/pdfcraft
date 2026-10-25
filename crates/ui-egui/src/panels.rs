@@ -628,8 +628,8 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// Format text for added text: the standard families, size, colour, style and alignment.
 fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText, item_key: Option<(usize, usize)>) -> bool {
     let font_choice_id = match item_key {
-        Some((page, index)) => egui::Id::new(("added_text_format_font_choice", page, index)),
-        None => egui::Id::new("added_text_format_font_choice_new"),
+        Some((page, index)) => egui::Id::unique(("added_text_format_font_choice", page, index)),
+        None => egui::Id::unique("added_text_format_font_choice_new"),
     };
     let chosen: Option<(String, pdfcraft_engine::FontFamily)> = ui.data(|d| d.get_temp(font_choice_id));
     let shown = chosen
