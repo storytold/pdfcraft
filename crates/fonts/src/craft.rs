@@ -36,8 +36,7 @@ pub fn bundled_tlwg_typewriter_font() -> Option<&'static CraftFont> {
         e.family.eq_ignore_ascii_case("TlwgTypewriter")
             || e.family.eq_ignore_ascii_case("Tlwg Typewriter")
             || e.file_name.eq_ignore_ascii_case("TlwgTypewriter.ttf")
-    })
-        && let Ok(font) = set_active_thai_font_entry(entry)
+    }) && let Ok(font) = set_active_thai_font_entry(entry)
     {
         return Some(font);
     }
@@ -1009,5 +1008,43 @@ mod tests {
                 crate::shaping::invalidate_thai_cache();
             }
         }
+    }
+
+    #[test]
+    fn thai_arabic_digits_scale_to_thai_consonant_height() {
+        let _guard = THAI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior_font = get_active_thai_font();
+        let prior_entry = active_thai_font_entry();
+        let mut doc = pdfcraft_cos::Document::new_empty();
+        for name in ["THSarabunNew.ttf", "LeelawUI.ttf", "tahoma.ttf"] {
+            if set_active_thai_font_by_name(name).is_ok() {
+                let scale = crate::shaping::thai_digit_scale();
+                assert!((0.4..=1.0).contains(&scale), "Thai digit scale must be within [0.4, 1.0]: {scale}");
+
+                let clusters = crate::shaping::shape_thai("ระดับ 9 ๙").unwrap();
+                let cluster_refs: Vec<&crate::ShapedCluster> = clusters.iter().collect();
+                let t3_ref = crate::type3::type3_for_clusters(&mut doc, &cluster_refs).unwrap();
+                let t3_entry = doc.get(t3_ref);
+                let t3_obj = t3_entry.as_dict().unwrap();
+                let charprocs_ref = t3_obj.get(b"CharProcs").unwrap();
+                let charprocs = doc.resolve(charprocs_ref).as_dict().unwrap().clone();
+
+                // Find cluster for "9"
+                let digit_idx = clusters.iter().position(|c| c.text == "9").unwrap();
+                let glyph_name = format!("g{:02X}", digit_idx + 1);
+                let proc_stream_ref = charprocs.get(glyph_name.as_bytes()).unwrap();
+                let proc_obj = doc.resolve(proc_stream_ref);
+                let pdfcraft_cos::Object::Stream(proc_stream) = &*proc_obj else { panic!("not a stream") };
+                let proc_text = String::from_utf8_lossy(&proc_stream.decoded().unwrap()).to_string();
+                let first_line = proc_text.lines().next().unwrap();
+                let parts: Vec<&str> = first_line.split_whitespace().collect();
+                assert_eq!(parts.last().copied(), Some("d1"));
+                let top: f64 = parts[5].parse().unwrap();
+                assert!(top <= 600.0, "scaled digit top must be within Thai consonant height: {top}");
+            }
+        }
+        set_active_thai_font(prior_font);
+        set_active_thai_entry(prior_entry);
+        crate::shaping::invalidate_thai_cache();
     }
 }

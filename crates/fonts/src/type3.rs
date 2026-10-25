@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream, ObjRef};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, shaped_glyph};
 
@@ -31,14 +31,24 @@ pub fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &
         // Glyph space is 1000 units per em.
         let mut paths = Vec::new();
         let mut ink: Option<[f64; 4]> = None;
+        let is_digit = c.script == ShapedScript::Thai && !c.text.is_empty() && c.text.chars().all(|ch| ch.is_ascii_digit());
+        let digit_scale = if is_digit { crate::shaping::thai_digit_scale() } else { 1.0 };
         for (id, [dx, dy]) in &c.glyphs {
             let Some(g) = outlines.get(&(c.script, *id)) else { continue };
             for contour in &g.contours {
                 for (j, p) in contour.iter().enumerate() {
-                    paths.extend(format!("{} {} {}\n", n((p[0] + dx) * 1000.0), n((p[1] + dy) * 1000.0), if j == 0 { "m" } else { "l" }).bytes());
+                    paths.extend(
+                        format!(
+                            "{} {} {}\n",
+                            n((p[0] * digit_scale + dx) * 1000.0),
+                            n((p[1] * digit_scale + dy) * 1000.0),
+                            if j == 0 { "m" } else { "l" }
+                        )
+                        .bytes(),
+                    );
                 }
                 paths.extend_from_slice(b"h\n");
-                let b = [g.bbox[0] + dx, g.bbox[1] + dy, g.bbox[2] + dx, g.bbox[3] + dy];
+                let b = [g.bbox[0] * digit_scale + dx, g.bbox[1] * digit_scale + dy, g.bbox[2] * digit_scale + dx, g.bbox[3] * digit_scale + dy];
                 ink = Some(ink.map_or(b, |a| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]));
             }
         }

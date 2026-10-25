@@ -436,18 +436,21 @@ fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
         // Arabic and Hebrew letters take their face; so do spaces and punctuation between them
         // (Hebrew's when they follow Hebrew), which the shaper then mirrors. Latin text (and what
         // the faces lack) keeps the item's font.
+        let line_has_thai = line.chars().any(is_thai);
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
-            let script = if is_thai(c) {
-                Some(ShapedScript::Thai)
-            } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
-                Some(ShapedScript::Hebrew)
-            } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
-                Some(ShapedScript::Arabic)
-            } else {
-                None
-            };
+            let after_thai = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Thai));
+            let script =
+                if is_thai(c) || ((line_has_thai || after_thai) && (c.is_ascii_digit() || (after_thai && c == ' ')) && pdfcraft_fonts::thai_has(c)) {
+                    Some(ShapedScript::Thai)
+                } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
+                    Some(ShapedScript::Hebrew)
+                } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
+                    Some(ShapedScript::Arabic)
+                } else {
+                    None
+                };
             match segments.last_mut() {
                 Some((kind, s)) if *kind == script => s.push(c),
                 _ => segments.push((script, c.to_string())),
@@ -1002,8 +1005,6 @@ pub(crate) fn draw_header_footer_shaped(
     }
     Ok((content, fonts))
 }
-
-
 
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or

@@ -43,12 +43,56 @@ impl ShapedScript {
 static FACE: OnceLock<Option<std::sync::Arc<(FontRef<'static>, ShaperData)>>> = OnceLock::new();
 static HEBREW: OnceLock<Option<std::sync::Arc<(FontRef<'static>, ShaperData)>>> = OnceLock::new();
 static THAI: std::sync::RwLock<Option<std::sync::Arc<(FontRef<'static>, ShaperData)>>> = std::sync::RwLock::new(None);
+static THAI_SCALE: std::sync::RwLock<Option<f64>> = std::sync::RwLock::new(None);
 
 /// Invalidate the cached Thai shaper data when a new custom Thai font is registered or loaded.
 pub fn invalidate_thai_cache() {
     if let Ok(mut lock) = THAI.write() {
         *lock = None;
     }
+    if let Ok(mut lock) = THAI_SCALE.write() {
+        *lock = None;
+    }
+}
+
+/// The scale factor applied to Arabic numerals ('0'..='9') in Thai text so that their rendered
+/// height matches the Thai base consonant height (such as 'ก').
+pub fn thai_digit_scale() -> f64 {
+    if let Ok(lock) = THAI_SCALE.read()
+        && let Some(scale) = *lock
+    {
+        return scale;
+    }
+    let Some(cached) = face(ShapedScript::Thai) else { return 1.0 };
+    let font = &cached.0;
+    let charmap = font.charmap();
+
+    let thai_top = ['\u{0E01}', '\u{0E2D}', '\u{0E23}', '\u{0E14}', '\u{0E1A}']
+        .iter()
+        .find_map(|&ch| {
+            let gid = charmap.map(ch)?;
+            let outline = crate::script::bounded_outline(font, gid, 0.0).ok()?;
+            let top = outline.bbox[3];
+            (top > 0.1).then_some(top)
+        })
+        .unwrap_or(0.5);
+
+    let digit_top = ['9', '8', '0']
+        .iter()
+        .find_map(|&ch| {
+            let gid = charmap.map(ch)?;
+            let outline = crate::script::bounded_outline(font, gid, 0.0).ok()?;
+            let top = outline.bbox[3];
+            (top > 0.1).then_some(top)
+        })
+        .unwrap_or(0.7);
+
+    let scale = if digit_top > thai_top && thai_top > 0.0 { (thai_top / digit_top).clamp(0.4, 1.0) } else { 1.0 };
+
+    if let Ok(mut lock) = THAI_SCALE.write() {
+        *lock = Some(scale);
+    }
+    scale
 }
 
 fn face(script: ShapedScript) -> Option<std::sync::Arc<(FontRef<'static>, ShaperData)>> {
@@ -164,9 +208,11 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
                 c
             }
         };
-        let at = [cluster.advance + f64::from(pos.x_offset) * scale, f64::from(pos.y_offset) * scale];
+        let is_thai_digit = kind == ShapedScript::Thai && !cluster.text.is_empty() && cluster.text.chars().all(|ch| ch.is_ascii_digit());
+        let digit_scale = if is_thai_digit { thai_digit_scale() } else { 1.0 };
+        let at = [cluster.advance + f64::from(pos.x_offset) * scale * digit_scale, f64::from(pos.y_offset) * scale * digit_scale];
         cluster.glyphs.push((info.glyph_id, at));
-        cluster.advance += f64::from(pos.x_advance) * scale;
+        cluster.advance += f64::from(pos.x_advance) * scale * digit_scale;
     }
     Ok(out.into_iter().map(|(_, c)| c).collect())
 }
