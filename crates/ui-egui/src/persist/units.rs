@@ -68,6 +68,7 @@ impl Unit {
 
 /// The unit for a locale tag's region: `en_US.UTF-8`, `en-US`, `bg-BG`, `zh-Hans-CN`, `en_GB@euro`.
 /// `None` without a region (`C`, `POSIX`, `en`).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn unit_for_tag(tag: &str) -> Option<Unit> {
     Some(match region_of(tag)?.as_str() {
         "US" | "LR" | "MM" => Unit::Inches,

@@ -1268,6 +1268,7 @@ fn an_indexed_lookup_table_is_read_in_every_legal_form() {
         let _ = render(space, paint, cycle);
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
     use super::*;
@@ -1300,6 +1301,7 @@ fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
     assert!(pool.try_recv().is_none());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_request_being_rendered_is_not_rendered_again() {
     use super::*;
@@ -1469,6 +1471,7 @@ fn request_removed_before_busy_publication_skips_parser_acquisition() {
     assert!(pool.try_recv().is_none(), "obsolete request A did not publish a stale result");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn re_sent_queues_render_each_page_once() {
     use super::*;
@@ -1703,6 +1706,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
+#[cfg(not(target_arch = "wasm32"))]
 const ONE_PAGE_TWICE: &[u8] = b"%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >> endobj
@@ -2670,6 +2674,7 @@ fn inline_pool_renders_in_priority_order() {
     assert!(pool.try_recv().is_none());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn dropping_the_pool_cancels_its_renders() {
     const TEXT: &[u8] = b"%PDF-1.7
@@ -2702,6 +2707,7 @@ trailer << /Root 1 0 R >>
     assert!(!blue(&settings) && glyphs(&settings) == 0, "once the pool is gone, interpretation stops before drawing");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_watchdog_stops_the_render_it_gives_up_on() {
     let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
