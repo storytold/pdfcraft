@@ -2135,3 +2135,38 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+#[test]
+fn callout_on_a_turned_page_is_drawn_upright_as_displayed() {
+    let mut doc = fixture();
+    let page = page_ref(&doc, 0).unwrap();
+    doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(90))).unwrap();
+    let co = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 500.0, 340.0, 620.0],
+                knee: [260.0, 520.0],
+                point: [220.0, 460.0],
+                font_size: 10.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("co"),
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let callout = &list(&doc, 0)[co];
+    assert_eq!(callout.get(b"PCTextRotate").and_then(Object::as_int), Some(90));
+    let r = rect(callout);
+    let n = callout.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).unwrap();
+    let obj = doc.get(n);
+    let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+    let m: Vec<f64> = s.dict.get(b"Matrix").expect("form is turned by a /Matrix").as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(m, vec![0.0, 1.0, -1.0, 0.0, r[2], r[1]]);
+    // The leader starts at the pointed-at spot, mapped from user space into the displayed frame.
+    let ap = ap_content(&doc, callout);
+    let start = format!("{} {} m", 460.0 - r[1], r[2] - 220.0);
+    assert!(ap.contains(&start), "{start} in {ap}");
+}
