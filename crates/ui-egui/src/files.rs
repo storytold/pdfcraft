@@ -437,6 +437,38 @@ impl PdfCraftApp {
         }
     }
 
+    /// ⌘V / Ctrl+V with files copied in Explorer, Finder or a file manager (#1289) does what
+    /// dropping them does: on Home each opens in a tab, and on the Combine files tab they join
+    /// its list. A document showing keeps ⌘V for its own pastes. Returns whether the paste was
+    /// taken, so a file opened (or brought to the front) doesn't take the same ⌘V as well.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn paste_files_key(&mut self, ctx: &egui::Context, pasted: bool) -> bool {
+        if !pasted || self.active.is_some() || self.palette_open || ctx.egui_wants_keyboard_input() {
+            return false;
+        }
+        let paths = match &self.clipboard_override {
+            Some(crate::create_ui::Clip::Files(paths)) => paths.clone(),
+            Some(_) => return false,
+            None if self.system_clipboard => crate::create_ui::read_clipboard_files(),
+            None => return false,
+        };
+        // Read once: the first file opened leaves Home.
+        let combine = self.combine_showing();
+        // A file list always holds full paths; anything else isn't a file to open.
+        let paths: Vec<_> = paths.into_iter().filter(|p| p.is_absolute()).collect();
+        let taken = !paths.is_empty();
+        for path in paths {
+            if !combine {
+                self.open_path(&path.to_string_lossy());
+            } else if path.is_dir() {
+                self.add_folder_to_combine(&path, true);
+            } else {
+                self.use_paths(FilePurpose::Combine, &[path]);
+            }
+        }
+        taken
+    }
+
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {

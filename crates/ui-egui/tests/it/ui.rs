@@ -1077,6 +1077,86 @@ fn pdfs_dropped_on_the_combine_tab_join_its_list() {
     h.get_by_label("just now");
 }
 
+/// #1289: ⌘V / Ctrl+V with a PDF copied in Explorer or Finder opens it from Home, as dropping it
+/// does.
+#[test]
+fn pasting_a_copied_pdf_file_on_home_opens_it() {
+    use pdfcraft_ui_egui::Clip;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-paste-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("copied.pdf");
+    std::fs::write(&path, FIXTURE).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(3);
+    // egui-winit swallows the press of ⌘V when the clipboard holds no text: only the release arrives.
+    let paste = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.run_steps(3);
+    };
+    // Text on the clipboard opens nothing.
+    h.state_mut().clipboard_override = Some(Clip::Text(path.to_string_lossy().into_owned()));
+    paste(&mut h);
+    assert!(h.state().views.is_empty(), "text is not a file");
+    h.state_mut().clipboard_override = Some(Clip::Files(vec![path.clone()]));
+    paste(&mut h);
+    support::wait_until(&mut h, "pasted document", |app| app.views.len() == 1);
+    h.get_by_label_contains("copied.pdf");
+    let (_, id) = h.state().active_ids().unwrap();
+    assert_eq!(h.state().session.get(id).unwrap().bytes.as_slice(), FIXTURE);
+    // With the document showing, ⌘V is its own: another copied file doesn't open.
+    let other = dir.join("other.pdf");
+    std::fs::write(&other, FIXTURE).unwrap();
+    h.state_mut().clipboard_override = Some(Clip::Files(vec![other.clone()]));
+    paste(&mut h);
+    assert_eq!(h.state().views.len(), 1, "a document showing keeps ⌘V");
+    // Back on Home, a copied file that is open already comes to the front; the other opens.
+    h.state_mut().set_option("home", "").unwrap();
+    h.run_steps(2);
+    assert!(h.state().active.is_none());
+    h.state_mut().clipboard_override = Some(Clip::Files(vec![path.clone()]));
+    paste(&mut h);
+    assert_eq!((h.state().views.len(), h.state().active), (1, Some(0)), "the open tab comes to the front");
+    h.state_mut().set_option("home", "").unwrap();
+    h.state_mut().clipboard_override = Some(Clip::Files(vec![other]));
+    paste(&mut h);
+    support::wait_until(&mut h, "second pasted document", |app| app.views.len() == 2);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// #1289: files pasted on the Combine files tab join its list, as dropped ones do.
+#[test]
+fn pasting_copied_files_on_the_combine_tab_adds_them() {
+    use pdfcraft_ui_egui::Clip;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-paste-combine-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("folder")).unwrap();
+    std::fs::write(dir.join("one.pdf"), FIXTURE).unwrap();
+    std::fs::write(dir.join("folder").join("two.pdf"), FIXTURE).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().set_option("combine-view", "list").unwrap();
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    h.state_mut().clipboard_override = Some(Clip::Files(vec![dir.join("one.pdf"), dir.join("folder")]));
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(3);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let app = h.state();
+    assert!(app.views.is_empty(), "nothing opens");
+    assert_eq!(app.combine_draft.len(), 2, "the file and the PDF in the folder");
+}
+
 #[test]
 fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-dir-{}", std::process::id()));
