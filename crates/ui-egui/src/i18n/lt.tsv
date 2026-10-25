@@ -2739,6 +2739,14 @@ key	Space	Tarpas
 	Make properties default	Nustatyti ypatybes kaip numatytąsias
 	Pages selected	Pasirinkti puslapiai
 	Page properties	Puslapio ypatybės
+	Create & Edit	Kūrimas ir redagavimas
+	Review & Compare	Peržiūra ir palyginimas
+	Forms & Signatures	Formos ir parašai
+	Protect & Standardize	Apsauga ir standartizavimas
+	Customize & Automate	Pritaikymas ir automatizavimas
+	No tools match your search.	Paieškos neatitinka joks įrankis.
+	Expand all tools	Išskleisti visus įrankius
+	Collapse all tools	Suskleisti visus įrankius
 
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
@@ -2792,3 +2800,4 @@ theme	Appearance	Išvaizda
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
+@plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų

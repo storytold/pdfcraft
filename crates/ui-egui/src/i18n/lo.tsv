@@ -2436,6 +2436,15 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+	Create & Edit	ສ້າງ & ແກ້ໄຂ
+	Review & Compare	ກວດກາຄືນ & ປຽບທຽບ
+	Forms & Signatures	ຟອມ & ລາຍເຊັນ
+	Protect & Standardize	ປ້ອງກັນ & ມາດຕະຖານ
+	Customize & Automate	ປັບແຕ່ງ & ອັດຕະໂນມັດ
+	No tools match your search.	ບໍ່ມີເຄື່ອງມືທີ່ກົງກັບການຄົ້ນຫາຂອງທ່ານ.
+	Expand all tools	ຂະຫຍາຍເຄື່ອງມືທັງໝົດ
+	Collapse all tools	ຫຍໍ້ເຄື່ອງມືທັງໝົດເຂົ້າ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້
+@plural	{n} reply|{n} replies	ການຕອບກັບ {n} ລາຍການ

@@ -2654,6 +2654,84 @@ fn redaction_marks_apply_for_good_and_undo() {
     assert!(matches!(s.apply(id, Edit::ApplyRedactions { pages: None }), Err(EditError::Redact(_))));
 }
 
+/// What [`mark_with_reply`] writes that must not reach a file once the mark is removed.
+const MARK_TRACES: [&str; 5] = ["/Redact", "MARKED OVERLAY", "Mark Author", "REPLY TO THE MARK", "Replier"];
+
+/// A redaction mark on page 1 (the first annotation there) and a reply to it.
+fn mark_with_reply(s: &mut Session, id: DocId) {
+    let shape = Shape::Redact {
+        quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])],
+        overlay: "MARKED OVERLAY".into(),
+        look: Default::default(),
+    };
+    let mark = Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Mark Author".into(),
+    });
+    s.apply(id, mark).unwrap();
+    let reply = Edit::ReplyToAnnotation { page: 0, index: 0, text: "REPLY TO THE MARK".into(), author: "Replier".into() };
+    s.apply(id, reply).unwrap();
+}
+
+/// Marks removed before they are applied, all at once or one by one, are not saved, nor are
+/// replies to them: the file would otherwise record where they were, their overlay text and who
+/// made them, and the page is left as it was.
+#[test]
+fn removed_redaction_marks_are_not_saved() {
+    for clear in [true, false] {
+        let (mut s, id) = session_with(1);
+        mark_with_reply(&mut s, id);
+        let removal = if clear { Edit::ClearRedactions } else { Edit::DeleteAnnotation { page: 0, index: 0 } };
+        s.apply(id, removal).unwrap();
+        assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
+        let saved = s.save_bytes(id).unwrap();
+        for trace in MARK_TRACES {
+            assert!(!saved.windows(trace.len()).any(|w| w == trace.as_bytes()), "clear: {clear}, {trace:?}");
+        }
+        let mut reopened = Session::new();
+        let back = reopened.open("saved.pdf", None, saved.clone(), None).unwrap();
+        assert_eq!(page_texts(&reopened, back), ["Page 1"]);
+        let page = pdfcraft_model::pages(&reopened.get(back).unwrap().editor.as_ref().unwrap().cos).swap_remove(0);
+        assert!(!page.dict.contains(b"Annots"), "clear: {clear}");
+
+        // Undo past that save brings the mark back, under the number the saved file left free.
+        s.mark_saved(id, saved, None).unwrap();
+        s.undo(id).unwrap();
+        let again = s.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let back = reopened.open("again.pdf", None, again.clone(), None).unwrap();
+        let d = reopened.get(back).unwrap();
+        assert!(d.info.warnings.is_empty() && d.editor.as_ref().unwrap().cos.repair_log().is_empty(), "{:?}", d.info.warnings);
+        assert_eq!(d.redaction_marks(), 1, "clear: {clear}");
+        let marks = pdfcraft_redact::marks(&d.editor.as_ref().unwrap().cos);
+        assert_eq!(marks.first().map(|m| m.overlay.as_str()), Some("MARKED OVERLAY"));
+    }
+}
+
+/// Removed marks are not in a signed file either, nor in one with revocation evidence embedded:
+/// no later save could take them out of those.
+#[test]
+fn removed_redaction_marks_are_not_signed() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    // After the test certificate's start date (2026-10-02).
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    mark_with_reply(&mut s, id);
+    s.apply(id, Edit::ClearRedactions).unwrap();
+    let signed = s.sign(id, &digital_id, SignOptions { rect: None, ..SignOptions::default() }).unwrap();
+    let evidence = sign::dss::Evidence { certs: vec![digital_id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let ltv = s.embed_ltv(id, &evidence).unwrap();
+    for (what, out) in [("signed", signed), ("LTV", ltv)] {
+        for trace in MARK_TRACES {
+            assert!(!out.windows(trace.len()).any(|w| w == trace.as_bytes()), "{what}: {trace:?}");
+        }
+    }
+}
+
 #[test]
 fn oversized_redaction_overlay_preserves_the_document_and_undo() {
     let (mut s, id) = session_with(1);
@@ -3718,6 +3796,78 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     let n = s.open_new("summary.pdf", pdf).unwrap();
     assert!(!s.get(n).unwrap().info.pages.is_empty());
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
+}
+
+/// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
+/// page `fitz-A0`, which used to file every reply under page 1's comment. An `/IRT` to the
+/// annotation itself, or to a link (never listed as a comment), leaves it a comment of its own. Both readers (inspect on open, and the
+/// comment list the engine refreshes after an edit) must agree.
+#[test]
+fn replies_thread_by_reference_when_names_repeat_across_pages() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 8 0 R 9 0 R 10 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R 7 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Alpha) /Contents (COVER) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Beta) /Contents (SECOND) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (ANSWER) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /NM (fitz-A1) /IRT 8 0 R /T (Delta) /Contents (SELF) >> endobj
+9 0 obj << /Type /Annot /Subtype /Link /Rect [200 20 260 40] /Border [0 0 0] /Dest [3 0 R /Fit] >> endobj
+10 0 obj << /Type /Annot /Subtype /Text /Rect [20 60 40 80] /NM (fitz-A2) /IRT 9 0 R /T (Echo) /Contents (LINKED) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("fitz.pdf", None, Arc::new(pdf.to_vec()), None).expect("opens");
+    let check = |s: &Session, replies: usize| {
+        let all = &s.get(id).unwrap().info.annotations;
+        let answer = all.iter().find(|a| a.contents.as_deref() == Some("ANSWER")).unwrap();
+        assert_eq!(answer.parent, Some((1, 0)), "{answer:?}");
+        let looped = all.iter().find(|a| a.contents.as_deref() == Some("SELF")).unwrap();
+        assert!(!looped.is_reply(), "{looped:?}");
+        let linked = all.iter().find(|a| a.contents.as_deref() == Some("LINKED")).unwrap();
+        assert!(!linked.is_reply(), "{linked:?}");
+        let text = comment_summary("fitz.pdf", all, SummarySort::Page);
+        let (cover, second) = text.split_once("SECOND").unwrap();
+        assert!(!cover.contains("ANSWER"), "page 1's comment has no replies: {text}");
+        assert!(cover.contains("Number: 2  Author: Delta"), "the self-reply is a comment of its own: {text}");
+        assert!(cover.contains("Number: 3  Author: Echo"), "so is the reply to a link: {text}");
+        assert_eq!(second.matches("    Author:").count(), replies, "{text}");
+    };
+    check(&s, 1);
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "LATER".into(), author: "Delta".into() }).unwrap();
+    check(&s, 2);
+}
+
+/// A comment listed through a reference chain (`/Annots [5 0 R]`, `5 0 obj 6 0 R`) keeps its
+/// replies after an edit, whether their `/IRT` names the comment or the chain, as on open.
+#[test]
+fn replies_thread_through_a_reference_chain_after_an_edit() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+5 0 obj 6 0 R endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (one) /Contents (CHAINED) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 120 40 130] /IRT 6 0 R /Contents (TO THE COMMENT) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 110] /IRT 5 0 R /Contents (THROUGH THE CHAIN) >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /Rect [20 60 40 80] /NM (two) /Contents (PLAIN) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("chain.pdf", None, Arc::new(pdf.to_vec()), None).expect("opens");
+    let check = |s: &Session| {
+        let all = &s.get(id).unwrap().info.annotations;
+        let comment = all.iter().find(|a| a.contents.as_deref() == Some("CHAINED")).expect("listed");
+        assert_eq!((comment.page, comment.index, comment.is_reply()), (0, 0, false), "{all:?}");
+        for reply in ["TO THE COMMENT", "THROUGH THE CHAIN"] {
+            let a = all.iter().find(|a| a.contents.as_deref() == Some(reply)).expect("listed");
+            assert_eq!((a.parent, a.in_reply_to.as_deref()), (Some((0, 0)), Some("one")), "{reply}: {all:?}");
+        }
+    };
+    check(&s);
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 3, text: "LATER".into(), author: "Delta".into() }).unwrap();
+    check(&s);
 }
 
 /// #820: the generated summary includes replies to replies, indented one level deeper.

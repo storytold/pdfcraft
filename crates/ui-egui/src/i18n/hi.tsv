@@ -2682,6 +2682,14 @@ certificate	SHA-256 digest	SHA-256 डाइजेस्ट
 	Make properties default	गुण डिफ़ॉल्ट बनाएँ
 	Pages selected	चयनित पृष्ठ
 	Page properties	पृष्ठ गुण
+	Create & Edit	बनाएँ और संपादित करें
+	Review & Compare	समीक्षा और तुलना करें
+	Forms & Signatures	फ़ॉर्म और हस्ताक्षर
+	Protect & Standardize	सुरक्षित और मानकीकृत करें
+	Customize & Automate	अनुकूलित और स्वचालित करें
+	No tools match your search.	आपकी खोज से कोई टूल मेल नहीं खाता।
+	Expand all tools	सभी टूल विस्तृत करें
+	Collapse all tools	सभी टूल समेटें
 	The password must have at least 8 characters.	पासवर्ड में कम से कम 8 वर्ण होने चाहिए।
 theme	Appearance	स्वरूप
 	Zoom — type a percentage and press Enter	ज़ूम — प्रतिशत टाइप करें और Enter दबाएँ
@@ -2768,3 +2776,4 @@ theme	Appearance	स्वरूप
 	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
 	Delete attachment	अनुलग्नक हटाएँ
 	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+@plural	{n} reply|{n} replies	{n} जवाब

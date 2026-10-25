@@ -2683,6 +2683,14 @@ key	Space	Space
 	Make properties default	Jadikan properti default
 	Pages selected	Halaman yang dipilih
 	Page properties	Properti halaman
+	Create & Edit	Buat & Edit
+	Review & Compare	Tinjau & Bandingkan
+	Forms & Signatures	Formulir & Tanda Tangan
+	Protect & Standardize	Lindungi & Standarkan
+	Customize & Automate	Sesuaikan & Otomatiskan
+	No tools match your search.	Tidak ada alat yang cocok dengan pencarian Anda.
+	Expand all tools	Perluas semua alat
+	Collapse all tools	Ciutkan semua alat
 	The password must have at least 8 characters.	Kata sandi harus memiliki minimal 8 karakter.
 theme	Appearance	Tampilan
 	Zoom — type a percentage and press Enter	Zoom — ketik persentase dan tekan Enter
@@ -2769,3 +2777,4 @@ theme	Appearance	Tampilan
 	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
+@plural	{n} reply|{n} replies	{n} balasan

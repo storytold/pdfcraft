@@ -2453,6 +2453,14 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Create & Edit	创建和编辑
+	Review & Compare	审阅和比较
+	Forms & Signatures	表单和签名
+	Protect & Standardize	保护和标准化
+	Customize & Automate	自定义和自动化
+	No tools match your search.	没有与搜索匹配的工具。
+	Expand all tools	展开所有工具
+	Collapse all tools	折叠所有工具
 	Attach a file…	附加文件…
 	Delete attachment	删除附件
 	Attaching files is not available on the web yet	网页版尚不支持附加文件
@@ -2495,3 +2503,4 @@ animation effects	Off	关
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
+@plural	{n} reply|{n} replies	{n} 条回复

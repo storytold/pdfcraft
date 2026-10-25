@@ -2676,6 +2676,14 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Create & Edit	Tạo và chỉnh sửa
+	Review & Compare	Xem xét và so sánh
+	Forms & Signatures	Biểu mẫu và chữ ký
+	Protect & Standardize	Bảo vệ và chuẩn hóa
+	Customize & Automate	Tùy chỉnh và tự động hóa
+	No tools match your search.	Không có công cụ nào khớp với tìm kiếm.
+	Expand all tools	Mở rộng tất cả công cụ
+	Collapse all tools	Thu gọn tất cả công cụ
 
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
@@ -2798,3 +2806,4 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+@plural	{n} reply|{n} replies	{n} câu trả lời

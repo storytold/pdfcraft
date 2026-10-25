@@ -12,6 +12,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHand
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
+use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
@@ -2373,7 +2374,7 @@ impl DocView {
 /// The hover popup for an annotation. Replies and Fill & Sign marks (typed text, checks, signatures)
 /// show none: they are page content being edited, not comments.
 fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
-    if a.in_reply_to.is_some() || a.fill_sign {
+    if a.is_reply() || a.fill_sign {
         return None;
     }
     let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
@@ -2791,7 +2792,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
-    let unobstructed = !app.modal_open() && !app.palette_open;
+    let modal = app.modal_open();
+    let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
     if view.organize {
@@ -2835,11 +2837,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Full screen: a click on the document goes forward a page and a shift-click back, as in
     // Acrobat, unless the click did something else (a link, a word selected). Decided below,
     // once the pages have had the click.
-    let present_click = view.presentation.is_some()
-        && navigation_enabled
-        && ui.rect_contains_pointer(navigation_rect)
-        && ui.input(|i| i.pointer.primary_clicked())
-        && app.quick_tool == QuickTool::Select;
+    let present_click =
+        view.presentation.is_some() && navigation_enabled && presentation_click(ui, navigation_rect) && app.quick_tool == QuickTool::Select;
     // Shift as held now, or as the click's own event carried it (a synthetic click).
     let present_back = present_click
         && ui.input(|i| {
@@ -2850,7 +2849,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         });
     if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && navigation_enabled && ui.rect_contains_pointer(navigation_rect) {
         let z = view.zoom * zoom_delta;
-        match ui.input(|i| i.pointer.hover_pos()) {
+        match zoom_anchor(ui) {
             Some(p) => view.zoom_at(z, p),
             None => view.set_zoom(z),
         }
@@ -2866,7 +2865,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Drawing a comment: the pointer in a band along any edge (or just past it) scrolls the view
     // that way, so a point beyond what is shown can be reached without letting go of the tool.
     let edge_delta = if unobstructed && matches!(view.comments.gesture, Some(comments::Gesture::Draw { .. })) {
-        let (pointer, dt) = ui.input(|i| (if i.pointer.any_down() { i.pointer.latest_pos() } else { i.pointer.hover_pos() }, i.stable_dt));
+        let (pointer, dt) = drawing_edge_pointer(ui);
         crate::autoscroll::edge_scroll(pointer, avail, dt)
     } else {
         Vec2::ZERO
@@ -3006,7 +3005,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
-    let interrupted = ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
+    let interrupted = glide_interrupted(ui);
     if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
     }
@@ -3164,15 +3163,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
     let mut badge_hover: Option<(Pos2, String)> = None;
-    // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
-    // windows, so a comment under the pointer would otherwise float over the dialog.
-    let page_covered = app.dialog.is_some()
-        || app.close_request.is_some()
-        || app.palette_open
-        || app.password_prompt.is_some()
-        || app.pending_link.is_some()
-        || app.pending_remote_link.is_some()
-        || app.updates.open;
     let mut clicked_link: Option<LinkTarget> = None;
     let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;
     let mut canvas_action: Option<comments::CanvasAction> = None;
@@ -3261,11 +3251,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let mut best_overlap = -1.0f32;
         let mut current_overlap = -1.0f32;
         let mut current_height = f32::INFINITY;
-        let pointer = ui.input(|i| i.pointer.hover_pos());
+        // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
+        // or a press they hold. The page modules read it rather than egui's raw pointer state.
+        let ptr = PagePointer::read(ui, &resp, modal);
+        let pointer = ptr.pos;
         // A press on a page makes it the current one (as in Acrobat), so a page command with
         // no selection (Rotate, Delete) acts on the page the reader pointed at, not on a page
         // gone to earlier that still shows whole beside it.
-        let pressed = unobstructed && ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(avail);
+        let pressed = unobstructed && ptr.pressed().is_some();
         let mut pressed_page = None;
         if resp.secondary_clicked() {
             // Set again below when the right-click lands on a link.
@@ -3421,14 +3414,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
             if editing_content {
                 let page_tex = view.pages.get(&i).map(|p| p.tex.id());
-                view.move_background.paint(ui, painter, &xf, i, info, &view.content, page_tex);
+                view.move_background.paint(painter, &xf, i, info, &view.content, page_tex, pointer);
             }
             if view.show_page_gaps {
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
 
             // Comments: tools, selection, moving and resizing come before text selection.
-            let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+            let pcx = comments::PageCx { page: i, xf: &xf, ptr: &ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
             if let QuickTool::Measure(measure_tool) = tool {
                 crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);
             }
@@ -3437,7 +3430,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // every viewing mode); then comments; then text selection.
             if let QuickTool::Stamp(kind) = tool
                 && allowed
-                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+                && let Some(p) = ptr.within(xf.rect)
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 if resp.clicked() {
@@ -3461,7 +3454,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if let Some(cs) = custom_stamp.as_ref()
                 && allowed
-                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+                && let Some(p) = ptr.within(xf.rect)
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 if resp.clicked() {
@@ -3482,12 +3475,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Over a mark already placed, the Fill & Sign tool picks it up (comments, below).
             if let QuickTool::Fill(ft) = tool
                 && allowed
-                && !comments::fill_grabs(ui, &pcx, view)
+                && !comments::fill_grabs(&pcx, view)
             {
                 match crate::fill_sign::page_input(
                     ui,
                     &resp,
                     &xf,
+                    &ptr,
                     i,
                     info,
                     ft,
@@ -3511,15 +3505,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
             if matches!(tool, QuickTool::SignArea { .. }) {
-                crate::sign_ui::page_input(ui, &resp, &xf, i, info, view);
+                crate::sign_ui::page_input(ui, &resp, &xf, &ptr, i, info, view);
             }
             if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-                crate::zoom_snap::page_input(ui, &resp, &xf, i, view);
+                crate::zoom_snap::page_input(ui, &resp, &xf, &ptr, i, view);
             }
             if tool == QuickTool::EnhanceCamera {
-                crate::camera_ui::page_input(ui, &resp, &xf, i, view, can_modify);
+                crate::camera_ui::page_input(ui, &resp, &xf, &ptr, i, view, can_modify);
             }
-            if tool == QuickTool::Crop && crate::crop::page_input(ui, &resp, &xf, i, info, view, can_crop) {
+            if tool == QuickTool::Crop && crate::crop::page_input(ui, &resp, &xf, &ptr, i, info, view, can_crop) {
                 view.current = i;
                 open_boxes = true;
             }
@@ -3531,7 +3525,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 };
                 // While a table is being set up, nothing else is drawn or moved.
                 let allowed = can_modify && table_preview.is_none() && open_table.is_none();
-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, allowed, view);
+                let o = crate::prepare::page_input(ui, &resp, &xf, &ptr, i, info, &form, field_tool, allowed, view);
                 field_props |= o.properties;
                 field_placed |= o.placed;
                 open_table = open_table.or(o.table);
@@ -3539,10 +3533,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else {
                 use crate::forms_ui::FieldPointer;
                 let field = if tool == QuickTool::Select
-                    && !(editing_content && can_modify && crate::content_ui::select_grabs(ui, &xf, i, info, &added, view))
-                    && !comments::select_grabs(ui, &pcx, view)
+                    && !(editing_content && can_modify && crate::content_ui::select_grabs(&xf, &ptr, i, info, &added, view))
+                    && !comments::select_grabs(&pcx, view)
                 {
-                    crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
+                    crate::forms_ui::page_input(ui, &resp, &xf, &ptr, i, info, &form, can_fill, view)
                 } else {
                     FieldPointer::Away
                 };
@@ -3556,11 +3550,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (vx, vy) = xf.screen_to_view(p);
                     text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
                 };
-                crate::redact_ui::page_input(ui, &resp, &xf, i, info, over_text, view)
+                crate::redact_ui::page_input(ui, &resp, &xf, &ptr, i, info, over_text, view)
             };
-            let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, i, info, view);
+            let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, &ptr, i, info, view);
             let on_objects =
-                !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, i, doc, view);
+                !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, &ptr, i, doc, view);
             let lines = if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify {
                 let generation = doc.edit_generation();
                 match view.edit_lines.get(&i) {
@@ -3592,6 +3586,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         ui,
                         &resp,
                         &xf,
+                        &ptr,
                         i,
                         info,
                         &added,
@@ -3620,11 +3615,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 };
                 // Editable text takes precedence over background/overlapping artwork. Both
                 // inventories are painted every frame, even when text owns the pointer.
-                let text_used = crate::edit_text_ui::page_input(ui, &resp, &xf, i, doc, &lines, view, !others_own_pointer && !image_owns_pointer);
+                let text_used =
+                    crate::edit_text_ui::page_input(ui, &resp, &xf, &ptr, i, doc, &lines, view, !others_own_pointer && !image_owns_pointer);
                 let image_used = crate::edit_text_ui::image_input(
                     ui,
                     &resp,
                     &xf,
+                    &ptr,
                     i,
                     info,
                     &images,
@@ -3634,7 +3631,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 );
                 !others_own_pointer && (text_used || image_used)
             };
-            let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
+            let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, &ptr, i, info, &doc_links, view);
             if tool == QuickTool::Select
                 && resp.secondary_clicked()
                 && can_modify
@@ -3712,23 +3709,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     } else if over_text && cursor_free {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
                     }
-                    let press_here = ui
-                        .input(|inp| {
-                            inp.pointer.press_origin().or_else(|| {
-                                // A press and release can arrive in one pass; egui has already
-                                // cleared press_origin, but the press still starts multi-click selection.
-                                inp.events.iter().find_map(|event| match event {
-                                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. }
-                                        if pos.is_finite() =>
-                                    {
-                                        Some(*pos)
-                                    }
-                                    _ => None,
-                                })
-                            })
-                        })
-                        .is_some_and(|o| r.contains(o));
-                    let pressed = ui.input(|inp| inp.pointer.primary_pressed());
+                    // The pages' press, kept when its release came in the same frame (#2100): it
+                    // still starts multi-click selection.
+                    let press_here = ptr.origin.is_some_and(|o| r.contains(o));
+                    let pressed = ptr.pressed().is_some();
                     if pressed && press_here && !over_link {
                         let now = ui.input(|inp| inp.time);
                         // The same limits egui uses to count clicks on release.
@@ -3753,7 +3737,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         // re-drag over text whose bar Copy closed would keep the bar hidden.
                         view.actions_dismissed = None;
                         view.selection_drag = true;
-                        let origin = ui.input(|inp| inp.pointer.press_origin()).unwrap_or(p);
+                        let origin = ptr.origin.unwrap_or(p);
                         let (ox, oy) = xf.screen_to_view(origin);
                         if view.clicks < 2 {
                             view.selection = if column {
@@ -3843,11 +3827,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 crate::redact_ui::after_text(&resp, i, info, view);
             }
             if area_tool {
-                crate::redact_ui::paint(ui, painter, i, view);
+                crate::redact_ui::paint(painter, i, view, pointer);
             }
             comments::paint_page(ui, painter, &pcx, view);
             if editing_content {
-                crate::content_ui::paint_page(ui, painter, &xf, i, info, &added, view);
+                crate::content_ui::paint_page(painter, &xf, i, info, &added, view, pointer);
             }
             if tool == QuickTool::EditText {
                 crate::object_ui::paint(painter, &xf, i, info, &view.objects);
@@ -3856,21 +3840,23 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 crate::camera_ui::paint(painter, &xf, i, view);
             }
             if tool == QuickTool::Link {
-                crate::link_ui::paint(ui, painter, &xf, i, info, &doc_links, view);
+                crate::link_ui::paint(painter, &xf, i, info, &doc_links, view, pointer);
             }
             if preparing {
-                crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
+                crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view, pointer);
                 if let Some(preview) = &table_preview {
                     crate::field_table_ui::paint_preview(painter, &xf, i, preview);
                 }
                 if calc_order {
                     let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-                    if let Some(name) = crate::calc_order_ui::paint_page(ui, painter, &xf, i, info, &form, &view.calc_order, generation, selected) {
+                    if let Some(name) =
+                        crate::calc_order_ui::paint_page(painter, &xf, i, info, &form, &view.calc_order, generation, selected, pointer)
+                    {
                         calc_hover = Some(name);
                     }
                 }
             } else {
-                crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
+                crate::forms_ui::paint_page(painter, &xf, i, info, &form, view, pointer);
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -3898,9 +3884,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                 }
             }
-            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback.
-            if !page_covered
-                && !matches!(tool, QuickTool::Fill(_))
+            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback. Tips
+            // draw above the palette, so none shows while it is open, even beside it.
+            if !matches!(tool, QuickTool::Fill(_))
+                && unobstructed
                 && let Some(p) = pointer
             {
                 for l in info.links.iter().filter(|l| l.page == i) {
@@ -4022,7 +4009,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             && navigation_enabled
             && unobstructed
             && !single_paging
-            && let Some(p) = ui.input(|i| i.pointer.latest_pos())
+            && let Some(p) = ptr.pos
         {
             let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
             if dy != 0.0 {
@@ -4307,7 +4294,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.frame_visible = visible_now.iter().copied().collect();
 
     if let Some((pos, text)) = hover_text {
-        egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
+        // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
+        let tip = egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
+        tip.fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
                 ui.label(text);
@@ -4727,6 +4716,31 @@ fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerOp, (u32, u1
     if app.session.set_layer_state(id, changes, preserve_rb) {
         app.views[index].invalidate_content();
     }
+}
+
+/// Where a pinch or ⌘-scroll zooms the view about: the pointer, wherever it is over the view. Not
+/// page input: it is read before the pages' widget exists, once `rect_contains_pointer` has found
+/// the view under the pointer.
+fn zoom_anchor(ui: &egui::Ui) -> Option<Pos2> {
+    ui.input(|i| i.pointer.hover_pos())
+}
+
+/// The pointer and frame time that scroll the view while a comment is drawn. Not page input: it is
+/// read before the pages' widget exists, and the pointer may be past the view's edge.
+fn drawing_edge_pointer(ui: &egui::Ui) -> (Option<Pos2>, f32) {
+    ui.input(|i| (i.pointer.latest_pos(), i.stable_dt))
+}
+
+/// A press anywhere, or a key, stops the touchpad's glide (#531).
+fn glide_interrupted(ui: &egui::Ui) -> bool {
+    ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
+}
+
+/// Full screen's click on the document, which turns the page: a primary click this frame with the
+/// view on top under it in `area`. Not page input: it is read before the pages' widget exists, and
+/// the turn waits until the pages have had the click.
+fn presentation_click(ui: &egui::Ui, area: Rect) -> bool {
+    ui.rect_contains_pointer(area) && ui.input(|i| i.pointer.primary_clicked())
 }
 
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
@@ -5291,7 +5305,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                         .info
                                         .annotations
                                         .iter()
-                                        .any(|a| a.page == page && a.index == annotation && a.in_reply_to.is_none() && comments::made_by(a, tool))
+                                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && comments::made_by(a, tool))
                             })
                         {
                             app.apply_edit(Edit::StyleAnnotation {
@@ -5877,6 +5891,8 @@ mod tests {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
+            grouped: false,
             rect: [0.0; 4],
             color: None,
             index: 0,

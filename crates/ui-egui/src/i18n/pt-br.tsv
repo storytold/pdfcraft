@@ -2503,6 +2503,14 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Create & Edit	Criar e editar
+	Review & Compare	Revisar e comparar
+	Forms & Signatures	Formulários e assinaturas
+	Protect & Standardize	Proteger e padronizar
+	Customize & Automate	Personalizar e automatizar
+	No tools match your search.	Nenhuma ferramenta corresponde à pesquisa.
+	Expand all tools	Expandir todas as ferramentas
+	Collapse all tools	Recolher todas as ferramentas
 	Attach a file…	Anexar um arquivo…
 	Delete attachment	Excluir anexo
 	Attaching files is not available on the web yet	Anexar arquivos ainda não está disponível na web
@@ -2816,3 +2824,4 @@ theme	Appearance	Aparência
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoje
+@plural	{n} reply|{n} replies	{n} resposta|{n} respostas

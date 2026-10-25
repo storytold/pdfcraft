@@ -3471,8 +3471,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown"]
-notes = "Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Missing: a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
+evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/organize/src/tests.rs::document_info_falls_back_to_the_xmp_packet", "crates/engine/src/tests.rs::document_information_stated_only_in_xmp_is_shown", "crates/ui-egui/tests/it/dialog_chrome.rs::document_properties_values_line_up_and_long_fields_wrap", "crates/ui-egui/tests/it/dialog_chrome.rs::space_audit_tab_measures_the_file_and_stays_in_the_card"]
+notes = "Description, Initial View, Security, Fonts, Custom (organize.custom-properties) and Advanced, plus a Space Audit tab Acrobat does not have (its audit is only in the PDF Optimizer); the audit runs when the tab opens and again after an edit. Title, Author, Subject and Keywords (and Creator, Producer in doc_info) come from /Info, else from the XMP packet (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) for files that state them only there; edits write both. Missing: a UTF-16 XMP packet isn't read, and /Info kept only in an older revision's trailer isn't looked up"
 
 [[feature]]
 id = "organize.edit-metadata"
@@ -3583,8 +3583,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_list"]
-evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand"]
-notes = "cards grouped by page with replies, status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet"
+evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand", "crates/ui-egui/tests/it/comments.rs::replies_follow_irt_references_when_names_repeat_on_every_page", "crates/engine/src/tests.rs::replies_thread_by_reference_when_names_repeat_across_pages", "crates/automation/tests/it/automation.rs::replies_thread_by_reference_when_ids_repeat_across_pages"]
+notes = "cards grouped by page with replies (threaded by the `/IRT` reference, so files whose `/NM` repeats per page, as PyMuPDF writes them, thread correctly; the header counts comments without replies, as Acrobat does), status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet"
 
 [[feature]]
 id = "comment.appearance-generation"
@@ -7673,7 +7673,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_audit_space"]
 evidence = ["crates/optimize/tests/optimize.rs::space_audit_shares_the_file_out_by_kind", "crates/optimize/tests/optimize.rs::space_audit_counts_what_fields_and_comments_draw_with_by_kind", "crates/optimize/tests/optimize.rs::space_audit_survives_deeply_nested_forms", "crates/automation/tests/it/automation.rs::auditing_space_through_tools", "crates/ui-egui/tests/it/viewer.rs::optimizer_audits_space_usage", "crates/ui-egui/tests/it/viewer.rs::space_audit_numbers_line_up_under_their_headers"]
-notes = "PDF Optimizer ▸ Audit space usage: what the file's bytes are spent on now (not what optimizing would save), in 16 categories (images, content streams, fonts, X Object forms, structure, bookmarks, thumbnails, comments, forms, named destinations, colour spaces, shadings, patterns, graphics states, embedded files, overhead) with bytes and percentages. Resources are counted by kind wherever they are used, so the fonts and images form fields and comments draw with count as fonts and images. Still missing: sizes are each object as it would be written uncompressed, so objects packed in compressed object streams count larger than they take on disk (overhead, the rest of the file, shrinks to match)"
+notes = "PDF Optimizer ▸ Audit space usage, and Document Properties ▸ Space Audit: what the file's bytes are spent on now (not what optimizing would save), in 16 categories (images, content streams, fonts, X Object forms, structure, bookmarks, thumbnails, comments, forms, named destinations, colour spaces, shadings, patterns, graphics states, embedded files, overhead) with bytes and percentages. Resources are counted by kind wherever they are used, so the fonts and images form fields and comments draw with count as fonts and images. Still missing: sizes are each object as it would be written uncompressed, so objects packed in compressed object streams count larger than they take on disk (overhead, the rest of the file, shrinks to match)"
 
 [[feature]]
 id = "optimize.optimizer-presets"

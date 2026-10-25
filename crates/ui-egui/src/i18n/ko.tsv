@@ -2682,6 +2682,14 @@ certificate	SHA-256 digest	SHA-256 다이제스트
 	Make properties default	속성을 기본값으로 설정
 	Pages selected	선택한 페이지
 	Page properties	페이지 속성
+	Create & Edit	만들기 및 편집
+	Review & Compare	검토 및 비교
+	Forms & Signatures	양식 및 서명
+	Protect & Standardize	보호 및 표준화
+	Customize & Automate	사용자 지정 및 자동화
+	No tools match your search.	검색과 일치하는 도구가 없습니다.
+	Expand all tools	모든 도구 펼치기
+	Collapse all tools	모든 도구 접기
 	The password must have at least 8 characters.	암호는 8자 이상이어야 합니다.
 theme	Appearance	모양
 	Zoom — type a percentage and press Enter	줌 — 백분율을 입력하고 Enter를 누르세요
@@ -2768,3 +2776,4 @@ theme	Appearance	모양
 	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
+@plural	{n} reply|{n} replies	답글 {n}개

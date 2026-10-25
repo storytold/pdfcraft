@@ -3,6 +3,8 @@
 //! Geometry follows the automation convention: points from the top-left of the displayed page,
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
 
+use std::collections::HashMap;
+
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -152,8 +154,13 @@ impl Automation {
     fn comment_target(&self, a: &Args) -> Result<(usize, usize)> {
         let all = self.comments(a)?;
         if let Some(id) = a.opt_str("id")? {
-            let c =
-                all.iter().find(|c| c.name.as_deref() == Some(id)).ok_or_else(|| failed(format!("no comment with id {id:?} (see comment_list)")))?;
+            // `/NM` need not be unique (PyMuPDF names the first comment on every page `fitz-A0`):
+            // the first match could be another page's comment, so a shared id is refused.
+            let mut named = all.iter().filter(|c| c.name.as_deref() == Some(id));
+            let c = named.next().ok_or_else(|| failed(format!("no comment with id {id:?} (see comment_list)")))?;
+            if named.next().is_some() {
+                return Err(failed(format!("several comments have the id {id:?}: pass page and index instead (see comment_list)")));
+            }
             return Ok((c.page, c.index));
         }
         let (Some(page), Some(index)) = (a.opt_int("page")?, a.opt_int("index")?) else {
@@ -193,33 +200,44 @@ impl Automation {
             }
             v
         };
+        // Every reply under the comment its thread starts from, at any depth, in document order:
+        // a reply to a reply keeps its `/IRT` on the direct parent, so following one level would
+        // drop it. Parents are found by reference, as `/NM` need not be unique. A status or
+        // checkmark belongs to the annotation its `/IRT` names (ISO 32000-2 §12.5.6.2), as in the
+        // Comments panel: one set on a reply is not the comment's.
+        let tops = pdfcraft_render::thread_tops(&all);
+        let mut threads: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
+        for r in &all {
+            let Some(&top) = tops.get(&(r.page, r.index)) else { continue };
+            let key = match r.parent {
+                Some(parent) if r.state.is_some() => parent,
+                _ => top,
+            };
+            threads.entry(key).or_default().push(r);
+        }
+        // An annotation's review status and checkmark: the latest of each set on it.
+        let states = |c: &Annotation, v: &mut Value| {
+            let set = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
+            v["status"] = json!(set.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()));
+            v["marked"] = json!(set.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked")));
+        };
         let roots: Vec<Value> = all
             .iter()
-            .filter(|c| c.in_reply_to.is_none() && only.is_none_or(|p| c.page == p))
+            .filter(|c| c.is_comment() && only.is_none_or(|p| c.page == p))
             .map(|c| {
                 let mut v = view(c);
-                // Every reply under this comment, at any depth, in document order. A reply to a
-                // reply keeps its `/IRT` on the direct parent, so following one level would drop it.
-                let descends_from = |r: &Annotation, root: &str| -> bool {
-                    let mut parent = r.in_reply_to.as_deref();
-                    for _ in 0..64 {
-                        let Some(nm) = parent else { return false };
-                        if nm == root {
-                            return true;
-                        }
-                        parent = all.iter().find(|x| x.name.as_deref() == Some(nm)).and_then(|x| x.in_reply_to.as_deref());
-                    }
-                    false
-                };
-                let thread: Vec<&Annotation> = match c.name.as_deref() {
-                    Some(nm) => all.iter().filter(|r| r.in_reply_to.is_some() && descends_from(r, nm)).collect(),
-                    None => Vec::new(),
-                };
-                let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone());
-                v["status"] = json!(status);
-                v["marked"] = json!(thread.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked")));
+                states(c, &mut v);
                 v["locked"] = json!(c.locked);
-                v["replies"] = thread.iter().filter(|r| r.state.is_none()).map(|r| view(r)).collect();
+                let thread = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
+                v["replies"] = thread
+                    .iter()
+                    .filter(|r| r.state.is_none())
+                    .map(|r| {
+                        let mut reply = view(r);
+                        states(r, &mut reply);
+                        reply
+                    })
+                    .collect();
                 v
             })
             .collect();

@@ -2452,6 +2452,14 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Create & Edit	Създаване и редактиране
+	Review & Compare	Преглед и сравнение
+	Forms & Signatures	Формуляри и подписи
+	Protect & Standardize	Защита и стандартизация
+	Customize & Automate	Персонализиране и автоматизация
+	No tools match your search.	Няма инструменти, отговарящи на търсенето.
+	Expand all tools	Разгъване на всички инструменти
+	Collapse all tools	Свиване на всички инструменти
 	Attach a file…	Прикачване на файл…
 	Delete attachment	Изтриване на прикачения файл
 	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията
@@ -2494,3 +2502,4 @@ animation effects	Off	Изключени
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Днес
+@plural	{n} reply|{n} replies	{n} отговор|{n} отговора

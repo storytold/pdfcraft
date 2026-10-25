@@ -10,6 +10,12 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    // The page sets hover cursors from the raw pointer position (form fields, links, comments)
+    // before any dialog is drawn, and nothing under a modal's backdrop takes clicks. Start from
+    // the arrow; the modal's own widgets set theirs as they are drawn.
+    if app.modal_open() || ctx.memory(|m| m.top_modal_layer().is_some()) {
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
+    }
     dialogs(app, ctx);
     // Last, so it sits above Document Properties when Security's Unlock… asked for it.
     unlock(app, ctx);
@@ -42,6 +48,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Properties ▸ Fonts shows the fonts as they are now, after any content edits.
     if let (Dialog::Properties(PropsTab::Fonts), Some((_, id))) = (dialog, app.active_ids()) {
         app.session.refresh_fonts(id);
+    }
+    // Properties ▸ Space Audit walks the whole file, so it is measured once per edit, not per frame.
+    if dialog == Dialog::Properties(PropsTab::SpaceAudit) {
+        app.refresh_space_audit();
     }
     // Seed the editable Description fields from the document when the dialog opens.
     if let (Dialog::Properties(_), Some((_, id))) = (dialog, app.active_ids())
@@ -118,6 +128,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         (PropsTab::Fonts, tl!("Fonts")),
                         (PropsTab::Custom, tl!("Custom")),
                         (PropsTab::Advanced, tl!("Advanced")),
+                        (PropsTab::SpaceAudit, tl!("Space Audit")),
                     ] {
                         if widgets::mode_tab(ui, label, tab == tb).clicked() {
                             next = Dialog::Properties(tb);
@@ -129,11 +140,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let Some((_, id)) = app.active_ids() else { return };
                 let Some(doc) = app.session.get(id) else { return };
                 let i = &doc.info;
+                // Description shows plain values among text fields; they start where the fields' text does.
+                let editable_info = tab == PropsTab::Description && doc.allows_modification() && app.props_draft.is_some();
+                let inset = if editable_info { widgets::FIELD_TEXT_INSET } else { 0.0 };
                 let row = |ui: &mut egui::Ui, k: &str, v: String| {
                     // Row labels are UI chrome; values are document data and stay as they are.
                     ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
-                    ui.scope(|ui| {
-                        ui.set_max_width(420.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(inset);
                         ui.add(
                             egui::Label::new(if v.is_empty() { egui::RichText::new("—").color(t.text_faint) } else { egui::RichText::new(v) }).wrap(),
                         );
@@ -141,15 +155,23 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ui.end_row();
                 };
                 egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
+                    if tab == PropsTab::SpaceAudit {
+                        ui.add_space(4.0);
+                        crate::optimize_ui::audit_table(ui, &app.space_audit, &t);
+                        return;
+                    }
                     egui::Grid::new("props").num_columns(2).spacing([18.0, 8.0]).min_col_width(140.0).show(ui, |ui| match tab {
                         PropsTab::Description => {
                             row(ui, "File", crate::bidi::visual(&doc.name).into_owned());
                             match app.props_draft.as_mut() {
-                                Some((_, draft)) if doc.allows_modification() => {
+                                Some((_, draft)) if editable_info => {
                                     for (k, v) in INFO_KEYS.iter().zip(draft.iter_mut()) {
                                         let l = ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
-                                        ui.add(widgets::line(v).desired_width(420.0).background_color(t.field).id_salt(("info", *k)))
-                                            .labelled_by(l.id);
+                                        // Subject and Keywords are often a sentence or a list: they wrap and grow
+                                        // instead of hiding most of the value past the field's edge.
+                                        let field =
+                                            if matches!(*k, "Subject" | "Keywords") { widgets::block(v).desired_rows(1) } else { widgets::line(v) };
+                                        ui.add(field.desired_width(f32::INFINITY).background_color(t.field).id_salt(("info", *k))).labelled_by(l.id);
                                         ui.end_row();
                                     }
                                 }
@@ -500,7 +522,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                                 ui.end_row();
                             }
                         }
-                    })
+                        // Laid out above, outside the two-column grid.
+                        PropsTab::SpaceAudit => {}
+                    });
                 });
             }
             Dialog::Split => {
@@ -837,7 +861,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 optimize_now = ok;
                 close = ok || cancel;
                 if std::mem::take(&mut app.optimize_draft.audit) {
-                    app.space_audit = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.audit_space()).unwrap_or_default();
+                    app.refresh_space_audit();
                     next = Dialog::AuditSpace;
                 }
                 return;
@@ -1309,43 +1333,47 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         ui.add_space(16.0);
         let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if dialog == Dialog::Recovery {
-                if widgets::pill_button(ui, tl!("Recover"), true).clicked() {
-                    recover = Some(true);
+        // One row high: on its own, a right-to-left layout centres the buttons in all the height
+        // left, which after a taller Properties tab is the room that tab left behind.
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if dialog == Dialog::Recovery {
+                    if widgets::pill_button(ui, tl!("Recover"), true).clicked() {
+                        recover = Some(true);
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Discard"), false).clicked() {
+                        recover = Some(false);
+                        close = true;
+                    }
+                } else if dialog == Dialog::NumberPages {
+                    if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                        apply_number = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                } else if dialog == Dialog::Split {
+                    if ui.add_enabled_ui(split_ready.is_some(), |ui| widgets::pill_button(ui, tl!("Split"), true)).inner.clicked() {
+                        split_now = split_ready.clone();
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                } else if changed {
+                    if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                        apply = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                } else if widgets::pill_button(ui, tl!("Close"), true).clicked() {
                     close = true;
                 }
-                if widgets::pill_button(ui, tl!("Discard"), false).clicked() {
-                    recover = Some(false);
-                    close = true;
-                }
-            } else if dialog == Dialog::NumberPages {
-                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-                    apply_number = true;
-                    close = true;
-                }
-                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                    close = true;
-                }
-            } else if dialog == Dialog::Split {
-                if ui.add_enabled_ui(split_ready.is_some(), |ui| widgets::pill_button(ui, tl!("Split"), true)).inner.clicked() {
-                    split_now = split_ready.clone();
-                    close = true;
-                }
-                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                    close = true;
-                }
-            } else if changed {
-                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-                    apply = true;
-                    close = true;
-                }
-                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                    close = true;
-                }
-            } else if widgets::pill_button(ui, tl!("Close"), true).clicked() {
-                close = true;
-            }
+            })
         });
     });
     if let Some(yes) = recover {

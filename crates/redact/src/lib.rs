@@ -699,27 +699,24 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     Ok(report)
 }
 
-/// Remove redaction marks without applying them (`None` = all).
+/// Remove redaction marks without applying them (`None` = all), with their replies and pop-ups as
+/// deleting a comment does: a reply left behind would keep its mark in the file through `/IRT`.
+/// Returns how many marks went.
 pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, RedactError> {
-    let all = marks(doc);
-    let doomed: Vec<ObjRef> = all.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).map(|m| m.obj).collect();
-    if doomed.is_empty() {
+    let targets: HashSet<ObjRef> = marks(doc).iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).map(|m| m.obj).collect();
+    if targets.is_empty() {
         return Err(RedactError::NothingToApply);
     }
+    let listed: Vec<Object> = pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).collect();
+    let doomed = pdfcraft_annot::with_replies_and_popups(doc, &listed, targets.iter().copied());
     for p in pdfcraft_model::pages(doc) {
         let annots = annots_of(doc, &p.dict);
-        let kept: Vec<Object> = annots
-            .iter()
-            .filter(|a| {
-                let Some(r) = a.as_ref() else { return true };
-                let parent = doc.get(r).as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref);
-                !doomed.contains(&r) && !parent.is_some_and(|p| doomed.contains(&p))
-            })
-            .cloned()
-            .collect();
+        let kept: Vec<Object> = annots.iter().filter(|a| !pdfcraft_annot::goes_with(a, &doomed)).cloned().collect();
+        // As deleting a comment does: a page whose marks were all it had loses `/Annots` again,
+        // and an indirect array stays the one object the page points to.
         if kept.len() != annots.len() {
-            doc.update_dict(p.obj, |d| d.set(b"Annots".to_vec(), Object::Array(kept)))?;
+            pdfcraft_annot::set_annots(doc, p.obj, kept)?;
         }
     }
-    Ok(doomed.len())
+    Ok(targets.len())
 }

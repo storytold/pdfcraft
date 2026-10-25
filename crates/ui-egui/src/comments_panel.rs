@@ -1,8 +1,9 @@
 //! The Comments panel (Acrobat's right-hand comment list; 11-visual-spec §3, audit `a15-*`).
 //!
-//! Header "Comments N" with search; an "Add a comment" box that posts a sticky note on the
-//! current page; cards grouped by page. Selecting a card selects the comment on the page and
-//! opens its reply box and "…" menu (Edit, Set status, Delete). Status replies show as a badge.
+//! Header "Comments N" (comments, as Acrobat counts them) with "N replies" under it and search;
+//! an "Add a comment" box that posts a sticky note on the current page; cards grouped by page.
+//! Selecting a card selects the comment on the page and opens its reply box and "…" menu (Edit,
+//! Set status, Delete). Status replies show as a badge.
 
 use std::collections::HashMap;
 
@@ -87,9 +88,16 @@ pub fn is_marked(thread: &[&Annotation]) -> bool {
     thread.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked"))
 }
 
-/// The number shown in the header: comments and their replies (not status changes).
+/// The number shown in the header: comments, not their replies or status changes (as Acrobat
+/// counts them).
 pub fn count(info: &DocInfo) -> usize {
-    info.annotations.iter().filter(|a| a.state.is_none()).count()
+    info.annotations.iter().filter(|a| a.is_comment()).count()
+}
+
+/// The replies under the header's count, at any depth: not status changes, checkmarks or a
+/// Replace Text caret (grouped with its strikeout, not a reply to it).
+pub fn reply_count(info: &DocInfo) -> usize {
+    info.annotations.iter().filter(|a| a.is_reply() && a.state.is_none() && !a.grouped).count()
 }
 
 fn matches(a: &Annotation, q: &str) -> bool {
@@ -157,25 +165,32 @@ pub(crate) fn show(
         return edit;
     }
     let query = view.comments.search.clone().filter(|q| !q.trim().is_empty());
-    let mut replies: HashMap<&str, Vec<&Annotation>> = HashMap::new();
+    let mut replies: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
     let mut page_counts: HashMap<usize, usize> = HashMap::new();
-    // Keep global name matching and source reply order. Page badges count roots before filtering.
+    // Replies find their parent by reference (`/NM` need not be unique) and keep source order.
+    // A reply at any depth joins the thread of the comment it starts from, as comment_list lists
+    // it. A status or checkmark stays with the annotation it was set on (its `/IRT` names it,
+    // ISO 32000-2 §12.5.6.2): one set on a reply, at any depth, is that reply's and not the
+    // comment's, so the card's badge and checkmark leave it out (comment_list reports it on the
+    // reply). Page badges count roots before filtering.
+    let tops = pdfcraft_render::thread_tops(&info.annotations);
     for a in &info.annotations {
-        if let Some(parent) = a.in_reply_to.as_deref() {
-            replies.entry(parent).or_default().push(a);
-        } else {
+        if let Some(parent) = a.parent {
+            let key = if a.state.is_none() { tops.get(&(a.page, a.index)).copied().unwrap_or(parent) } else { parent };
+            replies.entry(key).or_default().push(a);
+        } else if a.is_comment() {
             let count = page_counts.entry(a.page).or_default();
             *count = count.saturating_add(1);
         }
     }
-    let replies_of = |a: &Annotation| -> &[&Annotation] { a.name.as_deref().and_then(|name| replies.get(name)).map(Vec::as_slice).unwrap_or(&[]) };
+    let replies_of = |a: &Annotation| -> &[&Annotation] { replies.get(&(a.page, a.index)).map(Vec::as_slice).unwrap_or(&[]) };
     let cv = &view.comments;
     let status_of =
         |a: &Annotation| replies_of(a).iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()).unwrap_or_else(|| "None".into());
     let mut roots: Vec<&Annotation> = info
         .annotations
         .iter()
-        .filter(|a| a.in_reply_to.is_none())
+        .filter(|a| a.is_comment())
         .filter(|a| query.as_deref().is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q))))
         .filter(|a| !cv.hidden_types.iter().any(|t| t == kind_label(a)))
         .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))
@@ -304,8 +319,9 @@ fn card(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let mut buttons_left = f32::INFINITY;
+            let mut above = egui::Rect::NOTHING;
             let head = ui.horizontal(|ui| {
-                avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
+                above = avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
                 let author = a.author.as_deref().map_or_else(|| tl!("Unknown author").into(), crate::bidi::visual_auto);
                 ui.label(egui::RichText::new(author).font(theme::semibold(12.5)).color(t.text));
                 if let Some(m) = &a.modified {
@@ -376,11 +392,13 @@ fn card(
                     });
                 }
             });
-            // Replies, joined to the parent by a thread line.
+            // Replies, each joined to the avatar above it (the comment's or the previous reply's)
+            // by a thread line that runs the whole gap.
             for r in &replies {
                 ui.add_space(8.0);
-                let resp = ui.horizontal(|ui| {
-                    avatar(ui, t, None, Some(&initials(r.author.as_deref().unwrap_or("?"))), t.text_faint);
+                let mut me = egui::Rect::NOTHING;
+                ui.horizontal(|ui| {
+                    me = avatar(ui, t, None, Some(&initials(r.author.as_deref().unwrap_or("?"))), t.text_faint);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
@@ -393,8 +411,12 @@ fn card(
                         widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false);
                     });
                 });
-                let x = resp.response.rect.left() + 12.0;
-                ui.painter().vline(x, (resp.response.rect.top() - 14.0)..=(resp.response.rect.top() - 2.0), Stroke::new(1.5, t.border));
+                // The circles are 12 px in radius; leave a 1 px gap at each end.
+                let (top, bottom) = (above.center().y + 13.0, me.center().y - 13.0);
+                if above.is_positive() && top < bottom {
+                    ui.painter().vline(me.center().x, top..=bottom, Stroke::new(1.5, t.border));
+                }
+                above = me;
             }
             if selected && allowed {
                 ui.add_space(8.0);
@@ -501,8 +523,8 @@ fn card(
     edit
 }
 
-/// A 26 pt round badge: a type glyph (comments) or initials (replies).
-fn avatar(ui: &mut egui::Ui, t: &Tokens, icon: Option<&str>, text: Option<&str>, color: Color32) {
+/// A 26 pt round badge: a type glyph (comments) or initials (replies). Returns where it was drawn.
+fn avatar(ui: &mut egui::Ui, t: &Tokens, icon: Option<&str>, text: Option<&str>, color: Color32) -> egui::Rect {
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
     let bg = if t.dark() { Color32::from_gray(0x55) } else { Color32::from_gray(0xD8) };
     ui.painter().circle_filled(r.center(), 12.0, bg);
@@ -512,6 +534,7 @@ fn avatar(ui: &mut egui::Ui, t: &Tokens, icon: Option<&str>, text: Option<&str>,
     if let Some(s) = text {
         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, s, theme::semibold(10.5), t.text);
     }
+    r
 }
 
 /// Darken very light annotation colours (e.g. note yellow) so their glyph stays legible.
@@ -530,15 +553,13 @@ fn legible(c: Color32, t: &Tokens) -> Color32 {
 pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocView, hidden: bool) -> Option<&'static str> {
     let mut command = None;
     let cv = &mut view.comments;
-    let mut types: Vec<String> = info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| kind_label(a).to_string()).collect();
+    let mut types: Vec<String> = info.annotations.iter().filter(|a| a.is_comment()).map(|a| kind_label(a).to_string()).collect();
     types.sort();
     types.dedup();
-    let mut authors: Vec<String> =
-        info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| a.author.clone().unwrap_or_default()).collect();
+    let mut authors: Vec<String> = info.annotations.iter().filter(|a| a.is_comment()).map(|a| a.author.clone().unwrap_or_default()).collect();
     authors.sort();
     authors.dedup();
-    let mut colors: Vec<(String, Option<[f32; 3]>)> =
-        info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| (color_key(a), a.color)).collect();
+    let mut colors: Vec<(String, Option<[f32; 3]>)> = info.annotations.iter().filter(|a| a.is_comment()).map(|a| (color_key(a), a.color)).collect();
     colors.sort_by(|a, b| a.0.cmp(&b.0));
     colors.dedup_by(|a, b| a.0 == b.0);
     let active = !(cv.hidden_types.is_empty()
