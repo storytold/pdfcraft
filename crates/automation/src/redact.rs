@@ -126,7 +126,24 @@ impl Automation {
             let info = self.doc(a)?.info.clone();
             for (&p, text) in pages.iter().zip(&texts) {
                 let hits: Vec<(Option<usize>, _)> = match (&user_re, pattern) {
-                    (Some(re), _) => text.find_with(|chars| re.find(chars)).into_iter().map(|h| (None, h)).collect(),
+                    (Some(re), _) => {
+                        // A page with too many matches fails the call: marking only the first ones
+                        // would leave the rest readable after redact_apply.
+                        let too_many = std::cell::Cell::new(false);
+                        let found = text.find_with(|chars| {
+                            re.find(chars).unwrap_or_else(|_| {
+                                too_many.set(true);
+                                Vec::new()
+                            })
+                        });
+                        if too_many.get() {
+                            return Err(ToolError::InvalidArgs(format!(
+                                "regex has more than 10000 matches on page {}; nothing was marked. Narrow the expression so that every match can be marked",
+                                p + 1
+                            )));
+                        }
+                        found.into_iter().map(|h| (None, h)).collect()
+                    }
                     (None, Some(pat)) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
                     (None, None) => needles
                         .iter()
