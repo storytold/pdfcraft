@@ -1,9 +1,9 @@
 //! An image or soft mask whose data stops short of its `/Height` keeps that height (#2780,
 //! vendored hayro-interpret patch 67): the rows present are drawn where they belong, and the
-//! missing rows are padded as 1-, 2- and 4-bit samples already were. 8-bit data was cut to the
-//! rows present, which were then stretched over the whole image, so an image no longer lined up
-//! with its `/SMask`. A scanned page's colour layer drew its first rows across the page under a
-//! text mask that kept its full height, and the text came out as a faint ghost.
+//! missing samples are raw zeros, decoded like the rest, as 1-, 2- and 4-bit samples already
+//! were and as Chrome draws them. 8-bit data was cut to the rows present, so a short image was
+//! drawn short with its `/SMask` squeezed into those rows: a scanned page's colour layer no
+//! longer met its full-height text mask, and the text came out as a faint ghost.
 
 use super::{image_cache_pdf, render_first_page, rgb_at};
 
@@ -54,15 +54,33 @@ fn a_short_image_lines_up_with_its_soft_mask() {
     assert_eq!(rows(&objects), ["black", "white", "black", "black"]);
 }
 
-/// The same through the colour table a spot-colour image is converted with (patch 28), which
-/// follows the same length rule. The tint transform draws tint t as gray t, so sample 0 is black.
+/// The missing samples are raw zeros, decoded like the rest: under `/Decode [0.5 1]` they are
+/// 0.5, grey, as Chrome draws them. They were padded after decoding, as 0.0, black.
+#[test]
+fn a_short_image_pads_raw_zeros_under_its_decode() {
+    let image = gray("/Decode [0.5 1] ", 2);
+    let objects: [(&str, &[u8]); 1] = [(&image, &SHORT)];
+    assert_eq!(rows(&objects), ["grey", "white", "grey", "grey"]);
+}
+
+/// The same through the colour table a spot-colour image is converted with (patch 28). The
+/// tint transform draws tint t as gray t, and `/Decode [0.5 1]` makes a raw 0 the tint 0.5.
 #[test]
 fn a_short_spot_colour_image_draws_its_rows_where_they_belong() {
     // The table is used when the image has more pixels than its 256 entries: the two rows
     // present (400 pixels) are enough on their own.
-    let image = "<< /Type /XObject /Subtype /Image /Width 200 /Height 4 /ColorSpace [/Separation /Spot /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] /BitsPerComponent 8 /Length 400 >>";
+    let image = "<< /Type /XObject /Subtype /Image /Width 200 /Height 4 /ColorSpace [/Separation /Spot /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] /BitsPerComponent 8 /Decode [0.5 1] /Length 400 >>";
     let data = [[0x00; 200], [0xff; 200]].concat();
     let objects: [(&str, &[u8]); 1] = [(image, &data)];
+    assert_eq!(rows(&objects), ["grey", "white", "grey", "grey"]);
+}
+
+/// A soft mask's missing samples are raw zeros too: under `/Decode [1 0]` they are opaque, as
+/// Chrome draws them. The mask was inverted before it was padded, so they were clear.
+#[test]
+fn a_short_soft_mask_pads_raw_zeros_under_its_decode() {
+    let (image, mask) = (gray("/SMask 6 0 R ", 4), gray("/Decode [1 0] ", 2));
+    let objects: [(&str, &[u8]); 2] = [(&image, &[0x00; 4]), (&mask, &SHORT)];
     assert_eq!(rows(&objects), ["black", "white", "black", "black"]);
 }
 
