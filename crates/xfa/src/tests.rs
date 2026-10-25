@@ -3350,6 +3350,7 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     ur.set(b"UR3".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
     doc.update_dict(root, |d| d.set(b"Perms".to_vec(), Object::Dict(ur))).unwrap();
     let r = strip(&mut doc).unwrap();
+    assert!(doc.full_save_required());
     assert_eq!(r.packets, vec!["template".to_string(), "datasets".to_string()]);
     assert_eq!(r.unbound_data, Some(0));
     assert_eq!((r.script_buttons, r.image_fields), (0, 1), "{r:?}");
@@ -3433,6 +3434,16 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     let r = strip(&mut doc).unwrap();
     assert_eq!(r.field_keys, 2000);
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn strip_marks_document_as_requiring_full_save() {
+    use crate::pdf::strip;
+    let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(!doc.full_save_required());
+    strip(&mut doc).unwrap();
+    assert!(doc.full_save_required(), "stripping XFA packets must require a full save to prevent data exposure in incremental saves");
 }
 
 #[test]
