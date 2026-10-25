@@ -134,6 +134,7 @@ struct Pool {
     members: Vec<Member>,
     events: Rc<RefCell<Vec<(usize, Event)>>>,
     started: f64,
+    /// When a page last went to or came back from a worker: the idle time runs from here.
     last_used: f64,
     /// Which run each page sent belongs to: single-file and multiple-file OCR share the workers.
     router: Router<Result<Vec<Line>, String>>,
@@ -277,6 +278,11 @@ impl Pool {
                     self.kill(i);
                 }
             }
+        }
+        // The idle time starts once a worker is done with its page, not when it was given it (a
+        // page can take most of a minute to read).
+        if !done.is_empty() {
+            self.last_used = now();
         }
         for (id, lines) in done {
             self.router.deliver(id, lines);
