@@ -94,7 +94,7 @@ fn form_edit_pages(
             Some(old) => {
                 changed_pages.extend(pages(f));
                 changed_pages.extend(pages(old));
-                if old.value != f.value {
+                if old.value != f.value || old.widgets != f.widgets {
                     unbaked.extend(pages(f).into_iter().map(|p| (f.name.clone(), p)));
                 }
             }
