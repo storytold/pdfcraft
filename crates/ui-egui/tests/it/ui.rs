@@ -512,6 +512,14 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     h.state_mut().set_option("tool", "organize").unwrap();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    // Read mode hides the quick toolbar and keeps the tools down, so the control channel's
+    // `tool edit` there leaves editing off (review on #4605).
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(2);
+    assert_eq!(h.state().mode, Mode::Read);
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "no editing tool in Read mode");
 }
 
 /// Opening a document with Read as the default mode puts down the tool in use, as entering Read
