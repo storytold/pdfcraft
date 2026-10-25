@@ -474,7 +474,16 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         + owned(Hidden::Attachments)
                 }
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
-                Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
+                Hidden::FormFields => {
+                    let n = pdfcraft_forms::fields(doc).len();
+                    if n > 0 {
+                        n
+                    } else if cat.contains(b"AcroForm") {
+                        1
+                    } else {
+                        0
+                    }
+                }
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).map(|(n, _)| n).unwrap_or(0),
                 Hidden::HiddenLayers => {
                     let off = hidden_layers(doc).len();
@@ -510,7 +519,8 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
     let listed_before = listed_annotations(doc);
-    let fields = which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0;
+    let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
+    let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
     if fields {
         // Fields without appearances get one first, so their values stay visible.
         for f in pdfcraft_forms::fields(doc) {
@@ -631,9 +641,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     cat.set(b"OCProperties".to_vec(), Object::Dict(oc));
                 }
             }
+            Hidden::FormFields => {
+                cat.remove(b"AcroForm");
+            }
             _ => {}
         }
-        let n = count(h);
+        let n = if h == Hidden::FormFields && fields { count(h).max(1) } else { count(h) };
         if n > 0 {
             done.push((h, n));
         }

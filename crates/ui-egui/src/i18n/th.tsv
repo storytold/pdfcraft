@@ -2686,6 +2686,14 @@ key	Space	Space
 	Make properties default	ตั้งคุณสมบัติเป็นค่าเริ่มต้น
 	Pages selected	หน้าที่เลือก
 	Page properties	คุณสมบัติหน้า
+	Create & Edit	สร้างและแก้ไข
+	Review & Compare	ตรวจทานและเปรียบเทียบ
+	Forms & Signatures	แบบฟอร์มและลายเซ็น
+	Protect & Standardize	ป้องกันและกำหนดมาตรฐาน
+	Customize & Automate	ปรับแต่งและทำงานอัตโนมัติ
+	No tools match your search.	ไม่มีเครื่องมือที่ตรงกับการค้นหาของคุณ
+	Expand all tools	ขยายเครื่องมือทั้งหมด
+	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
 
@@ -2694,3 +2702,4 @@ theme	Appearance	ลักษณะที่ปรากฏ
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
+@plural	{n} reply|{n} replies	การตอบกลับ {n} รายการ

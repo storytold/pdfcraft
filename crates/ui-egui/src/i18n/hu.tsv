@@ -2488,6 +2488,14 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Create & Edit	Létrehozás és szerkesztés
+	Review & Compare	Áttekintés és összehasonlítás
+	Forms & Signatures	Űrlapok és aláírások
+	Protect & Standardize	Védelem és szabványosítás
+	Customize & Automate	Testreszabás és automatizálás
+	No tools match your search.	Egy eszköz sem felel meg a keresésnek.
+	Expand all tools	Az összes eszköz kibontása
+	Collapse all tools	Az összes eszköz összecsukása
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el
@@ -2530,3 +2538,4 @@ animation effects	Off	Ki
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
+@plural	{n} reply|{n} replies	{n} válasz|{n} válasz

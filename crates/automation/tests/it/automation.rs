@@ -2121,6 +2121,83 @@ fn nested_replies_stay_in_the_listing() {
     assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
 }
 
+/// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
+/// page `fitz-A0`. A shared id is refused rather than taken to mean page 1's comment.
+#[test]
+fn replies_thread_by_reference_when_ids_repeat_across_pages() {
+    let dir = workdir("repeated-ids");
+    // Contributor-original PDF, shaped like PyMuPDF output.
+    std::fs::write(
+        dir.join("fitz.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R 7 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Alpha) /Contents (COVER) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Beta) /Contents (SECOND) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (ANSWER) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "fitz.pdf" }))["doc"].as_u64().unwrap();
+    let replies = |a: &mut Automation| -> Vec<(String, Vec<String>)> {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        list["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let mut texts: Vec<String> =
+                    c["replies"].as_array().unwrap().iter().filter_map(|r| r["contents"].as_str().map(String::from)).collect();
+                texts.sort();
+                (c["contents"].as_str().unwrap().to_string(), texts)
+            })
+            .collect()
+    };
+    assert_eq!(replies(&mut a), [("COVER".into(), vec![]), ("SECOND".into(), vec!["ANSWER".to_string()])]);
+    let refused = err(&mut a, "comment_reply", json!({ "doc": doc, "id": "fitz-A0", "text": "LATER" }));
+    assert!(refused.to_string().contains("several comments"), "{refused}");
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "page": 2, "index": 1, "text": "LATER" }));
+    assert_eq!(replies(&mut a), [("COVER".into(), vec![]), ("SECOND".into(), vec!["ANSWER".to_string(), "LATER".to_string()])]);
+}
+
+/// A status or checkmark belongs to the annotation its `/IRT` names: one set on a reply is not
+/// its comment's, as the Comments panel shows it, and is reported on the reply. One whose
+/// annotation can't be found is not a comment of its own.
+#[test]
+fn a_checkmark_on_a_reply_is_not_its_comments() {
+    let dir = workdir("reply-checkmark");
+    // Contributor-original PDF: a comment, a reply, a checkmark and a status on the reply, and a
+    // status whose annotation (object 9) doesn't exist.
+    std::fs::write(
+        dir.join("checked.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [100 100 120 120] /T (Alpha) /Contents (COMMENT) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 4 0 R /T (Beta) /Contents (REPLY) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Marked /State /Marked >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Review /State /Accepted >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [200 20 220 40] /F 30 /IRT 9 0 R /T (Gamma) /StateModel /Review /State /Rejected >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "checked.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1, "{list}");
+    let c = &list["comments"][0];
+    assert_eq!((&c["marked"], &c["status"]), (&json!(false), &Value::Null), "{c}");
+    assert_eq!(c["replies"].as_array().map(Vec::len), Some(1), "the reply, not its states: {c}");
+    let reply = &c["replies"][0];
+    assert_eq!((&reply["marked"], &reply["status"]), (&json!(true), &json!("Accepted")), "{reply}");
+}
+
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");

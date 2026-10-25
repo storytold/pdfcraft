@@ -2698,6 +2698,14 @@ certificate	SHA-256 digest	SHA-256-tiiviste
 	Make properties default	Aseta ominaisuudet oletuksiksi
 	Pages selected	Valitut sivut
 	Page properties	Sivun ominaisuudet
+	Create & Edit	Luo ja muokkaa
+	Review & Compare	Tarkasta ja vertaa
+	Forms & Signatures	Lomakkeet ja allekirjoitukset
+	Protect & Standardize	Suojaa ja standardoi
+	Customize & Automate	Mukauta ja automatisoi
+	No tools match your search.	Hakuasi vastaavia työkaluja ei löytynyt.
+	Expand all tools	Laajenna kaikki työkalut
+	Collapse all tools	Kutista kaikki työkalut
 	The password must have at least 8 characters.	Salasanassa on oltava vähintään 8 merkkiä.
 theme	Appearance	Teema
 # Labels added upstream 2026-10-16…18.
@@ -2801,3 +2809,4 @@ theme	Appearance	Teema
 	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
+@plural	{n} reply|{n} replies	{n} vastaus|{n} vastausta

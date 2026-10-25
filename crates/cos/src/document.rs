@@ -1317,6 +1317,17 @@ impl Document {
         self.overlay.insert(r.num, Slot::Freed(r.generation.saturating_add(1)));
     }
 
+    /// Free what was added since the file was read and nothing refers to any more: the objects
+    /// [`SaveOptions::drop_unlinked`](crate::SaveOptions::drop_unlinked) leaves out of an
+    /// incremental save, freed as it writes them (the generation stays). For a writer about to
+    /// add an object that nothing refers to either, which that option would leave out too.
+    pub fn free_unlinked_additions(&mut self) {
+        for num in crate::writer::unlinked_additions(self) {
+            let generation = self.generation(num);
+            self.overlay.insert(num, Slot::Freed(generation));
+        }
+    }
+
     /// Record `current`'s object graph as unsaved edits of this document.
     ///
     /// Used when the working snapshot was restored from an earlier revision and the next

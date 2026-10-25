@@ -8,6 +8,7 @@ use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::widgets;
 
@@ -198,17 +199,18 @@ impl MoveBackground {
     }
 
     /// The page without the moving item, then the item's pixels taken from `page_tex` (the page
-    /// as rendered, item included where it was) at the dragged or applied position.
+    /// as rendered, item included where it was) at the dragged (to the pages' `pointer`) or
+    /// applied position.
     #[allow(clippy::too_many_arguments)]
     pub fn paint(
         &self,
-        ui: &egui::Ui,
         painter: &egui::Painter,
         xf: &PageXform,
         page: usize,
         info: &DocInfo,
         cv: &ContentView,
         page_tex: Option<egui::TextureId>,
+        pointer: Option<Pos2>,
     ) {
         let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
         if kp != page {
@@ -216,7 +218,7 @@ impl MoveBackground {
         }
         let r = screen_rect(xf, info, page, from);
         let to = if let Some((_, grab, start)) = cv.grab {
-            let Some(p) = ui.input(|i| i.pointer.hover_pos()) else { return };
+            let Some(p) = pointer else { return };
             dragged(r, grab, p - start, self.picture)
         } else if let Some(to) = self.settling {
             let to = screen_rect(xf, info, page, to);
@@ -302,14 +304,12 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
 }
 
 /// Added text and images keep pointer ownership over a form field while editing content.
-pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
+pub(crate) fn select_grabs(xf: &PageXform, ptr: &PagePointer, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
     let cv = &view.content;
     if cv.grab.is_some_and(|(grab_page, _, _)| grab_page == page) {
         return true;
     }
-    let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
-        return false;
-    };
+    let Some(p) = ptr.within(xf.rect) else { return false };
     on_page(added, page).into_iter().any(|(index, item)| {
         let rect = screen_rect(xf, info, page, item.content.rect());
         rect.expand(2.0).contains(p)
@@ -324,6 +324,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     added: &[Added],
@@ -333,13 +334,13 @@ pub(crate) fn page_input(
     view: &mut DocView,
 ) -> bool {
     let mut consumed = false;
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let pointer = ptr.pos;
     let cv = &mut view.content;
     if let Some((gp, grab, start)) = cv.grab
         && gp == page
     {
         consumed = true;
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             cv.grab = None;
             let end = pointer.unwrap_or(start);
             if let Some((sp, si)) = cv.selected
@@ -408,7 +409,7 @@ pub(crate) fn page_input(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
     }
     if resp.drag_started() {
-        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+        let origin = ptr.origin.unwrap_or(p);
         if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(origin) <= 6.0)) {
             cv.grab = Some((page, Grab::Corner(left, top), origin));
             consumed = true;
@@ -450,10 +451,18 @@ pub(crate) fn page_input(
     consumed || hit.is_some() && resp.is_pointer_button_down_on()
 }
 
-/// Outlines of added items (hover and selection with handles) and the box being dragged.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) {
+/// Outlines of added items (hover and selection with handles) and the box being dragged, the
+/// pages' `pointer` over them.
+pub(crate) fn paint_page(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    added: &[Added],
+    view: &DocView,
+    pointer: Option<Pos2>,
+) {
     let cv = &view.content;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
     for (i, a) in on_page(added, page) {
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;

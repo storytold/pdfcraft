@@ -1253,6 +1253,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
     };
+    let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     let mut undrawn = false;
     for w in &f.widgets {
         let (stream, missing) = match &shown {
@@ -1260,7 +1261,23 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
-        let ap = doc.add(Object::Stream(stream));
+        let existing_ap = in_place
+            .then(|| {
+                doc.get(w.obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"AP").map(|a| doc.resolve(a)))
+                    .and_then(|a| a.as_dict().and_then(|a| a.get(b"N").cloned()))
+                    .and_then(|n| n.as_ref())
+                    .filter(|r| doc.is_edited(r.num) && matches!(&*doc.get(*r), Object::Stream(_)))
+            })
+            .flatten();
+        let ap = match existing_ap {
+            Some(r) => {
+                doc.set(r, Object::Stream(stream));
+                r
+            }
+            None => doc.add(Object::Stream(stream)),
+        };
         let mut fresh = Dict::new();
         fresh.set(b"N".to_vec(), Object::Ref(ap));
         let apd = merged_appearance(doc, w.obj, &fresh);
@@ -1315,7 +1332,7 @@ fn password_fields(doc: &Document) -> Vec<Field> {
 /// again only makes the answer cautious. It reads only `/Ff`, `/Kids` and `/Parent`, so a save
 /// or recovery snapshot of a form without such a field doesn't build every [`Field`]. Like
 /// [`fields`], it looks at the form's field tree and at the widgets on the pages, which may be
-/// missing from `/Fields`. Each dictionary is visited once and at most 32 levels deep.
+/// missing from `/Fields`. Each dictionary is visited once and at most 64 levels deep.
 fn has_password_flag(doc: &Document) -> bool {
     let sets_it = |r: ObjRef| doc.get(r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
     let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
@@ -1323,7 +1340,7 @@ fn has_password_flag(doc: &Document) -> bool {
     let mut seen = std::collections::HashSet::new();
     while let Some((o, depth)) = stack.pop() {
         let Object::Ref(r) = o else { continue };
-        if depth > 32 || !seen.insert(r) {
+        if depth > 64 || !seen.insert(r) {
             continue;
         }
         if sets_it(r) {
@@ -1363,11 +1380,11 @@ pub fn restore_password_values(doc: &mut Document, values: &[(String, String)]) 
     Ok(())
 }
 
-/// `r` and its field ancestors (`/Parent`), nearest first, at most 32 deep and without repeats.
+/// `r` and its field ancestors (`/Parent`), nearest first, at most 64 deep and without repeats.
 fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
     let mut chain = vec![r];
     let mut cur = r;
-    while chain.len() < 32 {
+    while chain.len() < 64 {
         let Some(Object::Ref(parent)) = doc.get(cur).as_dict().and_then(|d| d.get(b"Parent").cloned()) else { break };
         if chain.contains(&parent) {
             break;

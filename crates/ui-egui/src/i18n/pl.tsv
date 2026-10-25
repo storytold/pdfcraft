@@ -2465,6 +2465,14 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Create & Edit	Tworzenie i edycja
+	Review & Compare	Recenzja i porównanie
+	Forms & Signatures	Formularze i podpisy
+	Protect & Standardize	Ochrona i standaryzacja
+	Customize & Automate	Dostosowanie i automatyzacja
+	No tools match your search.	Żadne narzędzie nie pasuje do wyszukiwania.
+	Expand all tools	Rozwiń wszystkie narzędzia
+	Collapse all tools	Zwiń wszystkie narzędzia
 	Attach a file…	Dołącz plik…
 	Delete attachment	Usuń załącznik
 	Attaching files is not available on the web yet	Dołączanie plików nie jest jeszcze dostępne w wersji webowej
@@ -2627,3 +2635,4 @@ animation effects	Off	Wyłączone
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj
+@plural	{n} reply|{n} replies	{n} odpowiedź|{n} odpowiedzi|{n} odpowiedzi

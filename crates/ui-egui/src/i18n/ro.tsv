@@ -2654,6 +2654,14 @@ key	Space	Spațiu
 	Optimizing… merging image fragments	Se optimizează… unificare fragmente de imagine
 	Outline colour:	Culoare contur:
 	Page properties	Proprietăți pagină
+	Create & Edit	Creare și editare
+	Review & Compare	Revizuire și comparare
+	Forms & Signatures	Formulare și semnături
+	Protect & Standardize	Protejare și standardizare
+	Customize & Automate	Personalizare și automatizare
+	No tools match your search.	Niciun instrument nu corespunde căutării.
+	Expand all tools	Extinderea tuturor instrumentelor
+	Collapse all tools	Restrângerea tuturor instrumentelor
 	Pages counted	Pagini numărate
 	Pages selected	Pagini selectate
 	Print as image	Imprimare ca imagine
@@ -2792,3 +2800,4 @@ theme	Appearance	Aspect
 	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
 	Delete attachment	Ștergere atașament
 	Delete attachment {key}	Ștergere atașament {key}
+@plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
