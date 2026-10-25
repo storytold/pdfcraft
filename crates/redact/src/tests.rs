@@ -2708,6 +2708,27 @@ fn removing_form_fields_takes_hidden_widgets_and_their_values_out_of_the_file() 
     assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
 }
 
+/// F-021: removing form fields on a document with an AcroForm dictionary (even one with no
+/// enumerable terminal fields) removes the AcroForm dictionary, processes widgets, and requires full save.
+#[test]
+fn removing_form_fields_removes_acroform_even_without_terminal_fields() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc =
+        one_page(b"BT /F1 10 Tf 10 100 Td (Visible) Tj ET", "", vec![b"<< /Type /Annot /Subtype /Widget /Rect [10 200 150 220] >>".to_vec()]);
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), fields_dict(&[]))).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), ref_array(&[7]))).unwrap();
+    let counts = scan(&doc);
+    assert_eq!(counts.iter().find(|c| c.0 == Hidden::FormFields).map(|c| c.1), Some(1));
+    assert!(doc.get(doc.root().unwrap()).as_dict().is_some_and(|d| d.contains(b"AcroForm")));
+    assert!(!doc.full_save_required());
+
+    let done = remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
+    assert_eq!(done, [(Hidden::FormFields, 1)]);
+    assert!(!doc.get(doc.root().unwrap()).as_dict().is_some_and(|d| d.contains(b"AcroForm")));
+    assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
+    assert!(doc.full_save_required());
+}
+
 /// Removing hidden text cleans the structure tree as redaction does: the elements describing the
 /// removed text lose their descriptions, and a reference into a rewritten Form points at the copy.
 #[test]

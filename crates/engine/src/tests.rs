@@ -2284,6 +2284,82 @@ fn a_signed_file_carries_no_password_field_value() {
     assert!(!appears_in_pdf(&signed, "*******"), "nor the typed length");
 }
 
+/// #3944: a value typed into an XFA `<passwordEdit/>` field stays in the open document (both the
+/// widget and the live XFA datasets, even across multiple edits and across Save + `mark_saved`),
+/// but is written to no file — neither on the widget nor in the XFA datasets stream.
+#[test]
+fn xfa_password_field_values_are_not_saved_in_datasets_or_widgets() {
+    let xfa_pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(""));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("xfa.pdf", None, Arc::new(xfa_pdf), None).unwrap();
+    let pin_name = s.get(id).unwrap().form.iter().find(|f| f.name.contains("pin")).unwrap().name.clone();
+
+    // Edit the password twice so an earlier edit's datasets stream could not linger in the overlay.
+    s.apply(id, Edit::SetFieldValue { name: pin_name.clone(), value: FieldValue::Text("secret1".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: pin_name.clone(), value: FieldValue::Text("hunter2".into()) }).unwrap();
+
+    let field = s.get(id).unwrap().form.iter().find(|f| f.name == pin_name).cloned().unwrap();
+    assert!(field.has(pdfcraft_forms::flags::PASSWORD));
+    assert_eq!(field.value, vec!["hunter2".to_string()], "the open document keeps the value");
+    assert!(appears_in_pdf(&s.get(id).unwrap().bytes, "hunter2"), "the working bytes hold the live datasets");
+    assert!(!appears_in_pdf(&s.get(id).unwrap().bytes, "secret1"), "the first edit's datasets stream was replaced in place");
+
+    let saved = s.save_bytes(id).unwrap();
+    for leak in ["hunter2", "secret1", "*******"] {
+        assert!(!appears_in_pdf(&saved, leak), "Save leaked {leak}");
+        assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), leak), "save_full_bytes leaked {leak}");
+        assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, leak), "reduced_bytes leaked {leak}");
+    }
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1);
+    for leak in ["hunter2", "secret1", "*******"] {
+        assert!(!appears_in_pdf(&snaps[0].bytes, leak), "autosave snapshot leaked {leak}");
+    }
+
+    // Reopening the saved file in a new session leaves the password field empty (it does not
+    // repopulate from the XFA datasets on open).
+    let mut t = Session::new();
+    let reopened = t.open("saved.pdf", None, saved.clone(), None).unwrap();
+    assert!(
+        t.get(reopened).unwrap().form.iter().find(|f| f.name == pin_name).unwrap().value.iter().all(|v| v.is_empty()),
+        "reopened XFA form must have an empty password field"
+    );
+
+    // Recording the save keeps the typed password in the open document (and its live datasets),
+    // while a subsequent save still omits it.
+    s.mark_saved(id, saved, Some("saved.pdf".into())).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == pin_name).unwrap().value, ["hunter2"]);
+    assert!(!s.get(id).unwrap().dirty);
+    for leak in ["hunter2", "secret1", "*******"] {
+        assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), leak), "save after mark_saved leaked {leak}");
+    }
+
+    // Undo past `mark_saved` and edit again: the datasets stream in the restored overlay is
+    // overwritten in place rather than left behind.
+    s.undo(id).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: pin_name.clone(), value: FieldValue::Text("secret3".into()) }).unwrap();
+    let saved_after_undo = s.save_bytes(id).unwrap();
+    for leak in ["hunter2", "secret1", "secret3", "*******"] {
+        assert!(!appears_in_pdf(&saved_after_undo, leak), "save after undo leaked {leak}");
+    }
+
+    // A relayout (`rerender`) after typing a password frees the replaced generated widget and its
+    // masked appearance stream so neither remains in the overlay when saving.
+    let relayout_xml = pdfcraft_xfa::fixtures::fields_template("").replace(
+        r#"<subform name="page1" layout="tb">"#,
+        r#"<subform name="page1" layout="tb"><field name="grow" w="2in"><ui><textEdit multiLine="1"/></ui></field>"#,
+    );
+    let id2 = s.open("relayout.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&relayout_xml)), None).unwrap();
+    let pin2 = s.get(id2).unwrap().form.iter().find(|f| f.name.contains("pin")).unwrap().name.clone();
+    let grow2 = s.get(id2).unwrap().form.iter().find(|f| f.name.contains("grow")).unwrap().name.clone();
+    s.apply(id2, Edit::SetFieldValue { name: pin2, value: FieldValue::Text("s3cr3t!".into()) }).unwrap();
+    s.apply(id2, Edit::SetFieldValue { name: grow2, value: FieldValue::Text("line1\nline2\nline3\nline4\nline5".into()) }).unwrap();
+    let saved_relayout = s.save_bytes(id2).unwrap();
+    for leak in ["s3cr3t!", "*******"] {
+        assert!(!appears_in_pdf(&saved_relayout, leak), "save after relayout leaked {leak}");
+    }
+}
+
 /// A value its field's font can't draw is kept, and the edit that drew it reports it in
 /// `edit_notices` (the interface shows it, tools return it): not a later unrelated edit, not a
 /// failed one, and not a value that can be drawn. The form (an inline AcroForm here) asks other

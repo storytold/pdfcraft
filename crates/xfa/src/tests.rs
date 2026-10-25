@@ -3350,6 +3350,7 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     ur.set(b"UR3".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
     doc.update_dict(root, |d| d.set(b"Perms".to_vec(), Object::Dict(ur))).unwrap();
     let r = strip(&mut doc).unwrap();
+    assert!(doc.full_save_required());
     assert_eq!(r.packets, vec!["template".to_string(), "datasets".to_string()]);
     assert_eq!(r.unbound_data, Some(0));
     assert_eq!((r.script_buttons, r.image_fields), (0, 1), "{r:?}");
@@ -3433,6 +3434,16 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     let r = strip(&mut doc).unwrap();
     assert_eq!(r.field_keys, 2000);
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn strip_marks_document_as_requiring_full_save() {
+    use crate::pdf::strip;
+    let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(!doc.full_save_required());
+    strip(&mut doc).unwrap();
+    assert!(doc.full_save_required(), "stripping XFA packets must require a full save to prevent data exposure in incremental saves");
 }
 
 #[test]
@@ -3779,4 +3790,70 @@ fn faces_measure_text_at_their_standard_14_widths() {
     // A condensed face is narrower by its scale.
     let condensed = text::Face { h_scale: 0.8, ..face(text::Family::Times, true, false) };
     assert!((condensed.width(sample) - 0.8 * Std14::TimesBold.text_width(sample, 10.0)).abs() < 1e-9);
+}
+
+/// #3944: clearing XFA password values removes values typed into `<passwordEdit/>` fields from the
+/// datasets packet (including across repeating subforms), restores a field's template default
+/// `<value><text>…</text></value>` when it has one, and replaces the datasets stream in place so
+/// the typed password is not left in an unreferenced stream in the overlay.
+#[test]
+fn clear_password_values_removes_typed_passwords_from_datasets_in_place() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="user" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="pin" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+  <field name="preset" w="2in" h="0.3in"><ui><passwordEdit/></ui><value><text>0000</text></value></field>
+  <subform name="row" layout="lr-tb"><occur min="1" max="-1"/>
+   <field name="secret" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+  </subform>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+<xfa:data><form><page1><user>Ada</user><pin>hunter2</pin><preset>9999</preset><row><secret>first</secret></row><row><secret>second</secret></row></page1></form></xfa:data>
+</xfa:datasets>
+</xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(has_password_values(&doc));
+    let cleared = clear_password_values(&mut doc).unwrap();
+    assert_eq!(cleared, 4);
+    assert!(!has_password_values(&doc), "only default and non-password values remain");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0);
+
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(packets.xdp.contains("<user>Ada</user>"), "non-password fields stay: {}", packets.xdp);
+    assert!(packets.xdp.contains("<preset>0000</preset>"), "template default restored: {}", packets.xdp);
+    for secret in ["hunter2", "9999", "first", "second"] {
+        assert!(!packets.xdp.contains(secret), "{secret} still in datasets: {}", packets.xdp);
+    }
+    let written = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(written)).unwrap();
+    for num in reopened.object_numbers() {
+        if let Object::Stream(st) = &*reopened.get(pdfcraft_cos::ObjRef::new(num, 0)) {
+            let decoded = st.decoded().unwrap_or_default();
+            let text = String::from_utf8_lossy(&decoded);
+            for secret in ["hunter2", "9999", "first", "second"] {
+                assert!(!text.contains(secret), "object {num} still holds {secret}: {text}");
+            }
+        }
+    }
+}
+
+/// #3944: a static XFA form whose AcroForm field sets the Password flag (`/Ff 8192`) also has its
+/// typed value cleared from the datasets packet.
+#[test]
+fn clear_password_values_clears_static_xfa_password_fields() {
+    let pdf = String::from_utf8(static_shell("<form1><page1><name>hunter2</name></page1></form1>"))
+        .unwrap()
+        .replace("/T (name[0])", "/T (name[0]) /Ff 8192");
+    let mut doc = Document::open(Arc::new(pdf.into_bytes())).unwrap();
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }

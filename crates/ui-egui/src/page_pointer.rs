@@ -1,8 +1,9 @@
 //! The pointer as the pages see it, read once per frame from the page view's content widget.
 //!
 //! egui knows what is drawn over the pages (a dialog, a menu, the palette, the quick bar, the
-//! chrome over a page scrolled under it) and keeps a press with the widget it began on until
-//! release. egui's raw pointer state knows neither, and its hover position is gone on the frame
+//! chrome over a page scrolled under it) and which widget holds a drag (a panel's tab carried
+//! over them), and keeps a press with the widget it began on until release. egui's raw pointer
+//! state knows none of that, and its hover position is gone on the frame
 //! a touch or a Windows pen lifts: egui-winit sends `PointerGone` with every touch release, and
 //! winit reports Windows pen input as touch. So page modules read [`PagePointer`], never egui's
 //! pointer positions or button states; a test below keeps it that way.
@@ -26,10 +27,11 @@ const MAX_EDGES: usize = 8;
 /// One frame's pointer, as the pages see it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PagePointer {
-    /// Where the pointer is, while the pages are what egui has under it, or while they hold a
-    /// press (until the frame of its release, past a page's edge included). With a dialog open
-    /// only a drag the pages already have keeps it. It is egui's `interact_pos`, which still has
-    /// the position on the frame a touch lifts.
+    /// Where the pointer is, while the pages are what egui has under it and no other widget holds
+    /// a drag (a panel's tab carried over them), or while they hold a press (until the frame of
+    /// its release, past a page's edge included). With a dialog open only a drag the pages
+    /// already have keeps it. It is egui's `interact_pos`, which still has the position on the
+    /// frame a touch lifts.
     pub pos: Option<Pos2>,
     /// Where the press the pages hold began, also on the frame of its release when the press
     /// came in that same frame (egui has forgotten it by then). `None` for a press that began on
@@ -59,7 +61,8 @@ impl PagePointer {
         // pages (egui's interact radius), so the top layer there must be the pages' own. A
         // dialog covers them from the frame it opens, before egui knows its layer.
         let layer = ui.layer_id();
-        let on_top = |p: &Pos2| !modal && resp.contains_pointer() && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer);
+        let on_top =
+            |p: &Pos2| !modal && !dragged_elsewhere(ui, resp) && resp.contains_pointer() && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer);
         let pos = at.filter(|p| held || on_top(p));
         if !held {
             return Self { pos, origin: None, edges: Vec::new(), primary_down, any_down };
@@ -76,6 +79,16 @@ impl PagePointer {
     pub(crate) fn pressed(&self) -> Option<Pos2> {
         first_press(&self.edges)
     }
+}
+
+/// Whether egui gives the drag to a widget that is not the pages' (a panel's tab, a floating panel's
+/// grip): egui hovers nothing else until it stops, though it still reports the pages under the
+/// pointer. A widget on the pages (a form field's editor) keeps them.
+fn dragged_elsewhere(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    let ctx = ui.ctx();
+    ctx.dragged_id().is_some_and(|id| {
+        id != resp.id && !ctx.read_response(id).is_some_and(|r| r.layer_id == resp.layer_id && resp.interact_rect.contains_rect(r.interact_rect))
+    })
 }
 
 fn first_press(edges: &[Edge]) -> Option<Pos2> {

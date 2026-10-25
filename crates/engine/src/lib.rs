@@ -3083,16 +3083,24 @@ fn renderer_password(bytes: &[u8]) -> String {
     }
 }
 
-/// The document as it may be written to a file (#3926): a copy without the values of text fields
-/// with the Password flag, or `cos` itself when it holds none. ISO 32000-2 §12.7.5.3, Table 231
-/// (a note to the Password flag): "it is imperative that PDF processors never store the value of
-/// the text field in the PDF file if this flag is set". The open document keeps them in memory.
+/// The document as it may be written to a file (#3926, #3944): a copy without the values of text
+/// fields with the Password flag (or XFA `<passwordEdit/>` fields in the datasets), or `cos`
+/// itself when it holds none. ISO 32000-2 §12.7.5.3, Table 231 (a note to the Password flag):
+/// "it is imperative that PDF processors never store the value of the text field in the PDF file
+/// if this flag is set". The open document keeps them in memory.
 fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<'_, pdfcraft_cos::Document>, EditError> {
-    if !pdfcraft_forms::has_password_values(cos) {
+    let has_form_pw = pdfcraft_forms::has_password_values(cos);
+    let has_xfa_pw = pdfcraft_xfa::has_password_values(cos);
+    if !has_form_pw && !has_xfa_pw {
         return Ok(std::borrow::Cow::Borrowed(cos));
     }
     let mut copy = cos.clone();
-    pdfcraft_forms::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
+    if has_form_pw {
+        pdfcraft_forms::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
+    }
+    if has_xfa_pw {
+        pdfcraft_xfa::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
+    }
     Ok(std::borrow::Cow::Owned(copy))
 }
 
@@ -4529,11 +4537,15 @@ impl Session {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
             let keys = editor.keys.clone();
-            // The saved file carries no Password-field values (#3943); the open document keeps them.
+            // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
             let typed = pdfcraft_forms::password_values(&editor.cos);
             editor.cos =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
             pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
+            if !typed.is_empty() && doc.info.xfa.is_some() {
+                let mut datasets = None;
+                let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
+            }
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
@@ -5138,17 +5150,18 @@ impl Session {
         let mut out = Vec::new();
         for d in &mut self.docs {
             if d.dirty && d.generation != d.snapshot_generation {
-                // The working bytes hold typed Password-field values (#3926): a recovery file is
-                // written from a copy without them, and none is written if that copy fails.
-                let bytes = match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos)) {
-                    Some(e) => match writable(&e.cos)
-                        .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
-                    {
-                        Ok(b) => Arc::new(b),
-                        Err(_) => continue,
-                    },
-                    None => d.bytes.clone(),
-                };
+                // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
+                // is written from a copy without them, and none is written if that copy fails.
+                let bytes =
+                    match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
+                        Some(e) => match writable(&e.cos)
+                            .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
+                        {
+                            Ok(b) => Arc::new(b),
+                            Err(_) => continue,
+                        },
+                        None => d.bytes.clone(),
+                    };
                 d.snapshot_generation = d.generation;
                 out.push(RecoverySnapshot {
                     doc: d.id,

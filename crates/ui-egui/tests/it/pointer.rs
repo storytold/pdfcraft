@@ -339,6 +339,52 @@ fn link_tip_stays_off_while_the_palette_is_open() {
     h.get_by_label("https://example.org/");
 }
 
+/// A panel's tab carried over a link shows neither its tip nor its cursor, and the link answers
+/// again once the tab is let go.
+#[test]
+fn a_dragged_panel_tab_passes_over_a_link_without_its_tip() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut h = open(link_pdf(), "150", false);
+    h.state_mut().set_option("panel", "comments").unwrap();
+    for _ in 0..4 {
+        h.run_steps(2);
+    }
+    let on_link = at(&h, 100.0, 340.0);
+    assert_eq!(cursor_at(&mut h, on_link), egui::CursorIcon::PointingHand);
+    h.run_steps(2);
+    assert!(tip_shown(&h), "the link's tip shows over an uncovered page");
+    // Away from the link, then the Inspector's tab is picked up and carried over it.
+    h.hover_at(at(&h, 150.0, 100.0));
+    h.run_steps(4);
+    let tab = h.get_by(|n| n.role() == Role::Tab && n.label().as_deref() == Some("Inspector")).rect().center();
+    h.hover_at(tab);
+    h.run_steps(1);
+    h.drag_at(tab);
+    h.run_steps(1);
+    for i in 1..=8 {
+        h.hover_at(tab + (on_link - tab) * (i as f32 / 8.0));
+        h.run_steps(1);
+    }
+    for _ in 0..4 {
+        h.run_steps(2);
+        assert!(h.ctx.dragged_id().is_some(), "the tab is still being dragged");
+        assert!(!tip_shown(&h), "no link tip under a dragged panel tab");
+        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
+    }
+    // Back to the tab and let go there, which leaves the layout as it was.
+    for i in 1..=8 {
+        h.hover_at(on_link + (tab - on_link) * (i as f32 / 8.0));
+        h.run_steps(1);
+    }
+    h.drop_at(tab);
+    h.run_steps(2);
+    assert!(h.ctx.dragged_id().is_none());
+    assert_eq!(cursor_at(&mut h, on_link), egui::CursorIcon::PointingHand, "the link answers again");
+    h.run_steps(2);
+    assert!(tip_shown(&h), "and shows its tip");
+}
+
 fn wheel(h: &mut Harness<'_, PdfCraftApp>, delta: egui::Vec2) {
     h.hover_at(egui::pos2(800.0, 500.0));
     h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move });
