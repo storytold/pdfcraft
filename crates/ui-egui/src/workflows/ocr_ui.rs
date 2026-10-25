@@ -244,7 +244,7 @@ impl PdfCraftApp {
             // A pending native probe must not mark the page as skipped: try again after repaint.
             None => return,
             Some(Err(_)) => {
-                self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
+                self.views[scan.view].auto_ocr_skipped.insert(scan.page, (scan.generation, self.ocr_draft.language.clone()));
                 return;
             }
             Some(Ok(())) => {}
@@ -261,7 +261,7 @@ impl PdfCraftApp {
 
     /// The page Edit should read now, if there is one: Edit is on outside Read mode with no dialog
     /// open, nothing else is being recognized, the document may be changed, the page in view has
-    /// not been read before (nor been found no scan since the document last changed), and an image
+    /// not been read before (nor been skipped since the document or language last changed), and an image
     /// covers at least half of it. Needs no OCR models, so the rules can be tested without them;
     /// the page's own text is judged by the run itself.
     fn scan_to_read(&mut self) -> Option<ScanToRead> {
@@ -284,10 +284,10 @@ impl PdfCraftApp {
         if document.read_only_reason.is_some() || !document.allows_modification() {
             return None;
         }
-        // A page found not to be a scan is judged again only once the document has changed, not
-        // every frame (listing its images parses the page).
+        // Recheck a skipped page after a document or language change, not every frame (listing
+        // its images parses the page). A missing backend for one language must not block another.
         let generation = document.edit_generation();
-        if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation) {
+        if self.views[view].auto_ocr_skipped.get(&page).is_some_and(|(seen, language)| *seen == generation && language == &self.ocr_draft.language) {
             return None;
         }
         let info = document.info.pages.get(page)?;
@@ -297,7 +297,7 @@ impl PdfCraftApp {
             page_area > 0.0 && ((x1 - x0) * (y1 - y0)).abs() >= 0.5 * page_area
         });
         if !covered {
-            self.views[view].auto_ocr_skipped.insert(page, generation);
+            self.views[view].auto_ocr_skipped.insert(page, (generation, self.ocr_draft.language.clone()));
             return None;
         }
         Some(ScanToRead { view, doc, page, generation })
@@ -668,6 +668,21 @@ mod tests {
         let add = Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: Arc::new(png.into_inner()) };
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
+    }
+
+    #[test]
+    fn a_scan_skipped_for_an_unavailable_language_is_retried_after_switching_languages() {
+        let mut app = app_with(scan());
+        app.ctx = Some(egui::Context::default());
+        // An unsupported language produces the same readiness error as missing models,
+        // without depending on which recognition models the test machine has installed.
+        app.ocr_draft.language = "unsupported".into();
+        app.auto_ocr_scanned_page();
+        assert!(app.ocr_run.is_none());
+        assert!(!app.views[0].auto_ocr_tried.contains(&0));
+        assert_eq!(found(&mut app), None, "do not retry the same unavailable backend every frame");
+        app.ocr_draft.language = "hu".into();
+        assert_eq!(found(&mut app), Some(0), "changing language retries the unchanged scan");
     }
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
