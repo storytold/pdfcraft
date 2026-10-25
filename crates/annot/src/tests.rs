@@ -432,6 +432,30 @@ fn drawn_x(ap: &str, needle: &str) -> f64 {
     nums[1]
 }
 
+/// CodeRabbit on #4153: `/RC` aligns a right-to-left paragraph where the appearance draws it: at
+/// the right edge when `/Q` is 0 or absent, and as asked when centred or right-aligned.
+#[test]
+fn right_to_left_rich_text_paragraphs_align_as_the_appearance_draws_them() {
+    let rc = |q: Option<i64>| {
+        let mut d = Dict::new();
+        d.set(b"Contents".to_vec(), PdfString::text("שלום\nHello"));
+        d.set(b"DA".to_vec(), PdfString::literal(b"0 0 0 rg /Helv 12 Tf".to_vec()));
+        if let Some(q) = q {
+            d.set(b"Q".to_vec(), Object::Int(q));
+        }
+        modify::rich_text(&mut d);
+        text(&d, b"RC")
+    };
+    for q in [None, Some(0)] {
+        let rc = rc(q);
+        assert!(rc.contains("text-align:left") && rc.contains("<p dir=\"rtl\" style=\"text-align:right\">שלום</p><p dir=\"ltr\">Hello</p>"), "{rc}");
+    }
+    for (q, align) in [(1, "center"), (2, "right")] {
+        let rc = rc(Some(q));
+        assert!(rc.contains(&format!("text-align:{align}")) && rc.contains("<p dir=\"rtl\">שלום</p><p dir=\"ltr\">Hello</p>"), "{rc}");
+    }
+}
+
 /// Hebrew in Fill & Sign text and text boxes is laid out right to left and drawn with the
 /// craft-fonts Hebrew face (#4085, #506): no `?`, nothing marked, copy and search keep the typed
 /// text. A build without the face writes `?` and marks the comment, as before.
@@ -455,7 +479,7 @@ fn hebrew_fill_sign_text_and_text_boxes_are_drawn_with_the_hebrew_face() {
         let ap = ap_content(&doc, d);
         assert!(ap.contains("/ActualText <FEFF06450631062D0628062700200057006F0072006C0064>") && ap.contains("f Q\n"), "{ap}");
         assert!(drawn_x(&ap, "(World) Tj") < drawn_x(&ap, " cm\n"), "{ap}");
-        assert!(text(d, b"RC").contains("<p dir=\"rtl\">"));
+        assert!(text(d, b"RC").contains("<p dir=\"rtl\" style=\"text-align:right\">"));
     }
     if pdfcraft_fonts::document_hebrew_font(false).is_none() {
         assert!(ap.contains("(???? World) Tj"), "{ap}");
@@ -473,7 +497,7 @@ fn hebrew_fill_sign_text_and_text_boxes_are_drawn_with_the_hebrew_face() {
     assert_eq!(ap.matches('?').count(), ap.matches("3 Tr").count() * 5, "{ap}");
     // A right-to-left paragraph: "World" is drawn left of the Hebrew.
     assert!(drawn_x(&ap, "(World) Tj") < drawn_x(&ap, " cm\n"), "{ap}");
-    assert!(text(d, b"RC").contains("<p dir=\"rtl\">"), "{}", text(d, b"RC"));
+    assert!(text(d, b"RC").contains("<p dir=\"rtl\" style=\"text-align:right\">"), "{}", text(d, b"RC"));
     // A restyle redraws it the same way; a character no face draws is still reported.
     let mut doc = doc;
     set_font_size(&mut doc, 0, t, 14.0, &meta("")).unwrap();

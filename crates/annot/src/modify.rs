@@ -55,8 +55,13 @@ pub(crate) fn rich_text(d: &mut Dict) {
         .split('\n')
         .map(|line| {
             let line = line.trim_end_matches('\r');
-            let dir = if shaped::paragraph_rtl(line) { "rtl" } else { "ltr" };
-            format!("<p dir=\"{dir}\">{}</p>", esc(line))
+            if !shaped::paragraph_rtl(line) {
+                return format!("<p dir=\"ltr\">{}</p>", esc(line));
+            }
+            // The appearance starts a right-to-left paragraph at the right edge when `/Q` is 0,
+            // and CSS `text-align:left` does not follow `dir` (CodeRabbit on #4153).
+            let style = if align == "left" { " style=\"text-align:right\"" } else { "" };
+            format!("<p dir=\"rtl\"{style}>{}</p>", esc(line))
         })
         .collect();
     let style = format!(
