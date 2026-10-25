@@ -2639,3 +2639,8 @@ animation effects	Off	Вимкнено
 	No image on clipboard to paste	У буфері обміну немає зображення для вставлення
 	Pinned {tool} to Home	{tool} закріплено на головній
 	Unpinned {tool} from Home	{tool} відкріплено від головної
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Заповнення й підпис: додати ще одні збережені ініціали
+	Initials {n}	Ініціали {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Можна зберігати не більше {n} наборів ініціалів. Видаліть один, щоб додати інший.

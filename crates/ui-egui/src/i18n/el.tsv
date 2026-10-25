@@ -2623,3 +2623,8 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Συμπλήρωση και υπογραφή: προσθήκη άλλης αποθηκευμένης μονογραφής
+	Initials {n}	Μονογραφή {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Μπορείτε να κρατήσετε έως {n} μονογραφές. Αφαιρέστε μία για να προσθέσετε άλλη.

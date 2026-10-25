@@ -2613,3 +2613,8 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Doldur ve İmzala: başka bir kayıtlı paraf ekle
+	Initials {n}	Paraf {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	En fazla {n} paraf saklayabilirsiniz. Başka bir paraf eklemek için birini kaldırın.

@@ -2884,3 +2884,8 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Điền & Ký: thêm một chữ viết tắt đã lưu khác
+	Initials {n}	Chữ viết tắt {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Bạn có thể lưu tối đa {n} chữ viết tắt. Hãy xóa một chữ viết tắt để thêm chữ viết tắt khác.

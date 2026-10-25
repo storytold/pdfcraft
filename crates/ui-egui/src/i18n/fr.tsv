@@ -2882,3 +2882,8 @@ certificate	Version	Version
 	No image on clipboard to paste	Aucune image à coller dans le presse-papiers
 	Pinned {tool} to Home	{tool} épinglé à l’Accueil
 	Unpinned {tool} from Home	{tool} désépinglé de l’Accueil
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Remplir et signer : ajouter d'autres initiales enregistrées
+	Initials {n}	Initiales {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Vous pouvez conserver jusqu'à {n} jeux d'initiales. Retirez-en un pour en ajouter un autre.

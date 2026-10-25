@@ -2616,3 +2616,8 @@ animation effects	Off	Ki
 	No image on clipboard to paste	Nincs beilleszthető kép a vágólapon
 	Pinned {tool} to Home	{tool} rögzítve a kezdőlapra
 	Unpinned {tool} from Home	{tool} leválasztva a kezdőlapról
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Kitöltés és aláírás: újabb mentett monogram hozzáadása
+	Initials {n}	Monogram {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Legfeljebb {n} monogramot tárolhatsz. Újabb hozzáadásához távolíts el egyet.

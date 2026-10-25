@@ -1337,23 +1337,18 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
         let d = std::mem::take(&mut app.signature_draft);
         // Cleared first, so a notice raised below (a full signature list) stays shown.
         app.toast = None;
-        let tool = if d.initials {
-            app.initials = d.saved();
-            crate::fill_sign::FillTool::Initials
-        } else {
-            if let Some(sig) = d.saved() {
-                if d.editing {
-                    app.signatures.replace_active(&d.label, sig);
-                } else if !app.signatures.add(&d.label, sig) {
-                    app.notify_fmt(
-                        "You can keep up to {n} signatures. Remove one to add another.",
-                        &[("n", &crate::fill_sign::MAX_SAVED_SIGNATURES.to_string())],
-                    );
-                    refused = true;
-                }
+        let library = if d.initials { &mut app.initials } else { &mut app.signatures };
+        if let Some(sig) = d.saved() {
+            if d.editing {
+                library.replace_active(&d.label, sig);
+            } else if !library.add(&d.label, sig) {
+                refused = true;
             }
-            crate::fill_sign::FillTool::Signature
-        };
+        }
+        if refused {
+            app.notify_full_list(d.initials);
+        }
+        let tool = if d.initials { crate::fill_sign::FillTool::Initials } else { crate::fill_sign::FillTool::Signature };
         if refused {
             app.signature_draft = d;
         } else {

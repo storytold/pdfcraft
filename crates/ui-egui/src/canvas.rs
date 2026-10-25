@@ -3607,7 +3607,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
     let signature = app.signatures.active().cloned();
-    let initials = app.initials.clone();
+    let initials = app.initials.active().cloned();
     let author = app.comment_prefs.author.clone();
     let today = app.session.today();
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.

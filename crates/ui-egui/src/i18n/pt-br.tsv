@@ -2902,3 +2902,8 @@ theme	Appearance	Aparência
 	No image on clipboard to paste	Nenhuma imagem na área de transferência para colar
 	Pinned {tool} to Home	{tool} fixado no Início
 	Unpinned {tool} from Home	{tool} desafixado do Início
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Preencher e assinar: adicionar outra rubrica salva
+	Initials {n}	Rubrica {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Você pode manter até {n} rubricas. Remova uma para adicionar outra.

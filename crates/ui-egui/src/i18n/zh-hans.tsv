@@ -2581,3 +2581,8 @@ animation effects	Off	关
 	No image on clipboard to paste	剪贴板中没有可粘贴的图像
 	Pinned {tool} to Home	已将 {tool} 固定到主页
 	Unpinned {tool} from Home	已从主页取消固定 {tool}
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	填写与签名：再添加一组已保存的姓名首字母
+	Initials {n}	姓名首字母 {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	最多可保存 {n} 组姓名首字母。请先移除一组，再添加新的。

@@ -2778,3 +2778,8 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Signature {n}	ลายเซ็น {n}
 	Work, Personal, a name…	งาน, ส่วนตัว, ชื่อ…
 	You can keep up to {n} signatures. Remove one to add another.	เก็บลายเซ็นได้ไม่เกิน {n} รายการ โปรดเอาออกหนึ่งรายการเพื่อเพิ่มรายการใหม่
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	กรอกและเซ็น: เพิ่มชื่อย่อที่บันทึกไว้อีกรายการ
+	Initials {n}	ชื่อย่อ {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	เก็บชื่อย่อได้ไม่เกิน {n} รายการ โปรดเอาออกหนึ่งรายการเพื่อเพิ่มรายการใหม่

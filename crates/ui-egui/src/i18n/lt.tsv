@@ -2877,3 +2877,8 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Pildyti ir pasirašyti: pridėti dar vienus įrašytus inicialus
+	Initials {n}	Inicialai {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Galite laikyti iki {n} inicialų rinkinių. Norėdami pridėti kitą, vieną pašalinkite.

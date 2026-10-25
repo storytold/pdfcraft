@@ -2526,3 +2526,8 @@ animation effects	Off	ఆఫ్
 	No image on clipboard to paste	అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు
 	Pinned {tool} to Home	{tool} హోమ్‌కు పిన్ చేయబడింది
 	Unpinned {tool} from Home	{tool} హోమ్ నుండి అన్‌పిన్ చేయబడింది
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	నింపడం & సంతకం: మరిన్ని సేవ్ చేసిన పొడి అక్షరాలను జోడించు
+	Initials {n}	పొడి అక్షరాలు {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	మీరు గరిష్ఠంగా {n} పొడి అక్షరాల సెట్‌లను ఉంచుకోవచ్చు. మరొకటి జోడించడానికి ఒకదాన్ని తీసివేయండి.

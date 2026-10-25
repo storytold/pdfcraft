@@ -2622,3 +2622,8 @@ animation effects	Off	Izklopljeni
 	No image on clipboard to paste	V odložišču ni slike za lepljenje
 	Pinned {tool} to Home	{tool} pripeto na domačo stran
 	Unpinned {tool} from Home	{tool} odpeto z domače strani
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Izpolni in podpiši: dodaj še ene shranjene začetnice
+	Initials {n}	Začetnice {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Shranite lahko do {n} naborov začetnic. Za dodajanje novega enega odstranite.

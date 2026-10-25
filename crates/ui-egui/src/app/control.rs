@@ -15,9 +15,9 @@ impl PdfCraftApp {
         self.signatures.active()
     }
 
-    /// A Create signature / initials draft; a new signature is offered the next free label.
+    /// A Create signature / initials draft, offered its list's next free label.
     pub(crate) fn new_signature_draft(&self, initials: bool) -> fill_sign::SigDraft {
-        let label = if initials { String::new() } else { self.signatures.next_label() };
+        let label = if initials { self.initials.next_label() } else { self.signatures.next_label() };
         fill_sign::SigDraft { label, ..fill_sign::SigDraft::new(initials, &self.comment_prefs.author) }
     }
 
@@ -27,15 +27,16 @@ impl PdfCraftApp {
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
-            ("signature", _) => {
-                // The saved signature to sign with: its number in the list (from 1) or its label.
+            ("signature" | "initials", _) => {
+                // The saved signature (initials) to sign with: its number in its list (from 1) or its label.
+                let library = if key == "initials" { &mut self.initials } else { &mut self.signatures };
                 let n = value.trim().parse::<usize>().ok().and_then(|n| n.checked_sub(1));
-                if !n.is_some_and(|i| self.signatures.select(i)) && !self.signatures.select_label(value) {
-                    let labels: Vec<&str> = self.signatures.entries().iter().map(|e| e.label.as_str()).collect();
+                if !n.is_some_and(|i| library.select(i)) && !library.select_label(value) {
+                    let labels: Vec<&str> = library.entries().iter().map(|e| e.label.as_str()).collect();
                     return Err(if labels.is_empty() {
-                        "no signature is saved".to_string()
+                        if key == "initials" { "no initials are saved" } else { "no signature is saved" }.to_string()
                     } else {
-                        format!("signature must be a number from 1 to {} or one of the labels: {}", labels.len(), labels.join(", "))
+                        format!("{key} must be a number from 1 to {} or one of the labels: {}", labels.len(), labels.join(", "))
                     });
                 }
             }

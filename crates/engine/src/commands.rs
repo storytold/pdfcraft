@@ -340,6 +340,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("sign.fill.signature.remove", "Fill & Sign: remove saved signature", None, None, Nothing, "x"),
     c("sign.fill.initials.remove", "Fill & Sign: remove saved initials", None, None, Nothing, "x"),
     c("sign.fill.initials.change", "Fill & Sign: change initials", None, None, Nothing, "signature"),
+    c("sign.fill.initials.add", "Fill & Sign: add other saved initials", None, None, Nothing, "plus"),
     c("export.image", "Export to image…", FILE, None, Copying, "image"),
     c("optimize.reduce", "Reduce file size…", FILE, None, Document, "file-down"),
     c("optimize.advanced", "Optimize PDF…", FILE, None, Document, "settings-2"),

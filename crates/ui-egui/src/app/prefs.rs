@@ -16,6 +16,38 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
+/// A restored signature or initials that can be shown: a drawn one needs a visible stroke and a
+/// typed one some text.
+fn usable_sig(sig: &fill_sign::SavedSig) -> bool {
+    match sig {
+        fill_sign::SavedSig::Drawn(s) => strokes_drawn(s),
+        fill_sign::SavedSig::Typed(t) => !t.trim().is_empty(),
+        fill_sign::SavedSig::Image(_) => true,
+    }
+}
+
+/// A saved signature or initials list and its active index, as the settings hold them. One
+/// damaged entry (a bad image, a non-finite stroke) is dropped, not the whole list, and the active
+/// one stays active, or the nearest kept one before it if it was dropped.
+fn restored_list(list: &[serde_json::Value], saved_active: &serde_json::Value) -> (Vec<fill_sign::LabelledSig>, usize) {
+    let saved_active = saved_active.as_u64().and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
+    let mut active = 0;
+    let mut entries = Vec::new();
+    for (i, e) in list.iter().enumerate() {
+        if entries.len() >= fill_sign::MAX_SAVED_SIGNATURES {
+            break;
+        }
+        let Ok(e) = serde_json::from_value::<fill_sign::LabelledSig>(e.clone()) else { continue };
+        if usable_sig(&e.sig) {
+            if i <= saved_active {
+                active = entries.len();
+            }
+            entries.push(e);
+        }
+    }
+    (entries, active)
+}
+
 /// A drawn signature the pad would keep: every point a finite number, and at least one stroke
 /// long enough to show (two points), as the pad requires before saving.
 fn strokes_drawn(strokes: &[Vec<[f32; 2]>]) -> bool {
@@ -130,7 +162,8 @@ impl PdfCraftApp {
             "signature": match self.signature() { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match self.signature() { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
             "signature_image": match self.signature() { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
-            "initials": self.initials,
+            // The active initials, under the key older versions read (the list is added below).
+            "initials": self.initials.active(),
             "sign_graphic": self.sign_graphic,
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
             "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
@@ -159,6 +192,8 @@ impl PdfCraftApp {
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
         v["signatures"] = serde_json::json!(self.signatures.entries());
         v["active_signature"] = serde_json::json!(self.signatures.active_index());
+        v["initials_list"] = serde_json::json!(self.initials.entries());
+        v["active_initials"] = serde_json::json!(self.initials.active_index());
         v.to_string()
     }
 
@@ -363,28 +398,7 @@ impl PdfCraftApp {
     /// Saved signatures, stamps, actions and trusted certificates.
     fn restore_signature_prefs(&mut self, v: &serde_json::Value) {
         if let Some(list) = v["signatures"].as_array() {
-            // One damaged entry (a bad image, a non-finite stroke) is dropped, not the whole list.
-            // The active one stays active, or the nearest kept one before it if it was dropped.
-            let saved_active = v["active_signature"].as_u64().and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
-            let mut active = 0;
-            let mut entries = Vec::new();
-            for (i, e) in list.iter().enumerate() {
-                if entries.len() >= fill_sign::MAX_SAVED_SIGNATURES {
-                    break;
-                }
-                let Ok(e) = serde_json::from_value::<fill_sign::LabelledSig>(e.clone()) else { continue };
-                let usable = match &e.sig {
-                    fill_sign::SavedSig::Drawn(s) => strokes_drawn(s),
-                    fill_sign::SavedSig::Typed(t) => !t.trim().is_empty(),
-                    fill_sign::SavedSig::Image(_) => true,
-                };
-                if usable {
-                    if i <= saved_active {
-                        active = entries.len();
-                    }
-                    entries.push(e);
-                }
-            }
+            let (entries, active) = restored_list(list, &v["active_signature"]);
             self.signatures = fill_sign::SignatureLibrary::new(entries, active);
         } else {
             // Settings from before the signature list: one signature, which becomes the first entry.
@@ -405,8 +419,15 @@ impl PdfCraftApp {
                 self.signatures.add("", s);
             }
         }
-        if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
-            self.initials = Some(i);
+        if let Some(list) = v["initials_list"].as_array() {
+            let (entries, active) = restored_list(list, &v["active_initials"]);
+            self.initials = fill_sign::SignatureLibrary::new_initials(entries, active);
+        } else if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone())
+            && usable_sig(&i)
+        {
+            // Settings from before the initials list: one set, which becomes the first entry.
+            self.initials = fill_sign::SignatureLibrary::new_initials(Vec::new(), 0);
+            self.initials.add("", i);
         }
         // An unreadable choice (a damaged image) falls back to the name.
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();

@@ -2567,3 +2567,8 @@ animation effects	Off	關
 	No image on clipboard to paste	剪貼簿中沒有可貼上的影像
 	Pinned {tool} to Home	已將 {tool} 釘選至首頁
 	Unpinned {tool} from Home	已從首頁取消釘選 {tool}
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	填寫與簽署：再新增一組已儲存的姓名縮寫
+	Initials {n}	姓名縮寫 {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	最多可儲存 {n} 組姓名縮寫。請先刪除一組，再新增新的。

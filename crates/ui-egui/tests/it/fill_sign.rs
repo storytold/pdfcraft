@@ -408,14 +408,14 @@ fn typed_signatures_and_initials() {
     again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.signature().cloned(), h.state().signature().cloned());
-    assert_eq!(again.initials, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
+    assert_eq!(again.initials.active().cloned(), Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
 }
 
 #[test]
 fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     let mut h = harness();
     h.state_mut().signatures.set_active(Some(SavedSig::Typed("Ada Lovelace".into())));
-    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+    h.state_mut().initials.set_active(Some(SavedSig::Typed("AL".into())));
     h.state_mut().execute("sign.fill.signature");
     h.run_steps(2);
     assert_eq!(h.state().dialog, None, "Sign still reuses the saved signature");
@@ -439,7 +439,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert_eq!(h.state().signature().cloned(), Some(SavedSig::Typed("Grace Hopper".into())));
-    assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
+    assert_eq!(h.state().initials.active().cloned(), Some(SavedSig::Typed("AL".into())));
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
     assert_eq!(format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations), original);
     click(&mut h, 40.0, 200.0);
@@ -449,7 +449,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     h.run_steps(2);
     h.get_by_label("Fill & Sign").click();
     h.run_steps(2);
-    h.get_by_label("Change initials").click();
+    h.get_by_label("Change initials: Initials 1").click();
     h.run_steps(2);
     assert!(h.state().signature_draft.initials);
     assert_eq!(h.state().signature_draft.text, "AL");
@@ -463,7 +463,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     again.set_option("language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature().cloned(), Some(SavedSig::Typed("Grace Hopper".into())));
-    assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
+    assert_eq!(again.initials.active().cloned(), Some(SavedSig::Typed("GH".into())));
 }
 
 #[test]
@@ -495,7 +495,7 @@ fn changing_drawn_signatures_can_be_cancelled_or_switched_to_type() {
     let mut h = harness();
     let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2], [0.9, 0.1]]]);
     h.state_mut().signatures.set_active(Some(drawn.clone()));
-    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+    h.state_mut().initials.set_active(Some(SavedSig::Typed("AL".into())));
     h.state_mut().quick_tool = QuickTool::Fill(FillTool::Check);
     assert!(h.state_mut().execute("sign.fill.signature.change"));
     h.run_steps(2);
@@ -518,14 +518,14 @@ fn changing_drawn_signatures_can_be_cancelled_or_switched_to_type() {
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert_eq!(h.state().signature().cloned(), Some(SavedSig::Typed("Grace Hopper".into())));
-    assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
+    assert_eq!(h.state().initials.active().cloned(), Some(SavedSig::Typed("AL".into())));
 }
 
 #[test]
 fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     let mut h = harness();
     h.state_mut().signatures.set_active(Some(SavedSig::Typed("Ada Lovelace".into())));
-    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+    h.state_mut().initials.set_active(Some(SavedSig::Typed("AL".into())));
     h.state_mut().execute("sign.fill.signature");
     click(&mut h, 40.0, 300.0);
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
@@ -538,7 +538,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.get_by_label("Remove saved signature: Signature 1").click();
     h.run_steps(3);
     assert_eq!(h.state().signature().cloned(), None);
-    assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
+    assert_eq!(h.state().initials.active().cloned(), Some(SavedSig::Typed("AL".into())));
     let mut again = PdfCraftApp::new();
     again.set_option("language", "en").unwrap();
     again.restore(&h.state().persist());
@@ -549,14 +549,14 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert_eq!(h.state().signature().cloned(), Some(SavedSig::Typed("Grace Hopper".into())));
-    h.get_by_label("Remove saved initials").click();
+    h.get_by_label("Remove saved initials: Initials 1").click();
     h.run_steps(3);
-    assert_eq!(h.state().initials, None);
+    assert_eq!(h.state().initials.active(), None);
     h.get_by_label("Add initials").click();
     h.run_steps(3);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert_eq!(h.state().initials, None);
+    assert_eq!(h.state().initials.active(), None);
     assert_eq!(format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations), original);
 }
 
@@ -670,7 +670,7 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
     h.state_mut().set_option("tool", "fill_sign").unwrap();
     h.run_steps(3);
     h.get_by_label("Use signature: Signature 1");
-    h.get_by_label("Use initials");
+    h.get_by_label("Use initials: Initials 1");
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
         h.render().unwrap().save(format!("{dir}/image-signatures.png")).unwrap();
     }
@@ -754,7 +754,7 @@ fn image_signature_placement_selects_resize_handles_and_requires_reselecting_to_
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();
     h.state_mut().signatures.set_active(Some(SavedSig::Image(image.clone())));
-    h.state_mut().initials = Some(SavedSig::Image(image));
+    h.state_mut().initials.set_active(Some(SavedSig::Image(image)));
     h.state_mut().comment_prefs.pinned = true;
     h.state_mut().execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
@@ -1116,7 +1116,7 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     again.set_option("language", "en").unwrap();
     again.restore(r#"{"signature_text":"Ada","signature_image":{"Image":"bm90IGFuIGltYWdl"},"initials":{"Image":"%%%"}}"#);
     assert_eq!(again.signature().cloned(), Some(SavedSig::Typed("Ada".into())));
-    assert!(again.initials.is_none());
+    assert!(again.initials.is_empty());
     // A legacy drawn signature with nothing visible (no stroke of two points) is not kept.
     let mut dots = PdfCraftApp::new();
     dots.restore(r#"{"signature":[[[0.1,0.1]],[]]}"#);
@@ -1293,7 +1293,7 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
     for tool in ["sign.fill.signature", "sign.fill.initials", "sign.fill.text", "sign.fill.check", "sign.fill.date"] {
         let mut h = harness();
         h.state_mut().signatures.set_active(Some(SavedSig::Typed("Ada Lovelace".into())));
-        h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+        h.state_mut().initials.set_active(Some(SavedSig::Typed("AL".into())));
         h.state_mut().execute("sign.fill.signature");
         click(&mut h, 40.0, 250.0);
         let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
@@ -1905,6 +1905,104 @@ fn up_to_twenty_labelled_signatures_are_listed_chosen_placed_and_remembered() {
     assert_eq!(h.state().signatures.len(), 19);
     assert!(!signature_labels(&h).contains(&"Office".to_string()));
     h.get_by_label("Add signature");
+}
+
+fn initials_labels(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    h.state().initials.entries().iter().map(|e| e.label.clone()).collect()
+}
+
+#[test]
+fn labelled_initials_are_listed_chosen_placed_and_remembered_apart_from_signatures() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    h.state_mut().set_option("tool", "fill_sign").unwrap();
+    h.run_steps(3);
+    // Two sets of initials through Add initials, each labelled in the pad.
+    for (label, text) in [("Mine", "AL"), ("Ada's", "AdL")] {
+        h.get_by_label("Add initials").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, Some(Dialog::Signature));
+        assert!(h.state().signature_draft.initials);
+        assert!(!h.state().signature_draft.editing, "Add makes new initials, it does not replace them");
+        assert_eq!(h.get_by_role_and_label(Role::TextInput, "Label").value().as_deref(), Some("Initials 1"));
+        h.state_mut().signature_draft.label = label.into();
+        h.state_mut().signature_draft.text = text.into();
+        h.run_steps(2);
+        h.get_by_label("Apply").click();
+        h.run_steps(3);
+    }
+    assert_eq!(initials_labels(&h), ["Mine", "Ada's"]);
+    assert_eq!(h.state().initials.active().cloned(), Some(SavedSig::Typed("AdL".into())), "the newest is active");
+    assert!(h.state().signatures.is_empty(), "initials are not added to the signatures");
+
+    // Each card places its own initials.
+    h.get_by_label("Use initials: Mine").click();
+    h.run_steps(2);
+    assert_eq!(h.state().initials.active_index(), Some(0));
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
+    click(&mut h, 60.0, 100.0);
+    assert_eq!(items(&h).len(), 1);
+
+    // Change renames just those initials.
+    h.get_by_label("Change initials: Ada's").click();
+    h.run_steps(2);
+    assert!(h.state().signature_draft.initials && h.state().signature_draft.editing);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Label").value().as_deref(), Some("Ada's"));
+    h.state_mut().signature_draft.label = "Short".into();
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_eq!(initials_labels(&h), ["Mine", "Short"]);
+
+    // The list, its labels and the active entry survive a restart, and the active initials are
+    // still written where older versions look for them.
+    let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
+    again.restore(&h.state().persist());
+    assert_eq!(again.initials, h.state().initials);
+    let v: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(v["initials"], serde_json::json!({ "Typed": "AdL" }));
+
+    // Twenty at most: then Add gives way to a note, and the command opens nothing.
+    for n in 3..=20 {
+        assert!(h.state_mut().initials.add("", SavedSig::Typed(format!("I{n}"))));
+    }
+    h.run_steps(3);
+    assert!(h.state().initials.is_full());
+    assert!(h.query_by_label("Add initials").is_none());
+    h.get_by_label("You can keep up to 20 sets of initials. Remove one to add another.");
+    h.state_mut().execute("sign.fill.initials.add");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    h.get_by_label("Remove saved initials: Mine").click();
+    h.run_steps(3);
+    assert_eq!(initials_labels(&h).len(), 19);
+    assert!(!initials_labels(&h).contains(&"Mine".to_string()));
+    h.get_by_label("Add initials");
+}
+
+#[test]
+fn initials_saved_before_the_list_and_damaged_entries_still_load() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    let labels = |app: &PdfCraftApp| app.initials.entries().iter().map(|e| e.label.clone()).collect::<Vec<_>>();
+    // One set of initials, saved by a version without the list, becomes the first entry.
+    app.restore(r#"{"initials": {"Typed": "AL"}}"#);
+    assert_eq!(labels(&app), ["Initials 1"]);
+    assert_eq!(app.initials.active().cloned(), Some(SavedSig::Typed("AL".into())));
+    // A damaged entry is dropped, the rest kept, and the active one stays active.
+    app.restore(
+        &serde_json::json!({
+            "initials_list": [
+                { "label": "Mine", "sig": { "Typed": "AL" } },
+                { "label": "Blank", "sig": { "Typed": "  " } },
+                { "label": "Drawn", "sig": { "Drawn": [[[0.1, 0.1], [0.5, 0.2]]] } },
+            ],
+            "active_initials": 2,
+        })
+        .to_string(),
+    );
+    assert_eq!(labels(&app), ["Mine", "Drawn"]);
+    assert_eq!(app.initials.active_index(), Some(1));
 }
 
 #[test]

@@ -1348,9 +1348,9 @@ fn saved_signature_can_be_changed_through_the_control_channel() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "fill-signature");
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.remove" }));
     assert_eq!(h.state().signature().cloned(), None);
-    h.state_mut().initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into()));
+    h.state_mut().initials.set_active(Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.remove" }));
-    assert_eq!(h.state().initials, None);
+    assert_eq!(h.state().initials.active(), None);
 }
 
 #[test]
@@ -1378,6 +1378,27 @@ fn saved_signatures_are_listed_and_chosen_through_the_control_channel() {
     assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Signature));
     assert_eq!(h.state().signature_draft.label, "Signature 1");
     assert!(!h.state().signature_draft.editing);
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
+    h.run_steps(2);
+
+    // Initials are a list of their own, listed and chosen the same way.
+    let none = call(&mut h, &c, "ui.set", json!({ "key": "initials", "value": "1" })).unwrap_err();
+    assert!(none.contains("no initials are saved"), "{none}");
+    h.state_mut().initials.add("Mine", SavedSig::Typed("AL".into()));
+    h.state_mut().initials.add("", SavedSig::Typed("AdL".into()));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["initials"], json!(["Mine", "Initials 1"]));
+    assert_eq!(state["active_initials"], 2);
+    assert_eq!(state["signatures"], json!(["Work", "Home"]), "the signatures are left alone");
+    ok(&mut h, &c, "ui.set", json!({ "key": "initials", "value": "mine" }));
+    assert_eq!(h.state().initials.active().cloned(), Some(SavedSig::Typed("AL".into())));
+    let e = call(&mut h, &c, "ui.set", json!({ "key": "initials", "value": "3" })).unwrap_err();
+    assert!(e.contains("initials must be a number from 1 to 2") && e.contains("Mine, Initials 1"), "{e}");
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.add" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Signature));
+    assert!(h.state().signature_draft.initials);
+    assert_eq!(h.state().signature_draft.label, "Initials 2");
 }
 
 #[test]

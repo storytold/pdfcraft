@@ -616,10 +616,11 @@ pub struct PdfCraftApp {
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.
     export_status: Option<export_ui::ExportStatus>,
-    /// The saved Fill & Sign signatures (each with a label; [`Self::signature`] is the active one)
-    /// and initials, drawn, typed or imported.
+    /// The saved Fill & Sign signatures, drawn, typed or imported, each with a label
+    /// ([`Self::signature`] is the active one).
     pub signatures: fill_sign::SignatureLibrary,
-    pub initials: Option<fill_sign::SavedSig>,
+    /// The saved Fill & Sign initials, a list of their own.
+    pub initials: fill_sign::SignatureLibrary,
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,

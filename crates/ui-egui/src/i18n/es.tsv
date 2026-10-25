@@ -2940,3 +2940,8 @@ theme	Appearance	Aspecto
 	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
 	Pinned {tool} to Home	{tool} fijado en Inicio
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Rellenar y firmar: añadir otras iniciales guardadas
+	Initials {n}	Iniciales {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Puedes guardar hasta {n} juegos de iniciales. Quita uno para añadir otro.

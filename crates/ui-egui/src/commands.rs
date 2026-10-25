@@ -683,27 +683,22 @@ impl PdfCraftApp {
                 );
             }
             "sign.fill.signature.remove" => self.signatures.remove_active(),
-            "sign.fill.initials.remove" => self.initials = None,
+            "sign.fill.initials.remove" => self.initials.remove_active(),
             "sign.fill.signature.change" | "sign.fill.initials.change" => {
                 let initials = id == "sign.fill.initials.change";
-                let saved = if initials { self.initials.as_ref() } else { self.signatures.active() };
-                self.signature_draft = match saved {
-                    Some(s) => crate::fill_sign::SigDraft {
-                        label: if initials { String::new() } else { self.signatures.active_entry().map(|e| e.label.clone()).unwrap_or_default() },
-                        ..crate::fill_sign::SigDraft::from_saved(initials, s)
-                    },
+                let library = if initials { &self.initials } else { &self.signatures };
+                self.signature_draft = match library.active_entry() {
+                    Some(e) => crate::fill_sign::SigDraft { label: e.label.clone(), ..crate::fill_sign::SigDraft::from_saved(initials, &e.sig) },
                     None => self.new_signature_draft(initials),
                 };
                 self.dialog = Some(Dialog::Signature);
             }
-            "sign.fill.signature.add" => {
-                if self.signatures.is_full() {
-                    self.notify_fmt(
-                        "You can keep up to {n} signatures. Remove one to add another.",
-                        &[("n", &crate::fill_sign::MAX_SAVED_SIGNATURES.to_string())],
-                    );
+            "sign.fill.signature.add" | "sign.fill.initials.add" => {
+                let initials = id == "sign.fill.initials.add";
+                if (if initials { &self.initials } else { &self.signatures }).is_full() {
+                    self.notify_full_list(initials);
                 } else {
-                    self.signature_draft = self.new_signature_draft(false);
+                    self.signature_draft = self.new_signature_draft(initials);
                     self.dialog = Some(Dialog::Signature);
                 }
             }
@@ -711,7 +706,7 @@ impl PdfCraftApp {
                 let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return Some(false) };
                 self.quick_tool = crate::QuickTool::Fill(tool);
                 let initials = tool == crate::fill_sign::FillTool::Initials;
-                if (tool == crate::fill_sign::FillTool::Signature && self.signature().is_none()) || (initials && self.initials.is_none()) {
+                if (tool == crate::fill_sign::FillTool::Signature && self.signature().is_none()) || (initials && self.initials.is_empty()) {
                     self.signature_draft = self.new_signature_draft(initials);
                     self.dialog = Some(Dialog::Signature);
                 }

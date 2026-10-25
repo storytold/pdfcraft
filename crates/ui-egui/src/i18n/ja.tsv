@@ -2617,3 +2617,8 @@ animation effects	Off	オフ
 	No image on clipboard to paste	貼り付ける画像がクリップボードにありません
 	Pinned {tool} to Home	{tool} をホームにピン留めしました
 	Unpinned {tool} from Home	{tool} のホームへのピン留めを解除しました
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	入力と署名：保存済みのイニシャルを追加
+	Initials {n}	イニシャル {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	保存できるイニシャルは {n} 個までです。追加するには、いずれかを削除してください。

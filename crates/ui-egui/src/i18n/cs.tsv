@@ -2924,3 +2924,8 @@ certificate	Version	Verze
 	No image on clipboard to paste	Ve schránce není obrázek k vložení
 	Pinned {tool} to Home	{tool} připnuto na úvodní stránku
 	Unpinned {tool} from Home	{tool} odepnuto z úvodní stránky
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Vyplnit a podepsat: přidat další uložené iniciály
+	Initials {n}	Iniciály {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Uložit lze nejvýše {n} sad iniciál. Chcete-li přidat další, některou odeberte.

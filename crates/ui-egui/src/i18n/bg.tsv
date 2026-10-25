@@ -2580,3 +2580,8 @@ animation effects	Off	Изключени
 	No image on clipboard to paste	Няма изображение в клипборда за поставяне
 	Pinned {tool} to Home	{tool} е закачен в Начало
 	Unpinned {tool} from Home	{tool} е откачен от Начало
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Попълни и подпиши: добавяне на още едни запазени инициали
+	Initials {n}	Инициали {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Можете да запазите до {n} комплекта инициали. Премахнете един, за да добавите друг.
