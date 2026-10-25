@@ -59,6 +59,12 @@ pub trait Device<'a> {
     /// The tag is the marked content tag (e.g. b"P", b"Span"). The mcid is
     /// the marked content identifier from the properties dict, if present.
     fn begin_marked_content(&mut self, _tag: &[u8], _mcid: Option<i32>) {}
+    /// PdfCraft patch (53): the marked content sequence that just began has MCID `mcid` in the
+    /// page's own content, which indexes the page's `/StructParents` entry in the structure
+    /// tree's parent tree (ISO 32000-2 §14.7.5.4). Not called inside form XObjects, annotation
+    /// appearances, soft masks, patterns or Type 3 glyphs, whose MCIDs are their own. Called
+    /// right after `begin_marked_content` and before `actual_text`.
+    fn page_marked_content(&mut self, _mcid: i32) {}
     /// PdfCraft patch (25): the `/ActualText` of the marked content sequence that just began
     /// (ISO 32000-2 §14.9.4), as the text string's raw bytes. Called right after
     /// `begin_marked_content`; the text replaces everything drawn up to the matching
