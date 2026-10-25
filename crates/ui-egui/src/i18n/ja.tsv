@@ -941,6 +941,9 @@
 	Signature is valid:	署名は有効です:
 	Signature validity is UNKNOWN:	署名の有効性は不明です:
 	Signature is INVALID:	署名は無効です:
+	Signature valid	署名は有効
+	Validity unknown	有効性は不明
+	Signature invalid	署名は無効
 	Signature Details	署名の詳細
 	Reason	理由
 	Signing time	署名日時

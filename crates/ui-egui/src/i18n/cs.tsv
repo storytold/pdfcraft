@@ -1018,6 +1018,9 @@ key	Space	Mezerník
 	Signature is valid:	Podpis je platný:
 	Signature validity is UNKNOWN:	Platnost podpisu je NEZNÁMÁ:
 	Signature is INVALID:	Podpis je NEPLATNÝ:
+	Signature valid	Platný podpis
+	Validity unknown	Neznámá platnost
+	Signature invalid	Neplatný podpis
 	Signature Details	Podrobnosti podpisu
 	Reason	Důvod
 	Signing time	Čas podpisu

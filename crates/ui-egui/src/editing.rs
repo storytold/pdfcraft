@@ -48,10 +48,10 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
-        let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
-            (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
+        let (form_before, page_count_before, had_xfa, signatures_before) = if let Some(d) = self.session.get(id) {
+            (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some(), Some(std::sync::Arc::clone(&d.signatures)))
         } else {
-            (None, 0, false)
+            (None, 0, false, None)
         };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
@@ -75,7 +75,11 @@ impl PdfCraftApp {
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
-                if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
+                if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
+                    // A signature shows its state on its own page, which an edit elsewhere can
+                    // change (a certification forbidding it, say): every page redraws.
+                    view.document_changed(info);
+                } else if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
                 } else if let Some(form_before) = form_before

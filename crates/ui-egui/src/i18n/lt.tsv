@@ -1129,6 +1129,9 @@
 	Signature is valid:	Parašas galioja:
 	Signature panel	Parašų skydelis
 	Signature validity is UNKNOWN:	Parašo galiojimas NEŽINOMAS:
+	Signature valid	Parašas galioja
+	Validity unknown	Galiojimas nežinomas
+	Signature invalid	Parašas negalioja
 	Signer's name	Pasirašiusiojo vardas
 	Simplified field notation:	Supaprastinta lauko išraiška:
 	Single Page	Vienas puslapis
@@ -1804,6 +1807,7 @@
 	There is no folder to save the digital ID in.	Nėra aplanko skaitmeniniam ID įrašyti.
 	This document has not been modified since this signature was applied.	Po pasirašymo dokumentas nepakeistas.
 	This document has not been modified since this timestamp was applied.	Pridėjus šią laiko žymą dokumentas nepakeistas.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Šioje formoje per daug laukų arba per ilgas lauko pavadinimas, kad „PdfCraft“ galėtų perskaityti juos visus. Parašai tarp likusių laukų nerodomi sąraše, todėl dokumentas laikomas pasirašytu.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Šis parašas naudoja RIPEMD-160 — pasenusį 160 bitų maišos algoritmą, kuris parašams neberekomenduojamas. Parašas vis dar patvirtinamas, tačiau juo nereikėtų pasikliauti.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Šis parašas naudoja silpną SHA-1 maišos algoritmą, kuriam įrodytos kolizijos. Parašas vis dar patvirtinamas, nes SHA-1 naudoja daug prieš daugelį metų pasirašytų dokumentų, tačiau juo nereikėtų pasikliauti.
 	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Šis parašas naudoja trumpesnį nei 2048 bitų RSA raktą, kuris parašams nebelaikomas pakankamai stipriu. Parašas vis dar patvirtinamas, tačiau juo nereikėtų pasikliauti.

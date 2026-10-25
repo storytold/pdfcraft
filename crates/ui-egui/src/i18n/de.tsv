@@ -918,6 +918,9 @@
 	Signature is valid:	Signatur ist gültig:
 	Signature validity is UNKNOWN:	Gültigkeit der Signatur ist UNBEKANNT:
 	Signature is INVALID:	Signatur ist UNGÜLTIG:
+	Signature valid	Signatur gültig
+	Validity unknown	Gültigkeit unbekannt
+	Signature invalid	Signatur ungültig
 	Signature Details	Signaturdetails
 	Reason	Grund
 	Signing time	Signaturzeitpunkt

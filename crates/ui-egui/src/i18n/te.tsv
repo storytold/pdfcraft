@@ -911,6 +911,9 @@ comment menu	Edit	సవరించు
 	Signature is valid:	సంతకం చెల్లుబాటు అవుతుంది:
 	Signature validity is UNKNOWN:	సంతకం చెల్లుబాటు తెలియదు:
 	Signature is INVALID:	సంతకం చెల్లదు:
+	Signature valid	సంతకం చెల్లుబాటు అవుతుంది
+	Validity unknown	చెల్లుబాటు తెలియదు
+	Signature invalid	సంతకం చెల్లదు
 	Signature Details	సంతకం వివరాలు
 	Reason	కారణం
 	Signing time	సంతకం చేసిన సమయం

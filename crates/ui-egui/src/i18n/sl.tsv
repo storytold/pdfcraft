@@ -1726,6 +1726,9 @@
 	Signature is valid:	Podpis je veljaven:
 	Signature panel	Razdelek s podpisom
 	Signature validity is UNKNOWN:	Veljavnost podpisa je NEZNANA:
+	Signature valid	Veljaven podpis
+	Validity unknown	Neznana veljavnost
+	Signature invalid	Neveljaven podpis
 	Signatures	Podpisi
 	Signatures panel	Razdelek s podpisi
 	Signed and all signatures are valid.	Podpisano in vsi podpisi so veljavni.

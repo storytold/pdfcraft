@@ -931,6 +931,9 @@
 	Signature is valid:	Podpis jest prawidłowy:
 	Signature validity is UNKNOWN:	Ważność podpisu jest NIEZNANA:
 	Signature is INVALID:	Podpis jest NIEPRAWIDŁOWY:
+	Signature valid	Podpis prawidłowy
+	Validity unknown	Ważność nieznana
+	Signature invalid	Podpis nieprawidłowy
 	Signature Details	Szczegóły podpisu
 	Reason	Powód
 	Signing time	Czas podpisania

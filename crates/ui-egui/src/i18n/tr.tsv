@@ -891,6 +891,9 @@
 	Signature is valid:	İmza geçerli:
 	Signature validity is UNKNOWN:	İmza geçerliliği BİLİNMİYOR:
 	Signature is INVALID:	İmza GEÇERSİZ:
+	Signature valid	İmza geçerli
+	Validity unknown	Geçerlilik bilinmiyor
+	Signature invalid	İmza geçersiz
 	Signature Details	İmza Ayrıntıları
 	Reason	Neden
 	Signing time	İmzalama zamanı

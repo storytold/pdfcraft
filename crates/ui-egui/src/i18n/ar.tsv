@@ -940,6 +940,9 @@
 	Signature is valid:	التوقيع صالح:
 	Signature validity is UNKNOWN:	صلاحية التوقيع غير معروفة:
 	Signature is INVALID:	التوقيع غير صالح:
+	Signature valid	التوقيع صالح
+	Validity unknown	الصلاحية غير معروفة
+	Signature invalid	التوقيع غير صالح
 	Signature Details	تفاصيل التوقيع
 	Reason	السبب
 	Signing time	وقت التوقيع
@@ -2645,6 +2648,7 @@ animation effects	Off	معطّلة
 	There is no folder to save the digital ID in.	لا مجلد لحفظ المعرّف الرقمي فيه.
 	This document has not been modified since this signature was applied.	لم يُعدَّل المستند منذ تطبيق هذا التوقيع.
 	This document has not been modified since this timestamp was applied.	لم يُعدَّل المستند منذ تطبيق هذا الطابع الزمني.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	يحتوي هذا النموذج على حقول كثيرة جدًا، أو على اسم حقل طويل جدًا، فلا يقرؤها PdfCraft كلها. ولا يظهر في القائمة أي توقيع في الحقول الباقية، لذا يُعامَل المستند على أنه موقَّع.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	يستخدم هذا التوقيع RIPEMD-160، خوارزمية هضم قديمة بطول 160 بت لم تعد موصى بها للتواقيع. لا يزال يصح، لكن لا ينبغي الاعتماد عليه.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	يستخدم هذا التوقيع SHA-1، خوارزمية هضم ضعيفة: أُثبتت تصادمات فيها. لا يزال يصح لأن مستندات كثيرة وقّعت قبل سنوات تستخدمه، لكن لا ينبغي الاعتماد عليه.
 	Tools	الأدوات

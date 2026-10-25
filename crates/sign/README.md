@@ -50,6 +50,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   RFC 6960 OCSP responses (responder identity, OCSP-signing EKU for delegated responders,
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
+- **Status layers:** `show_status_layers` draws each signature's validated state (icon, and a
+  caption in the caller's words) into named-layer appearances, whose `/N` draws one layer form
+  that holds and draws `n1` and `n3`; `has_status_layers` says whether a document has any. It
+  works on a display copy and never edits an original object, so saving keeps the signed bytes.
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
 configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.

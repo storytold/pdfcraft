@@ -1,8 +1,8 @@
 //! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
 //!
 //! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
-//! text, from a
-//! document's working file (so unsaved edits and hidden layers are respected, as on screen).
+//! text, from the copy a document displays ([`Document::export_source`]): its working file, so
+//! unsaved edits and hidden layers are respected, with what is drawn for display only.
 
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 
@@ -28,9 +28,10 @@ pub struct ExportSource {
 
 impl Document {
     /// What an export reads, for exporting on another thread. These are the displayed
-    /// bytes, so they may carry missing comment appearances PdfCraft drew. Signature
-    /// artwork stays original; viewer validation badges are not document content and
-    /// do not enter image/text exports or Print as Image. Saving uses the working file.
+    /// bytes, so they may carry appearances PdfCraft drew that the file itself does not hold:
+    /// missing comment appearances, and the signature states of named-layer signature
+    /// appearances. Exports and Print as Image follow the page as shown; the viewer's badges
+    /// are not document content and never enter them. Saving uses the working file.
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),

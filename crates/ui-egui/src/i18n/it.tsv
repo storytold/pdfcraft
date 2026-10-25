@@ -937,6 +937,9 @@
 	Signature is valid:	La firma è valida:
 	Signature validity is UNKNOWN:	La validità della firma è SCONOSCIUTA:
 	Signature is INVALID:	La firma NON È VALIDA:
+	Signature valid	Firma valida
+	Validity unknown	Validità sconosciuta
+	Signature invalid	Firma non valida
 	Signature Details	Dettagli firma
 	Reason	Motivo
 	Signing time	Data e ora della firma
@@ -2637,6 +2640,7 @@ calendar date	December	dicembre
 	There is no folder to save the digital ID in.	Non c'è una cartella in cui salvare l'ID digitale.
 	This document has not been modified since this signature was applied.	Il documento non è stato modificato dopo l'applicazione di questa firma.
 	This document has not been modified since this timestamp was applied.	Il documento non è stato modificato dopo l'applicazione di questa marca temporale.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Questo modulo ha troppi campi, o un nome di campo troppo lungo, perché PdfCraft li legga tutti. Le eventuali firme tra gli altri non sono elencate, quindi il documento è considerato firmato.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Questa firma usa RIPEMD-160, un algoritmo di hash a 160 bit obsoleto e non più consigliato per le firme. Risulta ancora valida, ma non andrebbe considerata affidabile.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Questa firma usa SHA-1, un algoritmo di hash debole per cui sono state dimostrate collisioni. Risulta ancora valida perché molti documenti firmati anni fa lo usano, ma non andrebbe considerata affidabile.
 	Unsigned signature field	Campo firma non firmato

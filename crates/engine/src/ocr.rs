@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{LANGUAGES, Models, Ocr, OcrError, PlacedWord};
@@ -38,6 +39,18 @@ const ALREADY_ON_PAGE: f32 = 0.5;
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
 const SHEET: f32 = 842.0;
+
+/// The text of `page`'s own: its glyphs, without the words drawn as outlines or pictures that only
+/// `/ActualText` names.
+pub(crate) fn own_text(r: &mut PageRenderer, page: usize) -> Result<pdfcraft_render::PageText, String> {
+    r.filtered_text(page, TextFilter { painted: true, ..Default::default() })
+}
+
+/// Whether `page` has text of its own ([`own_text`]). A stamp drawn as outlines on a scan still
+/// leaves the scan to read; its words are not read twice, since they count as already on the page.
+fn has_own_text(r: &mut PageRenderer, page: usize) -> bool {
+    own_text(r, page).is_ok_and(|t| t.glyphs.iter().any(|g| !g.text.trim().is_empty()))
+}
 
 /// How much of `word` the `text` boxes cover, from 0 to 1. Boxes are `[x0, y0, x1, y1]` in page
 /// view space. Overlaps between the text boxes are counted twice (glyphs rarely overlap), so the
@@ -121,13 +134,14 @@ impl OcrJob {
             }
             let Some(info) = self.infos.get(page) else { continue };
             let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()) };
-            // The boxes of the page's own text (an earlier OCR layer's included), in view space.
+            // The boxes of all text on the page, in view space: an earlier OCR layer's, and words
+            // only /ActualText names, so neither is read again.
             let existing: Vec<[f32; 4]> = r
                 .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
                 .text
                 .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
                 .unwrap_or_default();
-            if self.settings.skip_text_pages && !existing.is_empty() {
+            if self.settings.skip_text_pages && !existing.is_empty() && has_own_text(&mut r, page) {
                 out.push(skip("the page already contains text"));
                 continue;
             }
@@ -264,6 +278,34 @@ pub fn recognize_file(
 mod tests {
     use super::*;
     use crate::export;
+
+    /// One 300 × 300 page drawing `content`, with Helvetica as `/F1`.
+    fn page(content: &str) -> Arc<Vec<u8>> {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        Arc::new(pdf.into_bytes())
+    }
+
+    #[test]
+    fn a_stamp_drawn_as_outlines_leaves_a_scan_to_read() {
+        let stamp = page("/Span <</ActualText (APPROVED)>> BDC 100 40 60 20 re f EMC");
+        let mut r = PageRenderer::new(stamp, RenderConfig::default());
+        assert!(!has_own_text(&mut r, 0), "words only /ActualText names are no text of the page's own");
+        // They still count as on the page, so reading the scan doesn't add them twice.
+        let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
+        assert_eq!(text.plain_text(), "APPROVED");
+    }
+
+    #[test]
+    fn printed_glyphs_count_as_own_text() {
+        let mut r = PageRenderer::new(page("BT /F1 12 Tf 20 150 Td (Total) Tj ET"), RenderConfig::default());
+        assert!(has_own_text(&mut r, 0));
+    }
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
     /// part of the page (a picture) is new.

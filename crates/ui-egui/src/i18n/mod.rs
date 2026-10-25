@@ -546,6 +546,17 @@ pub fn tr(lang: Lang, s: &str) -> &str {
     lang.catalog().plain(s).unwrap_or(s)
 }
 
+/// Like [`tr`], but in logical order for a right-to-left language too, for words written into a
+/// PDF, whose viewer lays them out itself. `None` when `lang` doesn't translate `s`.
+pub(crate) fn tr_logical(lang: Lang, s: &str) -> Option<String> {
+    if !lang.0.rtl {
+        return lang.catalog().plain(s).map(str::to_owned);
+    }
+    // The loaded catalog is in display order, so read the source again. Callers run when the
+    // language changes, not every frame.
+    Catalog::parse(lang.0.source, lang.0.plural_forms()).0.plain(s).map(str::to_owned)
+}
+
 /// How the layers below say their own sentences in the current language.
 ///
 /// The checker, the preflight profiles and the signature panel hand over a whole English wording

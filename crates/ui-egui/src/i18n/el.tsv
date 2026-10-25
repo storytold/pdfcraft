@@ -509,6 +509,9 @@
 	Signature is valid:	Η υπογραφή είναι έγκυρη:
 	Signature validity is UNKNOWN:	Η εγκυρότητα της υπογραφής είναι ΑΓΝΩΣΤΗ:
 	Signature is INVALID:	Η υπογραφή είναι ΜΗ ΕΓΚΥΡΗ:
+	Signature valid	Έγκυρη υπογραφή
+	Validity unknown	Άγνωστη εγκυρότητα
+	Signature invalid	Μη έγκυρη υπογραφή
 	Signature Details	Λεπτομέρειες υπογραφής
 	Reason	Αιτία
 	Signing time	Ώρα υπογραφής

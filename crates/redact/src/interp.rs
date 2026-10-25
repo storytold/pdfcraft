@@ -850,6 +850,9 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     }
 
     let mut processed = Vec::new();
+    // Painting operators written again under a clip that cuts the regions out: unchanged as
+    // operators, but what they paint is no longer all there.
+    let mut clipped: HashSet<usize> = HashSet::new();
     for (piece, mut changed) in pieces.into_iter().zip(rewrite) {
         let mut ops: Vec<Op> = Vec::with_capacity(piece.len());
         for op in piece {
@@ -895,6 +898,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     // A clip-and-paint path can't be wrapped in q/Q without losing its clip:
                     // paint it clipped, then set its clip with a no-op path.
                     scope.report.paths_clipped += 1;
+                    clipped.insert(op.span.start);
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
                         let plain: Vec<Op> = body.iter().filter(|p| !p.is("W") && !p.is("W*")).cloned().collect();
                         ops.push(Op::new("q", vec![]));
@@ -907,6 +911,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     ops.push(Op::new("n", vec![]));
                 } else {
                     scope.report.paths_clipped += 1;
+                    clipped.insert(op.span.start);
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
                         ops.push(Op::new("q", vec![]));
                         ops.extend(c);
@@ -1049,9 +1054,13 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     }
                 }
                 b"sh" if scope.mode == Mode::Apply => {
-                    // A shading fills the current clip: clip the regions out.
-                    if let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]) {
+                    // A shading fills the current clip: clip the regions out. Removing hidden
+                    // content has no regions, so the shading and its name stay as they are.
+                    if let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6])
+                        && !c.is_empty()
+                    {
                         changed = true;
+                        clipped.insert(op.span.start);
                         ops.push(Op::new("q", vec![]));
                         ops.extend(c);
                         ops.push(op);
@@ -1078,7 +1087,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         processed.push((ops, changed));
     }
     if scope.mode == Mode::Apply {
-        clean_replacements(doc, resources, &original, &mut processed, scope.report);
+        clean_replacements(doc, resources, &original, &clipped, &mut processed, scope.report);
     }
     for ((ops, changed), (comment_in, comment_out)) in processed.into_iter().zip(comment_edges) {
         out.streams.push(changed.then(|| {
@@ -1095,7 +1104,16 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     out
 }
 
-fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], processed: &mut [(Vec<Op>, bool)], report: &mut Report) {
+/// Strip `/ActualText` (and `/Alt`, `/E`, `/T`) from the marked content around anything redaction
+/// removed, changed or `clipped`: the words they name may be among what is gone.
+fn clean_replacements(
+    doc: &Document,
+    resources: &Dict,
+    original: &[Op],
+    clipped: &HashSet<usize>,
+    processed: &mut [(Vec<Op>, bool)],
+    report: &mut Report,
+) {
     let originals: HashMap<usize, &Op> = original.iter().map(|op| (op.span.start, op)).collect();
     let unchanged: HashSet<usize> =
         processed.iter().flat_map(|(ops, _)| ops).filter(|op| originals.get(&op.span.start) == Some(op)).map(|op| op.span.start).collect();
@@ -1107,7 +1125,13 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
             b"EMC" => {
                 stack.pop();
             }
-            _ if !unchanged.contains(&op.span.start) => affected.extend(stack.iter().copied()),
+            // A scope joins `affected` only with every scope around it, so once the innermost one
+            // is in, the rest are too: deep nesting over many changed ops stays linear.
+            _ if (!unchanged.contains(&op.span.start) || clipped.contains(&op.span.start))
+                && stack.last().is_some_and(|top| !affected.contains(top)) =>
+            {
+                affected.extend(stack.iter().copied())
+            }
             _ => {}
         }
     }

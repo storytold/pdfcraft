@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
 
 use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -562,6 +562,29 @@ impl PdfCraftApp {
         }
     }
 
+    /// Draw signature status captions in `lang` ([`status_captions`]) and redraw the pages, once
+    /// per language change: the session rebuilds the documents whose captions it draws.
+    pub(crate) fn apply_status_captions(&mut self, lang: crate::i18n::Lang) {
+        if self.status_captions_lang == Some(lang) {
+            return;
+        }
+        self.status_captions_lang = Some(lang);
+        // Only a document that draws a signature state shows the words: the others keep their
+        // pages, selection and search results.
+        let drawing: Vec<pdfcraft_engine::DocId> = self
+            .views
+            .iter()
+            .map(|v| v.id)
+            .filter(|id| self.session.get(*id).is_some_and(|d| d.signatures.iter().any(|s| s.verdict_shown)))
+            .collect();
+        if !self.session.set_signature_captions(status_captions(lang)) {
+            return;
+        }
+        for view in self.views.iter_mut().filter(|v| drawing.contains(&v.id)) {
+            view.invalidate_content();
+        }
+    }
+
     /// A file name without its PDF extension, for snapshot tab names.
     fn file_stem(name: &str) -> String {
         name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string()
@@ -937,6 +960,19 @@ pub(crate) fn appearance_labels(lang: crate::i18n::Lang) -> (AppearanceLabels, b
     }
 }
 
+/// The words a named-layer signature appearance's status caption is drawn with: all three in
+/// `lang`, or all three in English when `lang` misses one of them. The sign crate picks the
+/// face, and shapes right-to-left words itself, so they go in logical order.
+pub(crate) fn status_captions(lang: crate::i18n::Lang) -> StatusCaptions {
+    let english = StatusCaptions::default();
+    if lang == crate::i18n::Lang::EN {
+        return english;
+    }
+    let said = |s: &str| crate::i18n::tr_logical(lang, s);
+    (|| Some(StatusCaptions { valid: said(&english.valid)?, unknown: said(&english.unknown)?, invalid: said(&english.invalid)? }))()
+        .unwrap_or(english)
+}
+
 /// The detail lines of a visible signature, as `sign::pdf` stamps them (the distinguished name
 /// aside, which the dialog doesn't know before the ID is opened): the label above the name, then
 /// the reason, location and date, each after its label. `reason` and `location` are as typed.
@@ -1181,11 +1217,14 @@ fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
 /// One look per signature verdict, shared by the Signatures panel and the page badges so
 /// the two can't drift apart.
 pub(crate) fn signature_status_style(status: SignatureStatus) -> (&'static str, Color32) {
-    match status {
-        SignatureStatus::Valid => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
-        SignatureStatus::Unknown => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
-        SignatureStatus::Invalid => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),
-    }
+    // The colours the regenerated status layers draw with, so the page and the panel agree.
+    let [r, g, b] = sign::status_rgb(status);
+    let icon = match status {
+        SignatureStatus::Valid => "circle-check",
+        SignatureStatus::Unknown => "triangle-alert",
+        SignatureStatus::Invalid => "circle-x",
+    };
+    (icon, Color32::from_rgb(r, g, b))
 }
 
 /// What the Signatures panel asks the app to do.
@@ -1545,6 +1584,38 @@ mod tests {
         assert_eq!(signature_status_style(SignatureStatus::Valid).0, "circle-check");
         assert_eq!(signature_status_style(SignatureStatus::Unknown).0, "triangle-alert");
         assert_eq!(signature_status_style(SignatureStatus::Invalid).0, "circle-x");
+    }
+
+    #[test]
+    fn a_language_change_leaves_documents_without_a_drawn_state_alone() {
+        let mut app = PdfCraftApp::new();
+        let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
+        app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
+        app.views[0].texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
+        app.apply_status_captions(crate::i18n::Lang::from_code("de").unwrap());
+        assert!(!app.views[0].texts.is_empty(), "its text, selection and search results stay");
+    }
+
+    #[test]
+    fn status_captions_are_translated_in_every_language() {
+        use crate::i18n::Lang;
+        let english = StatusCaptions::default();
+        assert_eq!(status_captions(Lang::EN), english);
+        // A language missing any of the three falls back to English for all of them, so each
+        // has its own; whether a face draws them is the sign crate's call.
+        for lang in Lang::all().filter(|&l| l != Lang::EN) {
+            assert_ne!(status_captions(lang), english, "{} misses a status caption", lang.code());
+        }
+        let de = status_captions(Lang::from_code("de").unwrap());
+        assert_eq!((de.valid.as_str(), de.invalid.as_str()), ("Signatur gültig", "Signatur ungültig"));
+    }
+
+    #[test]
+    fn status_captions_reach_the_sign_crate_in_logical_order() {
+        // The screen shows Arabic in display order; the sign crate receives the catalogue's own
+        // logical order instead, so its bidi shaper does not reverse the words a second time.
+        let ar = status_captions(crate::i18n::Lang::from_code("ar").unwrap());
+        assert_eq!([ar.valid.as_str(), ar.unknown.as_str(), ar.invalid.as_str()], ["التوقيع صالح", "الصلاحية غير معروفة", "التوقيع غير صالح"]);
     }
 
     #[test]

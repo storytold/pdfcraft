@@ -934,6 +934,9 @@
 	Signature is valid:	Подпись действительна:
 	Signature validity is UNKNOWN:	Действительность подписи НЕИЗВЕСТНА:
 	Signature is INVALID:	Подпись НЕДЕЙСТВИТЕЛЬНА:
+	Signature valid	Подпись действительна
+	Validity unknown	Действительность неизвестна
+	Signature invalid	Подпись недействительна
 	Signature Details	Сведения о подписи
 	Reason	Причина
 	Signing time	Время подписания

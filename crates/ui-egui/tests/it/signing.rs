@@ -317,6 +317,50 @@ fn save_as_keeps_a_signed_document_incremental() {
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
 }
 
+/// A one-page document whose only signature field is signed but named far past the 4096 bytes the
+/// signature field walk reads, with a cross-reference table so it opens as written.
+fn signature_past_the_field_walk() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(64 << 10)),
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
+    // The walk stops short of the signed field, so its signature is not listed; Save As must still
+    // treat the document as signed and append to it, or that signature would no longer cover it.
+    let bytes = signature_past_the_field_walk();
+    let (original, out) = (bytes.clone(), dir().join("copy.pdf"));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
+    let saved = std::fs::read(&out).expect("file written");
+    assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
+}
+
 /// The fixture with an empty signature field across the bottom of the page.
 const WITH_FIELD: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >> endobj

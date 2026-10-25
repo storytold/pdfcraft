@@ -695,7 +695,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs; drawn as PDF path data by crates/sign/src/status_layers.rs into displayed signature status layers"
 sha256 = "201e790f3a05c65b2c4b0f952c9b9e1f35cd1c5b21698b3f4be131883fe90bc8"
 
 [[asset]]
@@ -2114,7 +2114,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs; drawn as PDF path data by crates/sign/src/status_layers.rs into displayed signature status layers"
 sha256 = "55aa37e0b73e7f8cd906952dbdeb96283c6595ca64aba240a17f3455cb989114"
 
 [[asset]]
@@ -2224,7 +2224,7 @@ source = "https://github.com/rsms/inter"
 licence = "OFL-1.1"
 licence_file = "assets/fonts/OFL-Inter.txt"
 kind = "font"
-usage = "UI font, embedded in the app; demo PDF labels; slanted fallback glyphs in Fill & Sign typed signatures for characters Dancing Script lacks (Cyrillic, Greek), drawn as filled paths"
+usage = "UI font, embedded in the app; demo PDF labels; slanted fallback glyphs in Fill & Sign typed signatures for characters Dancing Script lacks (Cyrillic, Greek), drawn as filled paths; embedded into displayed signature status captions beyond WinAnsi by crates/sign/src/status_layers.rs"
 sha256 = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
 
 [[asset]]
@@ -3251,7 +3251,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs; drawn as PDF path data by crates/sign/src/status_layers.rs into displayed signature status layers"
 sha256 = "ef1fec17d88794ba6c34c5cf63bdadbd234b3d4dffbcc3d55468b47e3f398472"
 
 [[asset]]
@@ -3378,7 +3378,7 @@ source = "https://github.com/storytold/craft-fonts (pinned by commit in .github/
 licence = "OFL-1.1"
 attribution = "https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md"
 kind = "font"
-usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs leaves out for size"
+usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Arabic interface text, file names and document titles (Noto Sans Arabic); status captions of named-layer signatures in Arabic and Japanese, drawn as filled outlines into the display copy by crates/sign/src/status_layers.rs; the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs leaves out for size"
 
 [[asset]]
 path = "crates/sign/tests/data/x509-rsa-sha1.pdf"
@@ -3517,3 +3517,14 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Catalan UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+
+[[asset]]
+path = "crates/sign/assets/greentick.png"
+title = "Signature valid green tick watermark"
+author = "Contributor-original"
+source = "Contributor-original: green tick watermark graphic for valid signature appearances"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Green tick watermark for valid signature status layers in crates/sign/src/status_layers.rs"
+sha256 = "50a12000ff6e7059a38b0abbeec7a8fdbfe9aa027b78c60f512e395ebad61340"
