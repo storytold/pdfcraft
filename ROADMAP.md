@@ -19,6 +19,7 @@
 > **Last reviewed:** 2026-10-20 - **Last updated:** 2026-10-20 - **Change:** minor (M6, #3502: form detection uses the existing content-stream boundary policy; estimates unchanged)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M2, #3574: named form properties retain page origin and own dictionary boundaries; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M4: initial-view options resolve indirect boolean preferences; estimates unchanged)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M8, #3647: retained unsafe tiling-pattern cells cause atomic Apply refusal; estimates unchanged)
 > **Last reviewed:** 2026-10-16; **Last updated:** 2026-10-16; **Change:** minor (M5 #2669, item 5: reply groups and page root counts per frame; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M7: the Edit text caret is as tall as the row it is on; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M6: CSV tab-containing headers; estimates unchanged)
@@ -258,6 +259,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-20 (M10, #3532 partial):** Vector printing retains existing widget artwork when its appearance lacks Subtype. A print-owned copy adds Form dispatch metadata. The source stream and all explicit subtypes stay unchanged. Synthetic source/output raster checks cover resources, selected/shared appearances, placement, flags and content modes. Appearance regeneration and physical printer validation remain outside this fix. Estimates unchanged.
 
 - **2026-10-20 (M5, arrow keys move comments):** With a comment selected, the arrow keys move it a screen pixel and ⌘/Ctrl or Shift and an arrow ten, instead of scrolling the view or turning the page; up is up on screen at any zoom and rotation, and each press is one undo step. Text markup and locked comments stay put. Estimates unchanged.
+- **2026-10-20 (M8, #3647):** Apply prunes fully removed tiling patterns, then checks retained pattern resources for text, images and unreadable content before reporting success. Shared patterns, Form-owned and inherited patterns, and cells kept by another page cause an atomic refusal when safe removal cannot be shown. Synthetic saved-file and automation regressions cover refusal, preserved marks and undo, and vector-only controls. Estimates unchanged.
 
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.
 

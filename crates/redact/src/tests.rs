@@ -393,6 +393,200 @@ fn a_form_that_fans_out_or_loops_is_bounded_by_the_page_budget() {
     }
 }
 
+/// A tiling pattern's cell is a content stream of its own and can draw text. Redacting a shape
+/// filled with such a pattern removed the fill from the page but left the pattern in the page's
+/// resources, so its cell -- with the text that was under the mark -- stayed in the saved file
+/// (#3647). A pattern nothing paints with any more now leaves the resources; one some surviving
+/// paint still uses stays.
+#[test]
+fn a_pattern_whose_only_painting_was_redacted_leaves_the_page() {
+    fn page_with(fills: &str) -> Document {
+        let cell = stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300              /Resources << /Font << /F1 5 0 R >> >>",
+            b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+        );
+        let content = format!("BT /F1 10 Tf 10 280 Td (PUBLIC) Tj ET {fills}");
+        one_page(content.as_bytes(), "/Pattern << /P0 7 0 R >>", vec![cell])
+    }
+    let has_pattern = |doc: &Document| {
+        pdfcraft_model::pages(doc)[0]
+            .dict
+            .get(b"Resources")
+            .and_then(|r| doc.resolve(r).as_dict().cloned())
+            .is_some_and(|res| res.get(b"Pattern").is_some())
+    };
+
+    // One box, marked: the pattern is no longer painted, so it goes with the fill.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(report.patterns_removed, 1, "the pattern left the page");
+    assert!(!has_pattern(&doc), "the page has no /Pattern left");
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+
+    // Two boxes share a text-bearing cell. The second still needs its pattern, but it is not
+    // safe to infer that it visibly displays every byte of the cell.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f /Pattern cs /P0 scn 20 40 100 30 re f");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal keeps the pending mark and original bytes");
+
+    // Paint is not only path painting: text shows with the fill pattern too, and the text here
+    // survives the mark. Dropping the pattern would take the fill away from text still on the
+    // page, so a pattern is kept for every operator that can paint with it.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f BT /F1 10 Tf 10 240 Td (KEEP) Tj ET");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert!(has_pattern(&doc), "the refused operation keeps the original pattern");
+    assert!(content(&doc, 0).contains("(KEEP)"), "the text is still there: {}", content(&doc, 0));
+
+    // Text in render mode 3 paints nothing, so it keeps no pattern: the unpainted pattern goes.
+    let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f BT 3 Tr /F1 10 Tf 10 240 Td (KEEP) Tj ET");
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "invisible text paints no pattern");
+
+    // `/Pattern` may be an indirect object, like any value. Reading the reference itself as a
+    // dictionary found none, so nothing was pruned and the cell stayed in the saved file.
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+    );
+    let mut doc = one_page(b"/Pattern cs /P0 scn 20 140 100 30 re f", "/Pattern 8 0 R", vec![cell, b"<< /P0 7 0 R >>".to_vec()]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "an indirect /Pattern is resolved before it is pruned");
+    assert!(!has_pattern(&doc), "the page has no /Pattern left");
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+}
+
+/// Pruning takes the pattern out of `/Resources` but leaves the `/P0 scn` that selected it, so
+/// the saved page names a pattern that is no longer there. ISO 32000-1 (8.6.6.2) says that
+/// operand is a key of the `/Pattern` subdictionary, so this is what a reader is handed: the
+/// question is whether it stops reading the stream there. Asked in the review of #3647.
+#[test]
+fn a_page_whose_pruned_pattern_is_still_selected_renders() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+    );
+    // `0 g` after the fill puts the text back on a plain colour: with the pattern still selected
+    // the text would paint with it, and a pattern something still paints with is never pruned.
+    // The text is *after* the selector on purpose -- that is what a reader would lose if it gave
+    // up on the stale `/P0`.
+    let content_stream = b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g BT /F1 24 Tf 10 40 Td (PUBLIC) Tj ET";
+    let mut doc = one_page(content_stream, "/Pattern << /P0 7 0 R >>", vec![cell]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "the pattern is pruned");
+
+    // The state this test is about: the selector outlived the resource it names.
+    let after = content(&doc, 0);
+    assert!(after.contains("/P0 scn"), "the selector is still in the content: {after}");
+    assert!(!after.contains("20 140 100 30 re"), "the fill that used it is gone: {after}");
+
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+    let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "the page still renders: {:?}, warnings {:?}", out.error, out.warnings);
+    assert_eq!((out.width, out.height), (300, 300), "the page box is unchanged");
+
+    // The text after the stale selector is still drawn: 24 pt at y 40, so the top-left origin
+    // puts it in the rows around 240..265. Without it the reader gave up at the bad operand.
+    let painted = |rows: std::ops::Range<u32>, cols: std::ops::Range<u32>| {
+        rows.flat_map(|y| cols.clone().map(move |x| (y, x))).any(|(y, x)| {
+            let i = ((y * out.width + x) * 4) as usize;
+            out.rgba[i..i + 3] != [255, 255, 255]
+        })
+    };
+    assert!(painted(236..268, 8..120), "the text after the stale selector is still painted");
+    // The mark itself is drawn over the area the pattern filled -- `apply` writes a black
+    // overlay there (`q 0 0 0 rg 15 135 115 40 re f Q`), so the cell cannot show through it
+    // even if a reader kept the stale selector.
+    let black = |y: u32, x: u32| {
+        let i = ((y * out.width + x) * 4) as usize;
+        out.rgba[i..i + 3] == [0, 0, 0]
+    };
+    assert!(black(145, 70), "the redaction overlay is painted over the pattern's box");
+}
+
+#[test]
+fn redaction_cannot_leave_hidden_cell_text_when_pattern_is_used_elsewhere() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"0.9 g 0 0 300 300 re f 0 g BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let content = b"/Pattern cs /P0 scn 20 140 100 30 re f 20 40 100 30 re f";
+    let mut doc = one_page(content, "/Pattern << /P0 7 0 R >>", vec![cell]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal must be atomic");
+}
+
+#[test]
+fn redaction_cannot_leave_hidden_cell_text_on_an_unselected_page() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P0 7 0 R >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 20 140 100 30 re f"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        cell,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R /Resources << /Pattern << /P0 7 0 R >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 20 40 100 30 re f"),
+    ]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    match apply(&mut doc, Some(&[0])) {
+        Ok(_) => {
+            let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+            assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the unselected page kept the hidden cell text");
+        }
+        Err(RedactError::Pattern { reason: PatternProblem::Content, .. }) => {
+            assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal must keep both pages and the mark");
+        }
+        Err(error) => panic!("unexpected refusal: {error}"),
+    }
+}
+
+#[test]
+fn redacted_form_must_not_retain_its_own_pattern_cell_text() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Pattern << /P0 7 0 R >> >>",
+        b"/Pattern cs /P0 scn 20 140 100 30 re f",
+    );
+    let mut doc = one_page(b"/Fm Do", "/XObject << /Fm 8 0 R >>", vec![cell, form]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "form-owned pattern refusal must be atomic");
+}
+
+#[test]
+fn redacted_form_must_not_retain_inherited_pattern_cell_text() {
+    let cell = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 30 150 Td (SECRET) Tj ET",
+    );
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"20 140 100 30 re f");
+    let mut doc = one_page(b"/Pattern cs /P0 scn /Fm Do", "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >>", vec![cell, form]);
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Pattern { reason: PatternProblem::Content, .. })));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "inherited pattern refusal must be atomic");
+}
+
 #[test]
 fn shared_form_xobjects_are_copied_not_changed() {
     let form =

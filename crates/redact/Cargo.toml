@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
@@ -21,3 +22,6 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
+# The redacted page is rendered in `tests::a_page_whose_pruned_pattern_is_still_selected_renders`:
+# layer 3 from layer 4, a dev dependency only.
+pdfcraft-render = { workspace = true }

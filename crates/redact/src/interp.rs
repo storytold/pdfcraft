@@ -61,6 +61,13 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
+    /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
+    /// everything else. A pattern's cell is a content stream of its own and this pass does not
+    /// enter it, so a pattern whose only painting was removed has to leave the page's resources
+    /// or its drawing stays in the file (#3647).
+    fill_pattern: Option<Vec<u8>>,
+    stroke_pattern: Option<Vec<u8>>,
 }
 
 /// What processing a scope produced.
@@ -78,6 +85,12 @@ pub(crate) struct Output {
     /// dictionaries may name them too (an inherited or shared /Resources, or the caller's when a
     /// form has none of its own): [`unlink_doomed`] removes those entries.
     pub doomed: Vec<ObjRef>,
+    /// Pattern resource names a painting operator that survived the rewrite still uses. A name
+    /// this scope saw selected but never painted with afterwards is pruned from the page's
+    /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
+    /// saved file (#3647).
+    pub patterns_seen: Vec<Vec<u8>>,
+    pub patterns_painted: Vec<Vec<u8>>,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -433,6 +446,51 @@ pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
             xo.remove(n);
         }
     }
+}
+
+/// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
+/// painting knows exactly what it draws and whether the paint survived; text, images and forms
+/// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted.
+/// That costs an unused resource entry, while dropping a pattern something still draws with
+/// loses paint from the page.
+fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
+    if fills && let Some(n) = &gs.fill_pattern {
+        out.patterns_painted.push(n.clone());
+    }
+    if strokes && let Some(n) = &gs.stroke_pattern {
+        out.patterns_painted.push(n.clone());
+    }
+}
+
+/// Drop every `/Pattern` entry this scope saw selected but no surviving painting operator drew
+/// with. The `scn` that selected it stays in the content, so the page names a pattern its
+/// resources no longer hold; nothing surviving paints with that colour, and
+/// `a_page_whose_pruned_pattern_is_still_selected_renders` pins that the page still renders and
+/// that operators after the stale selector still draw. A pattern's cell is a content stream of its own which
+/// this pass does not enter, so a pattern whose only painting was redacted would otherwise keep
+/// its drawing -- text included -- in the saved file (#3647). A pattern some surviving paint
+/// still uses, or one the scope never saw, is left alone.
+/// `/Pattern` may be an indirect object like any other value, so it is resolved: reading the
+/// reference itself as a dictionary found none and pruned nothing, leaving the cell in the file.
+/// What is written back is a dictionary of this page's own, so pruning never reaches through a
+/// `/Pattern` dictionary another page shares.
+pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>]) -> usize {
+    let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
+    let mut dropped = 0;
+    for n in seen {
+        if !painted.contains(n) && pat.get(n).is_some() {
+            pat.remove(n);
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        if pat.is_empty() {
+            res.remove(b"Pattern");
+        } else {
+            res.set(b"Pattern".to_vec(), Object::Dict(pat));
+        }
+    }
+    dropped
 }
 
 /// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or
@@ -791,6 +849,8 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        fill_pattern: None,
+        stroke_pattern: None,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -877,7 +937,15 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 let bbox = path_box.take();
                 let clips = std::mem::replace(&mut clip, false);
                 let hit = scope.mode == Mode::Apply && o != b"n" && bbox.is_some_and(|b| scope.hits(b));
+                // The pattern this paint draws with is still in use wherever the paint survives,
+                // whole or clipped. `n` paints nothing, so it uses none.
+                let paints_pattern = |out: &mut Output| {
+                    let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+                    let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+                    uses_patterns(out, &gs, fills, strokes);
+                };
                 if !hit {
+                    paints_pattern(&mut out);
                     ops.extend(body);
                     ops.push(op);
                     continue;
@@ -895,6 +963,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     // A clip-and-paint path can't be wrapped in q/Q without losing its clip:
                     // paint it clipped, then set its clip with a no-op path.
                     scope.report.paths_clipped += 1;
+                    paints_pattern(&mut out);
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
                         let plain: Vec<Op> = body.iter().filter(|p| !p.is("W") && !p.is("W*")).cloned().collect();
                         ops.push(Op::new("q", vec![]));
@@ -907,6 +976,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     ops.push(Op::new("n", vec![]));
                 } else {
                     scope.report.paths_clipped += 1;
+                    paints_pattern(&mut out);
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
                         ops.push(Op::new("q", vec![]));
                         ops.extend(c);
@@ -935,6 +1005,30 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                         gs.ctm = Matrix(m).then(&gs.ctm);
                     }
                 }
+                // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
+                // and clear it. `cs` with a space other than /Pattern clears it too.
+                b"scn" | b"SCN" => {
+                    let picked = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                    if let Some(name) = &picked {
+                        out.patterns_seen.push(name.clone());
+                    }
+                    if o == b"scn" {
+                        gs.fill_pattern = picked;
+                    } else {
+                        gs.stroke_pattern = picked;
+                    }
+                }
+                b"cs" | b"CS" => {
+                    if op.name(0) != Some(b"Pattern") {
+                        if o == b"cs" {
+                            gs.fill_pattern = None;
+                        } else {
+                            gs.stroke_pattern = None;
+                        }
+                    }
+                }
+                b"g" | b"rg" | b"k" => gs.fill_pattern = None,
+                b"G" | b"RG" | b"K" => gs.stroke_pattern = None,
                 b"BT" => {
                     tm = Matrix::IDENTITY;
                     tlm = Matrix::IDENTITY;
@@ -985,6 +1079,9 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     tm = tlm;
                 }
                 b"Tj" | b"TJ" | b"'" | b"\"" => {
+                    // Text paints with the fill pattern, and with the stroke pattern in the
+                    // stroking render modes. Mode 3 paints nothing and mode 7 only clips.
+                    uses_patterns(&mut out, &gs, matches!(gs.render_mode, 0 | 2 | 4 | 6), matches!(gs.render_mode, 1 | 2 | 5 | 6));
                     if o == b"\"" {
                         gs.word_spacing = op.num(0).unwrap_or(gs.word_spacing);
                         gs.char_spacing = op.num(1).unwrap_or(gs.char_spacing);
@@ -1037,6 +1134,8 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     continue;
                 }
                 b"BI" => {
+                    // An image mask paints with the fill colour, pattern included.
+                    uses_patterns(&mut out, &gs, true, false);
                     let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
                     if scope.hits(b) {
                         if scope.mode == Mode::Verify {
@@ -1060,6 +1159,10 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     }
                 }
                 b"Do" => {
+                    // An image mask paints with the fill colour, and a form's content is
+                    // interpreted with a graphics state of its own, so a pattern it inherits
+                    // from here is never recorded inside it.
+                    uses_patterns(&mut out, &gs, true, true);
                     if let Some(new) = xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out) {
                         changed = true;
                         if let Some(n) = new {
