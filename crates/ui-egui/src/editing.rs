@@ -201,7 +201,8 @@ impl PdfCraftApp {
                         view.pending_text_open = None;
                     }
                 }
-                let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
+                let detail = e.to_string();
+                let message = crate::object_ui::move_error(&edit, &detail).unwrap_or(detail);
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
@@ -1037,6 +1038,11 @@ impl PdfCraftApp {
 fn content_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::MoveObjects { page, .. }
+        | Edit::AlignObjects { page, .. }
+        | Edit::TransformPath { page, .. }
+        | Edit::RecolourObjects { page, .. }
+        | Edit::DeleteObjects { page, .. }
+        | Edit::ArrangeObjects { page, .. }
         | Edit::EditTextLine { page, .. }
         | Edit::EditTextBlock { page, .. }
         | Edit::EditPageImage { page, .. }
@@ -1814,7 +1820,7 @@ mod revert_draft_tests {
 #[cfg(test)]
 mod content_page_tests {
     use super::content_page;
-    use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
+    use pdfcraft_engine::{Edit, ObjectAlign, ObjectKind, ObjectTarget, ZOrder};
 
     /// Single-page content edits keep every other page's rasters; anything else still
     /// invalidates the whole document.
@@ -1822,6 +1828,14 @@ mod content_page_tests {
     fn single_page_content_edits_map_to_their_page() {
         let moved = Edit::MoveObjects { page: 3, objects: vec![ObjectTarget { kind: ObjectKind::Text, index: 0 }], offset: [1.0, 0.0] };
         assert_eq!(content_page(&moved), Some(3));
+        let aligned = Edit::AlignObjects { page: 2, objects: vec![ObjectTarget { kind: ObjectKind::Image, index: 0 }], align: ObjectAlign::Top };
+        assert_eq!(content_page(&aligned), Some(2));
+        let path = vec![ObjectTarget { kind: ObjectKind::Path, index: 0 }];
+        assert_eq!(content_page(&Edit::TransformPath { page: 1, index: 0, rect: [0.0, 0.0, 1.0, 1.0] }), Some(1));
+        assert_eq!(content_page(&Edit::RecolourObjects { page: 4, objects: path.clone(), fill: Some([1.0, 0.0, 0.0]), stroke: None }), Some(4));
+        assert_eq!(content_page(&Edit::DeleteObjects { page: 5, objects: path }), Some(5));
+        let image = ObjectTarget { kind: ObjectKind::Image, index: 0 };
+        assert_eq!(content_page(&Edit::ArrangeObjects { page: 6, object: image, order: ZOrder::Back }), Some(6));
         assert_eq!(content_page(&Edit::RotatePages { pages: vec![0], degrees: 90 }), None);
         assert_eq!(content_page(&Edit::SetInfo { key: "Title".into(), value: "x".into() }), None);
     }

@@ -2278,10 +2278,23 @@ signature pad	Type	入力
 	Finish or discard the text being edited before selecting several objects.	複数のオブジェクトを選択する前に、テキストの編集を完了するか破棄してください。
 	Move object	オブジェクトを移動
 	Move objects	複数のオブジェクトを移動
+	Align objects	オブジェクトを整列
+	Distribute objects	オブジェクトを均等配置
+	Resize object	オブジェクトのサイズを変更
+	Change colour	色を変更
+	Delete object	オブジェクトを削除
+	Delete objects	複数のオブジェクトを削除
+	Bring to front	最前面へ移動
+	Bring forward	前面へ移動
+	Send backward	背面へ移動
+	Send to back	最背面へ移動
 	Vertical text cannot be moved with this selection.	この選択範囲では縦書きのテキストを移動できません。
 	Text used as a clipping path cannot be moved with this selection.	この選択範囲ではクリッピングパスとして使われているテキストを移動できません。
 	These objects could not be moved. Select them again and try a smaller move.	これらのオブジェクトを移動できませんでした。選択し直し、移動量を小さくして試してください。
 	This page contains objects that cannot be selected together.	このページには一緒に選択できないオブジェクトがあります。
+	Text and added items can't be deleted with this selection.	この選択範囲ではテキストと追加した項目を削除できません。
+	Arrange	配置
+	Stroke colour	線の色
 	Fill colour	塗りつぶし色
 	No fill	塗りつぶしなし
 	Fill colour: none	塗りつぶし色: なし

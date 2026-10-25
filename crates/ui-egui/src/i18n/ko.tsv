@@ -2218,6 +2218,19 @@ certificate	Subject	주체
 	Finish or discard the text being edited before selecting several objects.	여러 개체를 선택하기 전에 편집 중인 텍스트를 완료하거나 취소하세요.
 	Move object	개체 이동
 	Move objects	개체 여러 개 이동
+	Align objects	개체 정렬
+	Distribute objects	개체 분배
+	Resize object	개체 크기 조정
+	Change colour	색상 변경
+	Delete object	개체 삭제
+	Delete objects	개체 여러 개 삭제
+	Bring to front	맨 앞으로 가져오기
+	Bring forward	앞으로 가져오기
+	Send backward	뒤로 보내기
+	Send to back	맨 뒤로 보내기
+	Text and added items can't be deleted with this selection.	이 선택 항목으로는 텍스트와 추가된 항목을 삭제할 수 없습니다.
+	Arrange	배치
+	Stroke colour	선 색상
 	Vertical text cannot be moved with this selection.	세로 텍스트는 이 선택 항목과 함께 이동할 수 없습니다.
 	Text used as a clipping path cannot be moved with this selection.	클리핑 경로로 사용되는 텍스트는 이 선택 항목과 함께 이동할 수 없습니다.
 	These objects could not be moved. Select them again and try a smaller move.	이 개체를 이동할 수 없습니다. 다시 선택한 뒤 더 짧은 거리로 옮겨 보세요.

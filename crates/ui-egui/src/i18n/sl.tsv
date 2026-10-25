@@ -2251,6 +2251,16 @@ signature pad	Type	Vtipkaj
 	List view	Pogled seznama
 	Move object	Premakni objekt
 	Move objects	Premakni objekte
+	Align objects	Poravnaj objekte
+	Distribute objects	Porazdeli objekte
+	Resize object	Spremeni velikost objekta
+	Change colour	Spremeni barvo
+	Delete object	Izbriši objekt
+	Delete objects	Izbriši objekte
+	Bring to front	Postavi v ospredje
+	Bring forward	Pomakni naprej
+	Send backward	Pomakni nazaj
+	Send to back	Postavi v ozadje
 	No fill	Brez polnila
 	Pages: {k} of {n}	Strani: {k} od {n}
 	Preview unavailable: {e}	Predogled ni na voljo: {e}
@@ -2265,6 +2275,9 @@ signature pad	Type	Vtipkaj
 	These objects could not be moved. Select them again and try a smaller move.	Teh objektov ni bilo mogoče premakniti. Izberite jih znova in poskusite z manjšim premikom.
 	This file is already as small as it can be made ({size}). No copy was saved.	Ta datoteka je že tako majhna, kot je mogoče ({size}). Kopija ni bila shranjena.
 	This page contains objects that cannot be selected together.	Ta stran vsebuje objekte, ki jih ni mogoče izbrati skupaj.
+	Text and added items can't be deleted with this selection.	Besedila in dodanih elementov s tem izborom ni mogoče izbrisati.
+	Arrange	Razporedi
+	Stroke colour	Barva obrobe
 	Vertical text cannot be moved with this selection.	Navpičnega besedila s tem izborom ni mogoče premakniti.
 key	Ctrl	Ctrl
 key	Delete	Delete

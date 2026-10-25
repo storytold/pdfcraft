@@ -2208,6 +2208,16 @@ calendar date	December	Желтоқсан
 	Mixed	Аралас
 	Move object	Объектіні жылжыту
 	Move objects	Объектілерді жылжыту
+	Align objects	Объектілерді туралау
+	Distribute objects	Объектілерді біркелкі орналастыру
+	Resize object	Объект өлшемін өзгерту
+	Change colour	Түсін өзгерту
+	Delete object	Объектіні жою
+	Delete objects	Объектілерді жою
+	Bring to front	Ең алдыңғы қатарға шығару
+	Bring forward	Алға жылжыту
+	Send backward	Артқа жылжыту
+	Send to back	Ең артқы қатарға жіберу
 	Multiple words or phrases	Бірнеше сөз немесе тіркес
 	New bookmark ({key})	Жаңа бетбелгі ({key})
 	New bookmarks from structure	Құрылымнан жаңа бетбелгілер
@@ -2249,6 +2259,9 @@ calendar date	December	Желтоқсан
 	These objects could not be moved. Select them again and try a smaller move.	Бұл объектілерді жылжыту мүмкін болмады. Оларды қайта таңдап, кішілеу жылжытуға тырысыңыз.
 	This file is already as small as it can be made ({size}). No copy was saved.	Бұл файлды одан әрі кішірейту мүмкін емес ({size}). Көшірме сақталмады.
 	This page contains objects that cannot be selected together.	Бұл бетте бірге таңдалмайтын объектілер бар.
+	Text and added items can't be deleted with this selection.	Мәтін мен қосылған элементтерді бұл таңдаумен жоюға болмайды.
+	Arrange	Реттеу
+	Stroke colour	Контур түсі
 	To change locked fields, also set Locked to No.	Бұғатталған өрістерді өзгерту үшін сонымен қатар «Бұғаттау» параметрін «Жоқ» етіп қойыңыз.
 	Vertical text cannot be moved with this selection.	Тік мәтінді бұл таңдаумен жылжытуға болмайды.
 	Zoom in ({key})	Үлкейту ({key})

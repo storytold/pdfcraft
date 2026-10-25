@@ -2345,6 +2345,19 @@ action wizard	Start	Inicia
 	Finish or discard the text being edited before selecting several objects.	Acaba o descarta el text que s'està editant abans de seleccionar diversos objectes.
 	Move object	Mou l'objecte
 	Move objects	Mou els objectes
+	Align objects	Alinea els objectes
+	Distribute objects	Distribueix els objectes
+	Resize object	Canvia la mida de l'objecte
+	Change colour	Canvia el color
+	Delete object	Suprimeix l'objecte
+	Delete objects	Suprimeix els objectes
+	Bring to front	Porta al davant
+	Bring forward	Porta endavant
+	Send backward	Envia enrere
+	Send to back	Envia al fons
+	Text and added items can't be deleted with this selection.	El text i els elements afegits no es poden suprimir amb aquesta selecció.
+	Arrange	Organitza
+	Stroke colour	Color del traç
 	Vertical text cannot be moved with this selection.	El text vertical no es pot moure amb aquesta selecció.
 	Text used as a clipping path cannot be moved with this selection.	El text utilitzat com a traçat de retall no es pot moure amb aquesta selecció.
 	These objects could not be moved. Select them again and try a smaller move.	No s'han pogut moure aquests objectes. Torna'ls a seleccionar i prova amb un moviment més petit.

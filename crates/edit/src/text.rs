@@ -619,6 +619,12 @@ impl TextLine {
         })
     }
 
+    /// The line's operators in the page's joined content: its text-showing operators, and the
+    /// marked-content operators of any `/ActualText` in it.
+    pub(crate) fn ops(&self) -> &[usize] {
+        &self.ops
+    }
+
     fn rotation(&self) -> f64 {
         let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
         m[1].atan2(m[0]).to_degrees()
@@ -3428,21 +3434,25 @@ fn vertical_encoding(doc: &Document, font: &Dict) -> Result<bool, EditError> {
 /// Numeric TJ offsets and text rise temporarily move each selected show operation, then
 /// restore both advances and rise. The PDF reader advances the original glyph bytes itself:
 /// no approximate font metrics are used to position following, unselected text (§9.4.4).
-pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
-    if indexes.is_empty() {
+pub(crate) fn translate_blocks(doc: &mut Document, page: usize, moves: &[(usize, [f64; 2])]) -> Result<(), EditError> {
+    if moves.is_empty() {
         return Ok(());
     }
     let p = page_dict(doc, page)?;
     let streams = content_streams(doc, &p.dict)?;
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
-    let mut selected = std::collections::BTreeSet::new();
-    for index in indexes {
-        let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
+    let mut selected = std::collections::BTreeMap::new();
+    for &(index, offset) in moves {
+        let b = blocks.get(index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
         for line in &b.lines {
             let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
             l.ensure_editable()?;
-            selected.extend(l.ops.iter().copied());
+            for op in &l.ops {
+                if *selected.entry(*op).or_insert(offset) != offset {
+                    return Err(EditError::Invalid("a text operation shared by two paragraphs cannot move two ways".into()));
+                }
+            }
         }
     }
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -3454,7 +3464,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     // Keep full precision: a tiny rounded text-space change can be magnified by a CTM,
     // and restoring rise/spacing must not alter following unselected text.
     let n = Object::Real;
-    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+    for (s, offset) in shown.into_iter().filter_map(|s| selected.get(&s.op).map(|o| (s, *o))) {
         if !(0..=3).contains(&s.state.render_mode) {
             return Err(EditError::Invalid("text used as a clipping path cannot be moved in a group".into()));
         }

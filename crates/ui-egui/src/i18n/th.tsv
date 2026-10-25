@@ -2199,6 +2199,19 @@ signature pad	Type	พิมพ์
 	Finish or discard the text being edited before selecting several objects.	แก้ไขข้อความให้เสร็จหรือละทิ้งก่อน จึงจะเลือกหลายออบเจ็กต์ได้
 	Move object	ย้ายออบเจ็กต์
 	Move objects	ย้ายออบเจ็กต์
+	Align objects	จัดแนวออบเจ็กต์
+	Distribute objects	กระจายออบเจ็กต์
+	Resize object	ปรับขนาดออบเจ็กต์
+	Change colour	เปลี่ยนสี
+	Delete object	ลบออบเจ็กต์
+	Delete objects	ลบออบเจ็กต์หลายรายการ
+	Bring to front	นำไปไว้ด้านหน้าสุด
+	Bring forward	นำไปด้านหน้า
+	Send backward	ส่งไปด้านหลัง
+	Send to back	ส่งไปไว้ด้านหลังสุด
+	Text and added items can't be deleted with this selection.	ไม่สามารถลบข้อความและรายการที่เพิ่มด้วยส่วนที่เลือกนี้ได้
+	Arrange	จัดเรียง
+	Stroke colour	สีเส้น
 	Vertical text cannot be moved with this selection.	ข้อความแนวตั้งไม่สามารถย้ายพร้อมกับส่วนที่เลือกนี้ได้
 	Text used as a clipping path cannot be moved with this selection.	ข้อความที่ใช้เป็นเส้นตัดภาพไม่สามารถย้ายพร้อมกับส่วนที่เลือกนี้ได้
 	These objects could not be moved. Select them again and try a smaller move.	ย้ายออบเจ็กต์เหล่านี้ไม่ได้ โปรดเลือกอีกครั้งแล้วลองย้ายในระยะที่สั้นลง

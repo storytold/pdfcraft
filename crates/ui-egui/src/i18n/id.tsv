@@ -1591,6 +1591,19 @@
 	Watermark	Tanda air
 	Move object	Pindahkan objek
 	Move objects	Pindahkan objek
+	Align objects	Sejajarkan objek
+	Distribute objects	Distribusikan objek
+	Resize object	Ubah ukuran objek
+	Change colour	Ubah warna
+	Delete object	Hapus objek
+	Delete objects	Hapus beberapa objek
+	Bring to front	Bawa ke paling depan
+	Bring forward	Bawa ke depan
+	Send backward	Kirim ke belakang
+	Send to back	Kirim ke paling belakang
+	Text and added items can't be deleted with this selection.	Teks dan item yang ditambahkan tidak dapat dihapus dengan pilihan ini.
+	Arrange	Atur
+	Stroke colour	Warna garis
 	All tools	Semua alat
 	Read	Baca
 	E-Sign	E-Sign

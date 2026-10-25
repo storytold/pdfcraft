@@ -28,6 +28,7 @@
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M4 #2997: Ctrl-drag (Option on macOS) in the Organize grid copies the pages into the drop gap; `page_duplicate` takes `at`; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M6: AcroForm XML text; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M2/gap 12: the Annex D.2 alias codes read as the ink they draw in both tables; the text oracle scores reading order; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-22 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 80b7d215: ≈ 67% → ≈ 70% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M14/#2383 GPU-limit candidate; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (M4: indirect page rotations; M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M6: preserve XML/XFDF attribute whitespace; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -94,8 +95,8 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
-| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Feature breadth** | **≈ 70%** tier-weighted (60.4% unweighted: 444 shipped + 99 partial of 817; P0 94.6%) | measured, `parity/acrobat-features.toml` (`cargo xtask parity`, 2026-10-22) |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured 2026-10-10 ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
@@ -123,7 +124,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Dimension | Ready | Weight | Remaining (h) | Doc |
 |---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth · 67% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth · 70% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
@@ -140,20 +141,20 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Area | Breadth (measured) | Ready (estimated) | Remaining (h) |
 |---|---|---|---|
-| A Core model and fidelity | 76.8% | 70% | 25–45 |
-| B View and navigation | 62.5% | 55% | 110–190 |
-| C Content editing | 53.3% | 30% | 100–180 |
-| D Organize pages | 61.2% | 70% | 12–25 |
-| E Comments and review | 77.7% | 70% | 12–25 |
-| F Forms and JavaScript | 78.5% | 65% | 40–75 |
-| G Protect, redact, sanitize | 58.5% | 55% | 15–30 |
+| A Core model and fidelity | 77.6% | 70% | 25–45 |
+| B View and navigation | 64.2% | 55% | 110–190 |
+| C Content editing | 63.7% | 30% | 100–180 |
+| D Organize pages | 65.6% | 70% | 12–25 |
+| E Comments and review | 78.0% | 70% | 12–25 |
+| F Forms and JavaScript | 80.4% | 65% | 40–75 |
+| G Protect, redact, sanitize | 59.5% | 55% | 15–30 |
 | H Digital signatures | 62.2% | 45% | 40–70 |
-| I Scan and OCR | 23.1% | 15% | 40–75 |
-| J Create and export | 39.7% | 25% | 55–100 |
-| K Optimize and standards | 34.5% | 20% | 65–115 |
-| L Print | 39.7% | 35% | 30–55 |
-| M Accessibility | 63.1% | 30% | 40–70 |
-| N Automation, preferences, misc | 30.0% | 35% | 25–45 |
+| I Scan and OCR | 32.7% | 15% | 40–75 |
+| J Create and export | 41.2% | 25% | 55–100 |
+| K Optimize and standards | 36.2% | 20% | 65–115 |
+| L Print | 43.6% | 35% | 30–55 |
+| M Accessibility | 72.1% | 30% | 40–70 |
+| N Automation, preferences, misc | 33.3% | 35% | 25–45 |
 
 What's strong and missing in each: [target-app-parity.md](docs/target-app-parity.md#by-feature-area).
 
@@ -387,6 +388,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-15 (M3, #1248):** A fresh install follows the desktop's appearance: the theme preference defaults to System (dark on a dark desktop, Light where the desktop says nothing); saved settings and `--theme` still win. Dark page rendering is Reading colours, and the page reading themes are #1732.
 - **2026-10-15 (M3, #1767):** Restore last view settings when reopening documents, as Acrobat's preference does: a file opened again shows the page, zoom and page display it was last shown with (remembered for the last 100 files when a tab closes or settings are saved), over the file's own initial view; on by default, Preferences ▸ Documents and view turns it off.
 - **2026-10-13 (M3, native-opening candidate):** Chosen tools survive preparation, conversion and password retries; startup intake waits for pending preparation. Regression tests cover completion, cancellation and document identity. Estimates unchanged.
+- **2026-10-13 (M7, vector editing, #1540):** Vector paths are page objects in Edit text & images. A click on a path's painted shape selects it and a drag moves it; Shift-click and the marquee add paths to a selection of text, images and added items; corner handles resize one path; Delete or Backspace removes paths and images together; Fill colour and Stroke colour swatches recolour the selected paths. Right-clicking the selection arranges one path or image (Bring to front, Bring forward, Send backward, Send to back) among the objects it overlaps, and aligns (left, centre, right, top, middle, bottom) or distributes any mix of objects in the page's orientation. Each is one undo step and rewrites only the content streams it changes; `object_list` reports paths with their colours, and `object_resize`, `object_recolour`, `object_delete`, `object_align` and `object_arrange` do the same through automation. Limits: recolour writes DeviceRGB, resizing scales the stroke with the path, pattern-painted paths don't move, clipping paths, paths in text objects and Form internals aren't selectable, and text and added items aren't arranged. `edit.vector-edit`, `edit.arrange-objects` and `edit.align-distribute-objects` shipped; the checklist recounted by hand comes to 432 shipped + 89 partial of 813 (58.6%, ≈ 69% tier-weighted), most of the change since 2026-10-10 from other features. Readiness and hours not re-judged.
 - **2026-10-13 (community, M3, #531 touchpad momentum):** On Wayland a two-finger swipe keeps gliding after the fingers lift and slows to a stop, measured from the gesture's last 0.1 s and decaying with a 0.35 s time constant through the #759 1:1 path. Any wheel input, click, key, zoom or edge ends it (fingers resting on the touchpad don't yet: the vendored winit binds no Wayland hold gestures); single-page paging, macOS (which sends its own momentum), the web, and Animation effects Off never glide. Unit tests for the physics and two headless view tests. Estimates unchanged.
 - **2026-10-13 (M3, native-open admission):** Later prepared replies stay queued while a modal or native picker owns the foreground. Picker completion, cancellation and abandonment wake retained opens. Regressions cover recipient ownership, exactly-once admission, source/history preservation and one-shot repaint requests. Estimates unchanged.
 - **2026-10-13 (M6, choice indices):** Multi-select choice fields write ascending `/I` option indices while preserving the caller's `/V` order. Synthetic forms and headless engine regressions cover reverse selection and save/reopen. Estimates unchanged.
@@ -699,6 +701,9 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-16 | minor | M14: Czech catalog completed (2,674 entries) and "tag" terminology unified. Estimates unchanged. |
 | 2026-10-13 | minor | M9: separate page validation overlays preserve signature artwork, and snapshot tabs reuse instead of multiplying; baked captions remain unchanged (#79 open); estimates unchanged |
+| 2026-10-13 | minor | M7 #1540: vector editing, align, distribute and arrange shipped; checklist recounted by hand (58.6% unweighted, ≈ 69% tier-weighted, area breadths); readiness and hours not re-judged |
+| 2026-10-20 | minor | M7 #1540, merge of `upstream/main` at 22bedbf2: checklist recounted with `cargo xtask parity` (59.9% unweighted: 441 shipped + 94 partial of 815; P0 94.6%; ≈ 70% tier-weighted) and area breadths updated, since the 2026-10-13 hand count had drifted; readiness and hours not re-judged |
+| 2026-10-22 | minor | M7 #1540, merge of `upstream/main` at 80b7d215: checklist recounted with `cargo xtask parity` (60.4% unweighted: 444 shipped + 99 partial of 817; P0 94.6%; ≈ 70% tier-weighted) and area breadths updated; readiness and hours not re-judged |
 | 2026-10-16 | minor | M10 #1201 partial: lossless image export applies component Decode pairs and Indexed mapping. Estimates unchanged. |
 | 2026-10-15 | minor | M6: CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV delimiters without changing field identities. Estimates unchanged. |
 | 2026-10-13 | minor | M4: rotation queries and edits resolve indirect page-tree values; inherited, negative and large rotations verified through both saves. Estimates unchanged. |

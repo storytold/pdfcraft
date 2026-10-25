@@ -2300,10 +2300,23 @@ key	Space	Spacja
 	Finish or discard the text being edited before selecting several objects.	Zakończ lub odrzuć edycję tekstu przed zaznaczeniem kilku obiektów.
 	Move object	Przenieś obiekt
 	Move objects	Przenieś obiekty
+	Align objects	Wyrównaj obiekty
+	Distribute objects	Rozmieść obiekty równomiernie
+	Resize object	Zmień rozmiar obiektu
+	Change colour	Zmień kolor
+	Delete object	Usuń obiekt
+	Delete objects	Usuń obiekty
+	Bring to front	Przesuń na wierzch
+	Bring forward	Przesuń do przodu
+	Send backward	Przesuń do tyłu
+	Send to back	Przesuń na spód
 	Vertical text cannot be moved with this selection.	Tekstu pionowego nie można przenieść razem z tym zaznaczeniem.
 	Text used as a clipping path cannot be moved with this selection.	Tekstu używanego jako ścieżka przycinania nie można przenieść razem z tym zaznaczeniem.
 	These objects could not be moved. Select them again and try a smaller move.	Nie udało się przenieść tych obiektów. Zaznacz je ponownie i spróbuj mniejszego przesunięcia.
 	This page contains objects that cannot be selected together.	Ta strona zawiera obiekty, których nie można zaznaczyć razem.
+	Text and added items can't be deleted with this selection.	Tekstu i dodanych elementów nie można usunąć razem z tym zaznaczeniem.
+	Arrange	Rozmieść
+	Stroke colour	Kolor obrysu
 	Reload documents when their files change on disk	Wczytuj ponownie dokumenty, gdy ich pliki zmienią się na dysku
 	Don't show again	Nie pokazuj ponownie
 	Show a notice when a document is secured	Pokazuj powiadomienie, gdy dokument jest zabezpieczony

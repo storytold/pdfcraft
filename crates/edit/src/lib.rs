@@ -467,7 +467,7 @@ fn stream_bytes(doc: &Document, o: &Object) -> Option<Vec<u8>> {
 
 /// The `/PCMark` tag in a content stream's dictionary: a mark kind, or `Wrap` for the q/Q
 /// wrapper. Read from the dictionary, so finding marks never decompresses page content.
-fn stream_tag(doc: &Document, o: &Object) -> Option<String> {
+pub(crate) fn stream_tag(doc: &Document, o: &Object) -> Option<String> {
     let obj = doc.resolve(o);
     obj.as_dict()?.name(b"PCMark").map(|n| String::from_utf8_lossy(n).into_owned())
 }
@@ -1022,12 +1022,23 @@ pub fn marks_present(doc: &Document) -> Vec<MarkKind> {
 mod background;
 pub use background::page_background;
 pub mod objects;
-pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
+pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects, move_objects_each};
+pub mod align;
+pub use align::{ObjectAlign, align_objects};
+pub mod arrange;
+pub use arrange::{ZOrder, arrange_object, arranged_target};
+pub mod delete;
+pub use delete::delete_objects;
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
+mod geometry;
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub mod paths;
+pub use paths::{FillRule, PagePath, Paint, page_paths};
+pub mod path_edit;
+pub use path_edit::{PathChange, change_path, delete_paths, recolour_paths};
 pub mod bidi;
 pub mod indic;
 mod linebreak;

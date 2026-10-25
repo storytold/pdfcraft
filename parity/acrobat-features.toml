@@ -2186,11 +2186,11 @@ title = "Arrange objects (bring forward, send backward)"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.edit_text"]
+tools = ["object_list", "object_arrange"]
+evidence = ["crates/edit/src/arrange_tests.rs::forward_goes_just_above_the_next_overlapping_object", "crates/edit/src/arrange_tests.rs::backward_goes_just_below_the_previous_overlapping_object", "crates/edit/src/arrange_tests.rs::front_and_back_go_past_every_overlapping_object", "crates/edit/src/arrange_tests.rs::the_line_style_it_was_drawn_with_is_replayed", "crates/edit/src/arrange_tests.rs::a_tagged_sequence_moves_whole_or_not_at_all", "crates/edit/src/arrange_tests.rs::hostile_nesting_never_panics", "crates/engine/src/tests.rs::each_arrange_order_is_one_undo_step", "crates/engine/src/tests.rs::refused_arranges_change_nothing", "crates/automation/tests/it/automation.rs::objects_arrange_through_object_tools_with_one_undo", "crates/automation/tests/it/automation.rs::refused_arranges_through_tools_change_nothing", "crates/ui-egui/tests/it/object_selection.rs::bring_to_front_in_the_page_menu_restacks_the_path_and_keeps_it_selected", "crates/ui-egui/tests/it/object_selection.rs::an_arrange_with_nothing_to_pass_explains_and_changes_nothing"]
+notes = "Edit text & images: right-click one selected vector path, image or Form artwork ▸ Arrange ▸ Bring to front, Bring forward, Send backward or Send to back (#1540), one undo step; the selection follows the object. Order is among the objects it overlaps: forward and backward pass the next one, front and back all of them. The object's own operators (with a private clip and the q/Q and marked content around it) move as bytes and are replayed with the graphics state they were drawn with, so it looks the same; only the content streams that change become new objects. Refused, page unchanged: text, items added in PdfCraft and PdfCraft's page marks, such as a watermark, header and footer or background (they keep their own layer, so Bring to front stays under a watermark), nothing overlapping in that direction, moving past content clipped differently or into different transparency or blending, objects tagged together with other content (/MCID, /ActualText, /Alt or /E), a shape that also clips, an object inside a text object, too many graphics-state settings, and content too irregular to rewrite. Missing: arranging text and added items, several objects at once, and objects inside Form artwork. See docs/editing-multiple-objects.md."
 
 [[feature]]
 id = "edit.align-distribute-objects"
@@ -2198,11 +2198,11 @@ title = "Align and distribute objects"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.edit_text"]
+tools = ["object_list", "object_align"]
+evidence = ["crates/edit/src/align.rs::offsets_line_up_edges_and_centres_of_the_union", "crates/edit/src/align.rs::distributing_evens_the_gaps_and_keeps_the_outermost_objects", "crates/edit/src/align.rs::mixed_objects_align_to_the_selection_and_keep_their_size", "crates/edit/src/align.rs::alignment_follows_the_displayed_orientation", "crates/edit/src/align.rs::images_partly_hidden_by_a_shared_clip_are_refused", "crates/edit/src/align.rs::vector_paths_align_with_images", "crates/engine/src/tests.rs::aligning_objects_is_one_undo_step_and_survives_save_reopen", "crates/engine/src/tests.rs::refused_alignments_change_nothing", "crates/automation/tests/it/automation.rs::objects_align_as_displayed_with_one_undo", "crates/automation/tests/it/automation.rs::vector_paths_move_and_align_through_object_tools", "crates/ui-egui/tests/it/object_selection.rs::align_left_in_the_page_menu_lines_up_the_selection_and_keeps_it"]
+notes = "Edit text & images: right-click a selection on one page ▸ Align ▸ Left, Center horizontally, Right, Top, Center vertically or Bottom (two or more objects), or Distribute ▸ Horizontally or Vertically (three or more; the outermost two stay put) (#1540). Any mix of existing paragraphs, images, Form artwork, vector paths and added items, on their combined bounds in the page's own orientation (/Rotate included; a view turned with View ▸ Rotate view isn't followed); sizes are kept, one undo step, and the selection stays. Refused, nothing changed: too few objects, objects already in place, vertical or clipping text (as for a move), a vector path painted with a pattern, and an image or vector path partly hidden by a clipping path shared with other content or by the page edge, which would show a different part once moved (move it instead). Missing: aligning objects on different pages. Form fields have their own Align and Distribute (form.align-distribute-fields). See docs/editing-multiple-objects.md."
 
 [[feature]]
 id = "edit.vector-edit"
@@ -2210,11 +2210,11 @@ title = "Select, move, scale, recolour and delete vector paths"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.edit_text"]
+tools = ["object_list", "object_move", "object_resize", "object_recolour", "object_delete"]
+evidence = ["crates/edit/src/paths_tests.rs::a_filled_rectangle_is_one_path", "crates/edit/src/paths_tests.rs::contains_follows_the_fill_rule", "crates/edit/src/paths_tests.rs::clipping_and_unpainted_paths_are_not_listed", "crates/edit/src/path_edit_tests.rs::moving_a_path_wraps_only_its_operators", "crates/edit/src/path_edit_tests.rs::resizing_maps_the_path_onto_the_new_box", "crates/edit/src/path_edit_tests.rs::recolouring_paints_only_what_the_path_paints", "crates/edit/src/path_edit_tests.rs::deleting_a_path_keeps_the_state_and_marked_content_around_it", "crates/edit/src/path_edit_tests.rs::a_path_painted_with_a_pattern_is_not_moved_but_recoloured_or_deleted", "crates/engine/src/tests.rs::vector_paths_are_listed_and_hit_tested_topmost_first", "crates/engine/src/tests.rs::resizing_a_vector_path_is_one_undo_step", "crates/engine/src/tests.rs::recolouring_vector_paths_is_one_undo_step", "crates/engine/src/tests.rs::deleting_paths_and_images_together_is_one_undo_step", "crates/automation/tests/it/automation.rs::object_list_reports_vector_paths_with_their_paint", "crates/automation/tests/it/automation.rs::vector_paths_move_and_align_through_object_tools", "crates/automation/tests/it/automation.rs::vector_paths_resize_recolour_and_delete_through_object_tools", "crates/ui-egui/tests/it/object_selection.rs::vector_paths_are_selected_by_their_painted_shape", "crates/ui-egui/tests/it/object_selection.rs::a_plain_drag_on_a_vector_path_moves_it_alone", "crates/ui-egui/tests/it/object_selection.rs::a_corner_handle_resizes_the_one_selected_path", "crates/ui-egui/tests/it/object_selection.rs::delete_removes_the_selected_path_and_image_in_one_step", "crates/ui-egui/tests/it/object_selection.rs::the_fill_colour_swatch_recolours_the_selected_path_in_one_step"]
+notes = "Edit text & images (#1540): a click on a path's painted shape (not its empty box) selects it and a drag moves it; Shift/Ctrl/Command-click and the marquee add paths to a selection of text, images and added items; corner handles resize one selected path with the opposite corner fixed; Delete, Backspace or right-click ▸ Delete removes the selected paths and images; Fill colour and Stroke colour swatches in the Edit a PDF panel recolour the selected paths. Each change is one undo step and writes only the content streams it changes. Limits: recolour writes DeviceRGB whatever the colour space was (CMYK, spot and pattern colours are not kept); resizing scales the line width and dash too, so a stroked path's box lands close to, not exactly on, the box asked for; a path painted with a pattern can't be moved or resized, alone, in a group or by Align and Distribute, nor can a path drawn flat (a degenerate transform); a move or resize that would take a path off the page or out of its clip is refused; clipping paths, paths that clip and paint at once, paths inside text objects and the contents of Form XObjects (a Form stays one grouped item) are not selectable; a page with more than 5,000 paths, clipping too complex to hit-test, or paths and other objects together over 10,000 leaves its paths out of selection; a path covering most of the page is left to a Shift-drag marquee; where a paragraph's, image's or added item's box covers the press, it takes the click even when the path is drawn over it (a marquee still selects the path); the swatches show grey for colours other than DeviceGray, DeviceRGB and DeviceCMYK (ICC-based, Lab, indexed, spot, pattern). Missing: rotating and flipping paths, changing line width, dash or caps, resizing several objects at once, and editing inside Form artwork. See docs/editing-multiple-objects.md."
 
 [[feature]]
 id = "edit.edit-object-tool"
@@ -2224,9 +2224,9 @@ tier = "P1"
 milestone = "M11"
 status = "partial"
 commands = ["edit.edit_text"]
-tools = ["object_list", "object_move"]
-evidence = ["crates/ui-egui/tests/it/object_selection.rs::marquee_and_mixed_group_drag_move_once_and_undo_together", "crates/automation/tests/it/automation.rs::mixed_objects_move_through_tools_with_generation_and_one_undo", "crates/edit/src/tests.rs::group_moves_preserve_glyph_bytes_and_unselected_text_state", "crates/engine/src/tests.rs::mixed_object_moves_are_one_undo_step_and_survive_save_reopen", "crates/ui-egui/tests/it/editing.rs::a_paragraph_selected_by_its_frame_deletes_with_one_key"]
-notes = "Same-page mixed selection (#844): Shift/Ctrl/Command-click toggles, empty-space marquee (additive with modifiers), drag previews and one atomic undo step for existing paragraphs, Image/Form XObjects and added text/images. Source glyph bytes, fonts and kerning retained; unselected text and shared Form resources stay put. Delete or Backspace removes the selection (a paragraph selected by its frame, or a group) as one undo step. Generation-scoped references with optional automation guard; count and geometry bounded; unsupported vertical/clipping text refused without partial changes. Still missing: arbitrary paths, inline images, cross-page movement, group resizing, arrange/align and a general object editor. See docs/editing-multiple-objects.md."
+tools = ["object_list", "object_move", "object_align", "object_resize", "object_recolour", "object_delete", "object_arrange"]
+evidence = ["crates/ui-egui/tests/it/object_selection.rs::marquee_and_mixed_group_drag_move_once_and_undo_together", "crates/automation/tests/it/automation.rs::mixed_objects_move_through_tools_with_generation_and_one_undo", "crates/edit/src/tests.rs::group_moves_preserve_glyph_bytes_and_unselected_text_state", "crates/engine/src/tests.rs::mixed_object_moves_are_one_undo_step_and_survive_save_reopen", "crates/edit/src/align.rs::a_group_move_takes_vector_paths_with_the_other_kinds", "crates/ui-egui/tests/it/object_selection.rs::a_plain_drag_on_a_vector_path_moves_it_alone", "crates/ui-egui/tests/it/editing.rs::a_paragraph_selected_by_its_frame_deletes_with_one_key"]
+notes = "Same-page mixed selection (#844): Shift/Ctrl/Command-click toggles, empty-space marquee (additive with modifiers), drag previews and one atomic undo step for existing paragraphs, Image/Form XObjects and added text/images. Source glyph bytes, fonts and kerning retained; unselected text and shared Form resources stay put. Delete or Backspace removes the selection (a paragraph selected by its frame, or a group) as one undo step; a group mixing vector paths with text or added items is refused. Generation-scoped references with optional automation guard; count and geometry bounded; unsupported vertical/clipping text refused without partial changes. Since #1540 painted vector paths are page objects too (a plain click selects one), with resize, recolour and delete (edit.vector-edit), align and distribute for any mix (edit.align-distribute-objects), arrange for paths and images (edit.arrange-objects), and a right-click menu over the selection. Still missing: inline images, objects inside Form artwork, cross-page movement, resizing several objects at once, arranging text and added items, and a general object editor (object properties, rotating paths). See docs/editing-multiple-objects.md."
 
 [[feature]]
 id = "edit.object-properties"

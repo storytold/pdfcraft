@@ -617,6 +617,7 @@ impl Pieces {
 
     /// The piece holding joined position `at` (the last piece for positions past the end).
     pub fn piece_of(&self, at: usize) -> usize {
+        // `ends` only grows, so a binary search: callers ask once per operator.
         self.ends.partition_point(|&e| e <= at).min(self.ends.len().saturating_sub(1))
     }
 

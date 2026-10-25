@@ -1235,6 +1235,9 @@
 	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Tai dinaminė XFA forma, kurios „PdfCraft“ dar negali rodyti. Matote faile esantį pakaitinį puslapį.
 	This measurement needs at least {n} points.	Šiam matavimui reikia bent {n} taškų.
 	This page contains objects that cannot be selected together.	Šiame puslapyje yra objektų, kurių negalima pasirinkti kartu.
+	Text and added items can't be deleted with this selection.	Teksto ir pridėtų elementų negalima naikinti su šiuo pasirinkimu.
+	Arrange	Išdėstyti
+	Stroke colour	Kontūro spalva
 	This page couldn't be displayed.\n{e}	Nepavyko parodyti šio puslapio.\n{e}
 	This printer offers no settings of its own.	Šis spausdintuvas neturi atskirų nuostatų.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Šio spausdintuvo tvarkyklė neperima dvipusio spausdinimo nuostatų iš kitų programų, todėl taikoma jos nuostata. Pakeiskite ją skiltyje „Savybės“…
@@ -1652,6 +1655,16 @@
 	Watermark	Vandenženklis
 	Move object	Perkelti objektą
 	Move objects	Perkelti objektus
+	Align objects	Lygiuoti objektus
+	Distribute objects	Tolygiai išdėstyti objektus
+	Resize object	Keisti objekto dydį
+	Change colour	Keisti spalvą
+	Delete object	Naikinti objektą
+	Delete objects	Naikinti objektus
+	Bring to front	Iškelti į priekį
+	Bring forward	Perkelti pirmyn
+	Send backward	Perkelti atgal
+	Send to back	Nukelti į galą
 	All tools	Visi įrankiai
 	Read	Skaityti
 	E-Sign	Pasirašyti

@@ -1640,6 +1640,19 @@ theme	Appearance	Giao diện
 	Watermark	Hình mờ
 	Move object	Di chuyển đối tượng
 	Move objects	Di chuyển các đối tượng
+	Align objects	Căn chỉnh các đối tượng
+	Distribute objects	Phân bố các đối tượng
+	Resize object	Đổi kích thước đối tượng
+	Change colour	Đổi màu
+	Delete object	Xóa đối tượng
+	Delete objects	Xóa các đối tượng
+	Bring to front	Đưa lên trên cùng
+	Bring forward	Đưa lên một lớp
+	Send backward	Đưa xuống một lớp
+	Send to back	Đưa xuống dưới cùng
+	Text and added items can't be deleted with this selection.	Không thể xóa văn bản và các mục đã thêm với vùng chọn này.
+	Arrange	Sắp xếp
+	Stroke colour	Màu nét
 	All tools	Tất cả công cụ
 	Read	Đọc
 	E-Sign	Ký điện tử

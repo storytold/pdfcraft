@@ -1600,6 +1600,19 @@
 	Watermark	Filigran
 	Move object	Mutare obiect
 	Move objects	Mutare obiecte
+	Align objects	Aliniere obiecte
+	Distribute objects	Distribuire obiecte
+	Resize object	Redimensionare obiect
+	Change colour	Schimbare culoare
+	Delete object	Ștergere obiect
+	Delete objects	Ștergere obiecte
+	Bring to front	Aducere în prim-plan
+	Bring forward	Aducere în față
+	Send backward	Trimitere în spate
+	Send to back	Trimitere în fundal
+	Text and added items can't be deleted with this selection.	Textul și elementele adăugate nu pot fi șterse cu această selecție.
+	Arrange	Aranjare
+	Stroke colour	Culoare contur
 	All tools	Toate instrumentele
 	Read	Citire
 	E-Sign	Semnătură electronică

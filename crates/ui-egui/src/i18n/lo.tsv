@@ -2237,6 +2237,19 @@ signature pad	Type	ພິມ
 	Finish or discard the text being edited before selecting several objects.	ເຮັດໃຫ້ສຳເລັດ ຫຼື ປະຖິ້ມຂໍ້ຄວາມທີ່ກຳລັງແກ້ໄຂກ່ອນທີ່ຈະເລືອກຫຼາຍວັດຖຸ.
 	Move object	ຍ້າຍວັດຖຸ
 	Move objects	ຍ້າຍຫຼາຍວັດຖຸ
+	Align objects	ຈັດລຽງວັດຖຸ
+	Distribute objects	ກະຈາຍໄລຍະຫ່າງວັດຖຸ
+	Resize object	ປັບຂະໜາດວັດຖຸ
+	Change colour	ປ່ຽນສີ
+	Delete object	ລຶບວັດຖຸ
+	Delete objects	ລຶບຫຼາຍວັດຖຸ
+	Bring to front	ນຳໄປໄວ້ໜ້າສຸດ
+	Bring forward	ເລື່ອນໄປໜ້າ
+	Send backward	ເລື່ອນໄປຫຼັງ
+	Send to back	ສົ່ງໄປໄວ້ຫຼັງສຸດ
+	Text and added items can't be deleted with this selection.	ບໍ່ສາມາດລຶບຂໍ້ຄວາມ ແລະ ລາຍການທີ່ເພີ່ມເຂົ້າມາດ້ວຍການເລືອກນີ້ໄດ້.
+	Arrange	ຈັດລຳດັບ
+	Stroke colour	ສີເສັ້ນ
 	Vertical text cannot be moved with this selection.	ບໍ່ສາມາດຍ້າຍຂໍ້ຄວາມແນວຕັ້ງດ້ວຍການເລືອກນີ້ໄດ້.
 	Text used as a clipping path cannot be moved with this selection.	ບໍ່ສາມາດຍ້າຍຂໍ້ຄວາມທີ່ໃຊ້ເປັນເສັ້ນທາງຕັດ (clipping path) ດ້ວຍການເລືອກນີ້ໄດ້.
 	These objects could not be moved. Select them again and try a smaller move.	ບໍ່ສາມາດຍ້າຍວັດຖຸເຫຼົ່ານີ້ໄດ້. ກະລຸນາເລືອກໃໝ່ ແລະ ທົດລອງຍ້າຍດ້ວຍໄລຍະທີ່ສັ້ນລົງ.

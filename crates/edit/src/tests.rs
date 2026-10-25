@@ -32,7 +32,7 @@ fn fixture() -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
-fn reopen(doc: &Document) -> Document {
+pub(crate) fn reopen(doc: &Document) -> Document {
     let bytes = write_incremental(doc, &SaveOptions::default()).unwrap();
     hayro_syntax::Pdf::new(bytes.clone()).expect("parses");
     Document::open(Arc::new(bytes)).unwrap()
@@ -2795,7 +2795,7 @@ fn image_page() -> Document {
     image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET")
 }
 
-fn image_page_with(content: &str) -> Document {
+pub(crate) fn image_page_with(content: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -2866,12 +2866,12 @@ fn moving_an_image_moves_its_own_clip_too() {
     let moved = [80.0, 420.0, 380.0, 620.0];
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(images::rect_to_rect(target, moved))).unwrap();
     assert!(close(first_rect_in_user_space(&doc), moved));
-    images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]).unwrap();
+    images::translate_images(&mut doc, 0, &[(0, [10.0, 0.0])]).unwrap();
     assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [90.0, 420.0, 390.0, 620.0]));
     assert!(close(first_rect_in_user_space(&doc), [90.0, 420.0, 390.0, 620.0]));
     // Moving it with the group move helper takes the clip along as well.
     let mut doc = image_page_with(content);
-    images::translate_images(&mut doc, 0, &[0], [30.0, -20.0]).unwrap();
+    images::translate_images(&mut doc, 0, &[(0, [30.0, -20.0])]).unwrap();
     assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [130.0, 80.0, 330.0, 180.0]));
     assert!(close(first_rect_in_user_space(&doc), [130.0, 80.0, 330.0, 180.0]));
     // A clip shared with other drawing is left where it is.
@@ -2930,7 +2930,7 @@ fn repeated_image_edits_change_one_transform_instead_of_nesting() {
         let mut doc = reopen(&doc);
         let before = images::page_images(&doc, 0).unwrap()[0].rect;
         for _ in 0..20 {
-            images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+            images::translate_images(&mut doc, 0, &[(0, [1.0, -2.0])]).unwrap();
         }
         let after = images::page_images(&doc, 0).unwrap()[0].rect;
         assert!(close(after, [before[0] + 20.0, before[1] - 40.0, before[2] + 20.0, before[3] - 40.0]), "{content}: {after:?}");
@@ -2948,7 +2948,7 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
     let start = images::page_images(&doc, 0).unwrap()[0].clone();
     let mut first = 0;
     for i in 0..20 {
-        images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+        images::translate_images(&mut doc, 0, &[(0, [1.0, -2.0])]).unwrap();
         if i == 0 {
             first = operators(&doc);
         }
@@ -5068,7 +5068,7 @@ fn an_image_whose_operator_starts_the_next_stream_can_be_selected_moved_and_dele
         assert!(after.len() == 1 && close(after[0].rect, target), "{label:?}: {after:?} {:?}", joined_ops(&moved).0);
 
         let mut shifted = doc.clone();
-        images::translate_images(&mut shifted, 0, &[0], [228.0, 0.0]).unwrap();
+        images::translate_images(&mut shifted, 0, &[(0, [228.0, 0.0])]).unwrap();
         let shifted = reopen(&shifted);
         let after = images::page_images(&shifted, 0).unwrap();
         assert!(after.len() == 1 && close(after[0].rect, target), "{label:?}: {after:?} {:?}", joined_ops(&shifted).0);
@@ -5424,6 +5424,39 @@ fn an_items_measured_face_is_the_face_it_is_written_as() {
     // Courier is monospaced in every style: equal widths here are correct, not a collapsed face.
     let courier = |italic| Family::Courier.width("Anna", 12.0, false, italic);
     assert_eq!(courier(false), courier(true));
+}
+
+#[test]
+fn the_object_inventory_lists_vector_paths_after_images() {
+    let mut doc = image_page_with(concat!(
+        "1 0 0 rg 10 20 100 50 re f q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET ",
+        "4 w 50 300 m 250 300 l S q 0 0 5 5 re W n Q",
+    ));
+    let objects = editable_objects(&doc, 0).unwrap();
+    let target = |kind, index| ObjectTarget { kind, index };
+    let targets: Vec<_> = objects.iter().map(|o| o.target).collect();
+    assert_eq!(targets, [target(ObjectKind::Text, 0), target(ObjectKind::Image, 0), target(ObjectKind::Path, 0), target(ObjectKind::Path, 1)]);
+    assert_eq!(ObjectKind::Path.as_str(), "path");
+    for (object, rect) in objects[2..].iter().zip([[10.0, 20.0, 110.0, 70.0], [48.0, 298.0, 252.0, 302.0]]) {
+        assert!(close(object.rect, rect), "{object:?}");
+        assert_eq!((object.content_type, object.text.as_deref()), ("path", None));
+    }
+    let original = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(move_objects(&mut doc, 0, &[target(ObjectKind::Path, 2)], [5.0, 5.0]).is_err(), "the clip is not a path");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), original);
+    // Moving the other kinds leaves the paths where they are.
+    move_objects(&mut doc, 0, &[target(ObjectKind::Text, 0)], [5.0, 5.0]).unwrap();
+    assert_eq!(editable_objects(&doc, 0).unwrap()[2..], objects[2..]);
+}
+
+#[test]
+fn a_page_with_too_many_vector_paths_still_lists_its_other_objects() {
+    // One more path than page_paths lists.
+    let doc =
+        image_page_with(&format!("{}q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET", "10 10 1 1 re f\n".repeat(5_001)));
+    assert!(page_paths(&doc, 0).is_err());
+    let kinds: Vec<_> = editable_objects(&doc, 0).unwrap().iter().map(|o| o.target.kind).collect();
+    assert_eq!(kinds, [ObjectKind::Text, ObjectKind::Image]);
 }
 
 #[test]

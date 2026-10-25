@@ -7832,7 +7832,8 @@ fn object_move_rejects_invalid_nested_references_without_any_change() {
     for objects in [
         json!([]),
         json!([{"kind":"text","index":0}]),
-        json!([{"kind":"path","index":1}]),
+        json!([{"kind":"bogus","index":1}]),
+        json!([{"kind":"text","index":1},{"kind":"path","index":1}]),
         json!([{"kind":"text","index":1,"extra":true}]),
         json!([{"kind":"text","index":1.5}]),
         json!([{"kind":"text","index":1},{"kind":"text","index":1}]),
@@ -7846,6 +7847,435 @@ fn object_move_rejects_invalid_nested_references_without_any_change() {
         assert!(a.call("object_move", &json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":1}],"offset":offset})).is_err());
         assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before);
     }
+}
+
+#[test]
+fn object_list_reports_vector_paths_with_their_paint() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let dir = workdir("object-list-paths");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    let contents = cos.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET 1 0 0 rg 20 40 100 50 re f 0 0 1 RG 4 w 30 200 m 170 200 l S q 0 0 10 10 re W n Q \
+          /CS0 cs 0.5 sc 20 100 30 20 re f 0 1 1 0 k 60 100 30 20 re f",
+    )));
+    cos.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(contents))).unwrap();
+    std::fs::write(dir.join("paths.pdf"), write_incremental(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"paths.pdf"}))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(listed["count"], 5, "the clip is not a path");
+    let objects = listed["objects"].as_array().unwrap();
+    assert_eq!(objects[0]["kind"], "text");
+    assert!(objects[0].get("fill").is_none(), "only path rows carry paint");
+    assert_eq!(
+        objects[1],
+        json!({"kind":"path","index":1,"type":"path","rect":[20.0,210.0,120.0,260.0],"text":null,"fill":"#FF0000","stroke":null,"line_width":null})
+    );
+    assert_eq!(
+        objects[2],
+        json!({"kind":"path","index":2,"type":"path","rect":[28.0,98.0,172.0,102.0],"text":null,"fill":null,"stroke":"#0000FF","line_width":4.0})
+    );
+    // A colour space other than DeviceGray/RGB/CMYK has no colour to report; `k` sets one again.
+    assert_eq!(
+        objects[3],
+        json!({"kind":"path","index":3,"type":"path","rect":[20.0,180.0,50.0,200.0],"text":null,"fill":null,"stroke":null,"line_width":null})
+    );
+    assert_eq!(
+        objects[4],
+        json!({"kind":"path","index":4,"type":"path","rect":[60.0,180.0,90.0,200.0],"text":null,"fill":"#FF0000","stroke":null,"line_width":null})
+    );
+}
+
+#[test]
+fn vector_paths_move_and_align_through_object_tools() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let dir = workdir("object-move-paths");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    let contents = cos.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET 1 0 0 rg 20 40 100 50 re f 0 0 1 RG 4 w 30 200 m 170 200 l S 0 1 1 0 k 60 100 30 20 re f",
+    )));
+    cos.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(contents))).unwrap();
+    std::fs::write(dir.join("paths.pdf"), write_incremental(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"paths.pdf"}))["doc"].as_u64().unwrap();
+    let list = |a: &mut Automation, doc: u64| ok(a, "object_list", json!({"doc":doc,"page":1}));
+    let near = |listed: &Value, row: usize, expected: [f64; 4]| {
+        (0..4).all(|i| (listed["objects"][row]["rect"][i].as_f64().unwrap() - expected[i]).abs() < 0.02)
+    };
+    let inventory = list(&mut a, doc);
+    assert_eq!(inventory["count"], 4);
+    assert_eq!(inventory["objects"][1]["kind"], "path");
+    // Displayed (y down) on the 200 x 300 page: user [20 40 120 90] shows at [20 210 120 260].
+    assert!(near(&inventory, 1, [20.0, 210.0, 120.0, 260.0]) && near(&inventory, 3, [60.0, 180.0, 90.0, 200.0]), "{inventory}");
+
+    let moved = ok(
+        &mut a,
+        "object_move",
+        json!({"doc":doc,"page":1,"generation":inventory["generation"],"objects":[{"kind":"path","index":1}],"offset":[10,20]}),
+    );
+    assert_eq!(moved["moved"], 1);
+    let after = list(&mut a, doc);
+    assert!(near(&after, 1, [30.0, 230.0, 130.0, 280.0]), "{after}");
+    assert_eq!(after["objects"][1]["fill"], "#FF0000");
+    for row in [0, 2, 3] {
+        assert_eq!(after["objects"][row], inventory["objects"][row], "only the path moved");
+    }
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"moved.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"moved.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(list(&mut a, reopened)["objects"], after["objects"]);
+
+    // Path 1 is now the leftmost at x 30; path 3 moves 30 left to meet it.
+    let redone = list(&mut a, doc);
+    let objects = json!([{"kind":"path","index":1},{"kind":"path","index":3}]);
+    let aligned = ok(&mut a, "object_align", json!({"doc":doc,"page":1,"objects":objects,"action":"left"}));
+    assert_eq!(aligned["aligned"], 2);
+    let lined = list(&mut a, doc);
+    assert!(near(&lined, 3, [30.0, 180.0, 60.0, 200.0]), "{lined}");
+    for row in [0, 1, 2] {
+        assert_eq!(lined["objects"][row], redone["objects"][row], "only path 3 moved");
+    }
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], redone["objects"]);
+}
+
+/// `paths.pdf` in `dir`: the page's paragraph, Form artwork at user [120 240 160 260], a red box
+/// at [20 40 120 90] and a blue 4 pt line from (30, 200) to (170, 200). object_list rows: text 1,
+/// image 1, path 1 (the box), path 2 (the line).
+fn write_vector_page(dir: &Path) {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 40, 20].map(Object::Int).to_vec()));
+    let figure = cos.add(Object::Stream(Stream::flate(form, b"0.2 0.5 0.9 rg 0 0 40 20 re f")));
+    let contents = cos.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET q 1 0 0 1 120 240 cm /Figure Do Q 1 0 0 rg 20 40 100 50 re f 0 0 1 RG 4 w 30 200 m 170 200 l S",
+    )));
+    cos.update_dict(page, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Figure".to_vec(), Object::Ref(figure));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    std::fs::write(dir.join("paths.pdf"), write_incremental(&cos, &Default::default()).unwrap()).unwrap();
+}
+
+#[test]
+fn vector_paths_resize_recolour_and_delete_through_object_tools() {
+    let dir = workdir("object-edit-paths");
+    write_vector_page(&dir);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"paths.pdf"}))["doc"].as_u64().unwrap();
+    let list = |a: &mut Automation, doc: u64| ok(a, "object_list", json!({"doc":doc,"page":1}));
+    let near = |listed: &Value, row: usize, expected: [f64; 4]| {
+        (0..4).all(|i| (listed["objects"][row]["rect"][i].as_f64().unwrap() - expected[i]).abs() < 0.02)
+    };
+    let inventory = list(&mut a, doc);
+    let kinds: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| o["kind"].clone()).collect();
+    assert_eq!(kinds, ["text", "image", "path", "path"], "{inventory}");
+    assert!(near(&inventory, 2, [20.0, 210.0, 120.0, 260.0]), "{inventory}");
+    let unchanged = |after: &Value, rows: &[usize]| rows.iter().all(|&row| after["objects"][row] == inventory["objects"][row]);
+
+    // Displayed (y down) on the 200 x 300 page: [30 150 80 250] is user [30 50 80 150].
+    let resized = ok(
+        &mut a,
+        "object_resize",
+        json!({"doc":doc,"page":1,"generation":inventory["generation"],"object":{"kind":"path","index":1},"rect":[30,150,80,250]}),
+    );
+    assert_eq!(resized["undo"], "Resize object", "{resized}");
+    let after = list(&mut a, doc);
+    assert!(near(&after, 2, [30.0, 150.0, 80.0, 250.0]) && after["objects"][2]["fill"] == "#FF0000", "{after}");
+    assert!(unchanged(&after, &[0, 1, 3]), "only the box changed: {after}");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+
+    // Each path takes the colour of the part it paints.
+    let objects = json!([{"kind":"path","index":1},{"kind":"path","index":2}]);
+    let recoloured = ok(&mut a, "object_recolour", json!({"doc":doc,"page":1,"objects":objects,"fill":"#00FF00","stroke":"#FF00FF"}));
+    assert_eq!((recoloured["recoloured"].clone(), recoloured["undo"].clone()), (json!(2), json!("Change colour")));
+    let after = list(&mut a, doc);
+    let paint = |listed: &Value, row: usize| (listed["objects"][row]["fill"].clone(), listed["objects"][row]["stroke"].clone());
+    assert_eq!(paint(&after, 2), (json!("#00FF00"), Value::Null));
+    assert_eq!(paint(&after, 3), (Value::Null, json!("#FF00FF")));
+    assert!((2..4).all(|row| after["objects"][row]["rect"] == inventory["objects"][row]["rect"]) && unchanged(&after, &[0, 1]), "{after}");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+
+    // The artwork alone.
+    let deleted = ok(&mut a, "object_delete", json!({"doc":doc,"page":1,"objects":[{"kind":"image","index":1}]}));
+    assert_eq!((deleted["deleted"].clone(), deleted["undo"].clone()), (json!(1), json!("Delete object")));
+    let rows = inventory["objects"].as_array().unwrap();
+    assert_eq!(list(&mut a, doc)["objects"], json!([rows[0], rows[2], rows[3]]));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+
+    // The artwork and the box go; the line becomes path 1.
+    let objects = json!([{"kind":"image","index":1},{"kind":"path","index":1}]);
+    let deleted = ok(&mut a, "object_delete", json!({"doc":doc,"page":1,"objects":objects}));
+    assert_eq!((deleted["deleted"].clone(), deleted["undo"].clone()), (json!(2), json!("Delete objects")));
+    let after = list(&mut a, doc);
+    assert_eq!(after["count"], 2, "{after}");
+    assert_eq!(after["objects"][0], inventory["objects"][0]);
+    let mut line = inventory["objects"][3].clone();
+    line["index"] = json!(1);
+    assert_eq!(after["objects"][1], line);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"deleted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"deleted.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(list(&mut a, reopened)["objects"], after["objects"]);
+}
+
+#[test]
+fn refused_object_edits_through_tools_change_nothing() {
+    let dir = workdir("object-edit-refusals");
+    write_vector_page(&dir);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"paths.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let stale = before["generation"].as_u64().unwrap() + 1;
+    let (box_, line, text) = (json!({"kind":"path","index":1}), json!({"kind":"path","index":2}), json!({"kind":"text","index":1}));
+    let refused = [
+        // Not a path, corners out of order, off the page, no such path, stale.
+        ("object_resize", json!({"object":text,"rect":[30,150,80,250]}), "only a vector path"),
+        ("object_resize", json!({"object":box_,"rect":[80,150,30,250]}), "x1 > x0"),
+        ("object_resize", json!({"object":box_,"rect":[500,500,600,550]}), "off the page"),
+        ("object_resize", json!({"object":{"kind":"path","index":9},"rect":[30,150,80,250]}), "no vector path 9"),
+        ("object_resize", json!({"object":box_,"rect":[30,150,80,250],"generation":stale}), "call object_list again"),
+        // No colour, not a colour, not only paths, a fill for a line, stale.
+        ("object_recolour", json!({"objects":[box_]}), "fill, stroke or both"),
+        ("object_recolour", json!({"objects":[box_],"fill":"#12"}), "not a colour"),
+        ("object_recolour", json!({"objects":[box_, text],"fill":"#00FF00"}), "only vector paths can be recoloured"),
+        ("object_recolour", json!({"objects":[{"kind":"image","index":1}],"fill":"#00FF00"}), "only vector paths can be recoloured"),
+        ("object_recolour", json!({"objects":[line],"fill":"#00FF00"}), "no fill to recolour"),
+        ("object_recolour", json!({"objects":[box_],"fill":"#00FF00","generation":stale}), "call object_list again"),
+        // Text, added content, no such image, stale.
+        ("object_delete", json!({"objects":[box_, text]}), "not text or added content"),
+        ("object_delete", json!({"objects":[{"kind":"added","index":1}]}), "not text or added content"),
+        ("object_delete", json!({"objects":[box_, {"kind":"image","index":9}]}), "no longer exists"),
+        ("object_delete", json!({"objects":[box_],"generation":stale}), "call object_list again"),
+    ];
+    for (tool, mut args, why) in refused {
+        args["doc"] = json!(doc);
+        args["page"] = json!(1);
+        let message = err(&mut a, tool, args.clone()).to_string();
+        assert!(message.contains(why), "{tool} {args}: {message}");
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before, "{tool} {args}");
+    }
+    let state = ok(&mut a, "doc_info", json!({"doc":doc}))["document"].clone();
+    assert_eq!((state["dirty"].clone(), state["undo"].clone()), (json!(false), Value::Null), "{state}");
+}
+
+/// `stacked.pdf` in `dir`: the page's paragraph, then a red box R at user [20 200 100 260] under
+/// an image at [70 210 110 230] under a blue box B at [50 220 130 280], each overlapping the
+/// others, and a green box G at [150 20 180 50] apart from everything. object_list rows: text 1,
+/// image 1, path 1 (R), path 2 (B), path 3 (G).
+fn write_stacked_page(dir: &Path) {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(4));
+    image.set(b"Height".to_vec(), Object::Int(2));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    let image = cos.add(Object::Stream(Stream::flate(image, &[0x80; 8])));
+    let contents = cos.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"BT /F1 24 Tf 20 150 Td (Page 1) Tj ET 1 0 0 rg 20 200 80 60 re f q 40 0 0 20 70 210 cm /Im0 Do Q \
+          0 0 1 rg 50 220 80 60 re f 0 1 0 rg 150 20 30 30 re f",
+    )));
+    cos.update_dict(page, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im0".to_vec(), Object::Ref(image));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    std::fs::write(dir.join("stacked.pdf"), write_incremental(&cos, &Default::default()).unwrap()).unwrap();
+}
+
+#[test]
+fn objects_arrange_through_object_tools_with_one_undo() {
+    let dir = workdir("object-arrange");
+    write_stacked_page(&dir);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"stacked.pdf"}))["doc"].as_u64().unwrap();
+    let list = |a: &mut Automation, doc: u64| ok(a, "object_list", json!({"doc":doc,"page":1}));
+    let arrange =
+        |a: &mut Automation, object: &Value, order: &str| ok(a, "object_arrange", json!({"doc":doc,"page":1,"object":object,"order":order}));
+    // The path rows' fills, in painting order.
+    let fills = |listed: &Value| -> Vec<Value> {
+        listed["objects"].as_array().unwrap().iter().filter(|o| o["kind"] == "path").map(|o| o["fill"].clone()).collect()
+    };
+    // Every row but its index, in no particular order.
+    let unordered = |listed: &Value| {
+        let mut rows: Vec<String> = listed["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| {
+                let mut o = o.clone();
+                o["index"] = Value::Null;
+                o.to_string()
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+    let inventory = list(&mut a, doc);
+    let kinds: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| o["kind"].clone()).collect();
+    assert_eq!(kinds, ["text", "image", "path", "path", "path"], "{inventory}");
+    assert_eq!(fills(&inventory), ["#FF0000", "#0000FF", "#00FF00"], "{inventory}");
+
+    // R to the front: above B, the last object it overlaps; G overlaps nothing and stays on top.
+    let front = ok(
+        &mut a,
+        "object_arrange",
+        json!({"doc":doc,"page":1,"generation":inventory["generation"],"object":{"kind":"path","index":1},"order":"front"}),
+    );
+    assert_eq!((front["undo"].clone(), front["object"].clone()), (json!("Bring to front"), json!({"kind":"path","index":2})), "{front}");
+    let after = list(&mut a, doc);
+    assert_eq!(fills(&after), ["#0000FF", "#FF0000", "#00FF00"], "{after}");
+    assert_eq!(unordered(&after), unordered(&inventory), "the same objects in the same places");
+    // The returned reference is R's row.
+    let mut red = inventory["objects"][2].clone();
+    red["index"] = json!(2);
+    assert_eq!(after["objects"][3], red);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+
+    // B to the back: below R, the first object it overlaps, and so below the image between them.
+    let back = arrange(&mut a, &json!({"kind":"path","index":2}), "back");
+    assert_eq!((back["undo"].clone(), back["object"].clone()), (json!("Send to back"), json!({"kind":"path","index":1})), "{back}");
+    let after = list(&mut a, doc);
+    assert_eq!(fills(&after), ["#0000FF", "#FF0000", "#00FF00"], "{after}");
+    assert_eq!(unordered(&after), unordered(&inventory), "the same objects in the same places");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+
+    // The image forward, above B: images are listed apart from paths, so its reference and the
+    // list stay, and nothing above it overlaps it any more.
+    let image = json!({"kind":"image","index":1});
+    let forward = arrange(&mut a, &image, "forward");
+    assert_eq!((forward["undo"].clone(), forward["object"].clone()), (json!("Bring forward"), image.clone()), "{forward}");
+    assert_eq!(list(&mut a, doc)["objects"], inventory["objects"]);
+    let message = err(&mut a, "object_arrange", json!({"doc":doc,"page":1,"object":image,"order":"forward"})).to_string();
+    assert!(message.contains("nothing above this object overlaps it"), "{message}");
+    let undone = ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!((undone["undone"].clone(), undone["document"]["undo"].clone()), (json!("Bring forward"), Value::Null), "{undone}");
+
+    // Under B again, so it comes forward again; saved and reopened, it stays above B.
+    arrange(&mut a, &image, "forward");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"arranged.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"arranged.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(list(&mut a, reopened)["objects"], inventory["objects"]);
+    let message = err(&mut a, "object_arrange", json!({"doc":reopened,"page":1,"object":image,"order":"forward"})).to_string();
+    assert!(message.contains("nothing above this object overlaps it"), "{message}");
+}
+
+#[test]
+fn refused_arranges_through_tools_change_nothing() {
+    let dir = workdir("object-arrange-refusals");
+    write_stacked_page(&dir);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"stacked.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let stale = before["generation"].as_u64().unwrap() + 1;
+    let (red, blue, green) = (json!({"kind":"path","index":1}), json!({"kind":"path","index":2}), json!({"kind":"path","index":3}));
+    let only = "only vector paths, images and grouped artwork can be arranged";
+    let refused = [
+        // Nothing overlaps G, nothing is below R and nothing above B.
+        (json!({"object":green,"order":"front"}), "nothing above this object overlaps it"),
+        (json!({"object":green,"order":"back"}), "nothing below this object overlaps it"),
+        (json!({"object":red,"order":"backward"}), "nothing below this object overlaps it"),
+        (json!({"object":blue,"order":"forward"}), "nothing above this object overlaps it"),
+        // Text, added content, no such path, not an order, two objects, no object, stale.
+        (json!({"object":{"kind":"text","index":1},"order":"back"}), only),
+        (json!({"object":{"kind":"added","index":1},"order":"front"}), only),
+        (json!({"object":{"kind":"path","index":9},"order":"front"}), "no longer exists"),
+        (json!({"object":red,"order":"top"}), "order must be front, forward, backward or back"),
+        (json!({"object":[red, blue],"order":"front"}), "each object must contain kind and index"),
+        (json!({"order":"front"}), "missing argument object"),
+        (json!({"object":red,"order":"front","generation":stale}), "call object_list again"),
+    ];
+    for (mut args, why) in refused {
+        args["doc"] = json!(doc);
+        args["page"] = json!(1);
+        let message = err(&mut a, "object_arrange", args.clone()).to_string();
+        assert!(message.contains(why), "{args}: {message}");
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before, "{args}");
+    }
+    let state = ok(&mut a, "doc_info", json!({"doc":doc}))["document"].clone();
+    assert_eq!((state["dirty"].clone(), state["undo"].clone()), (json!(false), Value::Null), "{state}");
+}
+
+#[test]
+fn objects_align_as_displayed_with_one_undo() {
+    let dir = workdir("object-align");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"One","rect":[40,20,110,40]}));
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Two","rect":[60,200,150,230]}));
+    // Turned a quarter, the displayed top is the lowest user-space x.
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":90}));
+    let inventory = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(inventory["count"], 3);
+    let objects: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    let rect = |o: &Value, i: usize| o["rect"][i].as_f64().unwrap();
+    let top = inventory["objects"].as_array().unwrap().iter().map(|o| rect(o, 1)).fold(f64::MAX, f64::min);
+    let aligned = ok(&mut a, "object_align", json!({"doc":doc,"page":1,"generation":inventory["generation"],"objects":objects,"action":"top"}));
+    assert_eq!(aligned["aligned"], 3);
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    for (old, new) in inventory["objects"].as_array().unwrap().iter().zip(after["objects"].as_array().unwrap()) {
+        assert!((rect(new, 1) - top).abs() < 0.02, "{old} -> {new}");
+        assert!(
+            (rect(new, 0) - rect(old, 0)).abs() < 0.02 && (rect(new, 3) - rect(new, 1) - rect(old, 3) + rect(old, 1)).abs() < 0.03,
+            "{old} -> {new}"
+        );
+        assert_eq!(old["text"], new["text"]);
+    }
+    assert!(inventory["objects"].as_array().unwrap().iter().any(|o| (rect(o, 1) - top).abs() > 1.0), "something moved");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], inventory["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"aligned.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"aligned.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
+    // One object, two to distribute, already in place, an unknown action, a stale generation.
+    let stable = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    for mut args in [
+        json!({"objects":[objects[0]],"action":"left"}),
+        json!({"objects":objects[..2],"action":"distribute_vertical"}),
+        json!({"objects":objects,"action":"top"}),
+        json!({"objects":objects,"action":"diagonal"}),
+        json!({"objects":objects,"action":"left","generation":inventory["generation"]}),
+    ] {
+        args["doc"] = json!(doc);
+        args["page"] = json!(1);
+        assert!(a.call("object_align", &args).is_err(), "{args}");
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), stable);
+    }
+    ok(&mut a, "object_align", json!({"doc":doc,"page":1,"objects":objects,"action":"center"}));
+    let centred = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let centres: Vec<f64> = centred["objects"].as_array().unwrap().iter().map(|o| rect(o, 0) + rect(o, 2)).collect();
+    assert!(centres.iter().all(|c| (c - centres[0]).abs() < 0.03), "{centres:?}");
 }
 
 #[test]

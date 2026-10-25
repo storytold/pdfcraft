@@ -60,7 +60,7 @@ let bytes = s.save_full_bytes(id)?;   // full rewrite, garbage-collected
 s.mark_saved(id, bytes.clone(), path)?;
 ```
 
-`Edit` is one enum of 75 variants — every undoable change in the product, from
+`Edit` is one enum of 94 variants — every undoable change in the product, from
 `RotatePages` to `AddAnnotation`, `SetFieldValue`, `ApplyRedactions` and `AddWatermark`. Adding a
 feature means adding a variant and handling it in `apply`, which is what keeps undo, the dirty
 flag, autosave and the automation tools consistent for free.

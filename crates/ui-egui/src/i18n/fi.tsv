@@ -2236,6 +2236,19 @@ certificate	Subject	Kohde
 	Finish or discard the text being edited before selecting several objects.	Viimeistele tai hylkää muokattava teksti ennen useiden objektien valitsemista.
 	Move object	Siirrä objekti
 	Move objects	Siirrä objektit
+	Align objects	Tasaa objektit
+	Distribute objects	Jaa objektit tasaisesti
+	Resize object	Muuta objektin kokoa
+	Change colour	Muuta väriä
+	Delete object	Poista objekti
+	Delete objects	Poista objektit
+	Bring to front	Tuo päällimmäiseksi
+	Bring forward	Tuo yhtä ylemmäs
+	Send backward	Vie yhtä alemmas
+	Send to back	Vie alimmaiseksi
+	Text and added items can't be deleted with this selection.	Tekstiä ja lisättyjä kohteita ei voi poistaa tällä valinnalla.
+	Arrange	Järjestä
+	Stroke colour	Viivan väri
 	Vertical text cannot be moved with this selection.	Pystysuoraa tekstiä ei voi siirtää tällä valinnalla.
 	Text used as a clipping path cannot be moved with this selection.	Leikkauspolkuna käytettyä tekstiä ei voi siirtää tällä valinnalla.
 	These objects could not be moved. Select them again and try a smaller move.	Objekteja ei voitu siirtää. Valitse ne uudelleen ja kokeile pienempää siirtoa.

@@ -2277,10 +2277,23 @@ action wizard	Start	Indítás
 	Finish or discard the text being edited before selecting several objects.	Több objektum kijelölése előtt fejezze be vagy vesse el a szöveg szerkesztését.
 	Move object	Objektum áthelyezése
 	Move objects	Objektumok áthelyezése
+	Align objects	Objektumok igazítása
+	Distribute objects	Objektumok elosztása
+	Resize object	Objektum átméretezése
+	Change colour	Szín módosítása
+	Delete object	Objektum törlése
+	Delete objects	Objektumok törlése
+	Bring to front	Előtérbe hozás
+	Bring forward	Előrébb hozás
+	Send backward	Hátrébb küldés
+	Send to back	Háttérbe küldés
 	Vertical text cannot be moved with this selection.	A függőleges szöveg nem helyezhető át ezzel a kijelöléssel.
 	Text used as a clipping path cannot be moved with this selection.	A vágógörbeként használt szöveg nem helyezhető át ezzel a kijelöléssel.
 	These objects could not be moved. Select them again and try a smaller move.	Ezeket az objektumokat nem sikerült áthelyezni. Jelölje ki őket újra, és próbáljon kisebb elmozdítást.
 	This page contains objects that cannot be selected together.	Ez az oldal olyan objektumokat tartalmaz, amelyek nem jelölhetők ki együtt.
+	Text and added items can't be deleted with this selection.	A szöveg és a hozzáadott elemek nem törölhetők ezzel a kijelöléssel.
+	Arrange	Elrendezés
+	Stroke colour	Körvonalszín
 	Fill colour	Kitöltőszín
 	No fill	Nincs kitöltés
 	Fill colour: none	Kitöltőszín: nincs

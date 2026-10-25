@@ -2302,10 +2302,23 @@ certificate	Subject	Власник сертифіката
 	Finish or discard the text being edited before selecting several objects.	Завершіть або скасуйте редагування тексту, перш ніж вибирати кілька об’єктів.
 	Move object	Перемістити об’єкт
 	Move objects	Перемістити об’єкти
+	Align objects	Вирівняти об’єкти
+	Distribute objects	Розподілити об’єкти
+	Resize object	Змінити розмір об’єкта
+	Change colour	Змінити колір
+	Delete object	Видалити об’єкт
+	Delete objects	Видалити об’єкти
+	Bring to front	На передній план
+	Bring forward	Перемістити вперед
+	Send backward	Перемістити назад
+	Send to back	На задній план
 	Vertical text cannot be moved with this selection.	Вертикальний текст не можна перемістити разом із цим виділенням.
 	Text used as a clipping path cannot be moved with this selection.	Текст, що використовується як контур відсікання, не можна перемістити разом із цим виділенням.
 	These objects could not be moved. Select them again and try a smaller move.	Не вдалося перемістити ці об’єкти. Виберіть їх знову та спробуйте менше зміщення.
 	This page contains objects that cannot be selected together.	На цій сторінці є об’єкти, які не можна виділити разом.
+	Text and added items can't be deleted with this selection.	Текст і додані елементи не можна видалити разом із цим виділенням.
+	Arrange	Упорядкувати
+	Stroke colour	Колір обведення
 	Fill colour	Колір заливки
 	No fill	Без заливки
 	Fill colour: none	Колір заливки: немає

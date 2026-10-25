@@ -2429,10 +2429,23 @@ action wizard	Start	Iniciar
 	Finish or discard the text being edited before selecting several objects.	Termina o descarta la edición del texto antes de seleccionar varios objetos.
 	Move object	Mover objeto
 	Move objects	Mover objetos
+	Align objects	Alinear objetos
+	Distribute objects	Distribuir objetos
+	Resize object	Cambiar tamaño del objeto
+	Change colour	Cambiar color
+	Delete object	Eliminar objeto
+	Delete objects	Eliminar objetos
+	Bring to front	Traer al frente
+	Bring forward	Traer adelante
+	Send backward	Enviar atrás
+	Send to back	Enviar al fondo
 	Vertical text cannot be moved with this selection.	El texto vertical no se puede mover con esta selección.
 	Text used as a clipping path cannot be moved with this selection.	El texto usado como trazado de recorte no se puede mover con esta selección.
 	These objects could not be moved. Select them again and try a smaller move.	No se pudieron mover estos objetos. Vuelve a seleccionarlos e intenta un desplazamiento menor.
 	This page contains objects that cannot be selected together.	Esta página contiene objetos que no se pueden seleccionar juntos.
+	Text and added items can't be deleted with this selection.	El texto y los elementos añadidos no se pueden eliminar con esta selección.
+	Arrange	Organizar
+	Stroke colour	Color de trazo
 	Fill colour	Color de relleno
 	No fill	Sin relleno
 	Fill colour: none	Color de relleno: ninguno

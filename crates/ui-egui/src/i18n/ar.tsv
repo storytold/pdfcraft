@@ -2301,10 +2301,23 @@ certificate	Subject	صاحب الشهادة
 	Finish or discard the text being edited before selecting several objects.	أكمل تحرير النص أو تجاهله قبل تحديد عدة عناصر.
 	Move object	نقل عنصر
 	Move objects	نقل عناصر
+	Align objects	محاذاة العناصر
+	Distribute objects	توزيع العناصر
+	Resize object	تغيير حجم عنصر
+	Change colour	تغيير اللون
+	Delete object	حذف عنصر
+	Delete objects	حذف عناصر
+	Bring to front	إحضار إلى المقدمة
+	Bring forward	تقديم للأمام
+	Send backward	إرجاع للخلف
+	Send to back	إرسال إلى الخلف
 	Vertical text cannot be moved with this selection.	لا يمكن نقل النص العمودي مع هذا التحديد.
 	Text used as a clipping path cannot be moved with this selection.	لا يمكن نقل النص المستخدم كمسار قص مع هذا التحديد.
 	These objects could not be moved. Select them again and try a smaller move.	تعذر نقل هذه العناصر. حددها مجددًا وحاول نقلها بمسافة أقل.
 	This page contains objects that cannot be selected together.	تحتوي هذه الصفحة على عناصر لا يمكن تحديدها معًا.
+	Text and added items can't be deleted with this selection.	لا يمكن حذف النص والعناصر المضافة مع هذا التحديد.
+	Arrange	ترتيب
+	Stroke colour	لون الحد
 	Fill colour	لون التعبئة
 	No fill	بلا تعبئة
 	Fill colour: none	لون التعبئة: بلا

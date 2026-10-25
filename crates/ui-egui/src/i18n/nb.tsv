@@ -1602,6 +1602,19 @@
 	Watermark	Vannmerke
 	Move object	Flytt objekt
 	Move objects	Flytt objekter
+	Align objects	Juster objekter
+	Distribute objects	Fordel objekter
+	Resize object	Endre størrelse på objekt
+	Change colour	Endre farge
+	Delete object	Slett objekt
+	Delete objects	Slett objekter
+	Bring to front	Flytt helt frem
+	Bring forward	Flytt fremover
+	Send backward	Flytt bakover
+	Send to back	Flytt helt bak
+	Text and added items can't be deleted with this selection.	Tekst og tillagte elementer kan ikke slettes med dette utvalget.
+	Arrange	Ordne
+	Stroke colour	Strekfarge
 	All tools	Alle verktøy
 	Read	Les
 	E-Sign	E-signer

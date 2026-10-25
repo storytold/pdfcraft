@@ -2218,6 +2218,19 @@ certificate	Subject	विषय
 	Finish or discard the text being edited before selecting several objects.	कई ऑब्जेक्ट चुनने से पहले संपादित किया जा रहा टेक्स्ट पूरा करें या छोड़ दें।
 	Move object	ऑब्जेक्ट खिसकाएँ
 	Move objects	ऑब्जेक्ट खिसकाएँ
+	Align objects	ऑब्जेक्ट संरेखित करें
+	Distribute objects	ऑब्जेक्ट वितरित करें
+	Resize object	ऑब्जेक्ट का आकार बदलें
+	Change colour	रंग बदलें
+	Delete object	ऑब्जेक्ट हटाएँ
+	Delete objects	ऑब्जेक्ट्स हटाएँ
+	Bring to front	सबसे आगे लाएँ
+	Bring forward	आगे लाएँ
+	Send backward	पीछे भेजें
+	Send to back	सबसे पीछे भेजें
+	Text and added items can't be deleted with this selection.	इस चयन के साथ टेक्स्ट और जोड़े गए आइटम हटाए नहीं जा सकते।
+	Arrange	व्यवस्थित करें
+	Stroke colour	स्ट्रोक रंग
 	Vertical text cannot be moved with this selection.	लंबवत टेक्स्ट इस चयन के साथ खिसकाया नहीं जा सकता।
 	Text used as a clipping path cannot be moved with this selection.	क्लिपिंग पथ के रूप में उपयोग होता टेक्स्ट इस चयन के साथ खिसकाया नहीं जा सकता।
 	These objects could not be moved. Select them again and try a smaller move.	इन ऑब्जेक्ट को खिसकाया नहीं जा सका। उन्हें दोबारा चुनें और कम खिसकाव आज़माएँ।

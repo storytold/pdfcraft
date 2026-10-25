@@ -2194,6 +2194,19 @@ signature pad	Type	Shkruaj
 	List view	Pamja me listë
 	Move object	Lëviz objektin
 	Move objects	Lëviz objektet
+	Align objects	Rreshto objektet
+	Distribute objects	Shpërndaj objektet
+	Resize object	Ndrysho madhësinë e objektit
+	Change colour	Ndrysho ngjyrën
+	Delete object	Fshi objektin
+	Delete objects	Fshi objektet
+	Bring to front	Sill në plan të parë
+	Bring forward	Sill përpara
+	Send backward	Dërgo prapa
+	Send to back	Dërgo në fund
+	Text and added items can't be deleted with this selection.	Teksti dhe elementet e shtuara nuk mund të fshihen me këtë përzgjedhje.
+	Arrange	Rregullo
+	Stroke colour	Ngjyra e vijës
 	No fill	Pa mbushje
 	Pages: {k} of {n}	Faqet: {k} nga {n}
 	Preview unavailable: {e}	Pamja paraprake nuk është e disponueshme: {e}

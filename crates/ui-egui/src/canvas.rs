@@ -4033,6 +4033,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             view.current = current;
         }
         resp.context_menu(|ui| {
+            if crate::object_ui::context_menu(ui, doc, view, can_modify) {
+                return;
+            }
             // Preparing a form: the selected field's menu.
             if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
                 // Several fields: Align, Center, Distribute, Set Fields to Same Size.

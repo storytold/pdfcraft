@@ -679,7 +679,30 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, ptr: &PagePointe
     let b = xf.user_rect(info, page, rect.map(|v| v as f32));
     let p = if ptr.primary_down { ptr.origin } else { ptr.pos };
     let knob = rotate_knob(b, ui.clip_rect()).0;
-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), knob].iter().any(|c| c.distance(p) < 8.0))
+    p.is_some_and(|p| corner_at(b, p).is_some() || p.distance(knob) < 8.0)
+}
+
+/// The resize handles of a selected box (screen): left-top, right-top, left-bottom,
+/// right-bottom, so corner `k`'s opposite is `3 - k`.
+pub(crate) fn corners(b: Rect) -> [Pos2; 4] {
+    [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()]
+}
+
+/// The resize handle of `b` within reach of `p`.
+pub(crate) fn corner_at(b: Rect, p: Pos2) -> Option<usize> {
+    corners(b).iter().position(|c| c.distance(p) < 8.0)
+}
+
+pub(crate) fn paint_handles(painter: &egui::Painter, b: Rect) {
+    for c in corners(b) {
+        painter.rect(
+            Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
+            CornerRadius::ZERO,
+            Color32::WHITE,
+            Stroke::new(1.0, ACCENT),
+            egui::StrokeKind::Middle,
+        );
+    }
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -861,18 +884,7 @@ pub(crate) fn image_input(
         if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()) {
             return crop_input(ui, resp, xf, ptr, page, info, view, i, b, allow_interaction);
         }
-        let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
-        let handles = |rect: Rect| {
-            for c in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()] {
-                painter.rect(
-                    Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
-                    CornerRadius::ZERO,
-                    Color32::WHITE,
-                    Stroke::new(1.0, ACCENT),
-                    egui::StrokeKind::Middle,
-                );
-            }
-        };
+        let corners = corners(b);
         // Until the page is rendered again its raster has an applied move or resize's picture
         // where it was: it stays blanked there and drawn where it went.
         // The whole-page raster and its tiles are replaced separately: the old frame stays blanked
@@ -895,9 +907,9 @@ pub(crate) fn image_input(
         }
         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-            handles(b);
+            paint_handles(painter, b);
         }
-        if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
+        if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corner_at(b, p)) {
             ui.ctx().set_cursor_icon(if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
         }
         // The rotate handle: a knob above the top edge, joined to it by a short stem.
@@ -922,7 +934,7 @@ pub(crate) fn image_input(
             && resp.drag_started()
             && let Some(o) = ptr.origin
         {
-            let corner = corners.iter().position(|c| c.distance(o) < 8.0);
+            let corner = corner_at(b, o);
             if corner.is_some() || image_contains(i, o) {
                 let opposite = corner.map(|k| corners[3 - k]);
                 if let Some(s) = view.image_selection.as_mut() {
@@ -1003,7 +1015,7 @@ pub(crate) fn image_input(
                 }
                 painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
                 painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-                handles(preview);
+                paint_handles(painter, preview);
             }
             if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
@@ -1060,7 +1072,7 @@ pub(crate) fn image_input(
         painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
     }
     let Some(b) = boxes.get(hit).copied() else { return false };
-    let corner = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().position(|c| c.distance(p) < 8.0);
+    let corner = corner_at(b, p);
     ui.ctx().set_cursor_icon(match (selected == Some(hit), corner) {
         (true, Some(0 | 3)) => egui::CursorIcon::ResizeNwSe,
         (true, Some(_)) => egui::CursorIcon::ResizeNeSw,

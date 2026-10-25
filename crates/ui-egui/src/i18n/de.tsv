@@ -2283,10 +2283,23 @@ action wizard	Start	Starten
 	Finish or discard the text being edited before selecting several objects.	Schließen Sie die Textbearbeitung ab oder verwerfen Sie sie, bevor Sie mehrere Objekte auswählen.
 	Move object	Objekt verschieben
 	Move objects	Objekte verschieben
+	Align objects	Objekte ausrichten
+	Distribute objects	Objekte verteilen
+	Resize object	Objektgröße ändern
+	Change colour	Farbe ändern
+	Delete object	Objekt löschen
+	Delete objects	Objekte löschen
+	Bring to front	In den Vordergrund
+	Bring forward	Eine Ebene nach vorne
+	Send backward	Eine Ebene nach hinten
+	Send to back	In den Hintergrund
 	Vertical text cannot be moved with this selection.	Vertikaler Text kann mit dieser Auswahl nicht verschoben werden.
 	Text used as a clipping path cannot be moved with this selection.	Text, der als Beschneidungspfad dient, kann mit dieser Auswahl nicht verschoben werden.
 	These objects could not be moved. Select them again and try a smaller move.	Diese Objekte konnten nicht verschoben werden. Wählen Sie sie erneut aus und versuchen Sie eine kleinere Verschiebung.
 	This page contains objects that cannot be selected together.	Diese Seite enthält Objekte, die nicht gemeinsam ausgewählt werden können.
+	Text and added items can't be deleted with this selection.	Text und hinzugefügte Elemente können mit dieser Auswahl nicht gelöscht werden.
+	Arrange	Anordnen
+	Stroke colour	Konturfarbe
 	Fill colour	Füllfarbe
 	No fill	Keine Füllung
 	Fill colour: none	Füllfarbe: keine

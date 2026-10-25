@@ -2242,10 +2242,23 @@ key	Space	Boşluk
 	Finish or discard the text being edited before selecting several objects.	Birden fazla nesne seçmeden önce düzenlenen metni tamamlayın veya iptal edin.
 	Move object	Nesneyi taşı
 	Move objects	Nesneleri taşı
+	Align objects	Nesneleri hizala
+	Distribute objects	Nesneleri dağıt
+	Resize object	Nesneyi yeniden boyutlandır
+	Change colour	Rengi değiştir
+	Delete object	Nesneyi sil
+	Delete objects	Nesneleri sil
+	Bring to front	En öne getir
+	Bring forward	Öne getir
+	Send backward	Arkaya gönder
+	Send to back	En arkaya gönder
 	Vertical text cannot be moved with this selection.	Dikey metin bu seçimle taşınamaz.
 	Text used as a clipping path cannot be moved with this selection.	Kırpma yolu olarak kullanılan metin bu seçimle taşınamaz.
 	These objects could not be moved. Select them again and try a smaller move.	Bu nesneler taşınamadı. Bunları tekrar seçin ve daha küçük bir taşıma deneyin.
 	This page contains objects that cannot be selected together.	Bu sayfa birlikte seçilemeyen nesneler içeriyor.
+	Text and added items can't be deleted with this selection.	Metin ve eklenen öğeler bu seçimle silinemez.
+	Arrange	Yerleştir
+	Stroke colour	Çizgi rengi
 	Fill colour	Dolgu rengi
 	No fill	Dolgu yok
 	Fill colour: none	Dolgu rengi: yok
