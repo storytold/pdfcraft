@@ -59,7 +59,9 @@ that warning and keeps the existing layout and accepted widget values.
   document's warnings), the packet after every form edit.
 
 Date data pictures also accept the existing English abbreviated and full month-name tokens
-(`MMM` and `MMMM`). They still need a year and a day of month; a weekday alone is insufficient.
+(`MMM` and `MMMM`). They still need a year and an original `D` or `DD` day-of-month token;
+a weekday (`E` through `EEEE`) alone is insufficient, even when normalization gives it the
+same letters as a day of month. Incomplete pictures keep stored text and use ISO for new dates.
 This uses the existing date converter and does not add locale-aware month names.
 
 Layout measures each container once per (node, width): width-less containers would otherwise

@@ -836,12 +836,49 @@ fn named_month_data_pictures_require_a_complete_date() {
         ("date{MMMM D, YYYY}", Some("mmmm d, yyyy")),
         ("date{EEE, MMM D, YYYY}", Some("ddd, mmm d, yyyy")),
         ("date{MMM YYYY}", None),
+        ("date{E MMM YYYY}", None),
+        ("date{EE MMMM YYYY}", None),
+        ("date{EEE MMM YYYY}", None),
         ("date{EEEE, MMM YYYY}", None),
+        ("E MMM YYYY", None),
+        ("EE MMMM YYYY", None),
+        ("date{E MM YYYY}", None),
+        ("date{EE M YYYY}", None),
         ("date{DD MMM}", None),
         ("date{DD MMMMM YYYY}", None),
     ] {
         field.data_picture = Some(picture.into());
         assert_eq!(crate::data::data_date_letters(&field).as_deref(), expected, "{picture}");
+    }
+}
+
+/// Numeric weekday tokens cannot supply a missing day of month during data reads or writes.
+#[test]
+fn named_month_data_pictures_with_only_weekdays_keep_iso_fallback() {
+    for (picture, initial) in [("E MMM YYYY", "1 Oct 2026"), ("EE MMMM YYYY", "01 October 2026")] {
+        let xml =
+            bound_date_template(&format!("<form><page><due>{initial}</due></page></form>")).replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
+        let (tpl, _) = parse(&xml).unwrap();
+        let data = parse_datasets(&xml).unwrap();
+        let live = form_tree(&tpl, Some(&data), &Overrides::default()).root;
+        assert_eq!(node_at(&live, "form[0].page[0].due[0]").unwrap().value, initial, "{picture}");
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        assert!(fields.iter().any(|f| f.name == "due" && f.data == FieldData::Text(initial.into())), "{picture}: {fields:?}");
+        assert_eq!(write_datasets(&mut doc, &fields).unwrap(), DatasetsWrite::default());
+        let due = fields.iter_mut().find(|f| f.name == "due").unwrap();
+        due.data = FieldData::Text("10/19/2026".into());
+        doc.update_dict(due.obj, |d| d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text("10/19/2026")))).unwrap();
+        let written = write_datasets(&mut doc, &fields).unwrap();
+        assert!(written.written && written.warnings.is_empty(), "{picture}: {written:?}");
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let packets = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some("2026-10-19"), "{picture}");
+        let layout = layout_xml(&packets.xdp).unwrap();
+        let due = layout.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+        assert_eq!(due.value.as_deref(), Some("10/19/2026"), "{picture}");
     }
 }
 

@@ -1,18 +1,23 @@
 use super::path::template_field;
 use super::{Field, Template};
 
-/// The date letters (`yyyy-mm-dd`, `yyyymmdd`) of an XFA date picture clause such as
-/// `date{YYYY-MM-DD}`, or `None` when it has none this reads (empty, or with symbols beyond
-/// years, months, days and separators).
-pub(crate) fn date_letters(picture: &str) -> Option<String> {
-    let inner = picture
+/// The first picture clause's contents, or the whole unwrapped picture, before normalization.
+fn date_clause(picture: &str) -> &str {
+    picture
         .find('{')
         .and_then(|a| {
             let rest = picture.get(a + 1..)?;
             rest.find('}').and_then(|b| rest.get(..b))
         })
         .unwrap_or(picture)
-        .trim();
+        .trim()
+}
+
+/// The date letters (`yyyy-mm-dd`, `yyyymmdd`) of an XFA date picture clause such as
+/// `date{YYYY-MM-DD}`, or `None` when it has none this reads (empty, or with symbols beyond
+/// years, months, days and separators).
+pub(crate) fn date_letters(picture: &str) -> Option<String> {
+    let inner = date_clause(picture);
     if inner.is_empty() || inner.chars().any(|c| !"YMDEJ-/., :".contains(c)) {
         return None;
     }
@@ -24,10 +29,13 @@ pub(crate) fn date_letters(picture: &str) -> Option<String> {
 /// ISO dates. Both numeric and named months can supply the month; a weekday cannot supply
 /// the day of month.
 pub(crate) fn data_date_letters(f: &Field) -> Option<String> {
-    let letters = f.data_picture.as_deref().and_then(date_letters)?;
+    let picture = f.data_picture.as_deref()?;
+    let letters = date_letters(picture)?;
     let tokens = date_tokens(&letters);
     let has = |any: &[&str]| tokens.iter().any(|t| any.contains(&t.as_str()));
-    (has(&["yyyy", "yy"]) && has(&["mmmm", "mmm", "mm", "m"]) && has(&["dd", "d"])).then_some(letters)
+    // E/EE become d/dd for the shared converter, but cannot supply a day of month.
+    let has_day = date_tokens(date_clause(picture)).iter().any(|t| matches!(t.as_str(), "d" | "dd"));
+    (has(&["yyyy", "yy"]) && has(&["mmmm", "mmm", "mm", "m"]) && has_day).then_some(letters)
 }
 
 /// A date as the data holds it, written in `data_pattern` (the field's data picture), read as
