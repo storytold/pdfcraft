@@ -8484,8 +8484,8 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id"]
-notes = "AccessKit labels on all custom widgets; full audit in M14.3"
+evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/it/viewer.rs::the_accessible_window_has_the_window_title_as_its_name"]
+notes = "AccessKit labels on all custom widgets; the accessible window is named with the window title and follows it (#4614); full audit in M14.3"
 
 [[feature]]
 id = "a11y.keyboard-only"
