@@ -283,8 +283,8 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(
         parse_lpstat(out),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None }
+            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None, description: String::new() }
         ]
     );
     assert!(parse_lpstat("lpstat: No destinations added.\nno system default destination\n").is_empty());
@@ -327,18 +327,21 @@ fn driverless_printers_join_the_list_without_a_queue() {
     assert_eq!(
         spool::printers_parsed(queues, Some("Basement_Color\nOffice_Laser\n")),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None },
+            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None, description: String::new() },
         ],
         "queues first, then the driverless destination; the queue listed twice is not doubled"
     );
     // An old spooler without `-e` (CUPS < 1.7) keeps its queues; only the driverless names are lost.
-    assert_eq!(spool::printers_parsed(queues, None), [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None }]);
+    assert_eq!(
+        spool::printers_parsed(queues, None),
+        [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() }]
+    );
     // The default can itself be driverless (`lpoptions -d` names a destination no queue exists
     // for): it keeps its marker, so the dialog preselects the user's default, not the first queue.
     assert_eq!(
         spool::printers_parsed("system default destination: Basement_Color\n", Some("Basement_Color\n")),
-        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None }],
+        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None, description: String::new() }],
         "a default destination without a queue is still the default"
     );
     assert!(spool::parse_lpstat_e("\n \n").is_empty(), "no destinations is empty, not [\"\"]");
@@ -414,17 +417,17 @@ fn windows_printers_carry_one_default_and_keep_their_names() {
     // Windows marks the system default with a `*` no queue name may contain; names hold spaces,
     // parentheses and non-ASCII letters, and the lines end with CRLF.
     let printers = parse_windows_printers("*Microsoft Print to PDF\r\nHP LaserJet 400 (Copy 2)\r\nКопир Canon iR\r\n\r\n*XPS via USB\r\n");
-    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None });
-    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None });
-    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None });
+    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None, description: String::new() });
+    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None, description: String::new() });
+    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None, description: String::new() });
     // A spooler marking two defaults: the first still wins, so the dialog has one to preselect.
-    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None });
+    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None, description: String::new() });
     assert_eq!(parse_windows_printers("\r\n"), Vec::new());
     // After a tab, whether the driver reports two-sided printing; a tab inside a name stays.
     let sided = parse_windows_printers("*Office PCL\t2\r\nOffice PS\t1\r\nTab\tName\t2\r\n");
-    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true) });
-    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false) });
-    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true) });
+    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true), description: String::new() });
+    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false), description: String::new() });
+    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true), description: String::new() });
 }
 
 /// A PPD shaped like a Fiery's: installable options, multi-line PostScript in the choices, Latin-1

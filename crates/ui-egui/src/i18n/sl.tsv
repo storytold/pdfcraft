@@ -1636,6 +1636,15 @@
 	Search	Iskanje
 	Search comments	Išči po komentarjih
 	Search tools and commands…	Poišči orodja in ukaze…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Dodano besedilo
+	Link URL	URL povezave
+	Search tools and commands	Poišči orodja in ukaze
+	Text editing line	Vrstica za urejanje besedila
+	Text to place	Besedilo za postavitev
+	Tooltip	Namig
+	Words or phrases to redact	Besede ali fraze za počrnitev
 	Searchable Image (Exact)	Iskalna slika (natančna)
 	Searching… {s} of {p} pages	Iskanje… {s} od {p} strani
 	Searching… {s}/{p}	Iskanje… {s}/{p}
@@ -2545,3 +2554,11 @@ animation effects	Off	Izklopljeni
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
 @plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovori|{n} odgovorov
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Orodja za strani
+	Insert pages from a file after the selection…	Vstavi strani iz datoteke za izborom…
+	Rotate the selected pages counterclockwise	Zavrti izbrane strani v nasprotni smeri urnega kazalca
+	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
+	Extract the selected pages…	Izvleci izbrane strani…
+	Delete the selected pages	Izbriši izbrane strani

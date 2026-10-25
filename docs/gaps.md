@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (gap 6: #2662 redaction audit counts a cover over one word of a long line; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -37,7 +37,7 @@ update the numbers.
 |---|---|---|---|---|
 | 2 | Rendering is borrowed and its fidelity unmeasured | feature, spec | 110–190 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 3 | Editing existing text is fragile on real files | feature | 100–180 | [target-app-parity.md](target-app-parity.md) |
-| 5 | Chinese UI shows missing-glyph boxes in releases | localization | 6–12 | [localization-parity.md](localization-parity.md) |
+| 5 | Chinese UI lacks a web glyph face | localization | 6–12 | [localization-parity.md](localization-parity.md) |
 | 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
 | 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
@@ -46,7 +46,7 @@ update the numbers.
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
 | 13 | Performance budgets and lazy loading of very large files | performance | 25–45 | this file |
-| 14 | Arabic not mirrored; no Hindi, Indonesian, Korean | localization | 25–45 | [localization-parity.md](localization-parity.md) |
+| 14 | Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean | localization | 25–45 | [localization-parity.md](localization-parity.md) |
 | 15 | Forms: JavaScript object model, actions, submit, XFA depth | feature | 40–75 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 16 | UI precision gaps (multi-select move, rulers, accelerators, windows) | UI/UX | 30–60 | [ui-parity.md](ui-parity.md) |
 | 17 | Certificate security and other protect gaps | feature, spec | 15–30 | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -117,18 +117,19 @@ update the numbers.
   how a document looks.
 - **Estimate:** 100–180 h (the longest feature pole, M7). **Doc:** [target-app-parity.md](target-app-parity.md).
 
-### 5. Chinese UI shows missing-glyph boxes in releases
+### 5. Chinese UI lacks a web glyph face
 
-- **Missing:** a Simplified Chinese (`Hans`) UI face in release builds and a working fallback.
+- **Missing:** a Simplified Chinese (`Hans`) UI face in the web build and a working fallback. Native release builds embed LXGW WenKai Lite from the pinned craft-fonts native Simplified Chinese manifest.
 - **Evidence:** [#826](https://github.com/storytold/pdfcraft/issues/826),
   [#688](https://github.com/storytold/pdfcraft/issues/688),
   [#728](https://github.com/storytold/pdfcraft/issues/728),
   [#758](https://github.com/storytold/pdfcraft/issues/758),
-  [#689](https://github.com/storytold/pdfcraft/issues/689) (Flatpak). craft-fonts has Noto Sans
-  CJK SC, but at 16.4 MB it is too large to embed whole; the interface needs a cut of it
-  (storytold/craft-libs#213).
-- **Impact:** the second-largest language group sees a broken interface although the catalog is 97%
-  translated.
+  [#689](https://github.com/storytold/pdfcraft/issues/689) (Flatpak) predate the native face; the
+  web build still embeds only BIZ UDPGothic Regular plus the small Arabic, Hebrew, Thai and Devanagari faces.
+  craft-fonts has Noto Sans CJK SC, but at 16.4 MB it is too large to embed whole; a web face needs
+  a cut of it (storytold/craft-libs#213).
+- **Impact:** the second-largest language group sees a broken interface in the web build although
+  the catalog is 97% translated.
 - **Estimate:** 6–12 h (cut CJK faces through craft-fonts-build plus the fallback chain). **Doc:**
   [localization-parity.md](localization-parity.md).
 
@@ -305,14 +306,18 @@ update the numbers.
   to edit.
 - **Estimate:** 25–45 h. **Doc:** this file.
 
-### 14. Arabic not mirrored; no Hindi, Indonesian, Korean
+### 14. Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean
 
-- **Missing:** a right-to-left layout (panels, menus, alignment), bidirectional text in the text
-  layout itself (wrapping, typed text); catalogs for Hindi, Indonesian and Korean (Acrobat ships
-  Korean; it ships Arabic in its Middle East edition; it ships none of Hindi or Indonesian).
+- **Missing:** end-to-end qualification of right-to-left interface workflows on native platforms
+  and in the browser (typed RTL text, IME composition, clipboard/selection and complex multi-line
+  bidirectional text); catalogs for Hindi, Indonesian and Korean (Acrobat ships Korean; it ships
+  Arabic in its Middle East edition; it ships none of Hindi or Indonesian). The logical catalog,
+  explicit right-to-left label direction and mirrored stock chrome are implemented and
+  unit-tested; complex RTL workflows are not yet accepted.
   Vietnamese ships as a catalog (`vi`, 100% of the current localizable union) but stays `partial`
   like other non-English languages (no translated help; engine/OS details stay English).
-- **Evidence:** [localization.md](localization.md) §Arabic; `misc.rtl-ui` planned.
+- **Evidence:** [localization.md](localization.md) §Arabic; `misc.rtl-ui` planned (end-to-end
+  qualification pending).
 - **Estimate:** 25–45 h (Arabic RTL 20–35, three catalogs 8–12 plus review). **Doc:**
   [localization-parity.md](localization-parity.md).
 
@@ -398,6 +403,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-19 | minor | Gap 2: a Type 0 font whose `/ToUnicode` is the name `/Identity-H` or `/Identity-V` (WSCAD) reads its codes as Unicode, so such pages have text to select, find and edit (hayro-interpret patch 44, `view.render-cid-fonts`). Estimates unchanged. |
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |

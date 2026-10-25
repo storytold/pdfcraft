@@ -151,6 +151,13 @@ pub struct PrepareView {
 }
 
 impl PrepareView {
+    /// Cancel a preparation marquee without injecting the terminal pointer release that Escape does.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        cancel_marquee(self);
+        // Unlike Escape, control cancellation never injects a terminal pointer release.
+        self.ignore_release = false;
+    }
+
     /// Unique field names: selecting several widgets of one radio group still edits one field.
     pub fn names(&self) -> Vec<String> {
         let mut names = Vec::new();
@@ -1371,6 +1378,7 @@ const SEPARATORS: [&str; 5] = ["1,234.56", "1234.56", "1.234,56", "1234,56", "1'
 const NEGATIVES: [&str; 4] = ["-1,234.01", "1,234.01 (red)", "(1,234.01)", "(1,234.01) (red)"];
 const SPECIALS: [&str; 5] = ["Zip Code", "Zip Code + 4", "Phone Number", "Social Security Number", "Arbitrary Mask"];
 
+/// Draw the field-format editor for the selected category and its options.
 fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     let cat = category(&d.format);
     let mut picked = cat;
@@ -1483,8 +1491,8 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
                         ui.selectable_value(p, pr.to_string(), pr);
                     }
                 });
-                ui.label(tl!("Custom:"));
-                ui.add(crate::widgets::line(p).desired_width(120.0));
+                let custom = ui.label(tl!("Custom:"));
+                ui.add(crate::widgets::line(p).desired_width(120.0)).labelled_by(custom.id);
             });
         }
         Format::Special(n) => {
@@ -1508,8 +1516,8 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Mask:"));
-                ui.add(crate::widgets::line(m).desired_width(160.0));
+                let mask = ui.label(tl!("Mask:"));
+                ui.add(crate::widgets::line(m).desired_width(160.0)).labelled_by(mask.id);
             });
             ui.label(egui::RichText::new(tl!("9 digit, A letter, O letter or digit, X any character")).small().color(t.text_faint));
             if idx < 4 {

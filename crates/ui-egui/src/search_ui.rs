@@ -11,6 +11,7 @@ use crate::widgets;
 /// Glyphs of context shown on each side of a match.
 const CONTEXT: usize = 36;
 
+/// Draw the Search panel with its query, options, progress and clickable result excerpts.
 pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize) {
     crate::widgets::begin_dialog(ui);
     let searched = view.texts.len() + view.text_failed.len();
@@ -18,7 +19,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     find.in_panel = true;
     let l = ui.label(egui::RichText::new(tl!("What word or phrase would you like to search for?")).color(t.text_muted));
     let r = ui
-        .add(crate::widgets::line(&mut find.query).id(egui::Id::new("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY))
+        .add(crate::widgets::line(&mut find.query).id(egui::Id::unique("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY))
+        .accessible_name(tl!("Search"))
         .labelled_by(l.id);
     if find.focus {
         r.request_focus();

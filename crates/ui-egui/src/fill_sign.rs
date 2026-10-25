@@ -555,7 +555,7 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
         ui.horizontal(|ui| {
             let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
             let use_label = label("Use {what}");
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, use_label.clone()));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
             painter.rect_stroke(
@@ -718,7 +718,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     // Over the page, so only where the document shows: a box scrolled under the mode bar or a
     // side panel must leave them their pointer (#2755). It stays where it was placed, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::new(("fill-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("fill-text", view.id.0)))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
@@ -732,15 +732,17 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             // The area's max rect is last frame's size, which caps the edit's width; widen it so the
             // box grows as text is typed.
             ui.set_min_width(width);
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut t.text)
-                    .font(egui::FontId::proportional((t.size as f32 * zoom).max(8.0)))
-                    .desired_width(width)
-                    .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
-                    .text_color(Color32::BLACK)
-                    .hint_text(tl!("Type text"))
-                    .id_salt("fill-text-edit"),
-            );
+            let r = ui
+                .add(
+                    egui::TextEdit::singleline(&mut t.text)
+                        .font(egui::FontId::proportional((t.size as f32 * zoom).max(8.0)))
+                        .desired_width(width)
+                        .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
+                        .text_color(Color32::BLACK)
+                        .hint_text(tl!("Type text"))
+                        .id_salt("fill-text-edit"),
+                )
+                .accessible_name(tl!("Text to place"));
             if t.focus {
                 r.request_focus();
                 t.focus = false;
@@ -911,10 +913,10 @@ fn scan_tab(
     }
     let Some(scan) = d.scan.as_mut() else {
         painter.text(area.center(), egui::Align2::CENTER_CENTER, tl!("No photo chosen"), egui::FontId::proportional(13.0), t.text_muted);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tl!("Photo")));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Photo")));
         return browse;
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tl!("Photo")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Photo")));
     // The photo, fitted into the area; `to_screen`/`to_photo` map between its pixels and points.
     let [pw, ph] = scan.photo.size();
     let (pw, ph) = (pw.max(1) as f32, ph.max(1) as f32);

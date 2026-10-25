@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use egui::epaint::text::{FontTweak, HintingTarget, SmoothHinting};
+use egui::epaint::text::{FallbackAlign, FontTweak, HintingTarget, SmoothHinting};
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, Response, Stroke, Vec2, Visuals};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -122,8 +122,9 @@ impl Tokens {
         }
     }
 
+    /// Return the cached theme tokens, falling back to the light palette before the first apply.
     pub fn get(ctx: &egui::Context) -> Self {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
     pub fn dark(&self) -> bool {
@@ -230,14 +231,34 @@ pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
 pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 
+/// Which installed face an interface language needs, given whether the build embeds a `Hans`
+/// face.
+///
+/// A bundled `Hans` face serves Simplified Chinese, so the installed face stays last there. It
+/// cannot serve Traditional Chinese: a Traditional interface keeps an installed `Hant` face
+/// before the Japanese faces even when a Simplified-only face is embedded, or Traditional-only
+/// characters would fall through to a Japanese face first.
+#[cfg(not(target_arch = "wasm32"))]
+fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate::system_fonts::Need {
+    use crate::system_fonts::Need;
+    match cjk {
+        CjkPreference::SimplifiedChinese if has_embedded_hans => Need::Other,
+        CjkPreference::SimplifiedChinese => Need::Hans,
+        CjkPreference::TraditionalChinese => Need::Hant,
+        CjkPreference::Default => Need::Other,
+    }
+}
+
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
 ///
-/// - In a Chinese interface built without a `Hans` craft-fonts face (every release so far,
-///   #826), it is a Chinese system face (Microsoft YaHei, PingFang, …), placed before the
-///   Japanese craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …),
-///   and one line drawn from two faces with different vertical metrics would not sit on one
-///   baseline.
+/// - In a Simplified Chinese interface built without an embedded `Hans` face (#826), it is a
+///   Simplified Chinese system face (Microsoft YaHei, PingFang SC, …), placed before the Japanese
+///   craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …), and one
+///   line drawn from two faces with different vertical metrics would not sit on one baseline.
+/// - A Traditional Chinese interface always uses an installed `Hant` face before the Japanese
+///   faces, even when a Simplified-only `Hans` face is embedded: that face cannot supply
+///   Traditional-only characters (說, 體, …).
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
@@ -268,12 +289,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                 stack.push(name.to_owned());
             }
         }
-        let need = match cjk {
-            _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
-            CjkPreference::SimplifiedChinese => Need::Hans,
-            CjkPreference::TraditionalChinese => Need::Hant,
-            CjkPreference::Default => Need::Other,
-        };
+        let need = installed_fallback_need(cjk, !pdfcraft_fonts::ui_chinese_fonts().is_empty());
         if let Some(data) = fallback(need) {
             fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
             let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
@@ -323,37 +339,14 @@ fn primary_font_tweak(platform: FontPolicyPlatform, name: &str) -> FontTweak {
     tweak
 }
 
-/// A face's vertical metrics in em, as egui reads them: skrifa's ascent, descent (negative) and
-/// line gap at the default location. `None` when the face doesn't parse.
-fn vertical_metrics(bytes: &[u8], index: u32) -> Option<[f32; 3]> {
-    use skrifa::MetadataProvider as _;
-    let font = skrifa::FontRef::from_index(bytes, index).ok()?;
-    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
-    let em = f32::from(m.units_per_em);
-    let metrics = [m.ascent / em, m.descent / em, m.leading / em];
-    (em > 0.0 && metrics.iter().all(|v| v.is_finite())).then_some(metrics)
-}
-
-/// How far below the primary face's baseline egui draws a fallback face's, in em of the font size
-/// (negative: above). egui centres the fallback's line box (ascent − descent + gap) on the
-/// primary's rather than lining up their baselines, so the baseline moves by half the difference
-/// of ascent + descent, less half the difference of the line gaps (epaint `text_layout`).
-fn baseline_drop(primary: [f32; 3], fallback: [f32; 3]) -> f32 {
-    let [pa, pd, pg] = primary;
-    let [a, d, g] = fallback;
-    ((a + d) - (pa + pd) + pg - g) / 2.0
-}
-
-/// `data` with its glyphs moved onto Inter's baseline (#1676). Without this, Chinese next to Latin
-/// in one label sits higher or lower than the Latin by a few percent of the font size, depending on
-/// the installed Chinese face (PingFang, Microsoft JhengHei, SimSun…). Inter is the first face of
-/// every proportional family; the monospace family's JetBrains Mono differs from it by 0.004 em,
-/// well under a pixel. A face that doesn't parse is left as it is (egui will skip it anyway).
+/// `data` with its glyphs placed on the row's baseline (#1676). epaint 0.37 otherwise centres a
+/// fallback face's line box on the primary's, so Chinese next to Latin in one label sits higher or
+/// lower than the Latin by a few percent of the font size, depending on the installed or embedded
+/// face (PingFang, Microsoft JhengHei, LXGW WenKai Lite…). `FallbackAlign::Baseline` makes epaint
+/// position every face's glyphs from the primary face's ascent, which is exactly the existing
+/// baseline-alignment intent without metric-derived offsets that go stale across egui versions.
 pub(crate) fn on_interface_baseline(mut data: FontData) -> FontData {
-    let primary = vertical_metrics(pdfcraft_fonts::INTER_REGULAR, 0);
-    if let (Some(primary), Some(fallback)) = (primary, vertical_metrics(&data.font, data.index)) {
-        data.tweak.y_offset_factor = -baseline_drop(primary, fallback);
-    }
+    data.tweak.fallback_align = FallbackAlign::Baseline;
     data
 }
 
@@ -429,13 +422,15 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
+/// Install the palette, widget styling, text sizes and right-to-left flag for the chosen theme.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // Keep the native window inherited. A concrete egui theme pins macOS's
     // NSWindow appearance and prevents winit from delivering ThemeChanged.
     // Our saved choice owns the palette; both egui branches receive it below.
     ctx.set_theme(egui::ThemePreference::System);
+    let rtl = crate::i18n::current().rtl();
     let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.panel;
     v.window_fill = t.card;
@@ -477,6 +472,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     }
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
+        // RTL languages mirror stock chrome (menus, combo boxes, scroll bars, headers).
+        // Labels still get their paragraph direction explicitly from `bidi::ui_direction`.
+        s.right_to_left = rtl;
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);
         s.spacing.button_padding = egui::vec2(10.0, 5.0);
         s.spacing.menu_margin = egui::Margin::same(6);
@@ -493,6 +491,30 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let style = ctx.global_style();
     ctx.set_style_of(egui::Theme::Light, style.clone());
     ctx.set_style_of(egui::Theme::Dark, style);
+    ctx.data_mut(|d| d.insert_temp(direction_key(), rtl));
+}
+
+/// Return the stable egui id holding the current right-to-left style flag.
+fn direction_key() -> egui::Id {
+    egui::Id::unique("pdfcraft-style-right-to-left")
+}
+
+/// Keep stock egui chrome's direction in step with the drawing language, after a language
+/// change as well as at startup. Setting a flag on both concrete themes is cheap; this avoids
+/// rebuilding the whole visuals and font state every frame.
+pub fn sync_direction(ctx: &egui::Context) {
+    let rtl = crate::i18n::current().rtl();
+    let changed = ctx.data_mut(|d| {
+        if d.get_temp::<bool>(direction_key()) == Some(rtl) {
+            false
+        } else {
+            d.insert_temp(direction_key(), rtl);
+            true
+        }
+    });
+    if changed {
+        ctx.all_styles_mut(|s| s.right_to_left = rtl);
+    }
 }
 
 /// WCAG 2 contrast ratio between two opaque colours.
@@ -519,6 +541,21 @@ pub fn readable(color: Color32, background: Color32, text: Color32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Arabic and Kurdish switch stock chrome to mirror from the right; English switches it
+    /// back. This is the `Style::right_to_left` half of the explicit RTL policy.
+    #[test]
+    fn arabic_chrome_is_right_to_left_after_the_language_changes() {
+        let previous = crate::i18n::current();
+        let ctx = egui::Context::default();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("ar").expect("registered language"));
+        apply(&ctx, ThemeKind::Light);
+        assert!(ctx.global_style().right_to_left);
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        sync_direction(&ctx);
+        assert!(!ctx.global_style().right_to_left);
+        crate::i18n::set_current(previous);
+    }
 
     /// #3193: a bookmark's own colour is kept where it reads on the panel, and moved towards the
     /// theme's text colour where it doesn't (dark blue on the dark panel), never past it.
@@ -641,18 +678,16 @@ mod tests {
         )
     }
 
-    /// The baseline of each glyph of `text` laid out by egui at `size` points, in points from the
-    /// top of the row: its position plus its face's `y_offset_factor`, as epaint draws it.
+    /// The y position of each glyph of `text` laid out by egui at `size` points, in points from
+    /// the top of the row.
     fn baselines(fallback: FontData, size: f32, text: &str) -> Vec<f32> {
-        let factor = fallback.tweak.y_offset_factor;
         let mut defs = FontDefinitions::empty();
         defs.font_data.insert("Inter".into(), Arc::new(FontData::from_static(pdfcraft_fonts::INTER_REGULAR)));
         defs.font_data.insert("fallback".into(), Arc::new(fallback));
         defs.families.insert(FontFamily::Proportional, vec!["Inter".into(), "fallback".into()]);
         let mut fonts = Fonts::new(TextOptions::default(), defs);
         let g = galley(&mut fonts, FontFamily::Proportional, size, 1.0, text);
-        let inter_has = |c: char| c.is_ascii();
-        g.rows[0].glyphs.iter().map(|gl| gl.pos.y + if inter_has(gl.chr) { 0.0 } else { size * factor }).collect()
+        g.rows[0].glyphs.iter().map(|gl| gl.pos.y).collect()
     }
 
     #[test]
@@ -664,14 +699,23 @@ mod tests {
         // As egui lays it out by itself, Ǆ sits ~4 pt off H's baseline: the bug (#1676).
         let raw = baselines(FontData::from_static(dancing), size, "HǄ");
         assert!((raw[1] - raw[0]).abs() > 3.0, "the test fonts must differ: {raw:?}");
-        let drop = baseline_drop(vertical_metrics(pdfcraft_fonts::INTER_REGULAR, 0).unwrap(), vertical_metrics(dancing, 0).unwrap());
-        assert!((raw[1] - raw[0] - size * drop).abs() <= 1.0, "baseline_drop predicts egui: {raw:?} vs {drop}");
-        // On the interface baseline, to the pixel.
+        // `FallbackAlign::Baseline` puts every face on the same baseline, to the pixel.
         let aligned = baselines(on_interface_baseline(FontData::from_static(dancing)), size, "HǄ");
         assert!((aligned[1] - aligned[0]).abs() <= 1.0, "{aligned:?}");
-        // A face that doesn't parse is left alone rather than guessed at.
-        assert_eq!(on_interface_baseline(FontData::from_static(b"not a font")).tweak, FontTweak::default());
-        assert_eq!(vertical_metrics(b"", 0), None);
+        assert_eq!(on_interface_baseline(FontData::from_static(dancing)).tweak.fallback_align, FallbackAlign::Baseline);
+    }
+
+    /// The policy only exists on native platforms (`installed_font_definitions` has no installed
+    /// faces on wasm), so the test must not use it in a wasm test build.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn traditional_chinese_keeps_an_installed_face_when_hans_is_embedded() {
+        use crate::system_fonts::Need;
+        assert_eq!(installed_fallback_need(CjkPreference::SimplifiedChinese, true), Need::Other);
+        assert_eq!(installed_fallback_need(CjkPreference::SimplifiedChinese, false), Need::Hans);
+        assert_eq!(installed_fallback_need(CjkPreference::TraditionalChinese, true), Need::Hant);
+        assert_eq!(installed_fallback_need(CjkPreference::TraditionalChinese, false), Need::Hant);
+        assert_eq!(installed_fallback_need(CjkPreference::Default, true), Need::Other);
     }
 
     #[test]

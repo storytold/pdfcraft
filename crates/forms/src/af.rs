@@ -844,7 +844,10 @@ fn group(int: &str, sep: char) -> String {
 fn number_text(v: f64, decimals: u8, sep: u8) -> String {
     // Round half away from zero, as JavaScript's toFixed does for these values.
     let p = 10f64.powi(i32::from(decimals));
-    let s = format!("{:.*}", decimals as usize, (v.abs() * p).round() / p);
+    let scaled = v.abs() * p;
+    // Past 2^53 every value is already whole, and scaling could overflow to infinity.
+    let r = if scaled.is_finite() { scaled.round() / p } else { v.abs() };
+    let s = format!("{:.*}", decimals as usize, r);
     let (int, frac) = s.split_once('.').map_or((s.as_str(), ""), |(a, b)| (a, b));
     let (g, d) = match sep {
         1 => (None, '.'),
@@ -2059,5 +2062,13 @@ mod undelimited_tests {
         assert_eq!(parse_date("1430", "HHMM").map(|d| (d.hh, d.mm)), Some((14, 30)));
         assert_eq!(parse_date("99999999999999999999", "yyyymmdd"), None);
         assert_eq!(parse_date("2026 99999999999", "yyyy"), None, "an unreadable number is left over, not ignored");
+    }
+
+    #[test]
+    fn huge_finite_numbers_do_not_print_inf() {
+        let n = format_value(&Format::Number { decimals: 2, sep: 1, neg: 0, currency: String::new(), prepend: true }, "1e307");
+        assert!(n.len() > 300 && n.ends_with(".00") && !n.contains("inf"), "got {n}");
+        let p = format_value(&Format::Percent { decimals: 2, sep: 1 }, "1e306");
+        assert!(!p.contains("inf"), "got {p}");
     }
 }

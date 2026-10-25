@@ -77,9 +77,6 @@ impl PdfCraftApp {
                     };
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
-                    if self.right.is_some() {
-                        self.pending_panel_reveals.push(crate::docking::Panel::Inspector);
-                    }
                 }
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
@@ -289,24 +286,66 @@ pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
 /// leaves 173 pt): a taller floor would push OK off the screen again.
 pub(crate) const PREFERENCES_MIN_SCROLL: f32 = 60.0;
 
+/// Whether the interface can draw a language picker's native name. On the web the browser's glyph
+/// rasterizer draws scripts no embedded face has, so the native names stay; on native, ask the
+/// fonts this build installed (including an installed fallback face, unless system fonts are off).
+fn picker_text_is_drawable(ui: &egui::Ui, text: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (ui, text);
+        true
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.0), text))
+    }
+}
+
+/// The date picker's displayed name. Its languages are the interface languages, so it uses the
+/// same drawable-name fallback: a native name whose script this build has no face for would
+/// otherwise abort under egui 0.37's `MissingGlyphPolicy::Panic` (for example Hindi without a
+/// Devanagari face and installed system fonts turned off).
+fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable: impl FnOnce(&str) -> bool) -> &'static str {
+    match crate::i18n::Lang::from_code(l.code) {
+        Some(language) => language.picker_name(drawable),
+        None => l.name,
+    }
+}
+
 /// Preferences: interface language and size, appearance, identity and JavaScript. Drawn in a scroll
 /// area; [`preferences_buttons`] goes below it, outside the scroll, so OK is always in reach.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
-        ui.label(tl!("Interface language"));
-        let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
+        let label = ui.label(tl!("Interface language"));
+        // A native name is only drawn when these fonts can draw it; otherwise the English name
+        // keeps the list readable instead of aborting on a missing glyph (for example Hindi
+        // without a Devanagari face, and installed system fonts turned off).
+        let (selected, picker) = {
+            let drawable = |text: &str| picker_text_is_drawable(ui, text);
+            let selected = crate::i18n::Lang::from_code(&app.language)
+                .map_or_else(|| tl!("Auto").to_owned(), |language| language.picker_name(drawable).to_owned());
+            let picker = crate::i18n::Lang::for_picker_by(|language| language.picker_name(drawable))
+                .into_iter()
+                .map(|language| (language, language.picker_name(drawable)))
+                .collect::<Vec<_>>();
+            (selected, picker)
+        };
         let before = app.language.clone();
-        egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
-            if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
-                ui.close();
-            }
-            for language in crate::i18n::Lang::for_picker() {
-                if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
+        egui::ComboBox::from_id_salt("interface-language")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                     ui.close();
                 }
-            }
-        });
+                for (language, name) in &picker {
+                    if ui.selectable_value(&mut app.language, language.code().to_string(), *name).clicked() {
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
         // Relabel the rest of this dialog in the new language right away, not next frame.
         if app.language != before {
             crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
@@ -314,24 +353,28 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.horizontal(|ui| {
         use crate::ui_scale;
-        ui.label(tl!("Interface size"));
+        let label = ui.label(tl!("Interface size"));
         // Auto shows the size it draws at: the display's scale times the system's text scale.
         let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
         let auto_percent = ui_scale::percent(ui_scale::drawn(None, app.system_text_scale, native));
         let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &auto_percent.to_string())]);
         let selected = app.ui_scale.map_or_else(|| auto.clone(), |f| format!("{}%", ui_scale::percent(f)));
-        egui::ComboBox::from_id_salt("interface-size").selected_text(selected).show_ui(ui, |ui| {
-            if ui.selectable_value(&mut app.ui_scale, None, auto).clicked() {
-                ui.close();
-            }
-            for p in ui_scale::PRESETS {
-                let factor = f32::from(p) / 100.0;
-                if ui.selectable_label(app.ui_scale.is_some_and(|f| ui_scale::percent(f) == u32::from(p)), format!("{p}%")).clicked() {
-                    app.ui_scale = Some(factor);
+        egui::ComboBox::from_id_salt("interface-size")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                if ui.selectable_value(&mut app.ui_scale, None, auto).clicked() {
                     ui.close();
                 }
-            }
-        });
+                for p in ui_scale::PRESETS {
+                    let factor = f32::from(p) / 100.0;
+                    if ui.selectable_label(app.ui_scale.is_some_and(|f| ui_scale::percent(f) == u32::from(p)), format!("{p}%")).clicked() {
+                        app.ui_scale = Some(factor);
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
     });
     ui.label(
         egui::RichText::new(tl!("Auto follows the system's text size. Pages always render at the display's full resolution."))
@@ -340,16 +383,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     );
     ui.horizontal(|ui| {
         ui.label(tl!("Tools panel side"));
-        let right = app.docking.tools_on_right();
-        if ui.selectable_label(!right, tl!("Left")).clicked()
-            && let Err(error) = app.docking.set_tools_on_right(false)
-        {
-            app.notify(error);
+        let right = app.side_panels.tools_on_right();
+        if ui.selectable_label(!right, tl!("Left")).clicked() {
+            app.side_panels.tools_side = crate::side_panels::ToolsSide::Left;
         }
-        if ui.selectable_label(right, tl!("Right")).clicked()
-            && let Err(error) = app.docking.set_tools_on_right(true)
-        {
-            app.notify(error);
+        if ui.selectable_label(right, tl!("Right")).clicked() {
+            app.side_panels.tools_side = crate::side_panels::ToolsSide::Right;
         }
     });
     ui.add_space(8.0);
@@ -444,38 +483,42 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     // is app-wide: every open document follows it, and documents open with it.
     ui.label(egui::RichText::new(tl!("Reading colours")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
-        ui.label(tl!("Replace document colours"));
+        let label = ui.label(tl!("Replace document colours"));
         let mode = app.reading_colors.mode_name();
-        egui::ComboBox::from_id_salt("reading-colors").selected_text(tl!(reading_mode_label(mode))).show_ui(ui, |ui| {
-            for (m, label) in [
-                ("off", "Off"),
-                ("black-on-white", "Black on white"),
-                ("white-on-black", "White on black"),
-                ("yellow-on-black", "Yellow on black"),
-                ("green-on-black", "Green on black"),
-                ("custom", "Custom"),
-            ] {
-                if ui.selectable_label(mode == m, tl!(label)).clicked() {
-                    match m {
-                        "off" => app.set_reading_colors(pdfcraft_render::ReadingColors::default()),
-                        "custom" => {
-                            // Custom starts from the colours already chosen, or black on white.
-                            let colors = app.reading_colors.params.map_or(pdfcraft_render::ReadingColors::BLACK_ON_WHITE, |params| {
-                                pdfcraft_render::ReadingColors { params: Some(params) }
-                            });
-                            app.set_reading_colors(colors);
-                        }
-                        // `parse` knows these names; a preset comes with its own flags.
-                        preset => {
-                            if let Ok(colors) = pdfcraft_render::ReadingColors::parse(preset, None, None, None, None) {
+        egui::ComboBox::from_id_salt("reading-colors")
+            .selected_text(tl!(reading_mode_label(mode)))
+            .show_ui(ui, |ui| {
+                for (m, label) in [
+                    ("off", "Off"),
+                    ("black-on-white", "Black on white"),
+                    ("white-on-black", "White on black"),
+                    ("yellow-on-black", "Yellow on black"),
+                    ("green-on-black", "Green on black"),
+                    ("custom", "Custom"),
+                ] {
+                    if ui.selectable_label(mode == m, tl!(label)).clicked() {
+                        match m {
+                            "off" => app.set_reading_colors(pdfcraft_render::ReadingColors::default()),
+                            "custom" => {
+                                // Custom starts from the colours already chosen, or black on white.
+                                let colors = app.reading_colors.params.map_or(pdfcraft_render::ReadingColors::BLACK_ON_WHITE, |params| {
+                                    pdfcraft_render::ReadingColors { params: Some(params) }
+                                });
                                 app.set_reading_colors(colors);
                             }
+                            // `parse` knows these names; a preset comes with its own flags.
+                            preset => {
+                                if let Ok(colors) = pdfcraft_render::ReadingColors::parse(preset, None, None, None, None) {
+                                    app.set_reading_colors(colors);
+                                }
+                            }
                         }
+                        ui.close();
                     }
-                    ui.close();
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
     });
     if app.reading_colors.params.is_some() {
         let mut changed = false;
@@ -595,10 +638,20 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     }
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Language"));
-        let interface = crate::i18n::current().name();
-        let follow = crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]);
-        let current = app.session.date_language().map(str::to_string);
-        let selected = DATE_LANGUAGES.iter().find(|l| current.as_deref() == Some(l.code)).map_or(follow.clone(), |l| l.name.to_string());
+        // Build every label before the combo box mutably borrows `ui`, with the same drawable
+        // fallback the interface language picker uses.
+        let (follow, selected, current, names) = {
+            let drawable = |text: &str| picker_text_is_drawable(ui, text);
+            let interface = crate::i18n::current().picker_name(drawable);
+            let follow = crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]);
+            let current = app.session.date_language().map(str::to_string);
+            let selected = DATE_LANGUAGES
+                .iter()
+                .find(|l| current.as_deref() == Some(l.code))
+                .map_or_else(|| follow.clone(), |l| date_language_picker_name(l, drawable).to_string());
+            let names = DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, drawable))).collect::<Vec<_>>();
+            (follow, selected, current, names)
+        };
         egui::ComboBox::from_id_salt("date-language")
             .selected_text(selected)
             .width(240.0)
@@ -606,9 +659,8 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
                 if ui.selectable_label(current.is_none(), follow).clicked() && app.session.set_date_language(None).is_ok() {
                     ui.close();
                 }
-                for l in &DATE_LANGUAGES {
-                    if ui.selectable_label(current.as_deref() == Some(l.code), l.name).clicked()
-                        && app.session.set_date_language(Some(l.code)).is_ok()
+                for (l, name) in &names {
+                    if ui.selectable_label(current.as_deref() == Some(l.code), *name).clicked() && app.session.set_date_language(Some(l.code)).is_ok()
                     {
                         ui.close();
                     }
@@ -625,4 +677,22 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         .small()
         .color(t.text_muted),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
+        let date_language = |code: &str| pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == code).expect("date language");
+        let hindi = date_language("hi");
+        assert_eq!(date_language_picker_name(hindi, |_| true), hindi.name, "the native name is kept when it can be drawn");
+        assert_eq!(date_language_picker_name(hindi, |_| false), "Hindi", "no Devanagari face: show the English name");
+        let chinese = date_language("zh-hans");
+        assert_eq!(date_language_picker_name(chinese, |_| false), "Simplified Chinese");
+        for language in &pdfcraft_engine::dates::DATE_LANGUAGES {
+            assert!(!date_language_picker_name(language, |_| false).is_empty(), "{}", language.code);
+        }
+    }
 }

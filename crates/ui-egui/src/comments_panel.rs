@@ -124,7 +124,9 @@ pub(crate) fn show(
     let mut edit = None;
     // Search (the header's magnifier toggles it).
     if let Some(q) = view.comments.search.as_mut() {
-        let r = ui.add(crate::widgets::line(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
+        let r = ui
+            .add(crate::widgets::line(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"))
+            .accessible_name(tl!("Search comments"));
         if view.comments.search_focus {
             r.request_focus();
             view.comments.search_focus = false;
@@ -133,9 +135,14 @@ pub(crate) fn show(
     }
     // "Add a comment": a sticky note on the current page, near its top-right corner.
     if allowed {
-        let r = ui.add(
-            crate::widgets::line(&mut view.comments.add_box).hint_text(tl!("Add a comment")).desired_width(f32::INFINITY).id_salt("comment-add-box"),
-        );
+        let r = ui
+            .add(
+                crate::widgets::line(&mut view.comments.add_box)
+                    .hint_text(tl!("Add a comment"))
+                    .desired_width(f32::INFINITY)
+                    .id_salt("comment-add-box"),
+            )
+            .accessible_name(tl!("Add a comment"));
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
             let page = view.current.min(info.pages.len().saturating_sub(1));
             if let Some(p) = info.pages.get(page) {
@@ -238,9 +245,7 @@ pub(crate) fn show(
             if g.is_some() && g != group {
                 ui.add_space(6.0);
                 let title = g.clone().unwrap_or_default();
-                // Catalog labels are already in display order; an author's name is put in it here.
-                let shown = if sort == SortBy::Author && a.author.is_some() { crate::bidi::visual_auto(&title) } else { tl!(&title).into() };
-                ui.label(egui::RichText::new(shown).font(theme::semibold(12.5)).color(t.text_muted));
+                ui.label(egui::RichText::new(tl!(&title)).font(theme::semibold(12.5)).color(t.text_muted));
                 group = g;
             }
         } else if a.page != page {
@@ -287,6 +292,8 @@ pub(crate) fn show(
     edit
 }
 
+/// Draw one comment thread card, including author, body or inline editor, replies, status and per-comment
+/// actions; returns an edit to apply.
 #[allow(clippy::too_many_arguments)]
 fn card(
     ui: &mut egui::Ui,
@@ -322,7 +329,8 @@ fn card(
             let mut above = egui::Rect::NOTHING;
             let head = ui.horizontal(|ui| {
                 above = avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
-                let author = a.author.as_deref().map_or_else(|| tl!("Unknown author").into(), crate::bidi::visual_auto);
+                // The catalogue and author names stay logical: egui lays out RTL text itself.
+                let author = a.author.as_deref().map_or_else(|| tl!("Unknown author"), |name| name);
                 ui.label(egui::RichText::new(author).font(theme::semibold(12.5)).color(t.text));
                 if let Some(m) = &a.modified {
                     ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
@@ -402,7 +410,7 @@ fn card(
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
-                            let author = r.author.as_deref().map_or_else(|| tl!("Reply").into(), crate::bidi::visual_auto);
+                            let author = r.author.as_deref().map_or_else(|| tl!("Reply"), |name| name);
                             ui.label(egui::RichText::new(author).font(theme::semibold(12.0)));
                             if let Some(m) = &r.modified {
                                 ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
@@ -461,7 +469,7 @@ fn card(
     // clickable everywhere.
     let hit = if selected { frame.inner } else { rect };
     let click = ui
-        .interact(hit, ui.id().with(("card", key)), Sense::click())
+        .interact(hit, ui.scope_id().with(("card", key)), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
     if click.clicked() {
@@ -472,7 +480,7 @@ fn card(
     if click.double_clicked() && allowed {
         view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
     }
-    let menu_id = ui.id().with(("card-menu", key));
+    let menu_id = ui.scope_id().with(("card-menu", key));
     if open_menu {
         egui::Popup::open_id(ui.ctx(), menu_id);
     }
@@ -636,8 +644,7 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
         ui.separator();
         ui.label(egui::RichText::new(tl!("Author")).small());
         for a in &authors {
-            let name = crate::bidi::visual_auto(a);
-            toggle(ui, &mut cv.hidden_authors, a, if a.is_empty() { tl!("Unknown author") } else { &name });
+            toggle(ui, &mut cv.hidden_authors, a, if a.is_empty() { tl!("Unknown author") } else { a.as_str() });
         }
         ui.separator();
         ui.label(egui::RichText::new(tl!("Status")).small());

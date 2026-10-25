@@ -13,9 +13,8 @@ const TILE: egui::Vec2 = vec2(148.0, 118.0);
 const MATCHES_SHOWN: usize = 2;
 
 /// Whether `query` (already trimmed and lower-cased) is in `label` or its translation.
-/// A right-to-left language's translations are in display order (their words run the other way)
-/// while the query is in typing order, so there several words match one by one, as in the
-/// command palette.
+/// Translations and queries stay in logical order. For right-to-left labels, also accept
+/// multiword queries in a different word order, as in the command palette.
 fn label_hit(label: &str, translated: &str, query: &str, rtl: bool) -> bool {
     let translated = translated.to_lowercase();
     label.to_lowercase().contains(query)
@@ -115,7 +114,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// short shows in full on hover.
 fn tile(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, items: &[&'static str]) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(TILE, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(g.label)));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(g.label)));
     let press = theme::Press::track(ui, &resp);
     crate::home::card_lift(ui, t, rect, press);
     ui.painter().rect(rect, CornerRadius::same(10), press.fill(t.card, t.hover, t.pressed), Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
@@ -186,11 +185,13 @@ mod tests {
 
     #[test]
     fn right_to_left_labels_match_a_query_typed_in_logical_order() {
-        let shown = crate::bidi::display_rtl("تنظيم الصفحات");
-        assert_ne!(shown, "تنظيم الصفحات", "the catalogue reverses the words for display");
-        assert!(label_hit("Organize pages", &shown, "تنظيم الصفحات", true));
-        assert!(label_hit("Organize pages", &shown, "الصفحات", true), "one word");
-        assert!(!label_hit("Organize pages", &shown, "تنظيم الملفات", true), "every word must be there");
-        assert!(!label_hit("Organize pages", &shown, "تنظيم الصفحات", false), "left-to-right labels stay exact");
+        let arabic = crate::i18n::Lang::from_code("ar").expect("Arabic is registered");
+        let translated = crate::i18n::tr(arabic, "Organize pages");
+        assert_eq!(translated, "تنظيم الصفحات", "the catalogue keeps logical text");
+        assert!(label_hit("Organize pages", translated, "تنظيم الصفحات", true));
+        assert!(label_hit("Organize pages", translated, "الصفحات", true), "one word");
+        assert!(label_hit("Organize pages", translated, "الصفحات تنظيم", true), "RTL word-order fallback");
+        assert!(!label_hit("Organize pages", translated, "تنظيم الملفات", true), "every word must be there");
+        assert!(!label_hit("Organize pages", translated, "الصفحات تنظيم", false), "left-to-right labels stay exact");
     }
 }

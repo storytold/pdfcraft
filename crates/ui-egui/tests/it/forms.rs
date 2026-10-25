@@ -64,7 +64,7 @@ fn hovering_a_field_shows_its_tooltip() {
     let mut h = harness();
     assert!(h.query_by_label("Your name").is_none(), "no tooltip before the hover");
     rest_on_field(&mut h, "name");
-    assert!(h.query_by_label("Your name").is_some(), "the name field's /TU shows on hover");
+    assert!(h.query_all_by_label("Your name").next().is_some(), "the name field's /TU shows on hover");
     rest_on_field(&mut h, "city");
     assert!(h.query_by_label("Your name").is_none(), "another field doesn't keep the tooltip");
     // Nor shows one of its own: none has been shown since the pointer left `name` (well past the
@@ -84,7 +84,7 @@ fn a_read_only_fields_tooltip_shows_on_hover() {
     let mut h = harness();
     set_city(&mut h, pdfcraft_engine::FieldProps { tooltip: Some("Where you live".into()), read_only: Some(true), ..Default::default() });
     rest_on_field(&mut h, "city");
-    assert!(h.query_by_label("Where you live").is_some());
+    assert!(h.query_all_by_label("Where you live").next().is_some());
 }
 
 /// A `/TU` of only spaces shows no tooltip (no empty box under the pointer).
@@ -404,7 +404,7 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "name").unwrap();
         let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
-        (rect, egui::Id::new(("form-field", s.views[0].id.0, "name", 0usize)))
+        (rect, egui::Id::unique(("form-field", s.views[0].id.0, "name", 0usize)))
     };
     // From inside the first word to past the end of the text.
     let (from, to) = (egui::pos2(rect.left() + 30.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));

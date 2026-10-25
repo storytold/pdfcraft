@@ -280,7 +280,7 @@ fn flyout(ui: &egui::Ui, t: &Tokens, resp: egui::Response) -> egui::Response {
 /// labels.
 fn labelled_icon(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(LABEL_ICON, 26.0), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), label));
     let tint = if ui.is_enabled() { t.icon } else { t.text_faint };
     icons::paint(ui, Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), icon, 17.0, tint);
     resp.on_hover_text(label)
@@ -317,7 +317,7 @@ fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width:
 /// The text colour as a square swatch that opens the palette.
 fn colour_button(ui: &mut egui::Ui, t: &Tokens, color: [f64; 3]) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Colour")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Colour")));
     let [r, g, b] = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
     let fill = rect.shrink(4.0);
     ui.painter().rect_filled(fill, CornerRadius::same(2), Color32::from_rgb(r, g, b));

@@ -1370,7 +1370,9 @@ fn edit_menu_names_the_step_to_undo() {
     });
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover(); // submenus open on hover; their labels carry the arrow
+    // The popup's Edit entry and the left panel's Edit tool carry the same visible label. The
+    // tool reports a toggle state; the menu entry does not.
+    h.get_all_by_label("Edit").find(|n| n.accesskit_node().toggled().is_none()).expect("the Edit menu entry").hover(); // submenus open on hover; their labels carry the arrow
     h.run_steps(3);
     h.get_by_label_contains("Undo Rotate page").click(); // the label includes the shortcut
     h.run_steps(3);
@@ -6346,6 +6348,7 @@ fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
         delta: egui::vec2(0.0, -300.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(4);
     let scrolled = h.state().views[0].page_screen_rect(0).unwrap();

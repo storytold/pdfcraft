@@ -144,7 +144,7 @@ mod tests {
             let (_, resp) = ui.allocate_exact_size(PAGES.size(), Sense::click_and_drag());
             seen = PagePointer::read(ui, &resp, modal);
             if area {
-                egui::Area::new(egui::Id::new("over")).fixed_pos(OVER.min).show(ui.ctx(), |ui| {
+                egui::Area::new(egui::Id::unique("over")).fixed_pos(OVER.min).show(ui.ctx(), |ui| {
                     ui.allocate_exact_size(OVER.size(), Sense::hover());
                 });
             }

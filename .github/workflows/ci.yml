@@ -32,6 +32,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Windows font notice regressions
+        shell: pwsh
+        run: ./packaging/windows/test-font-notices.ps1
       - name: Git dependencies come from storytold
         run: |
           set -euo pipefail
@@ -73,7 +76,7 @@ jobs:
       # the org's 5 macOS slots are kept for release builds, and release.yml builds macOS.
       os: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-24.04","windows-latest"]' || '["ubuntu-24.04"]' }}
       # Same craft-fonts commit as release.yml and freebsd.yml.
-      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       # egui/winit/rfd, and the independent oracles (crates/oracle).
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev

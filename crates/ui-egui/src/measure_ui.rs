@@ -353,6 +353,7 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().id_salt("measure-panel").show(ui, |ui| panel_body(app, ui, t));
 }
+/// Draw the measurement panel: tool selection, scale calibration, snapping and the current reading.
 fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     crate::widgets::begin_dialog(ui);
     let Some((index, id)) = app.active_ids() else {
@@ -406,8 +407,8 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         ui.label(tl!("Click the first point to begin."));
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Label"));
-        ui.add(crate::widgets::line(&mut state.label).desired_width(130.0).char_limit(128));
+        let label = ui.label(tl!("Label"));
+        ui.add(crate::widgets::line(&mut state.label).desired_width(130.0).char_limit(128)).labelled_by(label.id);
     });
     ui.separator();
     ui.add(widgets::checkbox(&mut state.snap_enabled, tl!("Snap to drawing")));
@@ -429,7 +430,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     ui.horizontal(|ui| {
         ui.label(tl!("Drawing scale")).on_hover_text(tl!("Applying a scale switches units to m / mm."));
         let typed = ui.add(crate::widgets::line(&mut state.ratio_text).hint_text("1:100").desired_width(56.0).char_limit(16));
-        typed.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Scale")));
+        typed.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Scale")));
         state.ratio_dirty |= typed.changed();
         if typed.lost_focus() && std::mem::take(&mut state.ratio_dirty) {
             match parse_ratio(&state.ratio_text) {
@@ -459,8 +460,8 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         ui.add(egui::DragValue::new(&mut state.real_distance).range(0.000001..=1e12));
     });
     ui.horizontal(|ui| {
-        ui.label(tl!("Unit"));
-        ui.add(crate::widgets::line(&mut state.unit).desired_width(64.0).char_limit(12));
+        let unit = ui.label(tl!("Unit"));
+        ui.add(crate::widgets::line(&mut state.unit).desired_width(64.0).char_limit(12)).labelled_by(unit.id);
         ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
     });
     // A hand edit of the fields leaves the 1:N field showing the old ratio: say the new one.
@@ -480,8 +481,8 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         }
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Viewport"));
-        ui.add(crate::widgets::line(&mut state.name).desired_width(130.0).char_limit(128));
+        let viewport = ui.label(tl!("Viewport"));
+        ui.add(crate::widgets::line(&mut state.name).desired_width(130.0).char_limit(128)).labelled_by(viewport.id);
     });
     let apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
     if let Some(error) = &state.error {

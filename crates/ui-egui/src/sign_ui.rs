@@ -678,6 +678,7 @@ fn error(ui: &mut egui::Ui, err: &Option<String>) {
     }
 }
 
+/// Draw the digital-ID chooser, including unusable certificates and removal confirmation.
 fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Sign with a Digital ID");
     ui.label(tl!("Choose the digital ID that you want to use for signing:"));
@@ -690,7 +691,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             let selected = d.selected == Some(i);
             let usable = e.unusable.is_none();
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, usable, selected, &e.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, usable, selected, &e.name));
             let fill = if selected {
                 t.accent_soft
             } else if resp.hovered() && usable {

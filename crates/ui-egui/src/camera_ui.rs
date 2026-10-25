@@ -141,7 +141,7 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, view: 
 /// way, choose its look (original, colour, greyscale, black and white) and clean-up level,
 /// Crop pages, Organize pages, or Done. The instructions are a notice (`ocr.enhance_camera`).
 pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Tokens, allowed: bool) {
-    egui::Area::new(egui::Id::new("camera-bar"))
+    egui::Area::new(egui::Id::unique("camera-bar"))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
@@ -183,7 +183,7 @@ pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Token
                             let icon = |ui: &mut egui::Ui, name: &str, tip: &str| {
                                 let r = ui.add_enabled(allowed, egui::Button::image(crate::icons::image(name, 18.0, t.text)).frame(false));
                                 // Named for screen readers (and tests), not only on hover.
-                                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, allowed, tip));
+                                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, allowed, tip));
                                 r.on_hover_text(tip).clicked()
                             };
                             if icon(ui, "rotate-ccw", tl!("Rotate counterclockwise")) {

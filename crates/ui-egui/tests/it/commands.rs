@@ -293,12 +293,13 @@ fn palette_arrow_keys_select_results_and_enter_runs_the_selection() {
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages[0].rotation, 270);
 }
 
+/// Check that choosing Delete pages from the Pages menu reduces the document page count.
 #[test]
 fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Pages ⏵").hover();
+    h.get_by_label("Pages").hover();
     h.run_steps(3);
     h.get_by_label_contains("Delete pages").click();
     h.run_steps(3);
@@ -306,6 +307,8 @@ fn the_pages_menu_comes_from_the_registry() {
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);
 }
 
+/// Check that Open Recent lists a recorded file and opens it in a new active tab without replacing the
+/// original.
 #[test]
 fn the_open_recent_menu_lists_files_and_opens_one() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-recent-{}", std::process::id()));
@@ -326,9 +329,9 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
     h.run_steps(4);
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
+    h.get_by_label("File").hover();
     h.run_steps(3);
-    h.get_by_label("Open Recent ⏵").hover();
+    h.get_by_label("Open Recent").hover();
     h.run_steps(3);
     let original = h.state().views[0].id;
     h.get_by_label_contains("recent.pdf").click();
@@ -341,12 +344,13 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
     assert_eq!(app.session.get(original).unwrap().bytes.as_slice(), fixture(3).as_slice());
 }
 
+/// Check that Open Recent is disabled while no file has been opened.
 #[test]
 fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
     let mut h = harness();
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
+    h.get_by_label("File").hover();
     h.run_steps(3);
     assert!(
         h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(),
@@ -358,6 +362,7 @@ fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
     pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 }
 }
 
+/// Check that Clear Recent Files empties the list and disables Open Recent.
 #[test]
 fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -370,16 +375,16 @@ fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
     h.run_steps(4);
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
+    h.get_by_label("File").hover();
     h.run_steps(3);
-    h.get_by_label("Open Recent ⏵").hover();
+    h.get_by_label("Open Recent").hover();
     h.run_steps(3);
     h.get_by_label("Clear Recent Files").click();
     h.run_steps(3);
     assert!(h.state().recent.is_empty(), "the list is empty");
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
+    h.get_by_label("File").hover();
     h.run_steps(3);
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
 }
@@ -459,7 +464,7 @@ fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
     h.ctx.set_os(os);
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("View ⏵").hover();
+    h.get_by_label("View").hover();
     h.run_steps(3);
     h
 }
@@ -530,6 +535,8 @@ fn the_about_dialog_shows_the_running_version() {
     h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
 }
 
+/// Check that the quit shortcut needs exact platform modifiers and that unsaved work opens the save prompt
+/// instead of closing.
 #[test]
 fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
     for (os, modifiers) in [
@@ -550,6 +557,9 @@ fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
             let closes = h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::Close));
             assert_eq!(closes, should_close, "{os:?}, extra={extra:?}, dirty={dirty}");
             if dirty {
+                // The save prompt is a modal laid out after the key pass; let that pass settle
+                // before looking it up.
+                h.run_steps(2);
                 h.get_by_label("Cancel").click();
                 h.run_steps(2);
                 assert_eq!(h.state().views.len(), 1);

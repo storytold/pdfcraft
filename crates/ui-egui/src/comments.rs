@@ -1621,12 +1621,12 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         anchor = anchor.clamp(viewport.min, viewport.max);
     }
     let pos = pos2(anchor.x + 12.0, anchor.y);
-    let area = egui::Area::new(egui::Id::new(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
+    let area = egui::Area::new(egui::Id::unique(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
     area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::bidi::visual_auto(&prefs.author)).font(theme::semibold(13.0)));
+                ui.label(egui::RichText::new(prefs.author.clone()).font(theme::semibold(13.0)));
                 ui.label(egui::RichText::new(tl!(title)).font(theme::regular(11.5)).color(t.text_faint));
             });
             ui.add_space(6.0);
@@ -1636,8 +1636,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
             };
-            let edit =
-                ui.add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"));
+            let edit = ui
+                .add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"))
+                // 0.37 kittest rejects an unnamed text input; the hint is its logical name.
+                .accessible_name(hint);
             if c.focus {
                 edit.request_focus();
                 c.focus = false;
@@ -2056,8 +2058,9 @@ pub enum CanvasAction {
 /// How many custom colours the "Recent colours" row keeps.
 const RECENT_CUSTOM: usize = 5;
 
+/// Return the stable egui id for the recent custom-colour palette.
 fn recent_custom_id() -> egui::Id {
-    egui::Id::new("pdfcraft-recent-custom-colours")
+    egui::Id::unique("pdfcraft-recent-custom-colours")
 }
 
 /// Custom colours picked with "Other colour…" this session, newest first (#1193).
@@ -2091,7 +2094,7 @@ fn rgb_of(c: Color32) -> Rgb {
 /// One round swatch; `on` rings it as the current colour.
 fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tooltip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     ui.painter().circle_filled(r.center(), 9.0, color32(c));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
     if on || resp.hovered() {
@@ -2113,7 +2116,7 @@ fn other_colour_swatch(ui: &mut egui::Ui, open: bool) -> egui::Response {
         ui.painter().circle_stroke(c, 11.0, Stroke::new(1.5, SELECT_BLUE));
     }
     let label = tl!("Other colour…");
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, label));
     resp.on_hover_text(label)
 }
 
@@ -2202,7 +2205,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Colour")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Colour")));
     let resp = resp.on_hover_text(tl!("Colour"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         if let Some(c) = swatch_grid(ui, Some(style.color)) {
@@ -2266,7 +2269,7 @@ fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
         Some(_) => tl!("Fill colour"),
         None => tl!("Fill colour: none"),
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     resp.on_hover_text(label)
 }
 
@@ -2587,7 +2590,7 @@ mod tests {
         h.run();
         h.get_by_label("Page").click_secondary();
         h.run();
-        h.get_by_label("Colour ⏵").click();
+        h.get_by_label("Colour").click();
         h.run();
         h.get_by_label("Other colour…").click();
         h.run();

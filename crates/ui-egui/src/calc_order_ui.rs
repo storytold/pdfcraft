@@ -566,7 +566,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let is_selected = selected.as_deref() == Some(f.name.as_str());
             resp.widget_info(|| {
                 let label = if row.value.is_empty() { format!("{}. {}", k + 1, f.name) } else { format!("{}. {}: {}", k + 1, f.name, row.value) };
-                egui::WidgetInfo::selected(egui::WidgetType::Button, true, is_selected, label)
+                egui::WidgetInfo::selected(egui::Role::Button, true, is_selected, label)
             });
             if reveal.as_deref() == Some(f.name.as_str()) {
                 resp.scroll_to_me(Some(egui::Align::Center));
@@ -631,8 +631,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     [(up, "chevron-up", true, tl!("Earlier in calculation order")), (down, "chevron-down", false, tl!("Later in calculation order"))]
                 {
                     let to = if earlier { k.checked_sub(1) } else { Some(k + 1).filter(|&to| to < count) };
-                    let b = ui.interact(r, ui.id().with(("calc-order", k, earlier)), if to.is_some() { Sense::click() } else { Sense::hover() });
-                    b.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, to.is_some(), format!("{tip}: {}", f.name)));
+                    let b =
+                        ui.interact(r, ui.scope_id().with(("calc-order", k, earlier)), if to.is_some() { Sense::click() } else { Sense::hover() });
+                    b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, to.is_some(), format!("{tip}: {}", f.name)));
                     if visible {
                         let bpress = theme::Press::track(ui, &b);
                         bpress.wash(ui, r, 4, false);

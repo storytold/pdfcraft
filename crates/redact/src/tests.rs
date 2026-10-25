@@ -2265,6 +2265,74 @@ fn unselected_pages_keep_inherited_forms() {
     assert_eq!(under(&mut saved, 1, &[[0.0, 190.0, 300.0, 220.0]]), 6);
 }
 
+#[test]
+fn nested_resource_less_forms_keep_live_resources_after_redacting_another_page() {
+    for own_resources in [false, true] {
+        for still_drawn in [false, true] {
+            let original = b"BT /F1 10 Tf 10 200 Td (SECRET) Tj ET";
+            let mut extra = vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", original),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", if still_drawn { b"/Fm Do".as_slice() } else { b"q Q".as_slice() }),
+            ];
+            if own_resources {
+                extra.push(stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /Fm 7 0 R /Relay 8 0 R >> >>",
+                    b"/Relay Do",
+                ));
+            }
+            let resources =
+                if own_resources { "/XObject << /Fm 7 0 R /Relay 8 0 R /Wrapper 9 0 R >>" } else { "/XObject << /Fm 7 0 R /Relay 8 0 R >>" };
+            let mut doc = one_page(b"/Fm Do", resources, extra);
+            let mut page = doc.get(ObjRef::new(3, 0)).as_dict().unwrap().clone();
+            let inherited = page.remove(b"Resources").unwrap();
+            doc.set(ObjRef::new(3, 0), Object::Dict(page.clone()));
+            let second_content =
+                doc.add(Object::Stream(Stream::from_raw(Dict::new(), if own_resources { b"/Wrapper Do".to_vec() } else { b"/Relay Do".to_vec() })));
+            page.set(b"Contents".to_vec(), Object::Ref(second_content));
+            let second = doc.add(Object::Dict(page));
+            doc.update_dict(ObjRef::new(2, 0), |d| {
+                d.set(b"Resources".to_vec(), inherited);
+                d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(3, 0)), Object::Ref(second)]));
+                d.set(b"Count".to_vec(), Object::Int(2));
+            })
+            .unwrap();
+
+            let region = [[0.0, 190.0, 300.0, 220.0]];
+            let surviving = if still_drawn { 6 } else { 0 };
+            assert_eq!(under(&mut doc, 0, &region), 6, "the marked occurrence is real text");
+            assert_eq!(under(&mut doc, 1, &region), surviving, "the relay's original nested content is visible");
+            mark(&mut doc, 0, &region, "");
+            let report = apply(&mut doc, Some(&[0])).unwrap();
+            assert_eq!((report.marks, report.glyphs), (1, 6));
+            assert_eq!(under(&mut doc, 0, &region), 0);
+            assert_eq!(under(&mut doc, 1, &region), surviving, "redacting another page must preserve live nested content");
+
+            // A full saved document must retain both the reachable resource and its content,
+            // without relying on an old incremental revision's otherwise-unreachable objects.
+            let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert_eq!(under(&mut saved, 0, &region), 0);
+            assert_eq!(under(&mut saved, 1, &region), surviving);
+            let page = pdfcraft_model::pages(&saved).swap_remove(1);
+            let res = saved.resolve(page.dict.get(b"Resources").unwrap());
+            let xo = saved.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+            let mut holder = xo.as_dict().unwrap().clone();
+            if own_resources {
+                let wrapper = saved.resolve(holder.get(b"Wrapper").unwrap());
+                let Object::Stream(wrapper) = &*wrapper else { panic!("a real wrapper form") };
+                let res = saved.resolve(wrapper.dict.get(b"Resources").unwrap());
+                let xo = saved.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+                holder = xo.as_dict().unwrap().clone();
+            }
+            assert_eq!(holder.contains(b"Fm"), still_drawn, "keep only resources a surviving nested form actually uses");
+            if still_drawn {
+                let form = saved.resolve(holder.get(b"Fm").unwrap());
+                let Object::Stream(form) = &*form else { panic!("the preserved original form") };
+                assert_eq!(form.decoded().unwrap(), original);
+            }
+        }
+    }
+}
+
 /// A page tree of `n` pages that all draw form /Fm and inherit a direct `/Resources` from the root.
 fn inheriting_pages(n: usize) -> (Document, Vec<ObjRef>) {
     let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 10 200 Td (SECRET) Tj ET");

@@ -157,10 +157,12 @@ impl PdfCraftApp {
         let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
         match id {
             "ui.dock.reset" => {
-                if let Err(error) = crate::docking::command(self, true, &serde_json::Value::Null) {
+                if let Err(error) = crate::side_panels::command(self, true, &serde_json::Value::Null) {
                     self.notify(error);
                 }
             }
+            "view.side_panel" => self.toggle_side_panel(),
+            "view.tools_pane" => self.left_open = !self.left_open,
             "file.open" => self.open_dialog(),
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.

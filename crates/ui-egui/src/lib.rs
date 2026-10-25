@@ -9,6 +9,8 @@
 // The settings object in `persist` is one `json!` literal past the default limit of 128.
 #![recursion_limit = "256"]
 
+use crate::control::Host as _;
+
 /// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
 /// current directory (links are not resolved, as in `last_session`).
 pub(crate) fn same_file(a: &str, b: &str) -> bool {
@@ -42,7 +44,6 @@ mod image_pick;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
-pub mod docking;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod camera_ui;
 mod commands;
@@ -65,6 +66,7 @@ mod measure_ui;
 mod ocr_ui;
 mod optimize_ui;
 mod search_ui;
+pub mod side_panels;
 mod sign_ui;
 mod stamps_ui;
 mod standards_ui;
@@ -202,7 +204,7 @@ pub enum LeftPanel {
 }
 
 /// Right-hand panels, opened from the rail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RightPanel {
     Comments,
     Bookmarks,
@@ -281,8 +283,8 @@ struct GridDrop {
     /// Dropped on the Pages panel (its gap decides where they go), not the page grid.
     panel: bool,
     files: Vec<GridFile>,
-    /// When to stop waiting for the pointer (egui time, seconds).
-    deadline: f64,
+    /// When to stop waiting for the pointer (monotonic: `logic` may run without a UI pass).
+    deadline: web_time::Instant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -623,8 +625,8 @@ pub struct RecentFile {
 }
 
 pub struct PdfCraftApp {
-    pub docking: docking::Workspace,
-    pub(crate) pending_panel_reveals: Vec<docking::Panel>,
+    /// Tools side and pane widths; which panes are open is `left_open` and `right`.
+    pub side_panels: side_panels::SidePanels,
     pub session: Session,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
@@ -647,6 +649,8 @@ pub struct PdfCraftApp {
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
+    /// The side panel F4 reopens: the one open last.
+    pub(crate) last_right: RightPanel,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.
@@ -919,7 +923,7 @@ pub struct PdfCraftApp {
     /// Entries left by a previous session, offered in the Recovery dialog.
     pub recoverable: Vec<RecoveryMeta>,
     recovery_keys: std::collections::HashMap<DocId, String>,
-    last_autosave: f64,
+    last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
@@ -1090,6 +1094,7 @@ pub enum OpenOutcome {
 }
 
 impl PdfCraftApp {
+    /// Construct an application with the default session, panels, theme and control state.
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -1103,10 +1108,10 @@ impl PdfCraftApp {
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
-            docking: docking::Workspace::default(),
-            pending_panel_reveals: Vec::new(),
+            side_panels: Default::default(),
             left_open: true,
             right: None,
+            last_right: RightPanel::Comments,
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
@@ -1255,7 +1260,7 @@ impl PdfCraftApp {
             recovery: None,
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
-            last_autosave: 0.0,
+            last_autosave: None,
             allow_quit: false,
             deferred_commands: Vec::new(),
             dialog_seen: None,
@@ -1721,7 +1726,7 @@ impl PdfCraftApp {
             // Where there is no telling where the pointer is during the drag, its place arrives
             // with the first move after the drop.
             ctx.request_repaint();
-            self.grid_drop = Some(GridDrop { doc: id, panel, files, deadline: ctx.input(|i| i.time) + 1.0 });
+            self.grid_drop = Some(GridDrop { doc: id, panel, files, deadline: web_time::Instant::now() + std::time::Duration::from_secs(1) });
         }
         Vec::new()
     }
@@ -1745,7 +1750,7 @@ impl PdfCraftApp {
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
         let gap = match if panel { view.panel_gap } else { view.grid_gap } {
             Some(gap) => gap,
-            None if ctx.input(|i| i.time) >= deadline => usize::MAX,
+            None if web_time::Instant::now() >= deadline => usize::MAX,
             None => return ctx.request_repaint(),
         };
         view.insert_at = Some(gap);
@@ -2471,7 +2476,6 @@ impl PdfCraftApp {
 
     pub(crate) fn reveal_tools(&mut self) {
         self.left_open = true;
-        self.pending_panel_reveals.push(docking::Panel::Tools);
     }
 
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
@@ -2580,9 +2584,6 @@ impl PdfCraftApp {
             if self.right.is_none() {
                 self.right = before;
             }
-            if self.right.is_some() {
-                self.pending_panel_reveals.push(docking::Panel::Inspector);
-            }
         }
     }
 
@@ -2604,17 +2605,21 @@ impl PdfCraftApp {
             self.right_panel_closed = true;
         }
         self.right = panel;
-        if panel.is_some() {
-            self.pending_panel_reveals.push(docking::Panel::Inspector);
+        if let Some(panel) = panel {
+            self.last_right = panel;
         }
+    }
+
+    /// F4: closes the side panel, or reopens the one open last.
+    pub(crate) fn toggle_side_panel(&mut self) {
+        self.choose_right_panel(if self.right.is_some() { None } else { Some(self.last_right) });
     }
 
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         let mut v = serde_json::json!({
-            "docking": self.docking,
-            "docking_left_open": self.left_open,
+            "side_panels": self.side_panels.to_json(self.left_open),
             "docking_right": self.right,
             "recent": self.recent,
             "reopen_last_session": self.reopen_last_session,
@@ -2691,14 +2696,13 @@ impl PdfCraftApp {
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
-        if let Some(saved) = v.get("docking")
-            && let Ok(workspace) = serde_json::from_value::<docking::Workspace>(saved.clone())
-            && workspace.validate().is_ok()
-        {
-            self.docking = workspace;
-            self.left_open =
-                v.get("docking_left_open").and_then(serde_json::Value::as_bool).unwrap_or(self.docking.layout.contains(&docking::Panel::Tools));
-            self.right = v.get("docking_right").and_then(|value| serde_json::from_value(value.clone()).ok()).flatten();
+        let panels = side_panels::restore(&v);
+        self.side_panels = panels.panels;
+        if let Some(open) = panels.tools_open {
+            self.left_open = open;
+        }
+        if let Some(right) = v.get("docking_right") {
+            self.right = serde_json::from_value(right.clone()).ok().flatten().filter(|_| !panels.side_closed);
         }
         self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
         if let Some(view) = v["combine_view"].as_str().and_then(combine_ui::CombineView::parse) {
@@ -3062,11 +3066,13 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
-            ("tools-side", _) => self.docking.set_tools_on_right(match value {
-                "left" => false,
-                "right" => true,
-                _ => return Err("tools-side must be left or right".into()),
-            })?,
+            ("tools-side", _) => {
+                self.side_panels.tools_side = match value {
+                    "left" => side_panels::ToolsSide::Left,
+                    "right" => side_panels::ToolsSide::Right,
+                    _ => return Err("tools-side must be left or right".into()),
+                }
+            }
             ("organize", Some(v)) => {
                 if value == "off" {
                     v.organize = false;
@@ -3253,12 +3259,6 @@ impl PdfCraftApp {
                 return Err(format!("`{k}` needs an open document"));
             }
             (other, _) => return Err(format!("unknown option {other}")),
-        }
-        if key == "panel" && self.right.is_some() {
-            self.pending_panel_reveals.push(docking::Panel::Inspector);
-        }
-        if key == "left" && self.left_open {
-            self.pending_panel_reveals.push(docking::Panel::Tools);
         }
         Ok(())
     }
@@ -3450,6 +3450,60 @@ impl PdfCraftApp {
     }
 }
 
+/// Root-level panel salts whose 0.36 persisted state key changed in 0.37.
+///
+/// The shared rail and side panes now own their state. The legacy `rail` and
+/// `read_right_panel` entries are inert; the former `rail-nav` footer is no longer migrated.
+const PANEL_SALTS: [&str; 4] = ["tab_strip", "mode_bar", "rail", "read_right_panel"];
+
+/// Copy persisted 0.36 panel sizes to 0.37's parent-scope key, once, before the first panel.
+///
+/// 0.36 stored [`egui::PanelState`] under the panel's own `Id::unique(salt)`; 0.37 derives it
+/// from the parent `Ui`'s scope plus an `IdSalt`. A missing copy would reset a width the user
+/// chose. The old entry is left untouched, so rolling back to 0.36 still finds it.
+fn migrate_panel_state(ui: &egui::Ui) {
+    if ui.ctx().viewport_id() != egui::ViewportId::ROOT {
+        return;
+    }
+    for salt in PANEL_SALTS {
+        migrate_panel_state_from(ui, salt);
+    }
+}
+
+/// Copy one 0.36 panel's state to the key derived from this exact parent `Ui`.
+///
+/// The parent must be the `Ui` the panel is shown in (for a nested panel, the panel's content
+/// `Ui`), because 0.37's key includes that `Ui`'s scope.
+pub(crate) fn migrate_panel_state_from(ui: &egui::Ui, salt: &str) {
+    let old = egui::Id::unique(salt);
+    let new = ui.scope_id().with_salt(egui::IdSalt::new(salt));
+    if old == new || egui::PanelState::load(ui.ctx(), new).is_some() {
+        return;
+    }
+    if let Some(state) = egui::PanelState::load(ui.ctx(), old) {
+        ui.ctx().data_mut(|data| data.insert_persisted(new, state));
+        log::debug!("migrated panel {salt} state {:?}", state.size());
+    }
+}
+
+impl PdfCraftApp {
+    /// The parts of [`eframe::App::raw_input_hook`] that must run before egui's input hooks:
+    /// publish this pass's input-target generation to the control plugin, and hand the wheel
+    /// input to the reduced-motion reader.
+    ///
+    /// A test host that drives the app without eframe's raw hook can call this first, so its
+    /// frame ordering matches production instead of hiding focus-change bugs.
+    #[doc(hidden)]
+    pub fn prepare_raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The control plugin's input hook runs next: give it this pass's input generation.
+        if let Some(control) = &self.control {
+            control.set_epoch(self.input_epoch());
+        }
+        // Before egui reads this frame's wheel input.
+        self.scroll_speed.apply(ctx, raw);
+    }
+}
+
 impl eframe::App for PdfCraftApp {
     /// While files are dragged over the window the system sends no pointer moves, so egui
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
@@ -3457,8 +3511,7 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);
-        // Before egui reads this frame's wheel input.
-        self.scroll_speed.apply(ctx, raw);
+        self.prepare_raw_input(ctx, raw);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
         }
@@ -3518,8 +3571,8 @@ impl eframe::App for PdfCraftApp {
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
-        // Before anything reads this frame's wheel input or draws, and with the line speed just set.
-        self.motion.begin_pass(ctx, self.animation_effects);
+        // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:
+        // `logic` also runs alone while hidden, where the input events and time are stale.
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
         // the files were let go before the gap is read.
         self.finish_grid_drop(ctx);
@@ -3603,9 +3656,9 @@ impl eframe::App for PdfCraftApp {
         }
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
+        #[cfg(target_os = "macos")]
         craft_quit::on_close_request(ctx);
-        let now = ctx.input(|i| i.time);
-        self.autosave_tick(ctx, now);
+        self.autosave_tick(ctx, web_time::Instant::now());
         // Reload documents whose files a build rewrote (#431).
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
@@ -3654,11 +3707,17 @@ impl eframe::App for PdfCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
+        // A language change switches stock chrome between LTR and RTL before anything is drawn.
+        theme::sync_direction(&ctx);
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
             ctx.request_repaint();
             return;
         }
+        // Before any widget reads this frame's wheel input or draws.
+        self.motion.begin_pass(&ctx, self.animation_effects);
+        // One-time 0.36 -> 0.37 panel persistence migration, before any panel stores or reads state.
+        migrate_panel_state(ui);
         for view in &mut self.views {
             view.begin_render_frame();
         }
@@ -3672,6 +3731,9 @@ impl eframe::App for PdfCraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
         }
+        // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
+        // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
+        ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
         if self.full_screen && self.active.is_some() {
             // Full screen: the page on black, nothing else, as Acrobat's Full Screen Mode (Esc
             // or ⌘L to leave).
@@ -3688,6 +3750,10 @@ impl eframe::App for PdfCraftApp {
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
             self.finish_render_frame(&ctx);
+            if let Some(mut control) = self.control.take() {
+                control.finish_frame(&ctx, self);
+                self.control = Some(control);
+            }
             return;
         }
         self.sync_window_frame(&ctx);
@@ -3696,27 +3762,16 @@ impl eframe::App for PdfCraftApp {
         }
         chrome::tab_strip(self, ui);
         chrome::mode_bar(self, ui);
-        if self.active.is_some() {
-            chrome::right_rail(self, ui);
-            // Read mode hides the tools, not the navigation panes: the rail stays visible
-            // there, so its buttons (Bookmarks, Page thumbnails, ...) must open their panels.
-            // Outside Read mode the docking workspace draws the inspector.
-            if self.mode == Mode::Read && self.right.is_some() {
-                egui::Panel::right("read_right_panel")
-                    .resizable(true)
-                    .default_size(330.0)
-                    .size_range(260.0..=520.0)
-                    .frame(egui::Frame::NONE)
-                    .show(ui, |ui| panels::right_panel(self, ui));
-            }
-        }
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
         }
+        side_panels::show(self, ui);
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::Read {
+            if self.mode == Mode::AllTools && self.all_tools_full {
+                all_tools_ui::show(self, ui);
+            } else {
                 match self.active {
                     None if self.combine_showing() => combine_ui::page(self, ui),
                     None => home::show(self, ui),
@@ -3725,10 +3780,6 @@ impl eframe::App for PdfCraftApp {
                         None => canvas::document_area(self, index, ui),
                     },
                 }
-            } else if self.mode == Mode::AllTools && self.all_tools_full {
-                all_tools_ui::show(self, ui);
-            } else {
-                docking::show(self, ui);
             }
         });
         self.process_pending_edits();
@@ -3737,6 +3788,11 @@ impl eframe::App for PdfCraftApp {
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);
+        // Screenshots are issued only after a settled pass that really drew the window.
+        if let Some(mut control) = self.control.take() {
+            control.finish_frame(&ctx, self);
+            self.control = Some(control);
+        }
     }
 }
 
@@ -3764,5 +3820,77 @@ impl PdfCraftApp {
                 view.finish_render_frame(ctx, &doc.info, &doc.renderer);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod panel_migration_tests {
+    use super::*;
+
+    fn state(width: f32) -> egui::PanelState {
+        egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 900.0)) }
+    }
+
+    /// 0.36 stored a panel's persisted size under `Id::unique(salt)`. 0.37 derives the key from
+    /// the root `Ui`'s scope; the upgrade must carry the chosen width over, not reset it.
+    #[test]
+    fn upgrade_from_036_panel_memory_keeps_width() {
+        let ctx = egui::Context::default();
+        let old = egui::Id::unique("rail");
+        ctx.data_mut(|d| d.insert_persisted(old, state(287.0)));
+        let mut migrated = None;
+        let mut new_id = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            migrate_panel_state(ui);
+            new_id = Some(ui.scope_id().with_salt(egui::IdSalt::new("rail")));
+            migrated = egui::PanelState::load(ui.ctx(), new_id.expect("an id"));
+        });
+        output.drop_without_applying_deltas();
+        let migrated = migrated.expect("the 0.36 panel width migrates to the 0.37 key");
+        assert!((migrated.size().x - 287.0).abs() <= 1.0, "width survives: {:?}", migrated.size());
+        assert_eq!(new_id.unwrap(), ctx.viewport_id().root_ui_id().with_salt(egui::IdSalt::new("rail")));
+        assert!(egui::PanelState::load(&ctx, old).is_some(), "the old key stays for rollback");
+    }
+
+    /// A synthetic nested panel is keyed from its own parent `Ui`, not the root.
+    /// Migrating it at the root would silently miss its 0.36 state; the fixture uses
+    /// legacy rail names but does not model the current shared rail implementation.
+    #[test]
+    fn nested_panel_state_migrates_from_its_actual_parent_ui() {
+        let ctx = egui::Context::default();
+        let old = egui::Id::unique("rail-nav");
+        ctx.data_mut(|d| d.insert_persisted(old, state(140.0)));
+        let mut nested_id = None;
+        let mut migrated = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::Panel::right("rail").resizable(false).exact_size(48.0).show(ui, |ui| {
+                migrate_panel_state_from(ui, "rail-nav");
+                // The key egui will use for the nested panel shown in this same Ui.
+                let key = ui.scope_id().with_salt(egui::IdSalt::new("rail-nav"));
+                nested_id = Some(key);
+                migrated = egui::PanelState::load(ui.ctx(), key);
+                egui::Panel::bottom("rail-nav").resizable(false).show(ui, |_ui| {});
+            });
+        });
+        output.drop_without_applying_deltas();
+        let migrated = migrated.expect("the nested 0.36 state migrates to its parent-scoped key");
+        assert_eq!(migrated.size().x, 140.0);
+        assert_ne!(nested_id.unwrap(), ctx.viewport_id().root_ui_id().with_salt(egui::IdSalt::new("rail-nav")), "the nested key is not the root key");
+    }
+
+    /// The one-time copy must never overwrite state a 0.37 run has already stored.
+    #[test]
+    fn migration_does_not_replace_a_037_panel_state() {
+        let ctx = egui::Context::default();
+        let old = egui::Id::unique("rail");
+        let new = ctx.viewport_id().root_ui_id().with_salt(egui::IdSalt::new("rail"));
+        ctx.data_mut(|d| {
+            d.insert_persisted(old, state(287.0));
+            d.insert_persisted(new, state(412.0));
+        });
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| migrate_panel_state(ui));
+        output.drop_without_applying_deltas();
+        let kept = egui::PanelState::load(&ctx, new).expect("the 0.37 state");
+        assert_eq!(kept.size().x, 412.0);
     }
 }

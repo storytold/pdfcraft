@@ -34,7 +34,8 @@ pub fn create_staging(
 /// [`create_staging`], giving the new file the mode and group of the file `keep` describes on
 /// Unix. It is created readable and writable by its owner only and then given them, so its mode
 /// is never more open than that of the file it will replace, not even while it is still empty (a
-/// handle opened then would keep reading what is written later). The owner is the saver's.
+/// handle opened then would keep reading what is written later). The owner is the saver's. On
+/// Windows it is created with that file's [`KEPT_ATTRIBUTES`].
 fn create_staging_as(
     dir: &Path,
     name: &str,
@@ -63,8 +64,15 @@ fn create_staging_as(
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
+        // Given as the file is created, so a hidden target's staging file is never visible.
+        #[cfg(windows)]
+        if let Some(keep) = keep {
+            use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+            options.attributes(keep.file_attributes() & KEPT_ATTRIBUTES);
+        }
         match options.open(&tmp) {
             Ok(file) => {
+                #[cfg(unix)]
                 if let Some(keep) = keep {
                     // A volume that can't change modes (FAT, some network shares) leaves the file
                     // owner-only: stricter than the file it replaces, never looser.
@@ -78,8 +86,17 @@ fn create_staging_as(
             Err(e) => return Err(e),
         }
     }
+    #[cfg(not(any(unix, windows)))]
+    let _ = keep;
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
 }
+
+/// The Windows attributes a replaced file passes on to its staging file (#4593):
+/// `FILE_ATTRIBUTE_HIDDEN` and `FILE_ATTRIBUTE_SYSTEM`, the two that say who should see the
+/// file. A read-only file is refused before anything is staged, and the archive bit is the
+/// system's to set on a changed file; the other attributes describe how the volume stores it.
+#[cfg(windows)]
+const KEPT_ATTRIBUTES: u32 = 0x2 | 0x4;
 
 /// The permissions a staging file gets to replace the file `keep` describes. The mode's group bits
 /// are meant for that file's group, so the staging file joins it first. Where it can't (the saver
@@ -94,11 +111,6 @@ fn kept_permissions(file: &std::fs::File, keep: &std::fs::Metadata) -> std::fs::
         mode.set_mode(mode.mode() & !0o077);
     }
     mode
-}
-
-#[cfg(not(unix))]
-fn kept_permissions(_: &std::fs::File, keep: &std::fs::Metadata) -> std::fs::Permissions {
-    keep.permissions()
 }
 
 /// Unpredictable staging-name suffixes, so a name can't be planted in advance. Each is the
@@ -119,7 +131,8 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
 /// a folder at the target is refused by the rename. Flushing is the staging file's own
 /// (`sync_all`); parent-directory durability after a power loss is not promised. On Unix a file
 /// that is replaced keeps its permissions and group, so a private file stays private; a new file gets the
-/// usual mode for a new file. On Windows and macOS a replaced file keeps its creation date, where
+/// usual mode for a new file. On Windows a replaced file stays hidden or system if it was, and
+/// plain if it was plain. On Windows and macOS a replaced file keeps its creation date, where
 /// the volume stores one.
 /// On macOS, accessible extended attributes of an existing regular destination are copied
 /// before flushing; a copy failure refuses the save rather than losing metadata (#2658).
@@ -146,10 +159,14 @@ pub fn write_atomically_with(
     }
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("save");
-    // A file that is replaced keeps its permissions (#1790) and group. Unix only: Windows is as before.
+    // A file that is replaced keeps its permissions (#1790) and group on Unix, and its hidden and
+    // system attributes on Windows (#4593). A save replaces a symbolic link, not the file it
+    // points to, so on Windows the attributes are the link's own.
     #[cfg(unix)]
     let keep = std::fs::metadata(path).ok();
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let keep = std::fs::symlink_metadata(path).ok();
+    #[cfg(not(any(unix, windows)))]
     let keep = None;
     // A saved file is the same document: it keeps its creation date (#2658).
     #[cfg(any(windows, target_os = "macos"))]
@@ -659,6 +676,71 @@ mod tests {
         let fresh = dir.join("new.pdf");
         write_atomically(&fresh, b"NEW", StagingName::SuffixThenTag).unwrap();
         assert!(std::fs::metadata(&fresh).unwrap().created().unwrap() > then);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #4593: a save replaces the file, so a hidden or system file stays hidden or system, and
+    /// its staging file already is while it is written; a plain file stays plain, though the
+    /// staging name starts with a dot; a new file gets no attribute from anywhere.
+    #[cfg(windows)]
+    #[test]
+    fn a_replaced_file_keeps_its_hidden_and_system_attributes() {
+        use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+        const HIDDEN: u32 = 0x2;
+        const SYSTEM: u32 = 0x4;
+        let dir = test_dir("attributes");
+        let kept = |p: &Path| std::fs::metadata(p).unwrap().file_attributes() & (HIDDEN | SYSTEM);
+        for (i, keep) in [0, HIDDEN, SYSTEM, HIDDEN | SYSTEM].into_iter().enumerate() {
+            let target = dir.join(format!("doc{i}.pdf"));
+            let mut fixture = std::fs::OpenOptions::new().write(true).create_new(true).attributes(keep).open(&target).unwrap();
+            std::io::Write::write_all(&mut fixture, b"OLD").unwrap();
+            drop(fixture);
+            assert_eq!(kept(&target), keep, "the fixture has attributes {keep:#x}");
+            for form in [StagingName::TagThenSuffix, StagingName::SuffixThenTag] {
+                let mut staged = u32::MAX;
+                write_atomically_with(&target, b"NEW", form, [i as u64], |f| {
+                    staged = f.metadata()?.file_attributes() & (HIDDEN | SYSTEM);
+                    Ok(())
+                })
+                .unwrap();
+                assert_eq!(staged, keep, "the staging file has the target's attributes before it is flushed");
+                assert_eq!(kept(&target), keep, "the saved file keeps attributes {keep:#x}");
+                assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+            }
+        }
+        let fresh = dir.join("new.pdf");
+        write_atomically(&fresh, b"NEW", StagingName::TagThenSuffix).unwrap();
+        assert_eq!(kept(&fresh), 0, "a new file is neither hidden nor system");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save replaces a symbolic link, not the file it points to, so the saved file takes the
+    /// link's own attributes: a plain link to a hidden file saves as a plain file, and the file
+    /// it pointed to is left as it was.
+    #[cfg(windows)]
+    #[test]
+    fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
+        use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+        const HIDDEN: u32 = 0x2;
+        let dir = test_dir("link-attributes");
+        let referent = dir.join("referent.pdf");
+        let mut fixture = std::fs::OpenOptions::new().write(true).create_new(true).attributes(HIDDEN).open(&referent).unwrap();
+        std::io::Write::write_all(&mut fixture, b"OLD").unwrap();
+        drop(fixture);
+        let link = dir.join("link.pdf");
+        if let Err(e) = std::os::windows::fs::symlink_file(&referent, &link) {
+            eprintln!("skipped: creating a symbolic link needs Developer Mode or administrator rights ({e})");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        assert_eq!(std::fs::symlink_metadata(&link).unwrap().file_attributes() & HIDDEN, 0, "the link itself is visible");
+        write_atomically(&link, b"NEW", StagingName::TagThenSuffix).unwrap();
+        let saved = std::fs::symlink_metadata(&link).unwrap();
+        assert!(!saved.file_type().is_symlink(), "the save replaced the link");
+        assert_eq!(saved.file_attributes() & HIDDEN, 0, "the link was visible, so the saved file is");
+        assert_eq!(std::fs::read(&link).unwrap(), b"NEW");
+        assert_eq!(std::fs::read(&referent).unwrap(), b"OLD", "the file the link pointed to is untouched");
+        assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

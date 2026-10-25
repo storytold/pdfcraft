@@ -311,22 +311,32 @@ impl PdfCraftApp {
         }
     }
 
-    /// Autosave when the interval has passed (called every frame).
-    pub(crate) fn autosave_tick(&mut self, ctx: &egui::Context, now: f64) {
+    /// Autosave when the interval has passed (called by `logic`, which also runs while hidden).
+    ///
+    /// The deadline is monotonic (`web_time::Instant`): egui's input clock does not advance
+    /// during a hidden `run_logic`, so using it would stall autosave or restart its interval.
+    pub(crate) fn autosave_tick(&mut self, ctx: &egui::Context, now: web_time::Instant) {
         if self.recovery.is_none() {
             return;
         }
-        if now - self.last_autosave >= AUTOSAVE_SECS {
-            self.last_autosave = now;
+        // The first tick starts the interval, as the old zero clock did: it does not snapshot
+        // immediately just because no deadline had been recorded yet.
+        let Some(last) = self.last_autosave else {
+            self.last_autosave = Some(now);
+            if self.session.has_pending_autosave() {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(AUTOSAVE_SECS));
+            }
+            return;
+        };
+        if now.duration_since(last).as_secs_f64() >= AUTOSAVE_SECS {
+            self.last_autosave = Some(now);
             self.autosave_now();
         }
         // An idle native window has no input-driven frames. Wake it at the existing
         // autosave deadline, without keeping clean or already-snapshotted documents awake.
         if self.session.has_pending_autosave() {
-            let remaining = (self.last_autosave + AUTOSAVE_SECS - now).clamp(0.0, AUTOSAVE_SECS);
-            if let Ok(delay) = std::time::Duration::try_from_secs_f64(remaining) {
-                ctx.request_repaint_after(delay);
-            }
+            let next = self.last_autosave.unwrap_or(now) + std::time::Duration::from_secs_f64(AUTOSAVE_SECS);
+            ctx.request_repaint_after(next.saturating_duration_since(now));
         }
     }
 
@@ -469,8 +479,8 @@ mod idle_tests {
         assert_eq!(distinct.len(), 200);
     }
 
-    fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, now: f64) -> Duration {
-        let mut out = ctx.run_ui(egui::RawInput { time: Some(now), ..Default::default() }, |ui| {
+    fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, now: web_time::Instant) -> Duration {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             app.autosave_tick(ui.ctx(), now);
         });
         // Headless timer test: acknowledge texture uploads without a GPU backend.
@@ -478,6 +488,8 @@ mod idle_tests {
         out.viewport_output[&egui::ViewportId::ROOT].repaint_delay
     }
 
+    /// Check that an idle dirty document schedules a bounded write and autosaves without input, then stops
+    /// waking the window.
     #[test]
     fn idle_dirty_document_requests_its_deadline_and_writes_without_input() {
         let dir = TestDir::new();
@@ -487,22 +499,26 @@ mod idle_tests {
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         let id = app.session.open_new("Untitled.pdf", bytes).unwrap();
         let ctx = egui::Context::default();
+        let base = web_time::Instant::now();
+        frame(&mut app, &ctx, base);
         let mut delay = Duration::ZERO;
         for _ in 0..4 {
-            delay = frame(&mut app, &ctx, 15.0);
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(15));
         }
         assert!(delay > Duration::ZERO && delay <= Duration::from_secs(45), "idle deadline: {delay:?}");
         assert!(store.list().is_empty());
-        frame(&mut app, &ctx, 60.0);
+        frame(&mut app, &ctx, base + Duration::from_secs(60));
         assert_eq!(store.list().len(), 1, "timer frame writes the snapshot without input");
         assert!(app.session.get(id).unwrap().dirty, "autosave does not mark the document saved");
         assert!(!app.session.has_pending_autosave());
         for _ in 0..4 {
-            delay = frame(&mut app, &ctx, 61.0);
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(61));
         }
         assert_eq!(delay, Duration::MAX, "unchanged snapshot needs no periodic wake");
     }
 
+    /// Check that an edit after autosave schedules the next deadline, keeps the old snapshot until then, and
+    /// replaces it on time.
     #[test]
     fn second_edit_after_autosave_schedules_next_deadline_and_updates_snapshot() {
         let dir = TestDir::new();
@@ -512,7 +528,9 @@ mod idle_tests {
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         let id = app.session.open_new("Untitled.pdf", bytes).unwrap();
         let ctx = egui::Context::default();
-        frame(&mut app, &ctx, 60.0);
+        let base = web_time::Instant::now();
+        frame(&mut app, &ctx, base);
+        frame(&mut app, &ctx, base + Duration::from_secs(60));
         let entries = store.list();
         assert_eq!(entries.len(), 1);
         let key = entries[0].key.clone();
@@ -520,20 +538,20 @@ mod idle_tests {
         assert!(!app.session.has_pending_autosave());
         let mut delay = Duration::ZERO;
         for _ in 0..4 {
-            delay = frame(&mut app, &ctx, 61.0);
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(61));
         }
         assert_eq!(delay, Duration::MAX);
 
         app.session.apply(id, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Second edit".into() }).unwrap();
         assert!(app.session.has_pending_autosave());
         for _ in 0..4 {
-            delay = frame(&mut app, &ctx, 75.0);
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(75));
         }
         assert!(delay > Duration::ZERO && delay <= Duration::from_secs(45), "second edit wakes by 120 seconds: {delay:?}");
         assert_eq!(store.read(&key).unwrap(), first, "editing does not overwrite the snapshot before its deadline");
-        frame(&mut app, &ctx, 119.0);
+        frame(&mut app, &ctx, base + Duration::from_secs(119));
         assert_eq!(store.read(&key).unwrap(), first);
-        frame(&mut app, &ctx, 120.0);
+        frame(&mut app, &ctx, base + Duration::from_secs(120));
         let entries = store.list();
         assert_eq!(entries.len(), 1, "the same document replaces its existing snapshot");
         assert_eq!(entries[0].key, key);
@@ -545,11 +563,12 @@ mod idle_tests {
         assert!(app.session.get(id).unwrap().dirty);
         assert!(!app.session.has_pending_autosave());
         for _ in 0..4 {
-            delay = frame(&mut app, &ctx, 121.0);
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(121));
         }
         assert_eq!(delay, Duration::MAX, "the second snapshot also lets the window sleep");
     }
 
+    /// Check that a clean document and a document with recovery disabled never schedule an autosave.
     #[test]
     fn clean_documents_and_disabled_recovery_do_not_schedule_autosave() {
         for recovery_enabled in [false, true] {
@@ -565,9 +584,10 @@ mod idle_tests {
                 app.session.open_new("Unsaved.pdf", bytes).unwrap();
             }
             let ctx = egui::Context::default();
+            let base = web_time::Instant::now();
             let mut delay = Duration::ZERO;
             for _ in 0..4 {
-                delay = frame(&mut app, &ctx, 15.0);
+                delay = frame(&mut app, &ctx, base + Duration::from_secs(15));
             }
             assert_eq!(delay, Duration::MAX);
         }

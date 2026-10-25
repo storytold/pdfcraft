@@ -90,7 +90,13 @@ mod tests {
 
     fn wheel(unit: egui::MouseWheelUnit, dy: f32, command: bool) -> egui::Event {
         let modifiers = egui::Modifiers { command, ..egui::Modifiers::NONE };
-        egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        }
     }
 
     #[test]

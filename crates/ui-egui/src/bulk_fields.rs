@@ -283,7 +283,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut Draft, t: &theme::Tokens) -> (bool
         egui::Grid::new("bulk-field-properties").num_columns(3).spacing([16.0, 10.0]).show(ui, |ui| match d.tab {
             Tab::General => {
                 row(ui, "Tooltip:", &mut d.tooltip, |ui, v| {
-                    ui.add(egui::TextEdit::singleline(v).desired_width(280.0));
+                    ui.add(egui::TextEdit::singleline(v).desired_width(280.0)).accessible_name(tl!("Tooltip"));
                 });
                 bool_row(ui, "Read Only", &mut d.read_only);
                 bool_row(ui, "Required", &mut d.required);
