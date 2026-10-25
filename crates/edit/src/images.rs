@@ -239,12 +239,8 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
-            }
+            // ClosePath with no subpath panics by the same contract (#3581).
+            b"h" if self.has_current_point() => self.path.close_path(),
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()
                     && let (Some(p0), Some(p1), Some(p2), Some(p3)) =
