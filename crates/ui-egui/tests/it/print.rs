@@ -23,6 +23,132 @@ fn harness_with_settings(settings: Option<String>) -> Harness<'static, PdfCraftA
     h
 }
 
+fn print_key(h: &mut Harness<'static, PdfCraftApp>, modifiers: egui::Modifiers, key: egui::Key) {
+    h.key_press_modifiers(modifiers, key);
+    h.run_steps(2);
+}
+
+#[test]
+fn print_shortcuts_focus_paper_and_size_without_changing_settings() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().execute("print.dialog");
+    h.run_steps(3);
+    let before = h.state().print_draft.clone();
+    print_key(&mut h, Modifiers::ALT, Key::P);
+    assert!(h.get_by_value("US Letter").is_focused());
+    assert_eq!(h.state().print_draft, before);
+    // Enter opens the focused combo; its choices remain reachable by Tab/Enter.
+    print_key(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(h.ctx.memory(egui::Memory::focused).is_some());
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    print_key(&mut h, Modifiers::NONE, Key::Escape);
+    print_key(&mut h, Modifiers::ALT, Key::S);
+    assert!(h.get_by_label("Size").is_focused());
+    assert_eq!(h.state().print_draft, before);
+    print_key(&mut h, Modifiers::NONE, Key::Enter);
+    // Walk through the remaining handling tabs to the scaling radio buttons.
+    for _ in 0..5 {
+        print_key(&mut h, Modifiers::NONE, Key::Tab);
+    }
+    assert!(h.get_by_label("Fit").is_focused());
+    print_key(&mut h, Modifiers::NONE, Key::Tab);
+    assert!(h.get_by_label("Actual size").is_focused());
+    print_key(&mut h, Modifiers::SHIFT, Key::Tab);
+    assert!(h.get_by_label("Fit").is_focused());
+    print_key(&mut h, Modifiers::NONE, Key::Tab);
+    print_key(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(h.state().print_draft.size, pdfcraft_engine::print::SizeMode::Actual);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+}
+
+/// Native backends can pair an Alt access key with printable text in the same frame.
+#[test]
+fn print_shortcuts_do_not_type_into_the_page_range() {
+    use egui::{Key, Modifiers};
+    use egui_kittest::kittest::By;
+    let mut h = harness();
+    h.state_mut().execute("print.dialog");
+    h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::Range;
+    h.state_mut().print_draft.range = "1-1".into();
+    h.run_steps(3);
+    for (key, text, target) in [(Key::S, "s", "Size"), (Key::P, "p", "US Letter")] {
+        h.get(By::new().role(Role::TextInput).value("1-1")).focus();
+        h.run_steps(2);
+        let before = h.state().print_draft.clone();
+        // Harness::event processes each queued event in a separate frame. RawInput keeps
+        // the native Key/Text pair together, before Size requests focus later in this frame.
+        h.input_mut().events.extend([
+            egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT },
+            egui::Event::Text(text.into()),
+        ]);
+        h.run_steps(2);
+        assert_eq!(h.state().print_draft, before, "Alt+{text} must leave the range unchanged");
+        if key == Key::S {
+            assert!(h.get_by_label(target).is_focused());
+        } else {
+            assert!(h.get_by_value(target).is_focused());
+        }
+    }
+}
+
+/// Ordinary typing and AltGr text retain keyboard ownership in the range editor.
+#[test]
+fn print_shortcuts_preserve_nonshortcut_text() {
+    use egui::{Key, Modifiers};
+    use egui_kittest::kittest::By;
+    let mut h = harness();
+    h.state_mut().execute("print.dialog");
+    h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::Range;
+    for (modifiers, text) in [(Modifiers::NONE, "s"), (Modifiers::ALT | Modifiers::CTRL, "ß")] {
+        h.state_mut().print_draft.range = "1-1".into();
+        h.run_steps(3);
+        h.get(By::new().role(Role::TextInput).value("1-1")).focus();
+        h.run_steps(2);
+        h.input_mut()
+            .events
+            .extend([egui::Event::Key { key: Key::S, physical_key: None, pressed: true, repeat: false, modifiers }, egui::Event::Text(text.into())]);
+        h.run_steps(2);
+        assert_eq!(h.state().print_draft.range, format!("1-1{text}"));
+        assert!(!h.get_by_label("Size").is_focused());
+    }
+}
+
+#[test]
+fn print_shortcuts_preserve_other_modifiers_and_open_popups() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().execute("print.dialog");
+    h.run_steps(3);
+    h.get_by_label("Size").focus();
+    h.run_steps(2);
+    for modifiers in [Modifiers::NONE, Modifiers::ALT | Modifiers::SHIFT, Modifiers::ALT | Modifiers::CTRL, Modifiers::ALT | Modifiers::COMMAND] {
+        print_key(&mut h, modifiers, Key::P);
+        assert!(h.get_by_label("Size").is_focused(), "unexpected paper shortcut: {modifiers:?}");
+        h.get_by_value("US Letter").focus();
+        h.run_steps(2);
+        print_key(&mut h, modifiers, Key::S);
+        assert!(h.get_by_value("US Letter").is_focused(), "unexpected sizing shortcut: {modifiers:?}");
+        h.get_by_label("Size").focus();
+        h.run_steps(2);
+    }
+    h.get_by_value("US Letter").click();
+    h.run_steps(2);
+    print_key(&mut h, Modifiers::ALT, Key::S);
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    assert!(!h.get_by_label("Size").is_focused());
+    print_key(&mut h, Modifiers::NONE, Key::Escape);
+    h.get_by_label("Multiple").click();
+    h.run_steps(2);
+    let before = h.state().print_draft.clone();
+    print_key(&mut h, Modifiers::ALT, Key::S);
+    assert!(h.get_by_label("Size").is_focused());
+    assert_eq!(h.state().print_draft, before, "focusing does not switch handling modes");
+    print_key(&mut h, Modifiers::NONE, Key::Enter);
+    h.get_by_label("Fit");
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+}
+
 #[test]
 fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     // Five distinct painted pages, labelled i, ii, iii, 1, 2.

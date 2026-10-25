@@ -927,6 +927,30 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, value: &mut T, choice
     });
 }
 
+/// Access keys only move focus. Popups own their keyboard, and exact modifiers keep
+/// AltGr (Ctrl+Alt), shifted keys and document shortcuts out of this path.
+fn focus_shortcut(ui: &egui::Ui, key: egui::Key) -> bool {
+    if !ui.is_enabled() || !ui.memory(|m| m.allows_interaction(ui.layer_id())) || egui::Popup::is_any_open(ui.ctx()) {
+        return false;
+    }
+    ui.input_mut(|i| {
+        let mut pressed = false;
+        let mut paired_text = false;
+        // consume_key matches modifiers loosely (including extra Shift/Alt).
+        i.events.retain(|event| {
+            let matched = matches!(event, egui::Event::Key { key: k, pressed: true, modifiers, .. }
+                if *k == key && *modifiers == egui::Modifiers::ALT);
+            // egui-winit emits printable text immediately after its Key event, including
+            // Alt access keys. Remove that pair before the range editor processes it.
+            let text = paired_text && matches!(event, egui::Event::Text(_));
+            paired_text = matched;
+            pressed |= matched;
+            !matched && !text
+        });
+        pressed
+    })
+}
+
 /// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
 /// (print, cancel).
 pub(crate) fn body(
@@ -937,6 +961,8 @@ pub(crate) fn body(
     labels: &[String],
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
+    let focus_paper = focus_shortcut(ui, egui::Key::P);
+    let focus_size = focus_shortcut(ui, egui::Key::S);
     ui.set_width(820.0);
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
@@ -1049,11 +1075,15 @@ pub(crate) fn body(
                 ui.label(tl!("Paper:"));
                 let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
                 let before = d.paper;
-                egui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
+                let paper = egui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
                     for (i, (name, _)) in PAPERS.iter().enumerate() {
                         ui.selectable_value(&mut d.paper, i, tl!(name));
                     }
                 });
+                paper.response.clone().on_hover_text("Alt+P");
+                if focus_paper {
+                    paper.response.request_focus();
+                }
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);
@@ -1139,7 +1169,17 @@ pub(crate) fn body(
                     (Handling::Booklet, tl!("Booklet")),
                     (Handling::Label, tl!("Label")),
                 ] {
-                    if widgets::mode_tab(ui, label, d.handling == h).clicked() {
+                    let tab = widgets::mode_tab(ui, label, d.handling == h);
+                    if h == Handling::Size {
+                        tab.clone().on_hover_text("Alt+S");
+                        if focus_size {
+                            tab.request_focus();
+                        }
+                    }
+                    if tab.has_focus() {
+                        ui.painter().rect_stroke(tab.rect.shrink(2.0), 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                    }
+                    if tab.clicked() {
                         d.set_handling(h);
                     }
                 }
