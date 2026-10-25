@@ -6360,8 +6360,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_trust"]
-evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "trusted certificates persist with the app's settings"
+evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/src/tools/sign_ui.rs::preferences_remove_one_trusted_certificate", "crates/ui-egui/src/tools/sign_ui.rs::the_certificate_viewer_removes_a_trusted_certificate"]
+notes = "trusted certificates persist with the app's settings; Preferences lists them with Remove, the Certificate Viewer's Trust tab removes the one shown, and sign_trust removes by SHA-256 (#2613). No import from a .cer file in the app yet (sign_trust takes paths), and the OS trust store is not read"
 
 [[feature]]
 id = "sign.trust-import"

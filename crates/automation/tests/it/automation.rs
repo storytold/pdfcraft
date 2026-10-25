@@ -6361,6 +6361,15 @@ fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Pat
     std::fs::write(dir.join("ada.p7b"), der::seq(&[&der::oid(cms::SIGNED_DATA), &der::explicit(0, &sd)])).unwrap();
     assert_eq!(ok(a, "sign_trust", json!({ "paths": ["ada.p7b"] }))["trusted"].as_array().unwrap().len(), 1);
     assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "valid");
+    // #2613: one certificate stops being trusted by the sha256 the list reports, in any spelling;
+    // the signature it anchored is unknown again, and a removal that matches nothing removes nothing.
+    let sha = ok(a, "sign_trust", json!({}))["trusted"][0]["sha256"].as_str().unwrap().to_string();
+    assert!(matches!(a.call("sign_trust", &json!({ "remove": ["AB CD"] })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("sign_trust", &json!({ "remove": sha })), Err(ToolError::InvalidArgs(_))), "a list, not one string");
+    let r = ok(a, "sign_trust", json!({ "remove": [sha.replace(' ', ":").to_lowercase()] }));
+    assert_eq!((r["trusted"].as_array().map(Vec::len), r["removed"].as_u64()), (Some(0), Some(1)));
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
+    assert_eq!(ok(a, "sign_trust", json!({ "remove": [sha] }))["removed"], 0);
 }
 
 /// The decoded text of every visible signature appearance (Helvetica forms) in a signed file.

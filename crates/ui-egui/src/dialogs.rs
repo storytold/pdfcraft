@@ -1196,6 +1196,7 @@ fn dialog_certificate_viewer(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
     req.close = done;
     match action {
         Some(crate::sign_ui::CertAction::Trust(c)) => app.trust_certificate(*c),
+        Some(crate::sign_ui::CertAction::Untrust(c)) => app.untrust_certificate(&c),
         Some(crate::sign_ui::CertAction::Export(c)) => {
             app.export_certificate(&c);
         }

@@ -351,7 +351,7 @@ fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable:
     }
 }
 
-/// Preferences: interface language and size, appearance, identity and JavaScript. Drawn in a scroll
+/// Preferences: interface language and size, appearance, identity, trusted certificates and JavaScript. Drawn in a scroll
 /// area; [`preferences_buttons`] goes below it, outside the scroll, so OK is always in reach.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
@@ -532,6 +532,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.label(
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );
+    ui.add_space(8.0);
+    crate::sign_ui::trusted_certificates_section(ui, app, t);
     ui.add_space(8.0);
     date_format(ui, app, t);
     ui.add_space(8.0);
