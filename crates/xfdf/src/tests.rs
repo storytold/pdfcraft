@@ -1933,3 +1933,54 @@ fn annots_of(doc: &Document) -> Vec<Dict> {
         .filter(|d| d.get(b"Subtype") != Some(&Object::name("Widget")))
         .collect()
 }
+
+/// XML, CSV and text write a multi-select list's choices in one cell joined by ", ", and the
+/// import splits the cell at every ", ", so a choice that holds ", " itself was cut apart and the
+/// whole value refused.
+#[test]
+fn multi_select_choices_with_commas_round_trip_through_xml_csv_and_text() {
+    let options = vec!["Smith, John".to_string(), "Doe, Jane".to_string(), "Other".to_string()];
+    let form = || {
+        let mut doc = one_field();
+        add_field(&mut doc, 0, [50.0, 500.0, 250.0, 600.0], &NewField::List { options: options.clone(), multi: true }, Some("People")).unwrap();
+        doc
+    };
+    let mut src = form();
+    set_value(&mut src, "People", &FieldValue::Choice(vec!["Smith, John".into(), "Doe, Jane".into()])).unwrap();
+    let want = fields(&src).into_iter().find(|f| f.name == "People").unwrap().value;
+    assert_eq!(want, ["Smith, John", "Doe, Jane"]);
+    for format in [Format::Xml, Format::Csv, Format::Txt] {
+        let data = export_data(&src, format);
+        let mut dst = form();
+        let report = import(&mut dst, data.as_bytes());
+        let got = fields(&dst).into_iter().find(|f| f.name == "People").unwrap().value;
+        assert_eq!(got, want, "{format:?}: {report:?}: {data:?}");
+    }
+}
+
+/// An option that is two other options joined by ", " must not swallow them: a cell the old split
+/// reads entirely as options gives what the old split gave.
+#[test]
+fn multi_select_comma_option_does_not_shadow_a_plain_split() {
+    let mut doc = one_field();
+    let options = ["A", "B", "C", "A, B"].map(String::from).to_vec();
+    add_field(&mut doc, 0, [50.0, 500.0, 250.0, 600.0], &NewField::List { options, multi: true }, Some("L")).unwrap();
+    let r = import(&mut doc, b"L\n\"A, B, C\"\n").unwrap();
+    let got = fields(&doc).into_iter().find(|f| f.name == "L").unwrap().value;
+    assert_eq!(got, ["A", "B", "C"], "{r:?}");
+}
+
+/// Options with an export value apart from the display text ("Smith, John"): the cell holds
+/// display texts, and the reading against the options matches them too.
+#[test]
+fn multi_select_cell_is_read_against_display_texts() {
+    let mut doc = one_field();
+    let options = ["x", "y"].map(String::from).to_vec();
+    add_field(&mut doc, 0, [50.0, 500.0, 250.0, 600.0], &NewField::List { options, multi: true }, Some("L")).unwrap();
+    let obj = fields(&doc).into_iter().find(|f| f.name == "L").unwrap().obj;
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![pair("1", "Smith, John"), pair("2", "Doe, Jane")]))).unwrap();
+    let r = import(&mut doc, b"L\n\"Smith, John, Doe, Jane\"\n").unwrap();
+    let got = fields(&doc).into_iter().find(|f| f.name == "L").unwrap().value;
+    assert_eq!(got, ["1", "2"], "{r:?}");
+}

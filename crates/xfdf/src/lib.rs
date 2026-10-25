@@ -884,6 +884,62 @@ pub fn export_data(doc: &Document, format: Format) -> String {
 
 // ── import ──────────────────────────────────────────────────────────────────────────────────
 
+/// A multi-select list's cell split back into its choices. The cell is split at every ", " as
+/// before; if each piece is an option (export value or display text, as `set_value` accepts), that
+/// is the result. Otherwise an option can hold ", " itself ("Smith, John"), so the cell is read as
+/// a run of the field's options separated by ", "; a cell that isn't one is split at every ", "
+/// (and the unknown parts are refused).
+fn split_choices(cell: &str, options: &[(String, String)]) -> Vec<String> {
+    let is_option = |v: &str| options.iter().any(|(e, d)| e == v || d == v);
+    let plain: Vec<String> = cell.split(", ").filter(|v| !v.is_empty()).map(str::to_string).collect();
+    if plain.iter().all(|v| is_option(v)) {
+        return plain;
+    }
+    // prev[s] = the start of the choice that ends just before the ", " at s - 2; done = the
+    // start of the last choice, which ends the cell
+    let mut prev: Vec<Option<usize>> = vec![None; cell.len() + 1];
+    let mut done = None;
+    let mut s = 0;
+    while s < cell.len() && done.is_none() {
+        if s == 0 || prev.get(s).copied().flatten().is_some() {
+            for e in options.iter().flat_map(|(e, d)| [e, d]).filter(|e| !e.is_empty()) {
+                if !cell.get(s..).is_some_and(|rest| rest.starts_with(e.as_str())) {
+                    continue;
+                }
+                let end = s + e.len();
+                if end == cell.len() {
+                    done = Some(s);
+                    break;
+                }
+                if cell.get(end..).is_some_and(|rest| rest.starts_with(", "))
+                    && let Some(slot @ None) = prev.get_mut(end + 2)
+                {
+                    *slot = Some(s);
+                }
+            }
+        }
+        s += 1;
+    }
+    let Some(mut start) = done else {
+        return plain;
+    };
+    let mut end = cell.len();
+    let mut out = Vec::new();
+    loop {
+        out.push(cell.get(start..end).unwrap_or_default().to_string());
+        if start == 0 {
+            break;
+        }
+        end = start.saturating_sub(2);
+        match prev.get(start).copied().flatten() {
+            Some(p) => start = p,
+            None => break,
+        }
+    }
+    out.reverse();
+    out
+}
+
 /// Set the values of fields named in `values` (full names), counting what took.
 fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &mut Report) {
     let all = pdfcraft_forms::fields(doc);
@@ -895,9 +951,10 @@ fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &m
             FieldKind::CheckBox => FieldValue::Check(!first.is_empty() && first != "Off"),
             FieldKind::Radio => FieldValue::Radio((!first.is_empty() && first != "Off").then_some(first)),
             // XML, CSV and text hold a multi-select list's values in one cell, joined by ", "
-            // (as export_data writes them); split it unless the whole cell is one option.
+            // (as export_data writes them); split it into the field's options unless the whole
+            // cell is one option.
             FieldKind::List if f.has(pdfcraft_forms::flags::MULTI_SELECT) && vals.len() == 1 && !f.options.iter().any(|(e, _)| *e == first) => {
-                FieldValue::Choice(first.split(", ").filter(|v| !v.is_empty()).map(str::to_string).collect())
+                FieldValue::Choice(split_choices(&first, &f.options))
             }
             FieldKind::Combo | FieldKind::List => FieldValue::Choice(vals.iter().filter(|v| !v.is_empty()).cloned().collect()),
             FieldKind::PushButton | FieldKind::Signature => continue,
