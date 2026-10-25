@@ -191,7 +191,7 @@ impl Automation {
             });
             // How opaque it is drawn: as a whole, or its fill and text each at their own.
             // Not for replies, which are drawn with the comment they answer.
-            if c.in_reply_to.is_none()
+            if !c.is_reply()
                 && let Some(p) = doc.comment_props(c.page, c.index)
             {
                 v["opacity"] = json!(p.opacity);
