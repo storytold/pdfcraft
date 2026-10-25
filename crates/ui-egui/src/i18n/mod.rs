@@ -216,9 +216,9 @@ pub static LANGUAGES: [LangInfo; 35] = [
         code: "ckb", name: "کوردیی ناوەندی", source: include_str!("ckb.tsv"), plural: plural_one_other, rtl: true, catalog: OnceLock::new()
     },
     // Persian (Farsi); every `fa-*` locale (`fa-IR`, `fa_IR.UTF-8`, `fa-AF` ...) resolves here. Right
-    // to left like Arabic: see `LangInfo::rtl`. CLDR `fa` counts have two forms (one, other), like
-    // English, so `@plural` entries list two forms.
-    LangInfo { code: "fa", name: "فارسی", source: include_str!("fa.tsv"), plural: plural_one_other, rtl: true, catalog: OnceLock::new() },
+    // to left like Arabic: see `LangInfo::rtl`. CLDR `fa` counts have two forms (one: i = 0 or n = 1,
+    // other), which for whole counts is the French rule, so `@plural` entries list two forms.
+    LangInfo { code: "fa", name: "فارسی", source: include_str!("fa.tsv"), plural: plural_fr, rtl: true, catalog: OnceLock::new() },
     // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
     LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
@@ -1736,9 +1736,9 @@ mod tests {
         let fa = persian();
         assert_eq!(fa.name(), "فارسی");
         assert!(fa.rtl());
-        // CLDR `fa` has the English one/other rule: 1 is singular, every other count the plural.
+        // CLDR `fa` (one: i = 0 or n = 1): 0 and 1 are singular, every other count the plural.
         assert_eq!(fa.0.plural_forms(), 2);
-        assert_eq!([0, 1, 2, 11].map(|n| (fa.0.plural)(n)), [1, 0, 1, 1]);
+        assert_eq!([0, 1, 2, 11].map(|n| (fa.0.plural)(n)), [0, 0, 1, 1]);
         assert_eq!(normalize_pref("FA"), Some("fa"));
         for tag in ["fa", "fa-IR", "fa_IR.UTF-8", "FA-af", "fa_IR@calendar=persian"] {
             assert_eq!(lang_from_tag(tag), Some(fa), "{tag}");
