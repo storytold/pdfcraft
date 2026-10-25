@@ -418,6 +418,21 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             widgets::radio_value(ui, &mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
         }
     });
+    // Windows and browsers never report touchpads in points (crate::scroll_speed).
+    #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+    {
+        let row = ui.horizontal(|ui| {
+            ui.label(tl!("Scroll speed (touchpad)"));
+            for speed in crate::scroll_speed::ScrollSpeed::ALL {
+                widgets::radio_value(ui, &mut app.touchpad_speed, speed, tl_ctx!("scroll speed", speed.label()));
+            }
+        });
+        // XWayland and X11 report a touchpad as wheel lines.
+        #[cfg(not(target_os = "macos"))]
+        row.response.on_hover_text(tl!("On X11, the touchpad follows the mouse wheel speed."));
+        #[cfg(target_os = "macos")]
+        let _ = row;
+    }
     // Whether anything animates, the wheel's scrolling and zooming included; left alone it
     // follows the system's animation setting.
     ui.horizontal(|ui| {

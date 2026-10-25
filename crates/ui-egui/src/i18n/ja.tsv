@@ -2339,6 +2339,8 @@ key	Space	スペース
 scroll speed	Slow	遅い
 scroll speed	Normal	標準
 scroll speed	Fast	速い
+	Scroll speed (touchpad)	スクロール速度（タッチパッド）
+	On X11, the touchpad follows the mouse wheel speed.	X11 では、タッチパッドはマウスホイールの速度に従います。
 	Animation effects	アニメーション効果
 animation effects	On	オン
 animation effects	Off	オフ

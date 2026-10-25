@@ -2338,6 +2338,8 @@ key	Space	Szóköz
 scroll speed	Slow	Lassú
 scroll speed	Normal	Normál
 scroll speed	Fast	Gyors
+	Scroll speed (touchpad)	Görgetési sebesség (érintőpad)
+	On X11, the touchpad follows the mouse wheel speed.	X11 alatt az érintőpad az egérgörgő sebességét követi.
 	Animation effects	Animációs effektusok
 animation effects	On	Be
 animation effects	Off	Ki

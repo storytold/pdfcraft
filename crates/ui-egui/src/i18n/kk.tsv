@@ -2334,6 +2334,8 @@ key	Space	Бос орын
 scroll speed	Slow	Баяу
 scroll speed	Normal	Қалыпты
 scroll speed	Fast	Жылдам
+	Scroll speed (touchpad)	Айналдыру жылдамдығы (сенсорлық тақта)
+	On X11, the touchpad follows the mouse wheel speed.	X11 жүйесінде сенсорлық тақта тінтуір дөңгелегінің жылдамдығын пайдаланады.
 	Animation effects	Анимация әсерлері
 animation effects	On	Қосулы
 animation effects	Off	Өшірулі

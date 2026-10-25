@@ -2319,6 +2319,8 @@ key	Space	Spacja
 scroll speed	Slow	Wolna
 scroll speed	Normal	Normalna
 scroll speed	Fast	Szybka
+	Scroll speed (touchpad)	Szybkość przewijania (touchpad)
+	On X11, the touchpad follows the mouse wheel speed.	W X11 touchpad używa szybkości kółka myszy.
 	Animation effects	Efekty animacji
 animation effects	On	Włączone
 animation effects	Off	Wyłączone

@@ -2390,6 +2390,8 @@ certificate	Subject	Subjekt
 scroll speed	Slow	Pomalá
 scroll speed	Normal	Normální
 scroll speed	Fast	Rychlá
+	Scroll speed (touchpad)	Rychlost posouvání (touchpad)
+	On X11, the touchpad follows the mouse wheel speed.	V X11 se touchpad řídí rychlostí kolečka myši.
 	Animation effects	Animační efekty
 animation effects	On	Zapnuto
 animation effects	Off	Vypnuto

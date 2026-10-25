@@ -2344,6 +2344,8 @@ comment menu	Edit	Επεξεργασία
 scroll speed	Slow	Αργή
 scroll speed	Normal	Κανονική
 scroll speed	Fast	Γρήγορη
+	Scroll speed (touchpad)	Ταχύτητα κύλισης (επιφάνεια αφής)
+	On X11, the touchpad follows the mouse wheel speed.	Στο X11, η επιφάνεια αφής ακολουθεί την ταχύτητα του τροχού του ποντικιού.
 	Animation effects	Εφέ κίνησης
 animation effects	On	Ενεργά
 animation effects	Off	Ανενεργά

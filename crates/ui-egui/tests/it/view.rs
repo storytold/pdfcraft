@@ -546,6 +546,47 @@ fn precise_touchpad_wheel_scrolls_one_to_one() {
     assert!(drift.abs() < 2.0, "no easing tail after the swipe: drifted {drift}");
 }
 
+/// Wayland reports a touchpad swipe in points, which moved the page only as far as the fingers:
+/// slow next to XWayland, which reports it as wheel lines. Preferences ▸ Scroll speed (touchpad)
+/// scales those points before egui reads them (in `raw_input_hook`, which eframe calls and the
+/// harness doesn't, so it is called here), and the scaled swipe still lands at once. The choice
+/// is saved and set on the control channel.
+#[test]
+fn the_touchpad_speed_preference_scales_touchpad_points() {
+    use eframe::App as _;
+    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
+    for speed in ScrollSpeed::ALL {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "100")]);
+        h.state_mut().touchpad_speed = speed;
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        let before = rect(&h, 0).expect("page 1 on screen").min.y;
+        // One 10-point finger motion with no lift, so no glide follows it.
+        let mut raw = egui::RawInput { events: vec![wheel(MouseWheelUnit::Point, -10.0, TouchPhase::Move)], ..Default::default() };
+        let ctx = h.ctx.clone();
+        h.state_mut().raw_input_hook(&ctx, &mut raw);
+        for event in raw.events {
+            h.event(event);
+        }
+        h.run_steps(4);
+        let moved = before - rect(&h, 0).expect("page 1 still laid out").min.y;
+        let expected = 10.0 * speed.touchpad_factor();
+        assert!((moved - expected).abs() < 1.0, "{speed:?}: a 10-point swipe moved the page {moved}, not {expected}");
+        let settled = rect(&h, 0).unwrap().min.y;
+        h.run_steps(20);
+        let drift = settled - rect(&h, 0).unwrap().min.y;
+        assert!(drift.abs() < 1.0, "{speed:?}: no easing tail after the swipe: drifted {drift}");
+    }
+    let mut app = PdfCraftApp::new();
+    app.set_option("touchpad_scroll_speed", "slow").unwrap();
+    assert!(app.set_option("touchpad_scroll_speed", "warp").unwrap_err().contains("slow, normal, or fast"));
+    assert_eq!(app.scroll_speed, ScrollSpeed::Normal, "the wheel keeps its own choice");
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert_eq!(again.touchpad_speed, ScrollSpeed::Slow);
+}
+
 #[test]
 fn rapid_wheel_notches_accelerate_and_follow_touchpad_input() {
     use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;

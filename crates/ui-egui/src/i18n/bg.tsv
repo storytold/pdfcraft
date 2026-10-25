@@ -2302,6 +2302,8 @@ key	Space	Интервал
 scroll speed	Slow	Ниска
 scroll speed	Normal	Нормална
 scroll speed	Fast	Висока
+	Scroll speed (touchpad)	Скорост на превъртане (тъчпад)
+	On X11, the touchpad follows the mouse wheel speed.	В X11 тъчпадът следва скоростта на колелцето на мишката.
 	Animation effects	Анимационни ефекти
 animation effects	On	Включени
 animation effects	Off	Изключени

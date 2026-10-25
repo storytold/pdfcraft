@@ -2340,6 +2340,8 @@ key	Space	Leertaste
 scroll speed	Slow	Langsam
 scroll speed	Normal	Normal
 scroll speed	Fast	Schnell
+	Scroll speed (touchpad)	Bildlaufgeschwindigkeit (Touchpad)
+	On X11, the touchpad follows the mouse wheel speed.	Unter X11 folgt das Touchpad der Mausrad-Geschwindigkeit.
 	Animation effects	Animationseffekte
 animation effects	On	Ein
 animation effects	Off	Aus
