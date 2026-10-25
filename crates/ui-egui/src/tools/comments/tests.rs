@@ -478,6 +478,8 @@ fn edit_text_from_the_menu_follows_the_view_rotation_without_a_drawn_page() {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
+            grouped: false,
             rect: [10.0, 10.0, 80.0, 30.0],
             color: None,
             index: 0,
