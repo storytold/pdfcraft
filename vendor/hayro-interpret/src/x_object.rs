@@ -805,6 +805,13 @@ fn decode_context<'a>(
         })
         .unwrap_or(ColorSpace::device_gray());
 
+    // PdfCraft patch (67): nor are images and masks with more samples than `image_samples_ok`
+    // allows, since every sample they say they have is padded and expanded.
+    if !image_samples_ok(width, height, color_space.num_components()) {
+        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        return None;
+    }
+
     let fallback_bpc = if obj.is_stencil_mask { 1 } else { 8 };
 
     let bits_per_component = decoded
@@ -1467,4 +1474,16 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
 /// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
 pub fn image_size_ok(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
+}
+
+/// PdfCraft patch (67): whether an image or mask of `width` × `height` pixels of `components`
+/// samples each may be decoded: at most 2^30 samples, four a pixel at [`image_size_ok`]'s limit.
+/// Missing samples are padded (`fix_image_length`) and every sample is expanded on the way to
+/// RGB, to `u16` and then `f32`, so under the pixel limit alone a few bytes of a many-ink image
+/// asked for tens of gigabytes.
+pub fn image_samples_ok(width: u32, height: u32, components: u8) -> bool {
+    u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(u64::from(components)))
+        .is_some_and(|samples| samples <= 1 << 30)
 }
