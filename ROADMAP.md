@@ -347,6 +347,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-13 (M5, nested FDF values):** Comment export copies and renumbers nested indirect values, retaining geometry, colours, borders and shared graphs. Graph/data limits return an error before the destination is written; synthetic saved-PDF and automation exchange regressions. Estimates unchanged.
 - **2026-10-18 (M2, #3086):** Text extraction estimates letter tracking without repeated punctuation gaps so dotted TOC leaders do not swallow word spaces. Synthetic PDF regressions cover leader lengths, phrase search and selection; strongly tracked text stays intact. Estimates unchanged.
 - **2026-10-19 (M10, PR #3335 review):** Hungarian OCR installation notices use all interface catalogs, with raw diagnostics under Details; refreshed measured parity counts and retained dated historical audience estimates.
+- **2026-10-25 (M10, PR #3335):** Rebased Hungarian OCR onto the current main branch, preserving guarded recognition and document permissions; migrated OCR tests and evidence to consolidated test targets. Automatic OCR checks the selected language backend. Refreshed measured parity counts; readiness estimates unchanged.
 
 - **2026-10-18 (M6, #2892):** Push-button normal labels are editable per widget through Options and form_set_props, independently of field names; rendering, undo/redo and incremental/full save/reopen are covered. Estimates unchanged.
 

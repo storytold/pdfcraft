@@ -302,7 +302,8 @@ pub fn recognize_file(
 pub(crate) fn add_text_layer(doc: &mut pdfcraft_cos::Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
     use pdfcraft_cos::Object;
     if words.iter().all(|w| pdfcraft_fonts::first_non_win_ansi(&w.text).is_none()) {
-        return Ok(pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words))?);
+        pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words))?;
+        return Ok(());
     }
     let pages = pdfcraft_model::pages(doc);
     let page_info = pages.get(page).ok_or_else(|| EditError::Invalid("no such OCR page".into()))?;
@@ -335,7 +336,8 @@ pub(crate) fn add_text_layer(doc: &mut pdfcraft_cos::Document, page: usize, word
     content.extend_from_slice(b"ET\nQ\nEMC\n");
     resources.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(page_info.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).map_err(|e| EditError::Invalid(e.to_string()))?;
-    Ok(pdfcraft_edit::stamp(doc, page, "OCR", content)?)
+    pdfcraft_edit::stamp(doc, page, "OCR", content)?;
+    Ok(())
 }
 
 #[cfg(test)]

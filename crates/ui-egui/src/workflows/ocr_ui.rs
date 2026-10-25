@@ -91,7 +91,7 @@ pub struct AutoOcr {
 }
 
 /// The native installation probe may take seconds; never run it on the GUI thread.
-fn readiness(ui: &egui::Ui, language: &str) -> Option<Result<(), String>> {
+fn readiness(ctx: &egui::Context, language: &str) -> Option<Result<(), String>> {
     #[cfg(not(target_arch = "wasm32"))]
     if language == "hu" {
         type Probe = Arc<Mutex<Option<Result<(), String>>>>;
@@ -109,11 +109,11 @@ fn readiness(ui: &egui::Ui, language: &str) -> Option<Result<(), String>> {
         });
         let result = probe.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if result.is_none() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         return result;
     }
-    let _ = ui;
+    let _ = ctx;
     Some(pdfcraft_engine::ocr::availability(language))
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
     });
-    let readiness = readiness(ui, &d.language);
+    let readiness = readiness(ui.ctx(), &d.language);
     let available = matches!(readiness, Some(Ok(())));
     let detail = readiness.as_ref().and_then(|r| r.as_ref().err()).cloned();
     let message = match readiness {
@@ -239,9 +239,15 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available() {
-            self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
-            return;
+        let Some(ctx) = self.ctx.as_ref() else { return };
+        match readiness(ctx, &self.ocr_draft.language) {
+            // A pending native probe must not mark the page as skipped: try again after repaint.
+            None => return,
+            Some(Err(_)) => {
+                self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
+                return;
+            }
+            Some(Ok(())) => {}
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
         // Only a page with no text of its own is read. Comments and text boxes over the picture do
