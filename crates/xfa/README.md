@@ -61,9 +61,11 @@ that warning and keeps the existing layout and accepted widget values.
   draws (a draw a script gave a caption gets one, drawn in the draw's font unless it has its
   own); a draw's value; a field's item lists (a
   drop-down a script filled, whose template lists are empty); and the value of a field with
-  `<bind match="none">` (a bound field takes its value from the data). Only the first instance
-  of a repeating subform is read, and the root subform's `restoreState` is not consulted: the
-  packet is applied whatever it says.
+  `<bind match="none">` (a bound field takes its value from the data), a saved number shown
+  without the zeros that end its fraction (`6.00000000` as `6`). Only the first instance of a
+  repeating subform is read, and only for presence and access: each instance was saved with its
+  own values, which would otherwise all go to every instance (a warning says so). The root
+  subform's `restoreState` is not consulted: the packet is applied whatever it says.
 
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.

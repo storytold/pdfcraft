@@ -2826,6 +2826,75 @@ fn the_form_packet_restores_the_items_of_a_choice_list() {
     );
 }
 
+/// Each instance of a repeating subform is saved with its own values. The template has the
+/// subform once, so restoring the first instance's values would show them in every instance:
+/// inside one only presence and access are restored, with one warning.
+#[test]
+fn the_values_saved_in_a_repeating_subforms_instances_are_not_copied_to_all_of_them() {
+    let body = r#"<subform name="body" layout="tb" w="7.5in">
+ <field name="title" w="3in" h="0.4in"><ui><textEdit/></ui><bind match="none"/></field>
+ <subform name="rec" layout="tb" w="7.5in"><occur initial="2" max="-1"/>
+  <field name="pic" w="3in" h="0.4in"><ui><textEdit/></ui><bind match="none"/><caption><value><text>Picture</text></value></caption></field>
+  <field name="pick" w="3in" h="0.4in"><ui><choiceList/></ui><bind match="none"/><items><text>A</text></items></field>
+  <draw name="label" w="3in" h="0.3in"><value><text>Template label</text></value></draw>
+ </subform>
+</subform>"#;
+    let template = one_area_form(r#"layout="tb""#, body);
+    let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
+ <field name="title"><value><text>kept</text></value></field>
+ <subform name="rec"><field name="pic" access="readOnly"><caption><value><text>First caption</text></value></caption><value><text>first</text></value></field>
+  <field name="pick"><items><text>First item</text></items></field><draw name="label"><value><text>First label</text></value></draw></subform>
+ <subform name="rec"><field name="pic"><value><text>second</text></value></field><draw name="label"><value><text>Second label</text></value></draw></subform>
+</subform></subform></form>
+</xdp:xdp>"#;
+    let form = layout_xml(&template.replace("</xdp:xdp>", saved)).unwrap();
+    let page = &form.pages[0];
+    let values: Vec<(String, Option<String>, bool)> = widgets(page).iter().map(|w| (w.som.clone(), w.value.clone(), w.read_only)).collect();
+    let v = |som: &str, value: Option<&str>, ro: bool| (som.to_string(), value.map(str::to_string), ro);
+    assert_eq!(
+        values,
+        [
+            v("form[0].body[0].title[0]", Some("kept"), false),
+            v("form[0].body[0].rec[0].pic[0]", None, true),
+            v("form[0].body[0].rec[0].pick[0]", None, false),
+            v("form[0].body[0].rec[1].pic[0]", None, true),
+            v("form[0].body[0].rec[1].pick[0]", None, false),
+        ],
+        "the title outside the instances takes its value; the instances keep the template's, and the first one's access"
+    );
+    let options: Vec<Vec<(String, String)>> =
+        widgets(page).iter().filter_map(|w| if let WidgetKind::Choice { options, .. } = &w.kind { Some(options.clone()) } else { None }).collect();
+    assert_eq!(options, vec![vec![("A".to_string(), "A".to_string())]; 2]);
+    let text = texts(page).join(" ");
+    assert!(!text.contains("First") && !text.contains("Second") && text.matches("Template label").count() == 2, "{text}");
+    assert_eq!(form.warnings.iter().filter(|w| w.contains("repeating subform was saved")).count(), 1, "{:?}", form.warnings);
+}
+
+/// A number field bound to no data is saved with its value in canonical form
+/// (`<float>6.00000000</float>`); it opens showing the number without the trailing zeros.
+#[test]
+fn a_saved_number_opens_without_the_zeros_ending_its_fraction() {
+    let fields: String = ["f", "d", "i", "neg", "zero", "exp", "txt"]
+        .iter()
+        .map(|n| format!(r#"<field name="{n}" w="3in" h="0.4in"><ui><numericEdit/></ui><bind match="none"/></field>"#))
+        .collect();
+    let template = one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="tb" w="7.5in">{fields}</subform>"#));
+    let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
+ <field name="f"><value><float>6.00000000</float></value></field>
+ <field name="d"><value><decimal>12.50</decimal></value></field>
+ <field name="i"><value><integer>100</integer></value></field>
+ <field name="neg"><value><float>-0.250</float></value></field>
+ <field name="zero"><value><float>-0.000</float></value></field>
+ <field name="exp"><value><float>1.50E3</float></value></field>
+ <field name="txt"><value><text>6.00</text></value></field>
+</subform></subform></form>
+</xdp:xdp>"#;
+    let form = layout_xml(&template.replace("</xdp:xdp>", saved)).unwrap();
+    let values: Vec<Option<String>> = widgets(&form.pages[0]).iter().map(|w| w.value.clone()).collect();
+    let want = ["6", "12.5", "100", "-0.25", "0", "1.50E3", "6.00"];
+    assert_eq!(values, want.map(|s| Some(s.to_string())), "a number in another notation, and text, stay as they are");
+}
+
 #[test]
 fn a_text_field_without_a_border_of_its_own_has_no_box() {
     let body = r#"<subform name="body" layout="tb" w="7.5in"><field name="plain" w="3in" h="0.4in"><ui><textEdit/></ui></field><field name="boxed" w="3in" h="0.4in"><ui><textEdit><border><edge/></border></textEdit></ui></field><field name="tick" w="3in" h="0.4in"><ui><checkButton/></ui></field></subform>"#;

@@ -762,7 +762,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         if let Some(p) = saved_root.attribute("presence") {
             root_sf.common.presence = Presence::parse(Some(p));
         }
-        apply_saved_state(&mut root_sf.children, saved_root, 0, &mut warnings);
+        apply_saved_state(&mut root_sf.children, saved_root, 0, true, &mut warnings);
     }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
@@ -792,8 +792,11 @@ fn parse_access(a: Option<&str>) -> Option<Access> {
 ///   the data, which is saved on its own.
 ///
 /// Objects are matched by name and position among the same-named; of the instances of a
-/// repeating subform only the first is read, as the template has it once.
-fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize, warnings: &mut Vec<String>) {
+/// repeating subform only the first is read, as the template has it once. Each instance was
+/// saved with its own values, which the layout's instances can't take yet, so inside one
+/// (`content` false) only presence and access are restored: copying the first instance's
+/// values, items and captions would give every instance the first one's.
+fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize, content: bool, warnings: &mut Vec<String>) {
     if depth > MAX_DEPTH {
         let msg = format!("the saved form state nests deeper than {MAX_DEPTH} levels; what lies deeper is not restored");
         // Once, however many branches reach the limit.
@@ -803,30 +806,48 @@ fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize, warnings:
         return;
     }
     let mut matcher = Matcher::new(nodes.iter().map(|n| n.common().name.as_deref()));
-    for c in saved.children().filter(|c| c.is_element()) {
-        if !matches!(c.tag_name().name(), "subform" | "subformSet" | "area" | "field" | "draw" | "exclGroup") {
-            continue;
-        }
+    let saved_objects =
+        || saved.children().filter(|c| matches!(c.tag_name().name(), "subform" | "subformSet" | "area" | "field" | "draw" | "exclGroup"));
+    // How many saved objects have each name: more than the template has are instances.
+    let mut saved_count: HashMap<&str, usize> = HashMap::new();
+    for name in saved_objects().filter_map(|c| c.attribute("name")) {
+        let k = saved_count.entry(name).or_insert(0);
+        *k = k.saturating_add(1);
+    }
+    for c in saved_objects() {
         // More saved objects of the name than the template has: further instances.
         let Some(target) = matcher.index(c).and_then(|i| nodes.get_mut(i)) else { continue };
         let presence = c.attribute("presence").map(|p| Presence::parse(Some(p)));
+        let repeats = matches!(target, Node::Subform(_) | Node::Area(_))
+            && c.attribute("name").is_some_and(|n| saved_count.get(n).copied().unwrap_or(0) > matcher.template_count(n));
+        let inner = content && !repeats;
+        if content && repeats {
+            let msg =
+                "a repeating subform was saved with values of its own in each instance; only their presence and access are restored".to_string();
+            if !warnings.contains(&msg) {
+                warnings.push(msg);
+            }
+        }
         match target {
             Node::Subform(s) => {
                 if let Some(p) = presence {
                     s.common.presence = p;
                 }
-                apply_saved_state(&mut s.children, c, depth + 1, warnings);
+                apply_saved_state(&mut s.children, c, depth + 1, inner, warnings);
             }
             Node::Area(a) => {
                 if let Some(p) = presence {
                     a.common.presence = p;
                 }
-                apply_saved_state(&mut a.children, c, depth + 1, warnings);
+                apply_saved_state(&mut a.children, c, depth + 1, inner, warnings);
             }
-            Node::Field(f) => apply_saved_field(f, c, presence, warnings),
+            Node::Field(f) => apply_saved_field(f, c, presence, content, warnings),
             Node::Draw(d) => {
                 if let Some(p) = presence {
                     d.common.presence = p;
+                }
+                if !content {
+                    continue;
                 }
                 if let Some(text) = saved_caption(c, warnings) {
                     d.caption.get_or_insert_with(Caption::default).value = text;
@@ -844,7 +865,7 @@ fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize, warnings:
                 for k in children(c, "field") {
                     if let Some(f) = matcher.index(k).and_then(|i| g.fields.get_mut(i)) {
                         let presence = k.attribute("presence").map(|p| Presence::parse(Some(p)));
-                        apply_saved_field(f, k, presence, warnings);
+                        apply_saved_field(f, k, presence, content, warnings);
                     }
                 }
             }
@@ -879,15 +900,24 @@ impl<'a> Matcher<'a> {
         *k = k.saturating_add(1);
         self.by_name.get(name)?.get(nth).copied()
     }
+
+    /// How many template objects are named `name`.
+    fn template_count(&self, name: &str) -> usize {
+        self.by_name.get(name).map_or(0, Vec::len)
+    }
 }
 
-/// The saved state of one field (see [`apply_saved_state`]).
-fn apply_saved_field(f: &mut Field, saved: XmlNode, presence: Option<Presence>, warnings: &mut Vec<String>) {
+/// The saved state of one field (see [`apply_saved_state`]); only presence and access unless
+/// `content`.
+fn apply_saved_field(f: &mut Field, saved: XmlNode, presence: Option<Presence>, content: bool, warnings: &mut Vec<String>) {
     if let Some(p) = presence {
         f.common.presence = p;
     }
     if let Some(a) = parse_access(saved.attribute("access")) {
         f.access = a;
+    }
+    if !content {
+        return;
     }
     // A caption a script changed (a button's label, say). A saved caption the template lacks
     // was added by a script, and is shown with the template's defaults otherwise.
@@ -903,8 +933,32 @@ fn apply_saved_field(f: &mut Field, saved: XmlNode, presence: Option<Presence>, 
     if f.unbound
         && let Some(v) = saved_value(saved, warnings)
     {
-        f.value = v;
+        // A number is saved in its canonical form (`<float>6.00000000</float>`), not as it shows.
+        let number = child(saved, "value")
+            .and_then(|v| v.children().find(|k| k.is_element()))
+            .is_some_and(|k| matches!(k.tag_name().name(), "float" | "decimal" | "integer"));
+        f.value = match v {
+            Value::Text(t) if number => Value::Text(shortest_decimal(&t)),
+            v => v,
+        };
     }
+}
+
+/// A decimal number's text without the zeros that end its fraction, and without the point when
+/// nothing is left after it (`6.00000000` → `6`, `-2.50` → `-2.5`). Anything that isn't a plain
+/// decimal number (an exponent, a group separator, letters) is returned as it is, trimmed. The
+/// text is shortened, never parsed, so no digit changes.
+fn shortest_decimal(text: &str) -> String {
+    let t = text.trim();
+    let digits = t.strip_prefix(['-', '+']).unwrap_or(t);
+    let Some((int, frac)) = digits.split_once('.') else { return t.to_string() };
+    let plain = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if !plain(int) || !plain(frac) || (int.is_empty() && frac.is_empty()) {
+        return t.to_string();
+    }
+    let short = t.trim_end_matches('0').trim_end_matches('.');
+    // `.000` and `-0.0` are zero.
+    if short.bytes().all(|b| matches!(b, b'0' | b'-' | b'+')) { "0".to_string() } else { short.to_string() }
 }
 
 /// The text of a saved object's `<caption><value>`, when it holds some.
