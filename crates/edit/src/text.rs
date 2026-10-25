@@ -305,6 +305,27 @@ impl TextState {
         v
     }
 
+    /// Emboldened (`bold`): filled, then stroked `width` wide in the fill colour (`2 Tr`).
+    /// Otherwise a stroke in the fill colour is taken away; one in another colour stays.
+    /// Whether the text is now emboldened.
+    fn embolden(&mut self, bold: bool, width: f64) -> bool {
+        // The fill colour's operators as stroke colour: `g`/`rg`/`k`/`cs`/`sc`/`scn` upper-cased.
+        let stroke: Vec<Op> =
+            self.fill.iter().map(|op| Op::new(&String::from_utf8_lossy(&op.op).to_ascii_uppercase(), op.operands.clone())).collect();
+        if bold && width.is_finite() && width > 0.0 {
+            self.render_mode = 2;
+            self.stroke = stroke;
+            self.line_width = Some(width);
+            return true;
+        }
+        // Compared by operator and operands: where in the stream each was read doesn't matter.
+        let same = |a: &[Op], b: &[Op]| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.op == b.op && a.operands == b.operands);
+        if !bold && self.render_mode == 2 && same(&self.stroke, &stroke) {
+            self.render_mode = 0;
+        }
+        false
+    }
+
     /// Operators that set this state (inside a text object).
     fn ops(&self) -> Vec<Op> {
         let n = pdfcraft_content::num;
@@ -1374,7 +1395,19 @@ fn interpret(
                         trm0.apply(b, ts.rise + m.ascent * ts.size),
                     ],
                 };
-                let corners = span(0.0, if vertical.is_some() { y_text } else { x_text });
+                // The run's box is its cell standing upright on the pen's path, as an italic face's
+                // box is its advance: a slanted matrix leans the ink (`ink` below), not where the
+                // run starts and ends. The rise still moves along the matrix's own vertical axis.
+                let corners = match vertical {
+                    Some(_) => span(0.0, y_text),
+                    None => {
+                        let up = slanted(trm0.0, false);
+                        [(0.0, m.descent), (x_text, m.descent), (0.0, m.ascent), (x_text, m.ascent)].map(|(x, y)| {
+                            let (px, py) = trm0.apply(x, ts.rise);
+                            (px + up[2] * y * ts.size, py + up[3] * y * ts.size)
+                        })
+                    }
+                };
                 let rect = corners
                     .iter()
                     .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
@@ -1393,7 +1426,7 @@ fn interpret(
                             .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
                     })
                     .collect();
-                let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
+                let size_user = upright_height(&trm0.0) * ts.size;
                 // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
                 // It must not create a phantom editable line or enlarge its neighbours' boxes.
                 if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
@@ -1559,7 +1592,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 origin: Origin {
                     tm: s.tm.0,
                     tlm: s.tlm.0,
-                    k: (s.tm.then(&s.state.ctm).0[2].powi(2) + s.tm.then(&s.state.ctm).0[3].powi(2)).sqrt(),
+                    k: upright_height(&s.tm.then(&s.state.ctm).0),
                     ctm: s.state.ctm.0,
                     baseline: s.baseline,
                     x: s.start_x,
@@ -1673,7 +1706,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             origin: Origin {
                 tm: s.tm.0,
                 tlm: s.tlm.0,
-                k: (s.tm.then(&s.state.ctm).0[2].powi(2) + s.tm.then(&s.state.ctm).0[3].powi(2)).sqrt(),
+                k: upright_height(&s.tm.then(&s.state.ctm).0),
                 ctm: s.state.ctm.0,
                 baseline: s.baseline,
                 x: s.start_x,
@@ -2837,6 +2870,10 @@ pub struct BlockStyle {
     pub offset: Option<[f64; 2]>,
     /// Rewrap to this width in user space (dragging the box's edge).
     pub width: Option<f64>,
+    /// Draw the text emboldened or slanted although its face has no bold or italic
+    /// ([`RangeStyle::synthetic_bold`]); `Some(false)` takes such emboldening or slant away.
+    pub synthetic_bold: Option<bool>,
+    pub synthetic_italic: Option<bool>,
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
@@ -2852,6 +2889,43 @@ pub struct RangeStyle {
     pub underline: Option<bool>,
     pub char_spacing: Option<f64>,
     pub scale: Option<f64>,
+    /// Embolden the range in its own face (`2 Tr`: filled, then stroked in the fill colour
+    /// [`SYNTHETIC_BOLD`] em wide), as word processors draw bold in a face that has none.
+    /// `Some(false)` takes such emboldening away; a stroke in another colour is an outline
+    /// effect and stays. The glyphs' advances don't change, so the text wraps as before.
+    pub synthetic_bold: Option<bool>,
+    /// Slant the range [`SYNTHETIC_SLANT`] to the right in its own face (the text matrix's
+    /// vertical axis sheared along the baseline), or with `Some(false)` stand it upright again.
+    pub synthetic_italic: Option<bool>,
+}
+
+/// Stroke width of [`RangeStyle::synthetic_bold`], in em.
+pub const SYNTHETIC_BOLD: f64 = 1.0 / 30.0;
+/// Slant of [`RangeStyle::synthetic_italic`]: tan 12°.
+pub const SYNTHETIC_SLANT: f64 = 0.212_556_56;
+
+/// How high one text-space unit stands above the baseline of `m`: the height square to its
+/// baseline, so slanted (sheared) text has the size it is set in, not the length of its slanted
+/// axis. A degenerate baseline takes that axis' length.
+pub(crate) fn upright_height(m: &[f64; 6]) -> f64 {
+    let [a, b, c, d, _, _] = *m;
+    let along = a.hypot(b);
+    if along.is_finite() && along > f64::EPSILON { (a * d - b * c).abs() / along } else { c.hypot(d) }
+}
+
+/// `tm` slanted by [`SYNTHETIC_SLANT`] (`italic`) or upright: its vertical axis loses the part
+/// along the baseline and, slanted, gains the slant times its upright height. The baseline,
+/// size and origin stay. A degenerate baseline stays as it is.
+pub fn slanted(tm: [f64; 6], italic: bool) -> [f64; 6] {
+    let [a, b, c, d, e, f] = tm;
+    let along = a * a + b * b;
+    if !along.is_finite() || along <= f64::EPSILON {
+        return tm;
+    }
+    let k = (a * c + b * d) / along;
+    let (c, d) = (c - k * a, d - k * b);
+    let t = if italic { SYNTHETIC_SLANT * c.hypot(d) / along.sqrt() } else { 0.0 };
+    [a, b, c + t * a, d + t * b, e, f]
 }
 
 /// Rewrite paragraph `block` with new text (or its own) and formatting, rewrapped to its width.

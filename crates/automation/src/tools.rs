@@ -73,6 +73,16 @@ fn comment_ref(mut extra: Value) -> Value {
     extra
 }
 
+/// `text_edit`'s synthetic bold or italic in the text's own face.
+fn synthetic(what: &str) -> Value {
+    let how = if what == "bold" {
+        "emboldened: filled, then stroked in its fill colour 1/30 em wide (2 Tr); false takes such a stroke away"
+    } else {
+        "slanted 12° to the right by its text matrix; false stands it upright"
+    };
+    json!({ "type": "boolean", "description": format!("Draw the text {how}, keeping its own face, advances and wrapping. For a face with no {what} variant.") })
+}
+
 fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
@@ -1379,7 +1389,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 },
                     "paragraph": { "type": "integer", "minimum": 1 },
                     "font_resource": { "type": "string", "description": "Explicit source/full page font resource from text_fonts or text_font_import." },
-                    "ranges": { "type": "array", "maxItems": 1024, "items": { "type": "object", "properties": {"range":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2},"font":{"type":"string","enum":["helvetica","times","courier"]},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"font_resource":{"type":"string"},"size":{"type":"number","exclusiveMinimum":0},"color":{"type":"string"},"underline":{"type":"boolean"},"char_spacing":{"type":"number"},"scale":{"type":"number"}},"required":["range"]}, "description":"Disjoint UTF-8 byte ranges in replacement text; unspecified source formatting survives." },
+                    "ranges": { "type": "array", "maxItems": 1024, "items": { "type": "object", "properties": {"range":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2},"font":{"type":"string","enum":["helvetica","times","courier"]},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"font_resource":{"type":"string"},"size":{"type":"number","exclusiveMinimum":0},"color":{"type":"string"},"underline":{"type":"boolean"},"char_spacing":{"type":"number"},"scale":{"type":"number"},"synthetic_bold":synthetic("bold"),"synthetic_italic":synthetic("italic")},"required":["range"]}, "description":"Disjoint UTF-8 byte ranges in replacement text; unspecified source formatting survives." },
                     "text": { "type": "string" },
                     "font": { "type": "string", "enum": ["helvetica", "times", "courier"] },
                     "bold": { "type": "boolean" },
@@ -1393,7 +1403,9 @@ pub fn tools() -> Vec<ToolDef> {
                     "dy": { "type": "number", "description": "Paragraph only: move up by this many points (negative: down)." },
                     "width": { "type": "number", "description": "Paragraph only: rewrap to this width in points (dragging the box's edge)." },
                     "char_spacing": { "type": "number", "description": "Points." },
-                    "scale": { "type": "number", "description": "Horizontal scale in percent." } }),
+                    "scale": { "type": "number", "description": "Horizontal scale in percent." },
+                    "synthetic_bold": synthetic("bold"),
+                    "synthetic_italic": synthetic("italic") }),
                 &["doc", "page"],
             )),
         t("doc_revisions", "List revisions", "List the document's saved revisions (oldest first): each incremental update is one. Returns revision number, where it ends in the file and its size, and which signatures sign exactly that revision.")

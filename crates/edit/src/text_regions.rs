@@ -14,9 +14,13 @@ struct FallbackGroup {
     positions: Vec<usize>,
 }
 
+/// Whether two lines are drawn in one plane: the same scope and paint, baselines in one direction
+/// and glyphs standing up on the same side of them. A slanted run (italic drawn by shearing the
+/// text matrix, as word processors and [`RangeStyle::synthetic_italic`] do) stands on the same
+/// side, so its axis is compared upright: italic words stay in their paragraph.
 fn same_plane(a: &TextLine, b: &TextLine) -> bool {
-    let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
-    let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
+    let at = Matrix(slanted(Matrix(a.origin.tm).then(&Matrix(a.origin.ctm)).0, false));
+    let bt = Matrix(slanted(Matrix(b.origin.tm).then(&Matrix(b.origin.ctm)).0, false));
     a.scope == b.scope
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
@@ -469,6 +473,8 @@ pub(super) fn rewrite_styled_block(
                     underline: None,
                     char_spacing: None,
                     scale: None,
+                    synthetic_bold: None,
+                    synthetic_italic: None,
                 };
                 let r = selected.unwrap_or(&default_range);
                 let mut line = lines.get(source).unwrap_or(first).clone();
@@ -980,8 +986,16 @@ pub(super) fn rewrite_styled_block(
             if let Some([r, g, b]) = overrides.get(&item.1).and_then(|r| r.color).or(style.color) {
                 state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
             }
+            // Bold and italic in the run's own face, after its colour: the stroke takes the fill's.
+            let emboldened = overrides.get(&item.1).and_then(|r| r.synthetic_bold).or(style.synthetic_bold).is_some_and(|bold| {
+                let em = size_of(source, item.1) * source.origin.k / o.ctm[2].hypot(o.ctm[3]).max(1e-6);
+                state.embolden(bold, em * SYNTHETIC_BOLD)
+            });
             let inverse = Matrix(o.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
             let mut tm = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm)).then(&inverse).0;
+            if let Some(italic) = overrides.get(&item.1).and_then(|r| r.synthetic_italic).or(style.synthetic_italic) {
+                tm = slanted(tm, italic);
+            }
             let (ax, ay) = back.apply(x - source.origin.x, baseline - source.origin.baseline);
             tm[4] += ax;
             tm[5] += ay;
@@ -991,6 +1005,11 @@ pub(super) fn rewrite_styled_block(
             // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
             block_ops.push(Op::new("q", vec![]));
             block_ops.extend(state.paint_ops(after));
+            if emboldened {
+                // A solid outline with round corners: no dash in force, no miter spikes.
+                block_ops.push(Op::new("d", vec![Object::Array(Vec::new()), n(0.0)]));
+                block_ops.push(Op::new("j", vec![Object::Int(1)]));
+            }
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();
