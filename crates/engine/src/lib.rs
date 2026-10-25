@@ -84,7 +84,8 @@ pub use pdfcraft_edit::added::{
 };
 pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
-    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
+    Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Context as MarkContext, Family as FontFamily,
+    HeaderFooter, MarkKind, Watermark, header_footer_text,
 };
 pub use pdfcraft_forms::{
     BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkContext, MarkKind, Watermark, header_footer_text};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
@@ -648,6 +648,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let size_h = page.1.max(1.0);
     let (wm, fit) = (d.wm.clone(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
+    // Tokens show what adding writes on this page, its place in the range numbering it.
+    let nth = d.range.pages(count).iter().position(|&p| p == target).unwrap_or(0);
+    let mark_cx = MarkContext { date: app.session.today() };
     ui.horizontal(|ui| {
         preview(ui, t, page, picture, tint, |p, r, s| match kind {
             MarkKind::HeaderFooter => {
@@ -663,7 +666,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     if text.trim().is_empty() {
                         continue;
                     }
-                    let shown = text.replace("<<", "").replace(">>", "");
+                    let shown = header_footer_text(&hf, text, nth, count, &mark_cx);
                     let y = if k < 3 { r.top() + hf.margins[0] as f32 * s } else { r.bottom() - hf.margins[1] as f32 * s };
                     let (x, align) = match k % 3 {
                         0 => (r.left() + hf.margins[2] as f32 * s, egui::Align2::LEFT_CENTER),
