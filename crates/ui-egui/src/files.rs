@@ -9,9 +9,18 @@ use pdfcraft_engine::{DocId, Edit, SplitBy};
 
 use crate::PdfCraftApp;
 
+/// The formats accepted by Add image and by image drops into an open document.
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"];
+
 /// Why files were picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilePurpose {
+    /// Open the non-image files of a browser drop after inserting its images.
+    OpenDropped,
+    /// Add images to an existing page, centred and selected like Edit ▸ Add image.
+    AddImages {
+        page: usize,
+    },
     TextFont {
         page: usize,
     },
@@ -60,6 +69,9 @@ pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_e
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
+    if matches!(purpose, FilePurpose::AddImages { .. }) {
+        return dialog.add_filter(tl!("Images"), IMAGE_EXTENSIONS);
+    }
     if matches!(purpose, FilePurpose::TextFont { .. }) {
         return dialog.add_filter("TrueType / OpenType font", &["ttf", "otf"]);
     }
@@ -93,9 +105,9 @@ pub struct ReplaceDraft {
 }
 
 impl FilePurpose {
-    /// Insert and Replace edit the active document, at its selection.
+    /// Whether the result must remain bound to the active document and its edit generation.
     pub(crate) fn edits_active_document(self) -> bool {
-        matches!(self, Self::InsertPages | Self::ReplacePages | Self::TextFont { .. })
+        matches!(self, Self::InsertPages | Self::ReplacePages | Self::TextFont { .. } | Self::AddImages { .. })
     }
 }
 
@@ -120,6 +132,46 @@ pub struct FileRequest {
 
 /// Files picked asynchronously (web), waiting to be used.
 pub type Requests = Arc<std::sync::Mutex<Vec<FileRequest>>>;
+
+/// Read one browser drop as a batch, publishing image edits before any new tab opens.
+/// The reader is injected so delayed and failed browser reads can be tested on native hosts.
+#[cfg(any(target_arch = "wasm32", test))]
+async fn read_browser_drop<F, Fut>(
+    request: FileRequest,
+    dropped: Vec<egui::DroppedFileHandle>,
+    mut read: F,
+    requests: Requests,
+    failures: crate::FailedInbox,
+    ctx: egui::Context,
+) where
+    F: FnMut(egui::DroppedFileHandle) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, String>>,
+{
+    let mut images = Vec::new();
+    let mut documents = Vec::new();
+    for file in dropped {
+        let image = is_image_drop(&file);
+        let name = file.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match read(file).await {
+            Ok(bytes) if image => images.push((name, bytes)),
+            Ok(bytes) => documents.push((name, bytes)),
+            Err(e) => failures.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((name, e)),
+        }
+    }
+    let mut queue = requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !images.is_empty() {
+        queue.push(FileRequest { files: images, ..request });
+    }
+    if !documents.is_empty() {
+        queue.push(FileRequest { purpose: FilePurpose::OpenDropped, target: None, files: documents });
+    }
+    ctx.request_repaint();
+}
+
+/// Whether the dropped file uses one of the Add image extensions.
+fn is_image_drop(file: &egui::DroppedFileHandle) -> bool {
+    file.path().extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGE_EXTENSIONS.iter().any(|ext| e.eq_ignore_ascii_case(ext)))
+}
 
 /// Settings for the Split dialog.
 #[derive(Clone, Debug, PartialEq)]
@@ -454,8 +506,52 @@ impl PdfCraftApp {
         });
     }
 
+    /// Images dropped in the editor become page content. Specialized drop targets (the
+    /// signature pad, Organize grid and Pages panel) take their files before this runs.
+    pub(crate) fn drop_images(&mut self, dropped: Vec<egui::DroppedFileHandle>, ctx: &egui::Context) -> Vec<egui::DroppedFileHandle> {
+        let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return dropped };
+        if view.organize || self.dialog.is_some() || self.password_prompt.is_some() || self.image_import.is_some() {
+            return dropped;
+        }
+        let purpose = FilePurpose::AddImages { page: view.current };
+        #[cfg(target_arch = "wasm32")]
+        {
+            if dropped.iter().any(is_image_drop) {
+                self.startup_superseded = true;
+                wasm_bindgen_futures::spawn_local(read_browser_drop(
+                    self.file_request(purpose, Vec::new()),
+                    dropped,
+                    |file| async move { file.bytes_async().await },
+                    self.requests.clone(),
+                    self.failed_inbox.clone(),
+                    ctx.clone(),
+                ));
+                return Vec::new();
+            }
+            dropped
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (images, rest): (Vec<_>, Vec<_>) = dropped.into_iter().partition(is_image_drop);
+            let _ = ctx;
+            // Read and insert one file at a time, keeping a batch from retaining all its bytes.
+            for file in images {
+                if file.path().is_absolute() {
+                    self.use_paths(purpose, &[file.path().to_path_buf()]);
+                    continue;
+                }
+                let name = file.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                match file.bytes() {
+                    Ok(bytes) => self.use_files(purpose, vec![(name, bytes)]),
+                    Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
+                }
+            }
+            rest
+        }
+    }
+
     /// A request to use `files` for `purpose`, bound to the document it will edit: the active
-    /// one now, for Insert and Replace. Browsers make it when the picker opens and queue it on
+    /// one now, for Insert, Replace and Add images. Browsers make it before reading and queue it on
     /// `requests` once the files are read; it is used on a later frame.
     pub fn file_request(&self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) -> FileRequest {
         let target = if purpose.edits_active_document() { self.pick_target(self.active_ids().map(|(_, id)| id)) } else { None };
@@ -482,8 +578,16 @@ impl PdfCraftApp {
 
     /// Handle files picked asynchronously.
     pub(crate) fn process_file_requests(&mut self) {
+        // File requests import content; save pickers use their separate callback queue.
+        // Keep a mixed browser batch ordered while the user decides whether to close.
+        if self.close_request.is_some() {
+            return;
+        }
         let pending: Vec<_> = self.requests.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for FileRequest { purpose, target, files } in pending {
+            if files.is_empty() {
+                continue;
+            }
             if !self.still_pick_target(target) {
                 continue;
             }
@@ -497,6 +601,18 @@ impl PdfCraftApp {
     /// Use picked files (also the entry point for tests and automation).
     pub fn use_files(&mut self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) {
         match purpose {
+            FilePurpose::OpenDropped => {
+                for (name, bytes) in files {
+                    if let Err(e) = self.open_bytes(&name, None, bytes) {
+                        self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                    }
+                }
+            }
+            FilePurpose::AddImages { page } => {
+                for (name, bytes) in files {
+                    self.add_image_on_page(page, name, bytes);
+                }
+            }
             FilePurpose::TextFont { page } => {
                 let Some((_, bytes)) = files.into_iter().next() else { return };
                 let bytes = Arc::new(bytes);
@@ -1058,6 +1174,173 @@ impl PdfCraftApp {
                 let _ = crate::editing::download(&format!("{stem}.xfdf"), &bytes);
             }
             Err(e) => self.notify_error(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod browser_drop_tests {
+    use super::*;
+    use std::{
+        cell::Cell,
+        future::Future,
+        rc::Rc,
+        task::{Context, Poll, Waker},
+    };
+
+    /// A synthetic browser handle; the injected reader controls completion separately.
+    #[derive(Debug)]
+    struct Dropped(std::path::PathBuf, Vec<u8>);
+
+    impl egui::DroppedFile for Dropped {
+        /// The relative filename available from a browser drop.
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        /// Native test access; the injected reader controls when these bytes arrive.
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            Ok(self.1.clone())
+        }
+    }
+
+    /// A document with two pages and a contributor-generated image.
+    fn fixture() -> (PdfCraftApp, Vec<u8>) {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let pdf = app.session.create_blank(300.0, 400.0, 2).unwrap();
+        app.open_bytes("original.pdf", None, pdf.to_vec()).unwrap();
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.write_header().unwrap().write_image_data(&[40, 140, 220]).unwrap();
+        }
+        (app, png)
+    }
+
+    /// A completed mixed drop must wait for a save-changes decision, including cancellation.
+    #[test]
+    fn browser_drop_waits_for_a_save_prompt_before_images_and_pdf_open() {
+        for discard in [false, true] {
+            let (mut app, png) = fixture();
+            let original = app.views[0].id;
+            assert!(app.apply_edit(Edit::DeletePages { pages: vec![1] }));
+            let pdf = app.session.create_blank(100.0, 200.0, 1).unwrap();
+            let request = app.file_request(FilePurpose::AddImages { page: 0 }, vec![("photo.png".into(), png)]);
+            app.requests
+                .lock()
+                .unwrap()
+                .extend([request, FileRequest { purpose: FilePurpose::OpenDropped, target: None, files: vec![("other.pdf".into(), pdf.to_vec())] }]);
+            app.request_close_tab(0);
+            assert!(app.close_request.is_some());
+            app.process_file_requests();
+            assert!(app.session.get(original).unwrap().added().is_empty(), "no image behind the save prompt");
+            assert_eq!(app.views.len(), 1, "the PDF stays ordered after the image decision");
+            assert_eq!(app.requests.lock().unwrap().len(), 2);
+            app.resolve_close(&egui::Context::default(), if discard { Some(false) } else { None });
+            app.process_file_requests();
+            if discard {
+                assert!(app.session.get(original).is_none());
+                assert_eq!(app.views.len(), 1);
+                assert!(app.session.get(app.views[0].id).unwrap().added().is_empty());
+            } else {
+                assert_eq!(app.session.get(original).unwrap().added().len(), 1);
+                assert_eq!(app.views.len(), 2);
+            }
+            assert_eq!(app.session.get(app.views.last().unwrap().id).unwrap().name, "other.pdf");
+        }
+    }
+
+    /// A completed PDF read stays queued until the delayed image has been inserted or refused.
+    #[test]
+    fn browser_drop_pdf_finishes_first_without_stealing_the_image_target() {
+        for stale in [false, true] {
+            let (mut app, png) = fixture();
+            let original = app.views[0].id;
+            let pdf = app.session.create_blank(100.0, 200.0, 1).unwrap();
+            let files: Vec<egui::DroppedFileHandle> =
+                vec![Arc::new(Dropped("other.pdf".into(), pdf.to_vec())), Arc::new(Dropped("photo.png".into(), png))];
+            let request = app.file_request(FilePurpose::AddImages { page: 1 }, Vec::new());
+            let ready = Rc::new(Cell::new(false));
+            let completed = Rc::new(Cell::new(0));
+            let mut future = Box::pin(read_browser_drop(
+                request,
+                files,
+                {
+                    let ready = ready.clone();
+                    let completed = completed.clone();
+                    move |file| {
+                        let image = is_image_drop(&file);
+                        let mut result = Some(file.bytes());
+                        let ready = ready.clone();
+                        let completed = completed.clone();
+                        std::future::poll_fn(move |_| {
+                            if image && !ready.get() {
+                                return Poll::Pending;
+                            }
+                            completed.set(completed.get() + 1);
+                            Poll::Ready(result.take().unwrap())
+                        })
+                    }
+                },
+                app.requests.clone(),
+                app.failed_inbox.clone(),
+                egui::Context::default(),
+            ));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(future.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(completed.get(), 1, "the PDF finished before the image");
+            app.process_file_requests();
+            assert_eq!(app.views.len(), 1, "the PDF must wait for the image");
+            if stale {
+                app.active = None;
+            }
+            ready.set(true);
+            assert!(future.as_mut().poll(&mut cx).is_ready());
+            app.process_file_requests();
+            assert_eq!(app.views.len(), 2);
+            assert_eq!(app.session.get(app.views[1].id).unwrap().name, "other.pdf");
+            let doc = app.session.get(original).unwrap();
+            assert_eq!(doc.added().len(), usize::from(!stale));
+            if stale {
+                assert!(app.toast.as_ref().unwrap().0.contains("document changed"));
+            } else {
+                assert_eq!(doc.added()[0].page, 1);
+                assert!(app.toast.is_none());
+                app.active = Some(0);
+                assert!(app.execute("edit.undo"));
+                assert!(app.session.get(original).unwrap().added().is_empty());
+            }
+        }
+    }
+
+    /// Failed image reads retain their read errors and cannot produce stale-target notices.
+    #[test]
+    fn browser_drop_failed_reads_do_not_queue_empty_image_edits() {
+        for with_pdf in [false, true] {
+            let (mut app, png) = fixture();
+            let mut files: Vec<egui::DroppedFileHandle> = vec![Arc::new(Dropped("bad.png".into(), png))];
+            if with_pdf {
+                let pdf = app.session.create_blank(100.0, 200.0, 1).unwrap();
+                files.push(Arc::new(Dropped("other.pdf".into(), pdf.to_vec())));
+            }
+            let request = app.file_request(FilePurpose::AddImages { page: 0 }, Vec::new());
+            app.active = None;
+            let mut future = Box::pin(read_browser_drop(
+                request,
+                files,
+                |file| std::future::ready(if is_image_drop(&file) { Err("read failed".into()) } else { file.bytes() }),
+                app.requests.clone(),
+                app.failed_inbox.clone(),
+                egui::Context::default(),
+            ));
+            assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_ready());
+            assert_eq!(app.requests.lock().unwrap().len(), usize::from(with_pdf));
+            assert_eq!(*app.failed_inbox.lock().unwrap(), vec![("bad.png".into(), "read failed".into())]);
+            app.process_file_requests();
+            assert_eq!(app.views.len(), 1 + usize::from(with_pdf));
+            assert!(app.toast.is_none());
+            assert!(app.session.get(app.views[0].id).unwrap().added().is_empty());
         }
     }
 }

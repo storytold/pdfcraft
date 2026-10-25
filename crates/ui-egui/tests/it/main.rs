@@ -46,6 +46,7 @@ mod folders;
 mod fonts;
 mod forms;
 mod identity;
+mod image_drop;
 mod javascript;
 mod layer_actions;
 mod links;

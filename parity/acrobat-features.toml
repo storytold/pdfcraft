@@ -670,8 +670,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::dropping_a_pdf_on_the_window_opens_it", "crates/ui-egui/tests/it/ui.rs::dropping_an_open_pdf_again_focuses_its_tab"]
-notes = "desktop: the dropped file opens in a tab (by path, or its bytes); web: read asynchronously; a drop with a filesystem path matching an open document focuses that tab (#1620); pathless bytes have nothing to match and open another tab"
+evidence = ["crates/ui-egui/src/files.rs::browser_drop_waits_for_a_save_prompt_before_images_and_pdf_open", "crates/ui-egui/tests/it/ui.rs::dropping_a_pdf_on_the_window_opens_it", "crates/ui-egui/tests/it/ui.rs::dropping_an_open_pdf_again_focuses_its_tab", "crates/ui-egui/tests/it/image_drop.rs::image_drop_without_a_document_opens_a_tab", "crates/ui-egui/tests/it/image_drop.rs::image_drop_batch_continues_after_bad_files_and_pdf_still_opens_a_tab"]
+notes = "desktop: the dropped file opens in a tab (by path, or its bytes); web: read asynchronously; a drop with a filesystem path matching an open document focuses that tab (#1620); pathless bytes have nothing to match and open another tab Images dropped into the editor insert centred, selected content on the active page (#3813); without an active document they retain the image import flow. Specialized Organize/Pages, Combine and signature-pad targets retain their destinations. Mixed browser drops insert images before opening documents; failed reads never queue empty image edits. Pending imports and their PDF opens wait for the save-changes decision; a discarded source rejects its image target."
 
 [[feature]]
 id = "core.recent-files"
@@ -2082,8 +2082,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.image"]
 tools = ["page_add_image"]
-evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable"]
-notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only)"
+evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable", "crates/ui-egui/tests/it/image_drop.rs::image_drop_inserts_on_the_active_page_and_supports_undo_redo", "crates/ui-egui/tests/it/image_drop.rs::browser_image_drop_keeps_its_page_and_inserts_the_whole_batch"]
+notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only) JPEG 2000 is also accepted. Dropping images into the editor inserts and selects them on the current page (#3813); Organize/Pages and signature-pad targets retain their behaviour. Drops use centred placement rather than pointer coordinates."
 
 [[feature]]
 id = "edit.cut-copy-paste-objects"
