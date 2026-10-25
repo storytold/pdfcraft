@@ -1363,11 +1363,11 @@ pub fn restore_password_values(doc: &mut Document, values: &[(String, String)]) 
     Ok(())
 }
 
-/// `r` and its field ancestors (`/Parent`), nearest first, at most 32 deep and without repeats.
+/// `r` and its field ancestors (`/Parent`), nearest first, at most 64 deep and without repeats.
 fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
     let mut chain = vec![r];
     let mut cur = r;
-    while chain.len() < 32 {
+    while chain.len() < 64 {
         let Some(Object::Ref(parent)) = doc.get(cur).as_dict().and_then(|d| d.get(b"Parent").cloned()) else { break };
         if chain.contains(&parent) {
             break;
