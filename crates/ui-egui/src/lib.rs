@@ -3672,6 +3672,9 @@ impl eframe::App for PdfCraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
         }
+        // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
+        // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
+        ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
         if self.full_screen && self.active.is_some() {
             // Full screen: the page on black, nothing else, as Acrobat's Full Screen Mode (Esc
             // or ⌘L to leave).

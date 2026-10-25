@@ -1468,6 +1468,52 @@ fn required_radio_buttons_get_a_round_red_border() {
     assert!(!stroke(at(50.3, 339.7)), "the widget's corner, outside the circle, is not: {:?}", at(50.3, 339.7));
 }
 
+/// Two required check boxes: the first laid out for a round XFA check button (`/PCXfaRound`), the
+/// second an ordinary square one.
+const ROUND_CHECKS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 2 /T (round) /V /Off /AS /Off /Rect [50 300 90 340] /PCXfaRound true /P 3 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 2 /T (square) /V /Off /AS /Off /Rect [150 300 190 340] /P 3 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With fields highlighted, a round XFA check box gets a round border, as a radio button does,
+/// while an ordinary check box keeps a square one.
+#[test]
+fn round_check_boxes_get_a_round_highlight() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("checks.pdf", None, ROUND_CHECKS.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("fields", "on").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let r = rect(&h, 0).expect("page 1");
+    let ppp = h.ctx.pixels_per_point();
+    let img = h.render().expect("renders");
+    let at = |x: f32, y: f32| {
+        let p = egui::pos2(r.min.x + r.width() * (x / 300.0), r.min.y + r.height() * (1.0 - y / 400.0));
+        *img.get_pixel((p.x * ppp) as u32, (p.y * ppp) as u32)
+    };
+    // The red of the required border, or its antialiased edge over the field tint.
+    let stroke = |p: image::Rgba<u8>| p[0] > 180 && p[2] < 140 && i16::from(p[0]) - i16::from(p[2]) > 80;
+    assert!([0.05_f32, 0.2].into_iter().any(|dx| stroke(at(50.0 + dx, 320.0))), "the round box's left edge is red: {:?}", at(50.2, 320.0));
+    // Near the top of the left edge: outside the circle, on a square's border.
+    assert!(!stroke(at(50.25, 339.0)), "the round box's corner, outside the circle, is not: {:?}", at(50.25, 339.0));
+    assert!(
+        [0.1_f32, 0.25, 0.4].into_iter().any(|dx| stroke(at(150.0 + dx, 339.0))),
+        "the square box's is: {:?} {:?}",
+        at(150.1, 339.0),
+        at(150.25, 339.0)
+    );
+}
+
 /// Acrobat's Highlight existing fields is a preference, not a per-document choice: turned off
 /// once, the next document (and the next session) opens with fields plain. New settings start
 /// with it on.

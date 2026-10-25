@@ -480,7 +480,7 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
 
 /// Whether `wd` is a check box or radio button PdfCraft laid out for a round XFA check button
 /// (`/PCXfaRound true`, written by the XFA layout).
-fn is_round(doc: &Document, wd: &Dict) -> bool {
+pub(crate) fn is_round(doc: &Document, wd: &Dict) -> bool {
     matches!(wd.get(b"PCXfaRound").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
 }
 

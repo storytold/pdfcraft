@@ -2,7 +2,7 @@
 //! streams (standard-14 fonts, WinAnsi), image XObjects and AcroForm widgets. Widget appearance
 //! streams are left empty here; the forms layer regenerates them from the field dictionaries.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
@@ -21,6 +21,10 @@ pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
 pub const CLICK_KEY: &[u8] = b"PCXfaClick";
+/// Private key on the fields generated to name a signature field by its SOM path, one for each
+/// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
+/// fields they hold.
+pub const NODE_KEY: &[u8] = b"PCXfaNode";
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -44,7 +48,7 @@ fn hex32(h: &[u8; 32]) -> Vec<u8> {
 
 fn parse_hex32(s: &[u8]) -> Option<[u8; 32]> {
     let mut out = [0u8; 32];
-    if s.len() != 64 {
+    if s.len() != 64 || !s.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
     for (o, pair) in out.iter_mut().zip(s.as_chunks::<2>().0) {
@@ -264,6 +268,11 @@ struct Emitter<'a> {
     warnings: Vec<String>,
     /// The signatures the file holds, by the SOM path of the field signed.
     signed: HashMap<String, Signed>,
+    /// The full names of the fields the file came with, which a generated name must not repeat.
+    taken: HashSet<String>,
+    /// The fields above the signature fields named by their SOM paths, by the path they name:
+    /// each one's object and the fields it holds.
+    nodes: HashMap<String, (ObjRef, Vec<ObjRef>)>,
 }
 
 /// A signature field of the file that has been signed.
@@ -279,13 +288,16 @@ const MAX_FIELDS_SEARCHED: usize = 20_000;
 /// Deepest field nesting followed.
 const MAX_FIELD_DEPTH: usize = 32;
 
-/// The signed signature fields the document came with, by full name. Signing applications name
-/// a dynamic form's fields by their SOM path (`form1[0].page1[0].sign[0]`), which is how a
-/// laid-out signature box finds its signature. Fields of an earlier layout pass are not read.
-fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
+/// The fields the document came with: the full name of each, and the signed signature fields by
+/// SOM path. Signing applications name a dynamic form's fields by their SOM path
+/// (`form1[0].page1[0].sign[0]`), which is how a laid-out signature box finds its signature. A
+/// field an earlier layout pass generated gives no name, but a signature on it is kept, by its
+/// `/PCSom`, so a new layout keeps the box signed.
+fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, HashSet<String>) {
     let mut out = HashMap::new();
-    let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return out };
-    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return out };
+    let mut names = HashSet::new();
+    let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return (out, names) };
+    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return (out, names) };
     let mut stack: Vec<(Object, String, bool, usize)> =
         fields.as_array().into_iter().flatten().map(|f| (f.clone(), String::new(), false, 0)).collect();
     let mut seen = 0usize;
@@ -296,7 +308,22 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
         }
         let field = doc.resolve(&field);
         let Some(d) = field.as_dict() else { continue };
+        if d.contains(NODE_KEY) {
+            // Generated to name a signature field: only what it holds is looked at.
+            if depth < MAX_FIELD_DEPTH {
+                let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+                stack.extend(kids.into_iter().map(|k| (k, String::new(), false, depth + 1)));
+            }
+            continue;
+        }
         if d.contains(SOM_KEY) {
+            let som = d.get(SOM_KEY).map(|s| doc.resolve(s)).and_then(|s| s.as_string().map(|s| s.to_text()));
+            if d.name(b"FT") == Some(b"Sig")
+                && let Some(som) = som
+                && let Some(value) = d.get(b"V").filter(|v| doc.resolve(v).as_dict().is_some())
+            {
+                out.entry(som).or_insert(Signed { value: value.clone(), appearance: d.get(b"AP").cloned() });
+            }
             continue;
         }
         let name = match d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())) {
@@ -304,6 +331,9 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
             Some(t) => format!("{prefix}.{t}"),
             None => prefix,
         };
+        if !name.is_empty() {
+            names.insert(name.clone());
+        }
         let is_sig = match d.name(b"FT") {
             Some(ft) => ft == b"Sig",
             None => parent_is_sig,
@@ -318,7 +348,7 @@ fn signed_fields(doc: &Document, catalog: &Dict) -> HashMap<String, Signed> {
             stack.extend(kids.into_iter().map(|k| (k, name.clone(), is_sig, depth + 1)));
         }
     }
-    out
+    (out, names)
 }
 
 impl Emitter<'_> {
@@ -363,6 +393,9 @@ impl Emitter<'_> {
             ff |= 1;
         }
         let mut top_level = true;
+        // The SOM path of the generated field above this one, for a signature field named by its
+        // SOM path.
+        let mut under: Option<String> = None;
         match &w.kind {
             WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Password => {
                 d.set(b"FT".to_vec(), Object::name("Tx"));
@@ -463,6 +496,16 @@ impl Emitter<'_> {
                         d.set(b"AP".to_vec(), ap.clone());
                     }
                     ff |= 1;
+                }
+                if let Some((above, last)) = self.som_steps(&w.som)
+                    && let Some(parent) = self.node(&above)
+                {
+                    // Named by its SOM path, as fields under one for each step above it: other
+                    // viewers lay a dynamic form out again and find a signature by that name.
+                    d.set(b"T".to_vec(), Object::String(PdfString::text(&last)));
+                    d.set(b"Parent".to_vec(), Object::Ref(parent));
+                    top_level = false;
+                    under = Some(above.join("."));
                 }
             }
             WidgetKind::Image => {
@@ -574,12 +617,72 @@ impl Emitter<'_> {
         if top_level {
             self.fields.push(r);
             self.field_count += 1;
+        } else if let Some(path) = under {
+            if let Some((_, kids)) = self.nodes.get_mut(&path) {
+                kids.push(r);
+            }
+            self.taken.insert(w.som.clone());
+            self.field_count += 1;
         } else if let WidgetKind::Radio { group, .. } = &w.kind
             && let Some((_, kids)) = self.radio_groups.get_mut(group)
         {
             kids.push(r);
         }
         Ok(Some(r))
+    }
+
+    /// The steps of SOM path `som` above the last, and the last, when a field can be named by the
+    /// path: two to [`MAX_FIELD_DEPTH`] steps, none empty, and no field of the file or of this
+    /// pass already named by the path or by a part of it. `None` keeps the field's own name.
+    fn som_steps(&self, som: &str) -> Option<(Vec<String>, String)> {
+        let steps: Vec<&str> = som.split('.').collect();
+        if steps.len() < 2 || steps.len() > MAX_FIELD_DEPTH || steps.iter().any(|s| s.is_empty()) {
+            return None;
+        }
+        for i in 1..=steps.len() {
+            let path = steps.get(..i)?.join(".");
+            // A part already generated by this pass is shared; one the file has is not touched.
+            let generated = i < steps.len() && self.nodes.contains_key(&path);
+            if !generated && self.taken.contains(&path) {
+                return None;
+            }
+        }
+        let (last, above) = steps.split_last()?;
+        Some((above.iter().map(|s| s.to_string()).collect(), last.to_string()))
+    }
+
+    /// The generated field named by the SOM path of `steps`, made (with those above it) when this
+    /// pass has none yet; the topmost goes into the AcroForm's fields. `None` for no steps.
+    fn node(&mut self, steps: &[String]) -> Option<ObjRef> {
+        let mut parent: Option<(ObjRef, String)> = None;
+        for step in steps {
+            let path = match &parent {
+                Some((_, above)) => format!("{above}.{step}"),
+                None => step.clone(),
+            };
+            let r = match self.nodes.get(&path) {
+                Some((r, _)) => *r,
+                None => {
+                    let mut d = Dict::new();
+                    d.set(b"T".to_vec(), Object::String(PdfString::text(step)));
+                    d.set(b"Kids".to_vec(), Object::Array(Vec::new()));
+                    d.set(NODE_KEY.to_vec(), Object::Bool(true));
+                    if let Some((p, _)) = &parent {
+                        d.set(b"Parent".to_vec(), Object::Ref(*p));
+                    }
+                    let r = self.doc.add(Object::Dict(d));
+                    match parent.as_ref().and_then(|(_, above)| self.nodes.get_mut(above)) {
+                        Some((_, kids)) => kids.push(r),
+                        None => self.fields.push(r),
+                    }
+                    self.nodes.insert(path.clone(), (r, Vec::new()));
+                    self.taken.insert(path.clone());
+                    r
+                }
+            };
+            parent = Some((r, path));
+        }
+        parent.map(|(r, _)| r)
     }
 
     /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs, GIFs, BMPs and TIFFs
@@ -908,6 +1011,9 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
     out
 }
 
+/// Write laid-out `form` into `doc`: its pages replace the document's, its widgets join the
+/// AcroForm's fields (a box the file holds a signature for keeps it), and the AcroForm is marked
+/// laid out. What was written, with any warnings, comes back.
 pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> {
     let catalog_ref = doc.root().ok_or_else(|| XfaError::Malformed("the document has no catalog".into()))?;
     let mut catalog = doc.get(catalog_ref).as_dict().cloned().ok_or_else(|| XfaError::Malformed("the catalog is not a dictionary".into()))?;
@@ -925,7 +1031,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     };
     // Pictures embedded by earlier passes, from the pages this pass replaces.
     let images = earlier_images(doc, pages_ref);
-    let signed = signed_fields(doc, &catalog);
+    let (signed, taken) = existing_fields(doc, &catalog);
     let mut em = Emitter {
         doc,
         images,
@@ -935,7 +1041,17 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         field_count: 0,
         warnings: Vec::new(),
         signed,
+        taken,
+        nodes: HashMap::new(),
     };
+    // Every name a field of this pass takes at the top, wherever and in whatever order it is
+    // written: a signature field named by its SOM path must not repeat one.
+    for w in form.pages.iter().flat_map(|p| &p.items).filter_map(|i| if let Item::Widget(w) = i { Some(w) } else { None }) {
+        em.taken.insert(match &w.kind {
+            WidgetKind::Radio { group, .. } => group.clone(),
+            _ => w.name.clone(),
+        });
+    }
     let mut kids = Vec::new();
     for page in &form.pages {
         kids.push(Object::Ref(em.page(page, pages_ref)?));
@@ -949,6 +1065,10 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
                 d.set(b"V".to_vec(), Object::name(s));
             }
         })?;
+    }
+    let nodes: Vec<(ObjRef, Vec<ObjRef>)> = em.nodes.values().cloned().collect();
+    for (node, kids) in nodes {
+        em.doc.update_dict(node, |d| d.set(b"Kids".to_vec(), Object::Array(kids.iter().map(|r| Object::Ref(*r)).collect())))?;
     }
     let Emitter { doc, fields, field_count, warnings, .. } = em;
     let count = kids.len();
@@ -1174,7 +1294,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
             out.image_fields += 1;
         }
         let private: Vec<Vec<u8>> =
-            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
+            [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, NODE_KEY, b"PCItems".as_slice()].iter().filter(|k| d.contains(k)).map(|k| k.to_vec()).collect();
         if !private.is_empty() {
             out.field_keys += private.len();
             doc.update_dict(r, |d| {
@@ -1203,6 +1323,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
     for r in streams {
         doc.free(r);
     }
+    doc.require_full_save();
     Ok(out)
 }
 
@@ -1292,4 +1413,21 @@ pub fn existing_layout(doc: &Document) -> Option<crate::Report> {
 /// The rectangle of a widget in PDF user space (for tests).
 pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
     [r.x, page_height - r.bottom(), r.right(), page_height - r.y]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex32;
+
+    #[test]
+    fn parse_hex32_rejects_non_hex_digits() {
+        for prefix in ["+f", "-f", " f"] {
+            let mut s = prefix.as_bytes().to_vec();
+            s.resize(64, b'0');
+            assert!(parse_hex32(&s).is_none(), "{prefix:?}");
+        }
+        let mut ok = b"Ff".to_vec();
+        ok.resize(64, b'0');
+        assert_eq!(parse_hex32(&ok).map(|h| h[0]), Some(0xff));
+    }
 }

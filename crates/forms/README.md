@@ -14,6 +14,8 @@ set_value(&mut doc, "name", &FieldValue::Text("Ada".into()))?;
 set_value(&mut doc, "agree", &FieldValue::Check(true))?;
 set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into())))?;
 set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["Ham".into()]))?;
+// Many values: as set_value one by one, but reading the form once and recalculating once.
+let results: Vec<Result<(), FormError>> = set_values(&mut doc, &[("name".into(), FieldValue::Text("Ada".into()))])?;
 reset(&mut doc, None)?;                                      // Clear form (back to /DV)
 
 // Prepare a form

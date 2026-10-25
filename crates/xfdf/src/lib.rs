@@ -1126,6 +1126,24 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
     Ok(r)
 }
 
+/// A pop-up window for the comment `parent`, on its page.
+fn add_popup(doc: &mut Document, page: ObjRef, parent: ObjRef, rect: &[f64], open: bool) -> Result<(), DataError> {
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Annot"));
+    p.set(b"Subtype".to_vec(), Object::name("Popup"));
+    p.set(b"Rect".to_vec(), arr(rect));
+    p.set(b"Parent".to_vec(), Object::Ref(parent));
+    p.set(b"Open".to_vec(), Object::Bool(open));
+    let pr = doc.add(Object::Dict(p));
+    doc.update_dict(parent, |d| d.set(b"Popup".to_vec(), Object::Ref(pr)))?;
+    doc.update_dict(page, |pd| {
+        if let Some(Object::Array(a)) = pd.get_mut(b"Annots") {
+            a.push(Object::Ref(pr));
+        }
+    })?;
+    Ok(())
+}
+
 fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -1157,19 +1175,7 @@ fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
             if let Some(pop) = node.children().find(|c| c.has_tag_name("popup"))
                 && let Some(rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4)
             {
-                let mut p = Dict::new();
-                p.set(b"Type".to_vec(), Object::name("Annot"));
-                p.set(b"Subtype".to_vec(), Object::name("Popup"));
-                p.set(b"Rect".to_vec(), arr(&rect));
-                p.set(b"Parent".to_vec(), Object::Ref(r));
-                p.set(b"Open".to_vec(), Object::Bool(pop.attribute("open") == Some("yes")));
-                let pr = doc.add(Object::Dict(p));
-                doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pr)))?;
-                doc.update_dict(page, |pd| {
-                    if let Some(Object::Array(a)) = pd.get_mut(b"Annots") {
-                        a.push(Object::Ref(pr));
-                    }
-                })?;
+                add_popup(doc, page, r, &rect, pop.attribute("open") == Some("yes"))?;
             }
             report.comments += 1;
         }
@@ -1276,7 +1282,11 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
             // Comments and processing instructions can split a value into several text nodes.
             .map(|v| v.children().filter(|n| n.is_text()).filter_map(|n| n.text()).collect())
             .collect();
-        if !vals.is_empty() {
+        // A leaf with no `<value>` is an empty field (the export writes one that way), so it
+        // clears the field like FDF's `/V ()`; a field with kids only names their parent. A
+        // leaf holding only `<value-richtext>` is not read yet, so it leaves the field alone.
+        let names_kids_or_rich = f.children().any(|c| c.has_tag_name("field") || c.has_tag_name("value-richtext"));
+        if !vals.is_empty() || !names_kids_or_rich {
             out.push((full.clone(), vals));
         }
         walk_xfdf(f, &full, out, depth + 1)?;
@@ -1445,6 +1455,11 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
         // The parent is another comment: link it below rather than copying it in.
         let irt = src.get(b"IRT").cloned();
         src.remove(b"IRT");
+        // The pop-up is an annotation of its own (/Popup shall be an indirect reference, ISO
+        // 32000-2 Table 172): copied in, it would become a direct dictionary. A new one is
+        // placed on the page below, as the XFDF import does.
+        let popup = src.get(b"Popup").map(|p| fdf.resolve(p)).and_then(|p| p.as_dict().cloned());
+        src.remove(b"Popup");
         let mut path: Vec<ObjRef> = a.as_ref().into_iter().collect();
         let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0, &mut path, &mut budget)? else { continue };
         let Some(page) = d.get(b"Page").and_then(Object::as_int).and_then(|p| usize::try_from(p).ok()).and_then(|p| pages.get(p).copied()) else {
@@ -1457,6 +1472,10 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
         d.set(b"P".to_vec(), Object::Ref(page));
         let r = place(doc, page, d)?;
         later.remove(&r);
+        if let Some(rect) = popup.as_ref().and_then(|p| rect_strict(&fdf, p.get(b"Rect"))) {
+            let open = popup.as_ref().and_then(|p| p.get(b"Open")).is_some_and(|o| matches!(&*fdf.resolve(o), Object::Bool(true)));
+            add_popup(doc, page, r, &rect, open)?;
+        }
         if let Some(fr) = a.as_ref() {
             placed.insert(fr, r);
         }

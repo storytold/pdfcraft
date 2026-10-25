@@ -21,6 +21,7 @@ mod accessibility;
 mod actions;
 mod animate;
 mod attach_picker_target;
+mod attachment_row;
 mod bookmark_position;
 mod bookmarks;
 mod bulk_fields;

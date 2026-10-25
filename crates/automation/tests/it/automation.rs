@@ -252,6 +252,19 @@ fn doc_info_reports_the_open_destination() {
         "{open}"
     );
     assert_eq!(open["destination"]["zoom"].as_f64(), Some(2.0));
+    // The initial view reads the named destination's page, and choosing page 1 replaces it (ISO
+    // 32000-2 §12.3.2.4): one undo step, kept by the save.
+    let page = |a: &mut Automation, doc: u64| ok(a, "doc_info", json!({ "doc": doc }))["open_destination"]["page"].clone();
+    assert_eq!(ok(&mut a, "doc_initial_view", json!({ "doc": doc }))["initial_view"]["page"], 2);
+    assert_eq!(ok(&mut a, "doc_initial_view", json!({ "doc": doc, "page": 1 }))["initial_view"]["page"], 1);
+    assert_eq!(page(&mut a, doc), 1);
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(page(&mut a, doc), 2);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert_eq!(page(&mut a, doc), 1);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "named-page1.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "named-page1.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page(&mut a, saved), 1);
     let doc = ok(&mut a, "doc_open", json!({ "path": "script.pdf" }))["doc"].as_u64().unwrap();
     assert!(ok(&mut a, "doc_info", json!({ "doc": doc }))["open_destination"].is_null());
 }
@@ -4471,6 +4484,12 @@ fn adding_content_through_tools() {
     assert!(text.contains("DRAFT") && !text.contains("CONFIDENTIAL"), "{text}");
     // Image tools: rotate, flip, crop, replace.
     ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "rotate": 90, "flip_h": true, "crop": [0.1, 0, 0.1, 0] }));
+    // One side may trim most of the picture; together an axis keeps at least 5 %.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "crop": [0.7, 0, 0, 0] }));
+    assert!(matches!(
+        a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 2, "crop": [0.6, 0, 0.4, 0] })),
+        Err(ToolError::InvalidArgs(_))
+    ));
     ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "image": "logo.png" }));
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["dirty"], true);
     assert!(matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 2, "rotate": 45 })), Err(ToolError::InvalidArgs(_))));
@@ -5842,6 +5861,28 @@ fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     assert!(inked(60, 110), "the strokes are drawn");
 }
 
+/// Signing a laid-out XFA form's signature box through the tools signs the field named by its
+/// SOM path, which is how another viewer, laying the form out again, finds the signature; the
+/// signed file reopens with the signature intact and on that field.
+#[test]
+fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
+    let dir = workdir("xfa-sign");
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(""))).unwrap();
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let som = "form[0].page1[0].sign[0]";
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(fields["fields"].as_array().unwrap().iter().any(|f| f["name"] == som), "{fields}");
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": som, "out": "signed.pdf" }));
+    let signed = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "sign_list", json!({ "doc": signed }));
+    let s = list["signatures"].as_array().unwrap().iter().find(|s| s["signed"] == true).cloned().unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(s["field"], som, "{s}");
+    assert_eq!(s["status"], "unknown", "intact, the signer not trusted: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
@@ -6848,12 +6889,15 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }
 
+/// Hundreds of calculations run on opening and again after a change through the tools. The
+/// time limits are raised so that a busy machine does not stop them (the engine's tests check
+/// that the limits stop them).
 #[test]
-fn hundreds_of_xfa_calculations_open_and_recalculate_within_their_budgets() {
+fn hundreds_of_xfa_calculations_open_and_recalculate_through_tools() {
     let dir = workdir("xfa-many");
     let (sections, rows) = (10, 20);
     std::fs::write(dir.join("many.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::many_calculations_template(sections, rows))).unwrap();
-    let mut a = auto(&dir);
+    let mut a = auto(&dir).with_xfa_time_scale(100);
     let started = std::time::Instant::now();
     let opened = ok(&mut a, "doc_open", json!({ "path": "many.pdf" }));
     let open_took = started.elapsed();
@@ -7276,7 +7320,8 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     let dir = workdir("xfa-print-buttons");
     let template = pdfcraft_xfa::fixtures::repeated_print_button_template();
     std::fs::write(dir.join("print.pdf"), pdfcraft_xfa::fixtures::shell(&template)).unwrap();
-    let mut a = auto(&dir);
+    // Raised time limits: a busy machine does not stop the click scripts this checks.
+    let mut a = auto(&dir).with_xfa_time_scale(100);
     let doc = ok(&mut a, "doc_open", json!({ "path": "print.pdf" }))["doc"].as_u64().unwrap();
     let check = |a: &mut Automation, doc| {
         let fields = ok(a, "form_fields", json!({ "doc": doc }));
@@ -7301,7 +7346,8 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
 fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     let dir = workdir("xfa-scripts");
     std::fs::write(dir.join("scripted.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();
-    let mut a = auto(&dir);
+    // Raised time limits: a busy machine does not stop the scripts this checks.
+    let mut a = auto(&dir).with_xfa_time_scale(100);
     let doc = ok(&mut a, "doc_open", json!({ "path": "scripted.pdf" }))["doc"].as_u64().unwrap();
     let field = |a: &mut Automation, n: &str| {
         let f = ok(a, "form_fields", json!({ "doc": doc }));

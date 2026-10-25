@@ -918,42 +918,87 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
                         for (ai, a) in info.attachments.iter().enumerate() {
-                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add(icons::image("paperclip", 16.0, t.icon));
-                                    ui.vertical(|ui| {
-                                        ui.set_width(ui.available_width() - 70.0);
-                                        ui.add(egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate());
-                                        let mut meta = a.size.map(human_size).unwrap_or_default();
-                                        if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
-                                            let on_page = crate::i18n::fmt(
-                                                tl!("on page {label}"),
-                                                &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                            let is_pdf = a.name.to_lowercase().ends_with(".pdf");
+                            // Only an attachment of the document itself can be deleted here.
+                            let deletable = match &a.source {
+                                pdfcraft_render::AttachmentSource::Document { key } if attachable => Some(key),
+                                _ => None,
+                            };
+                            // The whole row answers a double-click and a right-click (#3466), below
+                            // its buttons, which still take their own clicks.
+                            let mut buttons: Vec<egui::Response> = Vec::new();
+                            let row = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add(icons::image("paperclip", 16.0, t.icon));
+                                        ui.vertical(|ui| {
+                                            ui.set_width(ui.available_width() - 70.0);
+                                            // Not selectable, so a click on the name or the details reaches the row.
+                                            ui.add(
+                                                egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate().selectable(false),
                                             );
-                                            meta = format!("{meta}  ·  {on_page}");
-                                        }
-                                        if let Some(d) = &a.description {
-                                            meta = format!("{meta}  ·  {d}");
-                                        }
-                                        ui.add(egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate());
+                                            let mut meta = a.size.map(human_size).unwrap_or_default();
+                                            if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
+                                                let on_page = crate::i18n::fmt(
+                                                    tl!("on page {label}"),
+                                                    &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                                                );
+                                                meta = format!("{meta}  ·  {on_page}");
+                                            }
+                                            if let Some(d) = &a.description {
+                                                meta = format!("{meta}  ·  {d}");
+                                            }
+                                            ui.add(
+                                                egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate().selectable(false),
+                                            );
+                                        });
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            let save = icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…"));
+                                            if save.clicked() {
+                                                attachment_action = Some((ai, false));
+                                            }
+                                            buttons.push(save);
+                                            if is_pdf {
+                                                let open = icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab"));
+                                                if open.clicked() {
+                                                    attachment_action = Some((ai, true));
+                                                }
+                                                buttons.push(open);
+                                            }
+                                            if let Some(key) = deletable {
+                                                let delete = icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment"));
+                                                if delete.clicked() {
+                                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                                }
+                                                buttons.push(delete);
+                                            }
+                                        });
                                     });
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…")).clicked() {
-                                            attachment_action = Some((ai, false));
-                                        }
-                                        if a.name.to_lowercase().ends_with(".pdf")
-                                            && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
-                                        {
-                                            attachment_action = Some((ai, true));
-                                        }
-                                        if let pdfcraft_render::AttachmentSource::Document { key } = &a.source
-                                            && attachable
-                                            && icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment")).clicked()
-                                        {
-                                            panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
-                                        }
-                                    });
-                                });
+                                })
+                            });
+                            // A double-click opens a PDF in a new tab, as Acrobat opens an attachment;
+                            // any other file is saved, since PdfCraft opens only PDFs.
+                            if row.response.double_clicked() {
+                                attachment_action = Some((ai, is_pdf));
+                            }
+                            // A right-click on one of the row's buttons is a right-click on the row:
+                            // the union keeps the row's id, so it is one menu either way.
+                            let menu = buttons.into_iter().fold(row.response.clone(), |row, button| row | button);
+                            menu.context_menu(|ui| {
+                                if is_pdf && ui.button(tl!("Open in a new tab")).clicked() {
+                                    attachment_action = Some((ai, true));
+                                    ui.close();
+                                }
+                                if ui.button(tl!("Save attachment…")).clicked() {
+                                    attachment_action = Some((ai, false));
+                                    ui.close();
+                                }
+                                if let Some(key) = deletable
+                                    && ui.button(tl!("Delete attachment")).clicked()
+                                {
+                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                    ui.close();
+                                }
                             });
                         }
                     }

@@ -2284,6 +2284,82 @@ fn a_signed_file_carries_no_password_field_value() {
     assert!(!appears_in_pdf(&signed, "*******"), "nor the typed length");
 }
 
+/// #3944: a value typed into an XFA `<passwordEdit/>` field stays in the open document (both the
+/// widget and the live XFA datasets, even across multiple edits and across Save + `mark_saved`),
+/// but is written to no file — neither on the widget nor in the XFA datasets stream.
+#[test]
+fn xfa_password_field_values_are_not_saved_in_datasets_or_widgets() {
+    let xfa_pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(""));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("xfa.pdf", None, Arc::new(xfa_pdf), None).unwrap();
+    let pin_name = s.get(id).unwrap().form.iter().find(|f| f.name.contains("pin")).unwrap().name.clone();
+
+    // Edit the password twice so an earlier edit's datasets stream could not linger in the overlay.
+    s.apply(id, Edit::SetFieldValue { name: pin_name.clone(), value: FieldValue::Text("secret1".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: pin_name.clone(), value: FieldValue::Text("hunter2".into()) }).unwrap();
+
+    let field = s.get(id).unwrap().form.iter().find(|f| f.name == pin_name).cloned().unwrap();
+    assert!(field.has(pdfcraft_forms::flags::PASSWORD));
+    assert_eq!(field.value, vec!["hunter2".to_string()], "the open document keeps the value");
+    assert!(appears_in_pdf(&s.get(id).unwrap().bytes, "hunter2"), "the working bytes hold the live datasets");
+    assert!(!appears_in_pdf(&s.get(id).unwrap().bytes, "secret1"), "the first edit's datasets stream was replaced in place");
+
+    let saved = s.save_bytes(id).unwrap();
+    for leak in ["hunter2", "secret1", "*******"] {
+        assert!(!appears_in_pdf(&saved, leak), "Save leaked {leak}");
+        assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), leak), "save_full_bytes leaked {leak}");
+        assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, leak), "reduced_bytes leaked {leak}");
+    }
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1);
+    for leak in ["hunter2", "secret1", "*******"] {
+        assert!(!appears_in_pdf(&snaps[0].bytes, leak), "autosave snapshot leaked {leak}");
+    }
+
+    // Reopening the saved file in a new session leaves the password field empty (it does not
+    // repopulate from the XFA datasets on open).
+    let mut t = Session::new();
+    let reopened = t.open("saved.pdf", None, saved.clone(), None).unwrap();
+    assert!(
+        t.get(reopened).unwrap().form.iter().find(|f| f.name == pin_name).unwrap().value.iter().all(|v| v.is_empty()),
+        "reopened XFA form must have an empty password field"
+    );
+
+    // Recording the save keeps the typed password in the open document (and its live datasets),
+    // while a subsequent save still omits it.
+    s.mark_saved(id, saved, Some("saved.pdf".into())).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == pin_name).unwrap().value, ["hunter2"]);
+    assert!(!s.get(id).unwrap().dirty);
+    for leak in ["hunter2", "secret1", "*******"] {
+        assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), leak), "save after mark_saved leaked {leak}");
+    }
+
+    // Undo past `mark_saved` and edit again: the datasets stream in the restored overlay is
+    // overwritten in place rather than left behind.
+    s.undo(id).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: pin_name.clone(), value: FieldValue::Text("secret3".into()) }).unwrap();
+    let saved_after_undo = s.save_bytes(id).unwrap();
+    for leak in ["hunter2", "secret1", "secret3", "*******"] {
+        assert!(!appears_in_pdf(&saved_after_undo, leak), "save after undo leaked {leak}");
+    }
+
+    // A relayout (`rerender`) after typing a password frees the replaced generated widget and its
+    // masked appearance stream so neither remains in the overlay when saving.
+    let relayout_xml = pdfcraft_xfa::fixtures::fields_template("").replace(
+        r#"<subform name="page1" layout="tb">"#,
+        r#"<subform name="page1" layout="tb"><field name="grow" w="2in"><ui><textEdit multiLine="1"/></ui></field>"#,
+    );
+    let id2 = s.open("relayout.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&relayout_xml)), None).unwrap();
+    let pin2 = s.get(id2).unwrap().form.iter().find(|f| f.name.contains("pin")).unwrap().name.clone();
+    let grow2 = s.get(id2).unwrap().form.iter().find(|f| f.name.contains("grow")).unwrap().name.clone();
+    s.apply(id2, Edit::SetFieldValue { name: pin2, value: FieldValue::Text("s3cr3t!".into()) }).unwrap();
+    s.apply(id2, Edit::SetFieldValue { name: grow2, value: FieldValue::Text("line1\nline2\nline3\nline4\nline5".into()) }).unwrap();
+    let saved_relayout = s.save_bytes(id2).unwrap();
+    for leak in ["s3cr3t!", "*******"] {
+        assert!(!appears_in_pdf(&saved_relayout, leak), "save after relayout leaked {leak}");
+    }
+}
+
 /// A value its field's font can't draw is kept, and the edit that drew it reports it in
 /// `edit_notices` (the interface shows it, tools return it): not a later unrelated edit, not a
 /// failed one, and not a value that can be drawn. The form (an inline AcroForm here) asks other
@@ -3574,8 +3650,12 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
     assert!(blue(colour_at(&s, 70, 150)) && red(colour_at(&s, 130, 150)), "flipped");
     img.flip_h = false;
     img.crop = [0.0, 0.0, 0.5, 0.0];
-    s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: AddedContent::Image(img) }).unwrap();
+    s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: AddedContent::Image(img.clone()) }).unwrap();
     assert!(red(colour_at(&s, 130, 150)), "the right half cropped away: red fills the box");
+    // More than half from one side: only the blue right part is left.
+    img.crop = [0.7, 0.0, 0.0, 0.0];
+    s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: AddedContent::Image(img) }).unwrap();
+    assert!(blue(colour_at(&s, 53, 150)) && blue(colour_at(&s, 130, 150)), "70 % trimmed from the left: blue fills the box to its left edge");
 }
 
 #[test]
@@ -5504,6 +5584,74 @@ fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
     assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
 }
 
+/// A static XFA form whose values are only in its datasets takes every one on opening, as
+/// filling the fields one at a time would leave it: values, appearances and the note; a
+/// read-only field keeps its own value.
+#[test]
+fn a_static_xfa_form_takes_many_data_values_as_one_by_one() {
+    let n = 60;
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(n));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("many.pdf", None, original.clone(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static));
+    assert!(!doc.dirty && doc.bytes.starts_with(&original[..]), "the values are an appended revision");
+    // The read-only first field keeps its own (empty) value, and is not named.
+    let note = doc.info.warnings.iter().find(|w| w.contains("taken from this form's XFA data")).expect("a warning");
+    assert!(note.starts_with("59 form field values") && note.contains("form1[0].page1[0].f1[0]") && note.ends_with("and 54 more"), "{note}");
+    assert!(!note.contains("f0[0]"), "{note}");
+    // The same values filled one at a time.
+    let mut one_by_one = pdfcraft_cos::Document::open(original).unwrap();
+    for i in 0..n {
+        let r = pdfcraft_forms::set_value(&mut one_by_one, &format!("form1[0].page1[0].f{i}[0]"), &FieldValue::Text(format!("v{i}")));
+        assert_eq!(r.is_err(), i == 0, "field {i}: {r:?}");
+    }
+    let opened = &doc.editor.as_ref().unwrap().cos;
+    let shown = |d: &pdfcraft_cos::Document| -> Vec<(String, Vec<String>, String)> {
+        pdfcraft_forms::fields(d)
+            .into_iter()
+            .map(|f| {
+                let w = f.widgets.first().map(|w| w.obj).unwrap();
+                let ap = d.get(w).as_dict().and_then(|w| w.get(b"AP").cloned()).map(|a| d.resolve(&a));
+                let n = ap.and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned())).map(|n| d.resolve(&n));
+                let look = match n.as_deref() {
+                    Some(pdfcraft_cos::Object::Stream(st)) => String::from_utf8_lossy(&st.decoded().unwrap()).into_owned(),
+                    _ => String::new(),
+                };
+                (f.name, f.value, look)
+            })
+            .collect()
+    };
+    let got = shown(opened);
+    assert_eq!(got.len(), n);
+    assert_eq!(got, shown(&one_by_one));
+    assert!(got[0].1.is_empty());
+    assert!(got.iter().enumerate().skip(1).all(|(i, (_, v, ap))| *v == [format!("v{i}")] && ap.contains(&format!("(v{i})"))));
+}
+
+/// Opening a static XFA form whose datasets fill thousands of fields took minutes: each value
+/// read the whole form again (twice), so the time grew with the square of the fields. Eight
+/// times the fields now takes at most about eight times as long (it took about fifty).
+#[test]
+fn opening_a_static_xfa_form_grows_linearly_with_its_data_values() {
+    let time = |n: usize| {
+        let bytes = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(n));
+        (0..3)
+            .map(|_| {
+                let mut s = Session::new();
+                let start = std::time::Instant::now();
+                s.open("many.pdf", None, bytes.clone(), None).expect("opens");
+                start.elapsed()
+            })
+            .min()
+            .unwrap_or_default()
+    };
+    let small = time(100);
+    let large = time(800);
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+    assert!(ratio < 16.0, "100 fields: {small:?}, 800 fields: {large:?} ({ratio:.1}x)");
+}
+
 /// A date goes into the XFA data in the field's data picture (`<bind><picture>`), as other
 /// viewers write and read it, and comes back from there when the form is opened again. It used
 /// to be written as an ISO date whatever the picture said.
@@ -5587,6 +5735,8 @@ fn xfa_data_no_field_binds_to_survives_an_edit_and_save() {
     assert!(doc.xfa_warnings.iter().any(|w| w.contains("structured content")));
 }
 
+/// An XFA form's choice lists, signature and picture fields open as their kinds of field, take
+/// values that scripts read, and are saved into the datasets.
 #[test]
 fn xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save() {
     let data = "<form><page1><country>Japan</country><langs>English\nSpanish</langs></page1></form>";
@@ -5606,7 +5756,8 @@ fn xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save() {
     assert_eq!(langs.value, vec!["English".to_string(), "Spanish".to_string()]);
     assert!(field(&s, "other").has(pdfcraft_forms::flags::EDIT));
     assert!(field(&s, "pin").has(pdfcraft_forms::flags::PASSWORD));
-    assert_eq!(field(&s, "sign").kind, K::Signature);
+    // The signature field is named by its SOM path, as another viewer finds a signature.
+    assert_eq!(field(&s, "form[0].page1[0].sign[0]").kind, K::Signature);
     // Scripts read a choice list's saved value.
     assert_eq!(field(&s, "summary").value, vec!["Country: JP".to_string()], "{:?}", s.take_js_output(id));
     // Choosing another item recalculates; the list takes several values; a typed value is kept
@@ -5764,7 +5915,8 @@ fn xfa_data_import_on_a_static_form_replaces_every_value_and_pictures_reach_its_
 #[test]
 fn xfa_data_import_adds_and_removes_rows_of_a_dynamic_form() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
-    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // Raised time limits: a busy machine does not stop the calculations this checks.
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
     let id = s.open("rows.pdf", None, bytes, None).expect("opens");
     let names = |s: &Session| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
@@ -5793,16 +5945,19 @@ fn xfa_data_import_adds_and_removes_rows_of_a_dynamic_form() {
     assert!(String::from_utf8_lossy(&out).contains("<item>only</item>"));
 }
 
-/// Hundreds of calculations, in JavaScript and FormCalc, run on opening in one engine within
-/// the opening's budget, and a change recalculates them within the event's.
+/// Hundreds of calculations, in JavaScript and FormCalc, run on opening in one engine, and a
+/// change recalculates them in one more. The time limits are raised so that a busy machine
+/// does not stop them; the next test checks that the limits stop them.
 #[test]
-fn hundreds_of_xfa_calculations_run_in_one_engine_within_the_open_budget() {
+fn hundreds_of_xfa_calculations_run_in_one_engine() {
     let (sections, rows) = (10, 20);
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::many_calculations_template(sections, rows)));
-    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let engines = pdfcraft_js::xfa_session::engines_started();
     let started = std::time::Instant::now();
     let id = s.open("many.pdf", None, bytes, None).expect("opens");
     let elapsed = started.elapsed();
+    assert_eq!(pdfcraft_js::xfa_session::engines_started() - engines, 1, "the scripts of the opening share one engine");
     let out = s.take_js_output(id);
     assert!(!out.errors.iter().any(|e| e.contains("were skipped") || e.contains("stopped")), "{:?}", out.errors);
     let form = &s.get(id).unwrap().form;
@@ -5815,14 +5970,37 @@ fn hundreds_of_xfa_calculations_run_in_one_engine_within_the_open_budget() {
     let expect = (rows * (rows + 1)).to_string();
     assert!(sums.iter().all(|f| f.value == vec![expect.clone()]), "{:?}", sums.iter().map(|f| f.value.clone()).collect::<Vec<_>>());
     eprintln!("{} calculate scripts on open in {elapsed:?}", sections * rows + sections);
-    // A change recalculates them all again, well within the event budget.
+    // A change recalculates them all again, in one more engine.
     let started = std::time::Instant::now();
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("100".into()) }).unwrap();
+    assert_eq!(pdfcraft_js::xfa_session::engines_started() - engines, 2, "the scripts of the change share one engine");
     let out = s.take_js_output(id);
     assert!(!out.errors.iter().any(|e| e.contains("were skipped")), "{:?}", out.errors);
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, vec!["200".to_string()]);
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, vec![(rows * (rows + 1) - 2 + 200).to_string()]);
     eprintln!("recalculated after a change in {:?}", started.elapsed());
+}
+
+/// The time the scripts of an opening share stops the calculations it has no time for, and
+/// says how many were skipped; a change's scripts are stopped the same way.
+#[test]
+fn the_xfa_open_budget_stops_the_calculations_it_has_no_time_for() {
+    let (sections, rows) = (10, 20);
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::many_calculations_template(sections, rows)));
+    // A time scale of 0 leaves no time at all: every script is skipped before it starts.
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(0);
+    let engines = pdfcraft_js::xfa_session::engines_started();
+    let id = s.open("many.pdf", None, bytes, None).expect("opens");
+    let skipped = sections * rows + sections;
+    let stopped = format!("The form's scripts were stopped: the scripts took more than 0 seconds; {skipped} more were skipped");
+    assert_eq!(s.take_js_output(id).errors, vec![stopped.clone()]);
+    let totals = |s: &Session| s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("total")).map(|f| f.value.clone()).collect::<Vec<_>>();
+    assert_eq!(totals(&s).len(), sections * rows);
+    assert!(totals(&s).iter().all(Vec::is_empty), "no total was calculated: {:?}", totals(&s));
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("100".into()) }).unwrap();
+    assert!(s.take_js_output(id).errors.iter().any(|e| e.starts_with("The form's scripts were stopped: the scripts took more than 0 seconds")));
+    assert!(totals(&s).iter().all(Vec::is_empty), "no total was calculated: {:?}", totals(&s));
+    assert_eq!(pdfcraft_js::xfa_session::engines_started(), engines, "no script ran, so no engine started");
 }
 
 /// The scripts of one event share the form as the engine holds it: a failed script's

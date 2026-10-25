@@ -2087,3 +2087,26 @@ fn go_to_page_brings_the_page_into_view_horizontally() {
     let (r, vp) = (v.page_screen_rect(2).expect("page 3 on screen"), v.viewport_rect());
     assert!(r.left() >= vp.left() && r.right() <= vp.right(), "page 3 at {r:?}, viewport {vp:?}");
 }
+
+/// #4614: the accessible window is named like the native one, and follows it when the active
+/// document changes, so a screen reader can find the window by its title.
+#[test]
+fn the_accessible_window_has_the_window_title_as_its_name() {
+    use egui_kittest::kittest::NodeT as _;
+    let mut h = harness();
+    h.run_steps(2);
+    let name = |h: &Harness<'static, PdfCraftApp>| h.root().accesskit_node().label().map(|l| l.to_string());
+    assert_eq!(name(&h).as_deref(), Some("b.pdf — PdfCraft"));
+    {
+        use pdfcraft_engine::Edit;
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Quarterly report".into() }).unwrap();
+        let mut v = s.session.get(id).unwrap().initial_view();
+        v.display_title = true;
+        s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
+    assert_eq!(name(&h), Some(h.state().window_title.clone()));
+}

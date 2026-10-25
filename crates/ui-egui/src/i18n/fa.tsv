@@ -1,0 +1,2806 @@
+# Persian (fa) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); the translation lists the
+#                                 language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Persian computing vocabulary. No proprietary localisation resource, string table or product UI
+# (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters.
+#
+# Right to left: like Arabic and Kurdish, `rtl: true` in i18n/mod.rs puts every entry into display
+# order when the catalog loads ([`crate::bidi::display_rtl`]); entries are written here in logical
+# (typing) order. The Persian comma \u060c and question mark \u061f are used, and \u200c (ZWNJ) joins
+# compound words.
+
+	Menu	منو
+	File	فایل
+	Edit	ویرایش
+	Pages	صفحه‌ها
+	View	نمایش
+	Help	راهنما
+	Preferences	ترجیحات
+	Preferences…	ترجیحات…
+	Interface language	زبان رابط کاربری
+	Interface size	اندازه رابط کاربری
+	Auto ({percent}%)	خودکار ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	حالت خودکار از اندازه متن سیستم پیروی می‌کند. صفحه‌ها همیشه با وضوح کامل نمایشگر رندر می‌شوند.
+	Identity	هویت
+	Name on new comments	نام روی یادداشت‌های جدید
+	Hide hover previews for highlights without comment text	پنهان کردن پیش‌نمایش شناور برای برجسته‌سازی‌های بدون متن یادداشت
+	Open…	باز کردن…
+	Open Recent	باز کردن موارد اخیر
+	Clear Recent Files	پاک کردن فایل‌های اخیر
+	Remove from Recent	حذف از موارد اخیر
+	Remove {name} from Recent	حذف {name} از موارد اخیر
+	Pin folder to Home…	سنجاق کردن پوشه به خانه…
+	Folders	پوشه‌ها
+	Pin a folder…	سنجاق کردن پوشه…
+	Pin a folder to Home	سنجاق کردن پوشه به خانه
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	یک پوشه را سنجاق کنید تا جدید‌ترین PDFهای آن اینجا فهرست شوند، مثلاً جایی که اسکنر یا درایو ابری هم‌گام‌شده آن‌ها را ذخیره می‌کند.
+	Unpin	برداشتن سنجاق
+	Unpin {folder}	برداشتن سنجاق {folder}
+	Looking for PDFs…	جستوجوی PDFها…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	این پوشه هم اکنون در دسترس نیست. ممکن است جابه جا شده باشد یا درایو یا هم‌گام‌سازی ابری آن آفلاین باشد.
+	No PDFs in this folder yet	هنوز PDFی در این پوشه نیست
+	Show less	نمایش کمتر
+	Show {n} more	نمایش {n} مورد بیشتر
+	The newest {n} of {total} PDFs	{n} PDF جدید‌تر از {total} PDF
+	Pinned folders need the desktop app	پوشه‌های سنجاق‌شده به برنامه دسکتاپ نیاز دارند
+	Choose a folder on this computer to pin	یک پوشه روی این رایانه برای سنجاق کردن انتخاب کنید
+	{folder} is already pinned to Home	{folder} از قبل به خانه سنجاق شده است
+	You can pin up to {n} folders. Unpin one first.	می‌توانید تا {n} پوشه را سنجاق کنید. ابتدا یکی را بردارید.
+	Pinned {folder} to Home	{folder} به خانه سنجاق شد
+	No recent files	فایل اخیری وجود ندارد
+	New blank PDF	PDF خالی جدید
+	Create PDF from file…	ایجاد PDF از فایل…
+	Create PDF from images…	ایجاد PDF از تصاویر…
+	Create PDF from multiple files…	ایجاد PDF از چند فایل…
+	Create separate PDFs…	ایجاد PDFهای جداگانه…
+	Create PDF from clipboard	ایجاد PDF از بریده دان
+	Combine files…	ترکیب فایل‌ها…
+	Save	ذخیره
+	Save as…	ذخیره به‌عنوان…
+	Close file	بستن فایل
+	Close all	بستن همه
+	Revert	باز‌گرداندن
+	Print…	چاپ…
+	Document properties…	ویژگی‌های سند…
+	Undo	واگرد
+	Redo	ازنو
+	Find…	یافتن…
+	Advanced search…	جستوجوی پیشرفته…
+	Copy pages	رونوشت صفحه‌ها
+	Cut pages	برش صفحه‌ها
+	Paste pages	چسباندن صفحه‌ها
+	Fit visible	تناسب با بخش قابل مشاهده
+	Marquee zoom	بزرگنمایی ناحی‌های
+	Take a snapshot	گرفتن تصویر لحظه ای
+	Column select	انتخاب ستونی
+	Full screen mode	حالت تمامصفحه
+	Read mode	حالت مطالعه
+	Next tab	زبانه بعدی
+	Previous tab	زبانه قبلی
+	Switch light / dark theme	تغییر بین پوسته روشن / تیره
+	Comments panel	پنل یادداشت‌ها
+	Form fields panel	پنل فیلد‌های فرم
+	Clear form	پاک کردن فرم
+	Find tools and commands…	یافتن ابزار‌ها و فرمان‌ها…
+	Zoom	بزرگنمایی
+	Actual size	اندازه واقعی
+	Zoom to page level	بزرگنمایی تا سطح صفحه
+	Fit to width	تناسب با عرض
+	Display theme	پوسته نمایش
+	Side panels	پنل‌های کناری
+	Enable Acrobat JavaScript	فعال کردن Acrobat JavaScript
+	Flatten Fill & Sign when saving	ادغام کردن پر کردن و امضا هنگام ذخیره
+	Text, marks and signatures become part of the page. Other comments stay editable.	متن، نشانه‌ها و امضا‌ها بخشی از صفحه می‌شوند. سایر یادداشت‌ها قابل‌ویرایش می‌مانند.
+	OK	تأیید
+	Join our Discord	به دیسکورد ما بپیوندید
+	Close	بستن
+	Next / previous match	تطابق بعدی / قبلی
+	Copy selected text	رونوشت متن انتخاب‌شده
+	Double-click	دوبار کلیک
+	Select a word	انتخاب یک واژه
+	Clear selection / close find	پاک کردن انتخاب / بستن جستوجو
+	Zoom in / out (also pinch or {key}-scroll)	بزرگنمایی / کوچکنمایی (همچنین با دو انگشت یا {key} + پیمایش)
+	Rotate view	چرخش نما
+	First / last page	صفحه اول / آخر
+	Previous / next page	صفحه قبلی / بعدی
+	Delete selected pages (Organize)	حذف صفحه‌های انتخاب‌شده (سازمان‌دهی)
+	Select all pages (Organize)	انتخاب همه صفحه‌ها (سازمان‌دهی)
+	Home	خانه
+	Open	باز کردن
+	Open a PDF ({key})	باز کردن یک PDF ({key})
+	Dark gray theme	پوسته خاکستری تیره
+	Light theme	پوسته روشن
+	Appearance mode	حالت ظاهر
+	Light	روشن
+	Dark	تیره
+	Active	فعال
+	Dark theme	پوسته تیره
+	Appearance settings…	تنظیمات ظاهر…
+	All tools	همه ابزار‌ها
+	Read	خواندن
+	Convert	تبدیل
+	E-Sign	امضای الکترونیکی
+	Print ({key})	چاپ ({key})
+	Save ({key})	ذخیره ({key})
+	Document properties ({key})	ویژگی‌های سند ({key})
+	Find tools and commands	یافتن ابزار‌ها و فرمان‌ها
+	Fit to height	تناسب با ارتفاع
+	Zoom in	بزرگنمایی
+	Zoom out	کوچکنمایی
+	Rotate view clockwise	چرخش نما در جهت ساعتگرد
+	Rotate view counterclockwise	چرخش نما در جهت پادساعتگرد
+	Page navigation	پیمایش صفحه
+	Previous view	نمای قبلی
+	Next view	نمای بعدی
+	Page display	نمایش صفحه
+	Continuous scrolling	پیمایش پیوسته
+	Show gaps between pages	نمایش فاصله بین صفحه‌ها
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	فاصله‌ها را برای اتصال لبه‌های صفحه پنهان کنید. حاشیه‌های داخل PDF تغییر نمی‌کنند.
+	Two-page view	نمای دو صفح‌های
+	Single page	صفحه تکی
+	Show cover page in two-page view	نمایش صفحه جلد در نمای دو صفح‌های
+	Use system setting	استفاده از تنظیمات سیستم
+	Light gray	خاکستری روشن
+	Dark gray	خاکستری تیره
+	Comments	یادداشت‌ها
+	Bookmarks	نشانک‌ها
+	Fields	فیلد‌ها
+	Layers	لایه‌ها
+	Attachments	پیوست‌ها
+	Signatures	امضا‌ها
+	Accessibility Checker	بررسی‌کننده دسترس‌پذیری
+	Search	جستوجو
+	Compare	مقایسه
+	Page thumbnails	بندانگشتی صفحه‌ها
+	Form fields	فیلد‌های فرم
+	Zoom out ({key})	کوچکنمایی ({key})
+	Zoom in ({key})	بزرگنمایی ({key})
+	Rotate view clockwise ({key})	چرخش نما در جهت ساعتگرد ({key})
+	Toggle fit page / fit width	تغییر بین تناسب با صفحه / تناسب با عرض
+	Next page	صفحه بعدی
+	Previous page	صفحه قبلی
+	Current page — type a page number or label (such as iv) and press Enter	صفحه فعلی — یک شماره یا برچسب صفحه (مانند iv) وارد کنید و Enter را فشار دهید
+	Zoom — type a percentage and press Enter	بزرگنمایی — یک درصد وارد کنید و Enter را فشار دهید
+	Welcome to PdfCraft	به PdfCraft خوش آمدید
+	An open-source PDF workbench — local, private, and scriptable.	یک میزکار PDF متن باز — محلی، خصوصی و قابل اسکریپت‌نویسی.
+	Join the ArtCraft community	به جامعه ArtCraft بپیوندید
+	Get help, share feedback and follow development on Discord.	کمک بگیرید، بازخورد بدهید و توسعه را در دیسکورد دنبال کنید.
+	Recommended tools	ابزار‌های پیشنهادی
+	Use now	همین حالا استفاده کنید
+	Open file	باز کردن فایل
+	Recent	اخیر
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	فایل‌هایی که در PdfCraft باز می‌کنید اینجا نمایش داده می‌شوند. برای باز کردن، یک PDF را هرجایی رها کنید.
+	Privacy	حریم خصوصی
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft آفلاین کار می‌کند. بدون تله سنجی، بدون حساب کاربری و بدون پردازش ابری، مگر اینکه ارائه دهند‌ه ای اضافه کنید.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	اسکریپت‌ها در یک محیط ایزوله بدون دسترسی به فایل یا شبکه اجرا می‌شوند. با خاموش بودن JavaScript، توابع استاندارد قالب‌بندی، اعتبارسنجی و محاسبه Acrobat همچنان کار می‌کنند.
+	Back to all tools	بازگشت به همه ابزار‌ها
+	Close panel	بستن پنل
+	View less	نمایش کمتر
+	View more	نمایش بیشتر
+	Available	در دسترس
+	Ready	آماده
+	Search tools and commands…	جستوجوی ابزار‌ها و فرمان‌ها…
+	No matching tools	ابزار منطبقی نیست
+	Tool	ابزار
+	Command	فرمان
+	Add a sticky note	افزودن یادداشت چسبان
+	Add a text box	افزودن کادر متن
+	Highlight text	برجسته‌سازی متن
+	Underline text	زیرخط متن
+	Strikethrough text	خط خوردگی متن
+	Squiggly underline text	زیرخط موجدار متن
+	Draw freehand	ترسیم آزاد
+	Draw a line	ترسیم خط
+	Draw an arrow	ترسیم پیکان
+	Draw a rectangle	ترسیم مستطیل
+	Draw an oval	ترسیم بیضی
+	Draw a polygon	ترسیم چند‌ضلعی
+	Draw connected lines	ترسیم خطوط متصل
+	Draw a cloud	ترسیم ابر
+	Add a callout	افزودن فراخوان
+	Insert text	درج متن
+	Replace text	جای‌گزینی متن
+	Attach a file	پیوست کردن فایل
+	Erase drawings	پاک کردن ترسیم‌ها
+	Flatten comments	ادغام یادداشت‌ها
+	Import comments…	درونبرد یادداشت‌ها…
+	Add a stamp	افزودن مهر
+	Export all comments to data file…	برونبرد همه یادداشت‌ها به فایل داده…
+	Hide all comments	پنهان کردن همه یادداشت‌ها
+	Summarize comments	خلاصه‌سازی یادداشت‌ها
+	Import form data…	درونبرد داده‌های فرم…
+	Export form data…	برونبرد داده‌های فرم…
+	PDF/A…	PDF/A…
+	Action Wizard…	جادوگر اقدام…
+	Prepare for distribution…	آماده‌سازی برای توزیع…
+	Optimize scanned documents…	بهینه‌سازی اسناد اسکن شده…
+	Compare files…	مقایسه فایل‌ها…
+	Detect form fields	تشخیص فیلد‌های فرم
+	Merge data files into spreadsheet…	ادغام فایل‌های داده در صفحهگسترده…
+	Flatten form fields	ادغام فیلد‌های فرم
+	Prepare a form	آماده‌سازی فرم
+	Tab order: by rows	ترتیب زبانه: بر اساس ردیف‌ها
+	Tab order: by columns	ترتیب زبانه: بر اساس ستون‌ها
+	Tab order: by document structure	ترتیب زبانه: بر اساس ساختار سند
+	Add text	افزودن متن
+	Edit text & images	ویرایش متن و تصاویر
+	Add or edit links	افزودن یا ویرایش پیوند‌ها
+	Create links from URLs	ایجاد پیوند از URLها
+	Remove all links	حذف همه پیوند‌ها
+	No links to remove	پیوندی برای حذف وجود ندارد
+	Removed 1 link	۱ پیوند حذف شد
+	Removed {n} links	{n} پیوند حذف شد
+	Add Bates numbering…	افزودن شماره‌گذاری Bates…
+	Add image…	افزودن تصویر…
+	Redact text and images	سیاه‌کردن متن و تصاویر
+	Redact pages…	سیاه‌کردن صفحه‌ها…
+	Find text and redact…	یافتن متن و سیاه‌کردن…
+	Redaction properties…	ویژگی‌های سیاه‌کردن…
+	Apply redactions…	اعمال سیاه‌کردن‌ها…
+	Clear redaction marks	پاک کردن نشانه‌های سیاه‌کردن
+	Remove hidden information…	حذف اطلاعات پنهان…
+	Sanitize document…	پاک‌سازی سند…
+	Field properties…	ویژگی‌های فیلد…
+	Add a text field	افزودن فیلد متن
+	Add a checkbox	افزودن جعبه انتخاب
+	Add a radio button	افزودن دکمه رادیویی
+	Add a drop-down list	افزودن فهرست کشویی
+	Add a list box	افزودن کادر فهرست
+	Add a button	افزودن دکمه
+	Add an image field	افزودن فیلد تصویر
+	Add a date field	افزودن فیلد تاریخ
+	Add a digital signature field	افزودن فیلد امضای دیجیتال
+	Digitally sign	امضای دیجیتال
+	Certify (visible signature)	گواهی (امضای قابل مشاهده)
+	Certify (invisible signature)	گواهی (امضای نامرئی)
+	Validate all signatures	اعتبارسنجی همه امضا‌ها
+	Signatures panel	پنل امضا‌ها
+	Fill & Sign: add text	پر کردن و امضا: افزودن متن
+	Fill & Sign: checkmark	پر کردن و امضا: علامت تیک
+	Fill & Sign: cross	پر کردن و امضا: ضربدر
+	Fill & Sign: dot	پر کردن و امضا: نقطه
+	Fill & Sign: line	پر کردن و امضا: خط
+	Fill & Sign: date	پر کردن و امضا: تاریخ
+	Fill & Sign: sign	پر کردن و امضا: امضا
+	Fill & Sign: initials	پر کردن و امضا: حروف اول
+	Export to image…	برونبرد به تصویر…
+	Reduce file size…	کاهش اندازه فایل…
+	Optimize PDF…	بهینه‌سازی PDF…
+	Export to text…	برونبرد به متن…
+	Export to Word…	برونبرد به Word…
+	Export to PowerPoint…	برونبرد به PowerPoint…
+	Export to HTML…	برونبرد به HTML…
+	Export to RTF…	برونبرد به RTF…
+	JavaScript console…	کنسول JavaScript…
+	Document JavaScripts…	JavaScriptهای سند…
+	Recognize text…	تشخیص متن…
+	Recognize text in multiple files…	تشخیص متن در چند فایل…
+	Check for accessibility…	بررسی دسترس‌پذیری…
+	Open accessibility report	باز کردن گزارش دسترس‌پذیری
+	Change reading options…	تغییر گزینه‌های خواندن…
+	Add alternate text…	افزودن متن جانشین…
+	Export all images…	برونبرد همه تصاویر…
+	Add header & footer…	افزودن سرصفحه و پاصفحه…
+	Update header & footer…	به‌روز‌رسانی سرصفحه و پاصفحه…
+	Remove header & footer	حذف سرصفحه و پاصفحه
+	Add watermark…	افزودن چاپ سایه…
+	Update watermark…	به‌روز‌رسانی چاپ سایه…
+	Remove watermark	حذف چاپسایه
+	Add background…	افزودن پس‌زمینه…
+	Update background…	به‌روز‌رسانی پس‌زمینه…
+	Remove background	حذف پس‌زمینه
+	Protect using password…	محافظت با گذرواژه…
+	Remove security	حذف امنیت
+	Security properties…	ویژگی‌های امنیت…
+	Organize pages	سازمان‌دهی صفحه‌ها
+	New bookmark	نشانک جدید
+	New bookmarks from structure	نشانک‌های جدید از ساختار
+	Rotate pages clockwise	چرخش صفحه‌ها در جهت ساعتگرد
+	Rotate pages counterclockwise	چرخش صفحه‌ها در جهت پادساعتگرد
+	Delete pages	حذف صفحه‌ها
+	Insert blank page	درج صفحه خالی
+	Rotate pages…	چرخش صفحه‌ها…
+	Duplicate pages	تکثیر صفحه‌ها
+	Crop pages	برش صفحه‌ها
+	Set page boxes…	تنظیم کادر‌های صفحه…
+	Insert pages from file…	درج صفحه‌ها از فایل…
+	Replace pages…	جای‌گزینی صفحه‌ها…
+	Extract pages…	استخراج صفحه‌ها…
+	Split document…	تقسیم سند…
+	Number pages…	شماره‌گذاری صفحه‌ها…
+	Keyboard shortcuts	میانبر‌های صفحه کلید
+	Join the ArtCraft Discord	به دیسکورد ArtCraft بپیوندید
+	PdfCraft web page	صفحه وب PdfCraft
+	PdfCraft on GitHub	PdfCraft در GitHub
+	ArtCraft website	وبسایت ArtCraft
+	Check for updates…	بررسی به‌روز‌رسانی‌ها…
+	About PdfCraft	درباره PdfCraft
+	Export a PDF	برونبرد یک PDF
+	Export to	برونبرد به
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	صفحه گسترده (.xlsx)
+	Presentation (.pptx)	ارائه (.pptx)
+	Image (PNG)	تصویر (PNG)
+	Export all images	برونبرد همه تصاویر
+	HTML web page	صفحه وب HTML
+	Rich Text Format (.rtf)	قالب متن غنی (.rtf)
+	Text (plain)	متن (ساده)
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	پر کردن و امضا
+	Fill	پر کردن
+	Checkmark	علامت تیک
+	Cross	ضرب در
+	Dot	نقطه
+	Line	خط
+	Date	تاریخ
+	Signature	امضا
+	Initials	حروف اول
+	Edit a PDF	ویرایش یک PDF
+	Modify page	تغییر صفحه
+	Rotate pages	چرخش صفحه‌ها
+	Insert pages	درج صفحه‌ها
+	Extract pages	استخراج صفحه‌ها
+	Add content	افزودن محتوا
+	Text	متن
+	Image	تصویر
+	Header and footer	سرصفحه و پاصفحه
+	Watermark	چاپ سایه
+	Link	پیوند
+	Bates numbering	شماره‌گذاری Bates
+	Background	پس‌زمینه
+	Attach file	پیوست کردن فایل
+	Create a PDF	ایجاد یک PDF
+	Create from	ایجاد از
+	Single file	فایل تکی
+	Multiple files	چند فایل
+	Separate PDFs	PDFهای جداگانه
+	Images	تصاویر
+	Clipboard	بریده دان
+	Blank page	صفحه خالی
+	Combine files	ترکیب فایل‌ها
+	Combine	ترکیب
+	Add files to combine	افزودن فایل‌ها برای ترکیب
+	Page options	گزینه‌های صفحه
+	Page grid	شبکه صفحه
+	Rotate	چرخش
+	Delete	حذف
+	Extract	استخراج
+	Insert	درج
+	Replace	جای‌گزینی
+	Split	تفکیک
+	More	بیشتر
+	Set page boxes	تعیین جعبه‌های صفحه
+	Set page transitions	تعیین انتقال‌های صفحه
+	Page labels	برچسب‌های صفحه
+	Page transitions	انتقال‌های صفحه
+	Add comments	افزودن یادداشت‌ها
+	Markup	نشانه‌گذاری
+	Sticky note	یادداشت چسبان
+	Underline	زیرخط
+	Strikethrough	خط خوردگی
+	Squiggly underline	زیرخط موجدار
+	Text box	جعبه متن
+	Drawing	ترسیم
+	Rectangle	مستطیل
+	Oval	بیضی
+	Arrow	پیکان
+	Cloud	ابر
+	Stamp	مهر
+	Review	باز‌بینی
+	Comment list	فهرست یادداشت‌ها
+	Scan & OCR	پویش و OCR
+	Recognize text	شناسایی متن
+	In this file	در این فایل
+	In multiple files	در چندین فایل
+	Enhance scanned file	بهبود فایل پویش‌شده
+	Correct recognized text	تصحیح متن شناسایی‌شده
+	Protect a PDF	محافظت از یک PDF
+	Protect	محافظت
+	Protect with password	محافظت با گذرواژه
+	Remove hidden information	حذف اطلاعات پنهان
+	Advanced options	گزینه‌های پیشرفته
+	Encrypt with certificate	رمز‌گذاری با گواهی
+	Security properties	ویژگی‌های امنیت
+	Redact a PDF	سیاه‌کردن یک PDF
+	Redact	سیاه‌کردن
+	Redact pages	سیاه‌کردن صفحه‌ها
+	Find text and redact	یافتن متن و سیاه‌کردن
+	Set properties	تعیین ویژگی‌ها
+	Sanitize document	پاک‌سازی سند
+	Compress a PDF	فشرده‌سازی یک PDF
+	Optimize	بهینه‌سازی
+	Reduce file size	کاهش اندازه فایل
+	Advanced optimization	بهینه‌سازی پیشرفته
+	Audit space usage	بررسی میزان فضای مصرفی
+	Field list	فهرست فیلد‌ها
+	Field properties	ویژگی‌های فیلد
+	Tab order by rows	ترتیب زبانه بر اساس سطر‌ها
+	Tab order by columns	ترتیب زبانه بر اساس ستون‌ها
+	Import data	درون‌ریزی داده‌ها
+	Export data	برونبری داده‌ها
+	Add form components	افزودن اجزای فرم
+	Text field	فیلد متن
+	Checkbox	کادر انتخاب
+	Radio button	دکمه رادیویی
+	Drop-down list	فهرست کشویی
+	List box	جعبه فهرست
+	Button	دکمه
+	Image field	فیلد تصویر
+	Date field	فیلد تاریخ
+	Digital signature	امضای دیجیتال
+	Stamps	مهر‌ها
+	Stamp palette	پالت مهر‌ها
+	Use a certificate	استفاده از یک گواهی
+	Certificates	گواهی‌ها
+	Timestamp	مهر زمانی
+	Use print production	استفاده از تولید چاپ
+	Print production	تولید چاپ
+	Output preview	پیش‌نمایش خروجی
+	Preflight	پیش‌بررسی
+	Convert colors	تبدیل رنگ‌ها
+	Add printer marks	افزودن نشانه‌های چاپگر
+	Fix hairlines	اصلاح خطوط مویی
+	Measure objects	اندازه‌گیری اشیا
+	Measure	اندازه‌گیری
+	Measuring tool	ابزار اندازه‌گیری
+	Geospatial location	موقعیت مکانی جغرافیایی
+	Compare files	مقایسه فایل‌ها
+	Select files to compare	انتخاب فایل‌ها برای مقایسه
+	Use guided actions	استفاده از کنش‌های هدایت‌شده
+	Actions list	فهرست کنش‌ها
+	Action Wizard	جادوگر کنش
+	Make accessible	دسترس‌پذیر کردن
+	Prepare for distribution	آماده‌سازی برای توزیع
+	Optimize scanned documents	بهینه‌سازی اسناد پویش‌شده
+	Archive documents	بایگانی اسناد
+	Prepare for accessibility	آماده‌سازی برای دسترس‌پذیری
+	Accessibility	دسترس‌پذیری
+	Automatically tag PDF	برچسب‌گذاری خودکار PDF
+	Change reading options	تغییر گزینه‌های خواندن
+	Check for accessibility	بررسی دسترس‌پذیری
+	Add alternate text	افزودن متن جانشین
+	Fix reading order	اصلاح ترتیب خواندن
+	Apply PDF standards	اعمال استاندارد‌های PDF
+	Standards	استاندارد‌ها
+	Save as PDF/A	ذخیره به‌صورت PDF/A
+	Save as PDF/X	ذخیره به‌صورت PDF/X
+	Save as PDF/UA	ذخیره به‌صورت PDF/UA
+	Add search index	افزودن نمایه جستوجو
+	Index	نمایه
+	Manage embedded index	مدیریت نمایه جا‌سازی‌شده
+	Use JavaScript	استفاده از JavaScript
+	JavaScript	JavaScript
+	Console	کنسول
+	Document JavaScripts	JavaScriptهای سند
+	Document actions	کنش‌های سند
+	AI assistant	دستیار هوش مصنوعی
+	Bring your own model (off by default)	مدل خودتان را بی‌آورید (به‌طور پیش‌فرض خاموش)
+	Summarize	خلاصه‌سازی
+	Ask about this document	پرسش درباره این سند
+	Translate	ترجمه
+	pages	صفحه‌ها
+	Planned	برنامه‌ریزی‌شده
+	Planned for milestone	برنامه‌ریزی‌شده برای نقطه عطف
+	open to see what it will include	باز کنید تا ببینید چه چیزی را در بر می‌گیرد
+	Optional: needs an AI provider you configure	اختیاری: به یک ارائه دهنده هوش مصنوعی که خودتان پیکر‌بندی می‌کنید نیاز دارد
+	Coming in milestone	در راه در نقطه عطف
+	Items marked Ready work today.	مواردی که با برچسب آماده مشخص شدهاند امروز کار می‌کنند.
+	Preview	پیش‌نمایش
+	Edit fields	ویرایش فیلد‌ها
+	Try the form as people filling it in will see it	فرم را همان‌گونه که افرادی که آن را پر می‌کنند می‌بینند امتحان کنید
+	Redact all	سیاه‌کردن همه
+	Clear all	پاک کردن همه
+	Rotate page	چرخش صفحه
+	Delete page	حذف صفحه
+	Move page	جابه‌جایی صفحه
+	Move pages	جابه‌جایی صفحه‌ها
+	Duplicate page	تکثیر صفحه
+	Replace page	جای‌گزینی صفحه
+	Replace pages	جای‌گزینی صفحه‌ها
+	Crop page	برش صفحه
+	Cancel	لغو
+	Don't save	ذخیره نکن
+	Apply	اعمال
+	Run	اجرا
+	Clear	پاک کردن
+	Sanitize	پاک‌سازی
+	Mark all	علامت‌گذاری همه
+	Save changes to “{name}” before closing?	تغییرات «{name}» پیش از بستن ذخیره شود؟
+	Your changes will be lost if you don't save them.	اگر آن‌ها را ذخیره نکنید، تغییراتتان از دست می‌رود.
+	Password required	گذرواژه لازم است
+	“{name}” is protected. Enter a password to open it.	«{name}» محافظت‌شده است. برای باز کردن آن گذرواژ‌های وارد کنید.
+	Password	گذرواژه
+	Incorrect password. Try again.	گذرواژه نادرست است. دوباره تلاش کنید.
+	Recognize Text	شناسایی متن
+	Password protection will be applied when you save	محافظت با گذرواژه هنگام ذخیره اعمال می‌شود
+	Saved the print-ready PDF to {path}	PDF آماده چاپ در {path} ذخیره شد
+	Could not save: {e}	ذخیره نشد: {e}
+	Earlier in tab order	پیش‌تر در ترتیب زبانه
+	Later in tab order	بعد‌تر در ترتیب زبانه
+	Calculation order	ترتیب محاسبه
+	Fix order	اصلاح ترتیب
+	Move only what must move, so every field calculates after the fields it reads.	فقط آنچه باید جابه جا شود را جابه جا کنید تا هر فیلد پس از فیلد‌هایی که می‌خواند محاسبه شود.
+	Earlier in calculation order	پیش‌تر در ترتیب محاسبه
+	Later in calculation order	بعد‌تر در ترتیب محاسبه
+	Too early	خیلی زود
+	Reads {name}, which calculates later, so it shows an old value.	{name} را می‌خواند که بعد‌تر محاسبه می‌شود، پس مقدار قدیمی را نشان می‌دهد.
+	Loop	حلقه
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} را می‌خواند که به نوبه خود آن را می‌خوانند. هیچ ترتیبی حلقه را اصلاح نمی‌کند: یکی از فرمول‌ها را تغییر دهید.
+	Not in order	نامرتب
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	در ترتیب محاسب‌های که در PDF ذخیره شده وجود ندارد: سایر نمایشگر‌های PDF ممکن است آن را محاسبه نکنند.
+	Back to Prepare a form	بازگشت به آماده‌سازی فرم
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	هنوز هیچ فیلدی در این فرم مقدارش را محاسبه نمی‌کند. به یک فیلد در برگه محاسبه از ویژگی‌هایش یک محاسبه بدهید تا اینجا نمایش داده شود.
+	{names} and {last}	{names} و {last}
+	{field} reads no other field	{field} هیچ فیلد دی‌گری را نمی‌خواند
+	{field} reads {fields}	{field} {fields} را می‌خواند
+	No field reads it	هیچ فیلدی آن را نمی‌خواند
+	The order saved in the PDF needs tidying	ترتیب ذخیره‌شده در PDF نیاز به مرتب‌سازی دارد
+	Moves only what must move	فقط آنچه باید جابه جا شود را جابه جا می‌کند
+	Every field calculates after the fields it reads.	هر فیلد پس از فیلد‌هایی که می‌خواند محاسبه می‌شود.
+	Every field outside a loop calculates after the fields it reads.	هر فیلد بیرون از یک حلقه پس از فیلد‌هایی که می‌خواند محاسبه می‌شود.
+	{field} reads its own value	{field} مقدار خودش را می‌خواند
+	{fields} read each other	{fields} یکدیگر را می‌خوانند
+	No order can fix a loop. Change one of the formulas.	هیچ ترتیبی حلقه را اصلاح نمی‌کند. یکی از فرمول‌ها را تغییر دهید.
+	Edit {field}'s formula	ویرایش فرمول {field}
+	Order · top calculates first	ترتیب · بالا اول محاسبه می‌شود
+	Script	اسکریپت
+	Links on page	پیوند‌های روی صفحه
+	Show on the page which fields each field reads	روی صفحه نشان بده که هر فیلد کدام فیلد‌ها را می‌خواند
+	Drag a field to move it, or select it and press {up} or {down}.	یک فیلد را برای جابه‌جایی بکشید، یا آن را انتخاب کنید و {up} یا {down} را فشار دهید.
+	From:	از:
+	To:	تا:
+	High Resolution	تفکیک‌پذیری بالا
+	Print	چاپ
+	Verify to see what the document needs.	برای دیدن نیاز‌های سند، بررسی کنید.
+	Set Page Boxes	تعیین جعبه‌های صفحه
+	Signature panel	پنل امضا
+	{month} {day}, {y}	{day} {month} {y}
+	The document's security settings don't allow filling in form fields	تنظیمات امنیتی سند اجازه پر کردن فیلد‌های فرم را نمی‌دهد
+	{name} is read-only	{name} فقط خواندنی است
+	{name} has no action	{name} هیچ کنشی ندارد
+	Previous month	ماه پیش
+	Next month	ماه بعد
+	January	ژانویه
+	February	فوریه
+	March	مارس
+	April	آوریل
+	May	مه
+	June	ژوئن
+	July	ژوئیه
+	August	اوت
+	September	سپتامبر
+	October	اکتبر
+	November	نوامبر
+	December	دسامبر
+	Done	انجام شد
+	This certificate is in your list of trusted certificates.	این گواهی در فهرست گواهی‌های مورد اعتماد شماست.
+	This certificate is trusted through a certificate above it in the chain.	این گواهی از طریق گواهی بالا‌تر از آن در زنجیره مورد اعتماد است.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	این گواهی مورد اعتماد نیست. امضا‌های ساخته‌شده با آن هویتی ناشناخته نشان می‌دهند.
+	Add to Trusted Certificates	افزودن به گواهی‌های مورد اعتماد
+	Export…	برونبری…
+	PDF Optimizer	بهینه‌ساز PDF
+	Discard Objects	دور انداختن اشیا
+	Discard User Data	دور انداختن داده‌های کاربر
+	Clean Up	پاک‌سازی
+	Color Images	تصاویر رنگی
+	Grayscale Images	تصاویر خاکستری
+	Bicubic downsampling to	نمونه برداری کاهشی دو مکعبی به
+	for images above	برای تصاویر بالا‌تر از
+	Compression	فشرده‌سازی
+	ZIP	ZIP
+	Retain existing	نگهداشتن موجود
+	Minimum	کمینه
+	Low	پایین
+	High	بالا
+	Maximum	بیشینه
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	هر تصویر همان‌جا که صفحه‌ها آن را ترسیم می‌کنند اندازه‌گیری می‌شود؛ تصویر تن‌ها در صورتی جایگزین می‌شود که نتیجه کوچک‌تر باشد.
+	Discard all links, actions and JavaScript	دور انداختن همه پیوند‌ها، کنش‌ها و JavaScript
+	Discard alternate images	دور انداختن تصاویر جانشین
+	Discard embedded page thumbnails	دور انداختن تصاویر بندانگشتی جا‌سازی‌شده صفحه
+	Discard document tags	دور انداختن برچسب‌های سند
+	Discard embedded print settings	دور انداختن تنظیمات چاپ جا‌سازی‌شده
+	Discard bookmarks	دور انداختن نشانک‌ها
+	Discard hidden layer content	دور انداختن محتوای لایه پنهان
+	Discard all comments, forms and multimedia	دور انداختن همه یادداشت‌ها، فرم‌ها و چند‌رسان‌های
+	Discard document information and metadata	دور انداختن اطلاعات و فراداده‌های سند
+	Discard all object data (file attachments)	دور انداختن همه داده‌های شیء (پیوست‌های فایل)
+	Discard private data of other applications	دور انداختن داده‌های خصوصی سایر برنامه‌ها
+	Discard hidden text	دور انداختن متن پنهان
+	Use Flate to encode streams that are not encoded	استفاده از Flate برای کد‌گذاری جریان‌هایی که کد‌گذاری نشدهاند
+	In streams that use LZW encoding, use Flate instead	در جریان‌هایی که از کد‌گذاری LZW استفاده می‌کنند، به‌جای آن از Flate استفاده کنید
+	Remove invalid links and bookmarks	حذف پیوند‌ها و نشانک‌های نامعتبر
+	Remove unreferenced named destinations	حذف مقصد‌های نامدار بدون ارجاع
+	Compress document structure (object streams)	فشرده‌سازی ساختار سند (جریان‌های شیء)
+	Remove unused objects and merge identical ones	حذف اشیای بدون استفاده و ادغام اشیای یکسان
+	Audit space usage…	بررسی میزان فضای مصرفی…
+	Space Audit	بررسی فضا
+	What takes up the space in this file, by kind of content.	چه چیزی فضای این فایل را اشغال می‌کند، بر حسب نوع محتوا.
+	Bytes	بایت
+	Content Streams	جریان‌های محتوا
+	X Object Forms	فرم‌های XObject
+	Structure Info	اطلاعات ساختار
+	Thumbnails	تصاویر بندانگشتی
+	Named Destinations	مقصد‌های نامدار
+	Color Spaces	فضا‌های رنگ
+	Shadings	سایه زنی‌ها
+	Patterns (graphics objects)	الگو‌ها (اشیای گرافیکی)
+	Extended Graphics States	حالت‌های گرافیکی توسعه یافته
+	Embedded Files	فایل‌های جا‌سازی‌شده
+	Document Overhead	سربار سند
+	Total	مجموع
+	Text Field Properties	ویژگی‌های فیلد متن
+	Check Box Properties	ویژگی‌های کادر انتخاب
+	Radio Button Properties	ویژگی‌های دکمه رادیویی
+	Dropdown Properties	ویژگی‌های فهرست کشویی
+	List Box Properties	ویژگی‌های جعبه فهرست
+	Button Properties	ویژگی‌های دکمه
+	Digital Signature Properties	ویژگی‌های امضای دیجیتال
+	Position	موقعیت
+	Options	گزینه‌ها
+	Validate	اعتبارسنجی
+	Calculate	محاسبه
+	Actions	کنش‌ها
+	This field is locked. Unlock it to change its properties.	این فیلد قفل است. برای تغییر ویژگی‌هایش آن را باز کنید.
+	Tooltip:	راهنمای ابزار:
+	Common Properties	ویژگی‌های مشترک
+	Read Only	فقط خواندنی
+	Required	الزامی
+	Font Size:	اندازه قلم:
+	Auto	خودکار
+	Text Color:	رنگ متن:
+	Borders and Colors	حاشیه‌ها و رنگ‌ها
+	Border Color:	رنگ حاشیه:
+	Fill Color:	رنگ پرشدگی:
+	No color	بدون رنگ
+	Beveled	پخدار
+	Left:	چپ:
+	Bottom:	پایین:
+	Width:	عرض:
+	Height:	ارتفاع:
+	Rotation:	چرخش:
+	Points from the page's bottom-left corner.	نقاط از گوشه پایین چپ صفحه.
+	Alignment:	تراز‌بندی:
+	Default Value:	مقدار پیش‌فرض:
+	Multi-line	چند‌خطی
+	Scroll long text	پیمایش متن طولانی
+	Allow Rich Text Formatting	اجازه قالب‌بندی متن غنی
+	Limit of	محدودیت
+	characters	نویسه
+	Field is used for file selection	فیلد برای انتخاب فایل استفاده می‌شود
+	Check spelling	بررسی املا
+	Comb of	شان‌های
+	Export Value: {on}	مقدار برونبری: {on}
+	Check box is checked by default	کادر به‌طور پیش‌فرض علامت خورده است
+	Button is checked by default	دکمه به‌طور پیش‌فرض علامت خورده است
+	Buttons with the same name and value are selected in unison	دکمه‌هایی با نام و مقدار یکسان هم‌زمان انتخاب می‌شوند
+	Item:	مورد:
+	Item List	فهرست موارد
+	Up	بالا
+	Delete {o}	حذف {o}
+	Add the choices people pick from.	گزینه‌هایی که افراد از میانشان انتخاب می‌کنند را بی‌فزایید.
+	Default:	پیش‌فرض:
+	(none)	(هیچکدام)
+	Sort items	مرتب‌سازی موارد
+	Allow user to enter custom text	اجازه دادن به کاربر برای وارد کردن متن سفارشی
+	Multiple selection	انتخاب چند‌گانه
+	Commit selected value immediately	ثبت فوری مقدار انتخاب‌شده
+	Number	عدد
+	Percentage	درصد
+	Time	زمان
+	Special	ویژه
+	Select format category:	دسته قالب را انتخاب کنید:
+	The value is shown as typed.	مقدار همان‌گونه که تایپ شده نشان داده می‌شود.
+	Decimal places:	ارقام اعشار:
+	Separator style:	سبک جدا‌کننده:
+	Currency symbol:	نماد واحد پول:
+	Before the number	پیش از عدد
+	Negative number style:	سبک اعداد منفی:
+	Format:	قالب:
+	Custom:	سفارشی:
+	Zip Code	کد پستی
+	Zip Code + 4	کد پستی + ۴
+	Phone Number	شماره تلفن
+	Social Security Number	شماره امنیت اجتماعی
+	Arbitrary Mask	ماسک دلبخواه
+	Mask:	ماسک:
+	9 digit, A letter, O letter or digit, X any character	۹: رقم؛ A: حرف؛ O: حرف یا رقم؛ X: هر نویسه
+	Example: {sample}	نمونه: {sample}
+	Field value is not validated	مقدار فیلد اعتبارسنجی نمی‌شود
+	Field value is in range:	مقدار فیلد در بازه است:
+	Add an Action	افزودن یک کنش
+	Select Trigger:	انتخاب محرک:
+	Mouse Up	رها کردن دکمه ماوس
+	Mouse Down	فشار دادن دکمه ماوس
+	Mouse Enter	ورود ماوس
+	Mouse Exit	خروج ماوس
+	On Focus	هنگام دریافت فوکوس
+	On Blur	هنگام از دست دادن فوکوس
+	Select Action:	انتخاب کنش:
+	Open a web link	باز کردن یک پیوند وب
+	Reset a form	باز‌نشانی یک فرم
+	Execute a menu item	اجرای یک مورد منو
+	Show a field	نمایش یک فیلد
+	Hide a field	پنهان کردن یک فیلد
+	Submit a form	ارسال یک فرم
+	Fields to reset (comma-separated; empty: all)	فیلد‌های باز‌نشانی (جدا شده با کاما؛ خالی: همه)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print، NextPage، PrevPage، FirstPage یا LastPage
+	Field names (comma-separated)	نام‌های فیلد (جدا شده با کاما)
+	URL to submit to	URL برای ارسال به آن
+	Script:	اسکریپت:
+	Value:	مقدار:
+	No actions	بدون کنش
+	Value is not calculated	مقدار محاسبه نمی‌شود
+	Value is the	مقدار برابر است با
+	sum (+)	مجموع (+)
+	product (x)	حاصلضرب (x)
+	average	میانگین
+	minimum	کمینه
+	maximum	بیشینه
+	of the following fields:	از فیلد‌های زیر:
+	Simplified field notation:	نشانه‌گذاری ساده‌شده فیلد:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	نام فیلد‌ها با + - * / و پرانتز‌ها؛ قبل از فاصله‌ها در نام‌ها \\ بگذارید.
+	Finding document fonts…	یافتن قلم‌های سند…
+	Installed fonts…	قلم‌های نصب‌شده…
+	Keep source fonts	حفظ قلم‌های منبع
+	Load font…	بار‌گذاری قلم…
+	No openly licensed document fonts found. Load a font file.	هیچ قلم سند با مجوز باز یافت نشد. یک فایل قلم بار‌گذاری کنید.
+	Format text	قالب‌بندی متن
+	Bold	پررنگ
+	Italic	کج
+	Align left	تراز‌بندی چپ
+	Centre	وسطچین
+	Align right	تراز‌بندی راست
+	Justify	هم‌تراز
+	Thai and Arabic use regular fallback fonts when available.	تایلندی و عربی در صورت موجود بودن از قلم‌های جانشین عادی استفاده می‌کنند.
+	Edit image	ویرایش تصویر
+	Rotate counterclockwise	چرخش پادساعتگرد
+	Rotate clockwise	چرخش ساعتگرد
+	Flip horizontal	وارونگی افقی
+	Flip vertical	وارونگی عمودی
+	Replace image	جای‌گزینی تصویر
+	Crop (% trimmed from each side)	برش (درصد کاسته‌شده از هر طرف)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	روی صفحه کلیک کنید تا متن اضافه شود؛ هر کلیک یک کادر جدید آغاز می‌کند و ✓ پایان می‌دهد. برای جابه‌جایی موارد را بکشید، برای تغییر اندازه گوش‌های را بکشید و برای ویرایش متن دوبار کلیک کنید.
+	Choose an image	انتخاب یک تصویر
+	Export to Image	صدور به تصویر
+	Export to Text	صدور به متن
+	Export All Images	صدور همه تصاویر
+	Resolution	تفکیک‌پذیری
+	Format	قالب
+	Quality	کیفیت
+	One {f} file per page, named after the document.	یک فایل {f} در هر صفحه، نام‌گذاری‌شده بر اساس سند.
+	Exclude images smaller than	کنار گذاشتن تصاویر کوچک‌تر از
+	No limit	بدون محدودیت
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	هر تصویر یک بار، نام‌گذاری‌شده بر اساس سند و صفحه. تصاویر JPEG بدون تغییر ذخیره می‌شوند؛ بقیه به‌صورت PNG.
+	Plain text in reading order; pages are separated by form feeds.	متن ساده به ترتیب خواندن؛ صفحه‌ها با نویسه‌های فرمفید از هم جدا می‌شوند.
+	Create {what}	ایجاد {what}
+	initials	حروف اول
+	signature	امضا
+	Create Custom Stamp	ایجاد مهر سفارشی
+	From {file}	از {file}
+	Category:	دسته:
+	e.g. My stamps	مثلاً مهر‌های من
+	Name:	نام:
+	Custom	سفارشی
+	Delete stamp	حذف مهر
+	Create custom stamp…	ایجاد مهر سفارشی…
+	From a PDF page or an image	از یک صفحه PDF یا یک تصویر
+	Line spacing	فاصله خطوط
+	Character spacing	فاصله نویسه‌ها
+	Horizontal scale	مقیاس افقی
+	Rotate Clockwise	چرخش ساعتگرد
+	Rotate Counterclockwise	چرخش پادساعتگرد
+	Flip Horizontal	وارونگی افقی
+	Flip Vertical	وارونگی عمودی
+	Replace Image…	جای‌گزینی تصویر…
+	Save Image As…	ذخیره تصویر به‌عنوان…
+	Copy Image	کپی تصویر
+	The image has been copied ({w} × {h} pixels)	تصویر کپی شد ({w} × {h} پیکسل)
+	Couldn't copy the image: {e}	کپی تصویر انجام نشد: {e}
+	Copy Image in Original Format	کپی تصویر در قالب اصلی
+	The image has been copied as a {ext} file	تصویر به‌صورت یک فایل {ext} کپی شد
+	The page has changed; select the image again	صفحه تغییر کرده است؛ تصویر را دوباره انتخاب کنید
+	Check for updates	بررسی به‌روز‌رسانی‌ها
+	No check has run yet.	هنوز هیچ بررسیای انجام نشده است.
+	Checking for a newer version…	بررسی برای نگارش تازه‌تر…
+	PdfCraft {v} is available.	PdfCraft {v} در دسترس است.
+	You have version {c}. Download the new version from its release page.	شما نگارش {c} را دارید. نگارش جدید را از صفحه انتشار آن دانلود کنید.
+	PdfCraft {c} is up to date.	PdfCraft {c} به‌روز است.
+	Couldn't check for updates: {e}	بررسی به‌روز‌رسانی‌ها انجام نشد: {e}
+	You have version {c}. All releases are listed at {page}.	شما نگارش {c} را دارید. همه انتشار‌ها در {page} فهرست شدهاند.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	آخرین انتشار را از GitHub می‌پرسد. هیچ چیزی به‌طور خودکار دانلود یا نصب نمی‌شود.
+	Download	دانلود
+	Later	بعداً
+	none	هیچکدام
+	Declared conformance: {shown}	انطباق اعلام‌شده: {shown}
+	Output intent: {list}	قصد خروجی: {list}
+	Conformance level:	سطح انطباق:
+	No problems found: the document conforms to {level}.	مشکلی یافت نشد: سند با {level} منطبق است.
+	 (page {p})	 (صفحه {p})
+	  · not fixable here	  · اینجا قابل رفع نیست
+	Verify	تأیید
+	Box	کادر
+	Units	واحد‌ها
+	Set to zero	تنظیم به صفر
+	Current page ({n})	صفحه کنونی ({n})
+	Subset	زیرمجموعه
+	Update	به‌روز‌رسانی
+	Add	افزودن
+	{verb} Header and Footer	{verb} سرصفحه و پاصفحه
+	{verb} Watermark	{verb} واترمارک
+	{verb} Background	{verb} پس‌زمینه
+	Margins	حاشیه‌ها
+	Left Header Text	متن سرصفحه چپ
+	Center Header Text	متن سرصفحه وسط
+	Right Header Text	متن سرصفحه راست
+	Left Footer Text	متن پاصفحه چپ
+	Center Footer Text	متن پاصفحه وسط
+	Right Footer Text	متن پاصفحه راست
+	Insert Page Number	درج شماره صفحه
+	Insert Date	درج تاریخ
+	Start page number	شماره صفحه شروع
+	Shrink the page content to make room for the header and footer	کوچک کردن محتوای صفحه برای ایجاد جا برای سرصفحه و پاصفحه
+	Source	منبع
+	Fit to page	اندازه با صفحه
+	Rotation	چرخش
+	Appear behind page	نمایش پشت صفحه
+	Appear on top of page	نمایش روی صفحه
+	Offset from centre	فاصله از مرکز
+	From colour	از رنگ
+	Page Range Options	گزینه‌های بازه صفحه
+	Preview: page {p} of {n}	پیش‌نمایش: صفحه {p} از {n}
+	Applies to 1 page	روی ۱ صفحه اعمال می‌شود
+	Applies to {n} pages	روی {n} صفحه اعمال می‌شود
+	Replaces the existing one on those pages.	مورد موجود در آن صفحه‌ها را جایگزین می‌کند.
+	PDF or image	PDF یا تصویر
+	No file chosen	هیچ فایلی انتخاب نشده
+	Page number	شماره صفحه
+	Scale relative to target page	مقیاس نسبت به صفحه هدف
+	Link Properties	ویژگی‌های پیوند
+	Create Link	ایجاد پیوند
+	Link Appearance	ظاهر پیوند
+	Link Type:	نوع پیوند:
+	Visible Rectangle	مستطیل قابل مشاهده
+	Invisible Rectangle	مستطیل نامرئی
+	Highlight Style:	سبک برجسته‌سازی:
+	Invert	وارون
+	Outline	خط دور
+	Inset	فرورفته
+	Line Thickness:	ضخامت خط:
+	Thin	نازک
+	Thick	ضخیم
+	Line Style:	سبک خط:
+	Solid	پیوسته
+	Dashed	خطچین
+	Color:	رنگ:
+	Link Action	کنش پیوند
+	Open a web page	باز کردن یک صفحه وب
+	Go to a page view	رفتن به نمایش صفحه
+	Type the web address.	نشانی وب را تایپ کنید.
+	This document has no signatures.	این سند هیچ امضایی ندارد.
+	The Keychain's digital IDs couldn't be listed: {e}	شناسه‌های دیجیتال Keychain فهرست نشدند: {e}
+	Signed and saved to {path}	امضا و در {path} ذخیره شد
+	Couldn't open revision {n}: {e}	باز کردن باز‌نگری {n} انجام نشد: {e}
+	Couldn't open the signed version: {e}	باز کردن نگارش امضا‌شده انجام نشد: {e}
+	Sign with a Digital ID	امضا با شناسه دیجیتال
+	Choose the digital ID that you want to use for signing:	شناسه دیجیتالی را که می‌خواهید برای امضا استفاده کنید انتخاب کنید:
+	Keychain  ·  	Keychain  ·  
+	Windows store  ·  	فروشگاه Windows  ·  
+	Issued by: 	صادر‌شده توسط: 
+	, Expires: 	، انقضا: 
+	Digitally signed by	امضا‌شده دیجیتالی توسط
+	DN: 	DN: 
+	Reason: 	دلیل: 
+	Location: 	مکان: 
+	Date: 	تاریخ: 
+	The labels are in English: the signature's font can't draw them in this language.	برچسب‌ها به انگلیسی هستند: قلم امضا نمی‌تواند آن‌ها را به این زبان بکشد.
+	No digital IDs yet.	هنوز هیچ شناسه دیجیتالی وجود ندارد.
+	Configure New Digital ID	پیکر‌بندی شناسه دیجیتال جدید
+	Remove "{name}" from this list? The file itself is not deleted.	«{name}» از این فهرست حذف شود؟ خود فایل حذف نمی‌شود.
+	Continue	ادامه
+	Configure a Digital ID for Signing	پیکر‌بندی یک شناسه دیجیتال برای امضا
+	Use a Digital ID from a file	استفاده از یک شناسه دیجیتال از یک فایل
+	Create a new Digital ID (self-signed, saved to a password-protected file)	ایجاد یک شناسه دیجیتال جدید (خودامضا، ذخیره‌شده در فایلی محافظت‌شده با گذرواژه)
+	Name	نام
+	Organizational Unit	واحد سازمانی
+	Organization Name	نام سازمان
+	Email Address	نشانی ایمیل
+	Country/Region	کشور/منطقه
+	Key Algorithm	الگوریتم کلید
+	Confirm Password	تأیید گذرواژه
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	برای امضا‌های دیجیتال، به مدت ۵ سال معتبر است. شناسه‌های خودامضا معمولاً مورد اعتماد دیگران نیستند.
+	File (.p12, .pfx)	فایل (.p12، .pfx)
+	Digital ID	شناسه دیجیتال
+	Browse…	مرور…
+	{verb} as "{name}"	{verb} به‌عنوان «{name}»
+	Certify	گواهی کردن
+	The signature will be invisible.	امضا نامرئی خواهد بود.
+	Distinguished name	نام ممتاز
+	Labels	برچسب‌ها
+	Graphic	نگاره
+	Signer's name	نام امضا‌کننده
+	Fill & Sign signature	امضای پُرکردن و امضا
+	Choose image…	انتخاب تصویر…
+	Permitted actions after certifying	کنش‌های مجاز پس از گواهی کردن
+	No changes allowed	هیچ تغییری مجاز نیست
+	Annotations, form fill-in, and digital signatures	حاشیه‌نویسی‌ها، پُرکردن فرم و امضا‌های دیجیتال
+	Form fill-in and digital signatures	پُرکردن فرم و امضا‌های دیجیتال
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	کلید در Keychain macOS است، که ممکن است برای اجازه دادن به PdfCraft برای استفاده از آن درخواست کند.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	کلید در مخزن گواهی Windows است، که ممکن است برای اجازه دادن به PdfCraft برای استفاده از آن درخواست کند.
+	Digital ID password	گذرواژه شناسه دیجیتال
+	Back	بازگشت
+	Validate all	اعتبارسنجی همه
+	Sign this field…	امضای این فیلد…
+	Signature is valid:	امضا معتبر است:
+	Signature validity is UNKNOWN:	اعتبار امضا ناشناخته است:
+	Signature is INVALID:	امضا نامعتبر است:
+	Signature Details	جزئیات امضا
+	Reason	دلیل
+	Signing time	زمان امضا
+	Algorithm	الگوریتم
+	Signer	امضا‌کننده
+	Issued by	صادر‌شده توسط
+	Valid	معتبر
+	Field	فیلد
+	Field: {field} on page {p}	فیلد: {field} در صفحه {p}
+	Add to trusted certificates	افزودن به گواهی‌های مورد اعتماد
+	View signed version	نمایش نگارش امضا‌شده
+	Show certificate…	نمایش گواهی…
+	Export certificate…	صدور گواهی…
+	Certificate Viewer	نمایشگر گواهی
+	This dialog shows the details of a certificate and its chain.	این گفتوگو جزئیات یک گواهی و زنجیره آن را نشان می‌دهد.
+	Trust	اعتماد
+	Issued to	صادر‌شده برای
+	Valid from	معتبر از
+	Valid to	معتبر تا
+	Intended usage	کاربرد موردنظر
+	Any	هر
+	Version	نگارش
+	Serial number	شماره سریال
+	Issuer	صادر‌کننده
+	Validity starts	آغاز اعتبار
+	Validity ends	پایان اعتبار
+	Public key	کلید عمومی
+	Key usage	کاربرد کلید
+	Not present	موجود نیست
+	Self-signed	خودامضا
+	Edit Action	ویرایش کنش
+	New Action	کنش جدید
+	Action name:	نام کنش:
+	Description:	توضیح:
+	Steps	گام‌ها
+	Add the steps this action runs, in order.	گام‌هایی را که این کنش به ترتیب اجرا می‌کند اضافه کنید.
+	Add Step	افزودن گام
+	An action with this name already exists.	کنشی با این نام از قبل وجود دارد.
+	New Action…	کنش جدید…
+	Edit…	ویرایش…
+	Add watermark	افزودن واترمارک
+	Add header	افزودن سرصفحه
+	Add footer	افزودن پاصفحه
+	Set document title	تعیین عنوان سند
+	Run a JavaScript	اجرای یک JavaScript
+	Prepare for Distribution	آماده‌سازی برای توزیع
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	حذف اطلاعات پنهان و تخت‌کردن یادداشت‌ها و فیلد‌های فرم، تا گیرندگان فقط صفحه‌ها را ببینند.
+	Optimize Scanned Documents	بهینه‌سازی اسناد اسک‌نشده
+	Make scans searchable, then make them smaller.	اسکن‌ها را قابل جستوجو کنید، سپس حجمشان را کاهش دهید.
+	Add Page Numbers	افزودن شماره‌های صفحه
+	Number every page in the footer.	هر صفحه را در پاصفحه شماره‌گذاری کنید.
+	Mark as Confidential	علامت‌گذاری به‌عنوان محرمانه
+	A diagonal CONFIDENTIAL watermark on every page.	یک واترمارک مورب CONFIDENTIAL روی هر صفحه.
+	Sanitize Documents	پاک‌سازی اسناد
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	حذف اطلاعات پنهان، فراداده، اسکریپت‌ها و محتوای جا‌سازی‌شده، و باز‌نویسی فایل‌ها.
+	Type text	تایپ متن
+	Text to insert	متن برای درج
+	Inserted text	متن درج‌شده
+	Replacement text	متن جایگزین
+	Edit text…	ویرایش متن…
+	Add a sticky note here	افزودن یک یادداشت چسبان در اینجا
+	{kind} Properties	ویژگی‌های {kind}
+	Appearance	ظاهر
+	General	عمومی
+	Review History	تاریخچه باز‌بینی
+	This comment's appearance can't be changed yet.	ظاهر این یادداشت هنوز قابل تغییر نیست.
+	Icon	نماد
+	Thickness	ضخامت
+	Line ending	پایان خط
+	Modified	تغییریافته
+	No status has been set.	هیچ وضعیتی تعیین نشده است.
+	Compare Files	مقایسه فایل‌ها
+	Old file:	فایل قدیمی:
+	Open the older version first	ابتدا نگارش قدیمی‌تر را باز کنید
+	New file:	فایل جدید:
+	Text is compared word by word; the differences are shown on the new file.	متن واژهبهواژه مقایسه می‌شود؛ تفاوت‌ها روی فایل جدید نشان داده می‌شوند.
+	Compare this file with an older version: Compare files… in All tools.	این فایل را با یک نگارش قدیمی‌تر مقایسه کنید: مقایسه فایل‌ها… در همه ابزار‌ها.
+	No differences in the text.	هیچ تفاوتی در متن نیست.
+	{n} {kind}	{n} {kind}
+	Inserted	درج‌شده
+	Deleted	حذف‌شده
+	Replaced	جایگزی‌نشده
+	Visual	بصری
+	Mark as comments	علامت‌گذاری به‌عنوان یادداشت
+	Report…	گزارش…
+	{kind} · page {p}	{kind} · صفحه {p}
+	Set Alternate Text	تعیین متن جانشین
+	This document has no tagged figures.	این سند هیچ شکل برچسب گذاری شد‌ه ای ندارد.
+	 on page {p}	 در صفحه {p}
+	Figure {i} of {n}{page}	شکل {i} از {n}{page}
+	No preview	بدون پیش‌نمایش
+	Alternate text	متن جانشین
+	Describe the figure	توصیف شکل
+	Decorative figure	شکل تزئینی
+	Previous figure	شکل قبلی
+	Next figure	شکل بعدی
+	Save & Close	ذخیره و بستن
+	Accessibility Checker Options	گزینه‌های بررسی‌کننده دسترس‌پذیری
+	Report Options	گزینه‌های گزارش
+	Create accessibility report	ایجاد گزارش دسترس‌پذیری
+	Page Range	بازه صفحه
+	All pages in document	همه صفحه‌های سند
+	Checking Options ({on} of 32 in all categories)	گزینه‌های بررسی ({on} از ۳۲ در همه دسته‌ها)
+	Show this dialog when the Checker starts	نمایش این گفتوگو هنگام شروع بررسی‌کننده
+	Select All	انتخاب همه
+	Clear All	پاک کردن همه
+	Start Checking	شروع بررسی
+	This document hasn't been checked yet.	این سند هنوز بررسی نشده است.
+	No issues found	مشکلی یافت نشد
+	1 issue	۱ مشکل
+	{n} issues	{n} مشکل
+	{label} (1 issue)	{label} (۱ مشکل)
+	{label} ({n} issues)	{label} ({n} مشکل)
+	Check again	بررسی دوباره
+	Report	گزارش
+	Show the accessibility report	نمایش گزارش دسترس‌پذیری
+	Collapse	جمع کردن
+	Expand	باز کردن
+	{rule} - {status}	{rule} - {status}
+	Passed	موفق
+	Failed	ناموفق
+	Needs manual check	نیاز‌مند بررسی دستی
+	Skipped	نادیده‌گرفته‌شده
+	Fix	اصلاح
+	Skip Rule	نادیده‌گرفتن قانون
+	Explain	توضیح
+	Check Again	بررسی مجدد
+	Show Report	نمایش گزارش
+	Options…	گزینه‌ها…
+	Go to the page	رفتن به صفحه
+	Page Content	محتوای صفحه
+	Forms	فرم‌ها
+	Alternate Text	متن جایگزین
+	Tables	جدول‌ها
+	Lists	فهرست‌ها
+	Headings	سرتیتر‌ها
+	Accessibility permission flag	پرچم مجوز دسترس‌پذیری
+	Accessibility permission flag is set	پرچم مجوز دسترس‌پذیری تنظیم شده است
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	تنظیمات امنیت باید به فناوری کمکی اجازه دهد محتوا را بخواند («فعال‌کردن دسترسی متنی برای دستگاه‌های صفحه خوان»). امنیت سند را تغییر دهید تا اجازه داده شود.
+	Image-only PDF	PDF فقطتصویری
+	Document is not image-only PDF	سند PDF فقطتصویری نیست
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	صفحه‌هایی که تن‌ها تصویر متن هستند را نمی‌توان با صدای بلند خواند یا جستوجو کرد. متن را تشخیص دهید (OCR) تا لایه متنی افزوده شود.
+	Document is tagged PDF	سند PDF برچسبدار است
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	برچسب‌ها به سند ساختاری منطقی می‌دهند که فناوری کمکی از آن پیروی می‌کند. سند را برچسب بزنید (برچسبزدن خودکار PDF).
+	Logical Reading Order	ترتیب خواندن منطقی
+	Document structure provides a logical reading order	ساختار سند ترتیب خواندن منطقی را فراهم می‌کند
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	بررسی کنید که برچسب‌ها به همان ترتیبی خوانده شوند که یک خواننده بینا می‌خواند. از ابزار ترتیب خواندن یا پنل برچسب‌ها برای اصلاح آن استفاده کنید.
+	Primary language	زبان اصلی
+	Text language is specified	زبان متن مشخص شده است
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	صفحهخوان‌ها صدا را بر پایه زبان سند انتخاب می‌کنند. آن را در ویژگی‌های سند > پیشرفته > زبان تنظیم کنید.
+	Document title is showing in title bar	عنوان سند در نوار عنوان نمایش داده می‌شود
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	پنجره باید به‌جای نام فایل عنوانی معنادار نشان دهد. عنوانی تنظیم کنید و نمایش اولیه > نمایش: عنوان سند.
+	Bookmarks are present in large documents	نشانک‌ها در اسناد بزرگ وجود دارند
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	اسناد بیش از ۲۰ صفحه برای پیمایش به نشانک نیاز دارند. برای بخش‌های اصلی نشانک بی‌فزایید.
+	Color contrast	کنتراست رنگ
+	Document has appropriate color contrast	سند کنتراست رنگ مناسب دارد
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	متن باید برای افراد کمبینا بهاندازه کافی با پس‌زمینه کنتراست داشته باشد. رنگ‌ها را چشمی یا با ابزار کنتراست بررسی کنید.
+	Tagged content	محتوای برچسبدار
+	All page content is tagged	تمام محتوای صفحه برچسبدار است
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	هر چیزی در صفحه باید برچسب بخورد یا به‌عنوان مصنوع (تزئین، سرصفحه، پاصفحه) علامت‌گذاری شود. محتوای بدون برچسب را برچسب بزنید.
+	Tagged annotations	یادداشت‌های برچسبدار
+	All annotations are tagged	تمام یادداشت‌ها برچسبدار هستند
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	یادداشت‌ها، پیوند‌ها و فیلد‌ها باید در درخت برچسب باشند تا اعلام شوند. یادداشت‌ها را برچسب بزنید.
+	Tab order	ترتیب تب
+	Tab order is consistent with structure order	ترتیب تب با ترتیب ساختار سازگار است
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	صفحه‌های دارای پیوند، یادداشت یا فیلد باید به ترتیب ساختار تب شوند. اصلاح، ترتیب تب هر صفحه را روی استفاده از ساختار سند تنظیم می‌کند.
+	Character encoding	رمز‌گذاری نویسه
+	Reliable character encoding is provided	رمز‌گذاری نویسه قابل‌اطمینان فراهم شده است
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	قلم‌ها باید نویسه‌های خود را به یونیکد نگاشت کنند تا متن خوانده و رو‌نویسی شود. قلم‌ها را اصلاح کنید یا PDF را دوباره بسازید.
+	Tagged multimedia	چند‌رسان‌های برچسبدار
+	All multimedia objects are tagged	تمام اشیای چند‌رسان‌های برچسبدار هستند
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	ویدئو، صدا و چند‌رسان‌های غنی باید برچسب بخورند تا اعلام شوند. یادداشت‌های چند‌رسانه ای را برچسب بزنید.
+	Screen flicker	سوسوی صفحه
+	Page will not cause screen flicker	صفحه باعث سوسوی صفحه نمی‌شود
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	پویانمایی چشمکزن می‌تواند باعث تشنج شود. اسکریپت‌ها و رسانه‌ها را از نظر سوسو بررسی کنید.
+	Scripts	اسکریپت‌ها
+	No inaccessible scripts	بدون اسکریپت غیر‌قابلدسترس
+	Timed responses	پاسخ‌های زماندار
+	Page does not require timed responses	صفحه به پاسخ‌های زماندار نیاز ندارد
+	People may need more time to respond. Check that nothing has a time limit.	ممکن است افراد به زمان بیشتری برای پاسخ نیاز داشته باشند. بررسی کنید که چیزی محدودیت زمانی نداشته باشد.
+	Navigation links	پیوند‌های پیمایش
+	Navigation links are not repetitive	پیوند‌های پیمایش تکراری نیستند
+	Repeated navigation links should be skippable. Check links that appear on every page.	پیوند‌های پیمایش تکراری باید قابل‌نادیدهگرفتن باشند. پیوند‌هایی را که در هر صفحه ظاهر می‌شوند بررسی کنید.
+	Tagged form fields	فیلد‌های فرم برچسبدار
+	All form fields are tagged	تمام فیلد‌های فرم برچسبدار هستند
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	فیلد‌های فرم باید در درخت برچسب (برچسب‌های Form) باشند تا اعلام شوند. فیلد‌های فرم را برچسب بزنید.
+	Field descriptions	توضیحات فیلد
+	All form fields have description	تمام فیلد‌های فرم توضیح دارند
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	هر فیلد به راهنمای ابزار نیاز دارد که بگوید چه چیزی وارد شود. یکی در ویژگی‌های فیلد > عمومی > راهنمای ابزار بی‌فزایید.
+	Figures alternate text	متن جایگزین شکل‌ها
+	Figures require alternate text	شکل‌ها به متن جایگزین نیاز دارند
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	تصویر‌ها به متن جای‌گزینی نیاز دارند که آن‌ها را توصیف کند، یا باید تزئینی علامت‌گذاری شوند. به هر شکل متن جایگزین بی‌فزایید.
+	Nested alternate text	متن جایگزین تودرتو
+	Alternate text that will never be read	متن جای‌گزینی که هرگز خوانده نمی‌شود
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	متن جایگزین درون عنصری که از قبل متن جایگزین دارد هرگز خوانده نمی‌شود. متن جایگزین درونی را حذف کنید.
+	Associated with content	مرتبط با محتوا
+	Alternate text must be associated with some content	متن جایگزین باید با محتوایی مرتبط باشد
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	متن جایگزین روی عنصری بدون محتوای صفحه هرگز در دسترس قرار نمی‌گیرد. آن را حذف کنید یا عنصر را به محتوا پیوند دهید.
+	Hides annotation	یادداشت را پنهان می‌کند
+	Alternate text should not hide annotation	متن جایگزین نباید یادداشت را پنهان کند
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	متن جایگزین روی عنصری که شامل پیوند یا فیلد است، آن یادداشت را از فناوری کمکی پنهان می‌کند. متن جایگزین را جابهجا کنید.
+	Other elements alternate text	متن جایگزین سایر عناصر
+	Other elements that require alternate text	سایر عناصری که به متن جایگزین نیاز دارند
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	فرمول‌ها و عناصر غیر‌متنی مشابه به متن جایگزین نیاز دارند. به آن‌ها متن جایگزین بی‌فزایید.
+	Rows	سطر‌ها
+	TR must be a child of Table, THead, TBody, or TFoot	TR باید فرزند Table، THead، TBody یا TFoot باشد
+	Table cells belong in a row. Fix the table's tags.	خانه‌های جدول درون سطر قرار می‌گیرند. برچسب‌های جدول را اصلاح کنید.
+	Headers	سرصفحه‌ها
+	Tables should have headers	جدول‌ها باید سرصفحه داشته باشند
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	خانه‌های سرصفحه (TH) به شنوندگان می‌گویند هر ستون یا سطر چه دارد. خانه‌های سرصفحه را علامت‌گذاری کنید.
+	Regularity	نظم
+	Tables must contain the same number of columns in each row and rows in each column	جدول‌ها باید در هر سطر تعداد ستون یکسان و در هر ستون تعداد سطر یکسان داشته باشند
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	جدول‌های نامنظم پیمایش خانه‌ها را گیج‌کننده می‌کنند. به هر سطر تعداد یکسان خانه بدهید (با احتساب ادغام‌ها).
+	Summary	خلاصه
+	Tables must have a summary	جدول‌ها باید خلاصه داشته باشند
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	خلاصه هدف و چیدمان جدول را توصیف می‌کند. به هر جدول ویژگی Summary بی‌فزایید.
+	List items	عناصر فهرست
+	LI must be a child of L	LI باید فرزند L باشد
+	List items belong in a list. Fix the list's tags.	عناصر فهرست درون فهرست قرار می‌گیرند. برچسب‌های فهرست را اصلاح کنید.
+	Lbl and LBody	Lbl و LBody
+	Lbl and LBody must be children of LI	Lbl و LBody باید فرزند LI باشند
+	List labels and bodies belong in a list item. Fix the list's tags.	برچسب‌ها و بدنه‌های فهرست درون عنصر فهرست قرار می‌گیرند. برچسب‌های فهرست را اصلاح کنید.
+	Appropriate nesting	تودرتویی مناسب
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	سطوح سرتیتر نباید پرش کنند (یک H1 و سپس H3). سرتیتر‌ها را دوباره برچسب بزنید.
+	TH and TD	TH و TD
+	TH and TD must be children of TR	TH و TD باید فرزند TR باشند
+	Mark Page Range	علامت‌گذاری بازه صفحه
+	Pages from	صفحه‌ها از
+	Single word or phrase	واژه یا عبارت تکی
+	Text to find	متن برای یافتن
+	Patterns	الگو‌ها
+	Phone Numbers	شماره‌های تلفن
+	Email Addresses	نشانی‌های رایانامه
+	Credit Cards	کارت‌های اعتباری
+	Social Security Numbers	شماره‌های امنیت اجتماعی
+	Dates	تاریخ‌ها
+	Text in images isn't found; recognise text (OCR) first.	متن درون تصویر‌ها یافت نمی‌شود؛ نخست متن را تشخیص دهید (OCR).
+	No matches.	بدون تطابق.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	برخی نشانک‌ها اینجا نمایش داده نمی‌شوند: پنل تعداد محدودی را فهرست می‌کند، با عمق تودرتویی محدود.
+	{n} match(es) marked for redaction.	{n} تطابق برای سیاه‌کردن علامت‌گذاری شد.
+	Multiple words or phrases	چندین واژه یا عبارت
+	One word or phrase per line	یک واژه یا عبارت در هر خط
+	Import list…	درون‌ریزی فهرست…
+	{n} word(s) or phrase(s)	{n} واژه یا عبارت
+	{name} is too large for a word list (at most 1 MB).	{name} برای فهرست واژه‌ها بیش‌از‌حد بزرگ است (حداکثر ۱ مگابایت).
+	Redaction Tool Properties	ویژگی‌های ابزار سیاه‌کردن
+	Redacted area fill colour:	رنگ پر‌کردن ناحیه سیاه‌شده:
+	Use overlay text	استفاده از متن روکش
+	Custom text:	متن سفارشی:
+	Redaction code:	کد سیاه‌کردن:
+	Font:	قلم:
+	Font size:	اندازه قلم:
+	Font size	اندازه قلم
+	Auto-size text to fit redaction region	تغییر خودکار اندازه متن برای جا شدن در ناحیه سیاه‌کردن
+	Font colour:	رنگ قلم:
+	Repeat overlay text	تکرار متن روکش
+	Text alignment:	تراز‌بندی متن:
+	Center	وسط
+	Apply redactions	اعمال سیاه‌کردن‌ها
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	در آستانه اعمال ۱ نشانه سیاه‌کردن هستید. متن، تصویر‌ها و ترسیم‌های زیر نشانه‌ها، و یادداشت‌ها و فیلد‌های فرمی که با آن‌ها هم‌پوشانی دارند، برای همیشه حذف می‌شوند.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	در آستانه اعمال {n} نشانه سیاه‌کردن هستید. متن، تصویر‌ها و ترسیم‌های زیر نشانه‌ها، و یادداشت‌ها و فیلد‌های فرمی که با آن‌ها هم‌پوشانی دارند، برای همیشه حذف می‌شوند.
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	سند را پس از آن ذخیره کنید: ذخیره‌سازی کل فایل را باز‌نویسی می‌کند تا هیچ اثری از محتوای حذف‌شده در آن نماند.
+	Select the items to remove from this document.	مواردی را برای حذف از این سند انتخاب کنید.
+	Metadata	فراداده
+	File attachments	پیوست‌های فایل
+	Comments and markups	یادداشت‌ها و علامت‌گذاری‌ها
+	Hidden text	متن پنهان
+	Hidden layers	لایه‌های پنهان
+	Links, actions and JavaScripts	پیوند‌ها، کنش‌ها و JavaScriptها
+	Private data of other applications	داده‌های خصوصی سایر برنامه‌ها
+	None found	چیزی یافت نشد
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	فیلد‌های فرم تخت می‌شوند: مقادیرشان نمایان می‌مانند. ذخیره‌سازی کل فایل را باز‌نویسی می‌کند.
+	Remove	حذف
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	پاک‌سازی اطلاعات پنهان را از سند حذف می‌کند: فراداده، پیوست‌های فایل، یادداشت‌ها، فیلد‌های فرم (تخت‌شده)، متن و لایه‌های پنهان، نشانک‌ها، پیوند‌ها، کنش‌ها و اسکریپت‌ها، و داده‌های خصوصی برنامه‌ها.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	سند را پس از آن ذخیره کنید؛ ذخیره‌سازی کل فایل را باز‌نویسی می‌کند تا هیچ چیز حذف‌شده در آن نماند.
+	Printer:	چاپگر:
+	Save as PDF	ذخیره به‌صورت PDF
+	{name} (default)	{name} (پیش‌فرض)
+	Copies:	نسخه‌ها:
+	Collate	مرتب‌سازی
+	Print in grayscale	چاپ در مقیاس خاکستری
+	Two-sided:	دورو:
+	Off	خاموش
+	Flip on long edge	چرخش روی لبه بلند
+	Flip on short edge	چرخش روی لبه کوتاه
+	Printer default	پیش‌فرض چاپگر
+	Paper:	کاغذ:
+	Pages to Print	صفحه‌ها برای چاپ
+	More options:	گزینه‌های بیشتر:
+	All pages in range	تمام صفحه‌ها در بازه
+	Odd pages only	فقط صفحه‌های فرد
+	Even pages only	فقط صفحه‌های زوج
+	Reverse pages	معکوس‌کردن صفحه‌ها
+	Page Sizing & Handling	اندازه و مدیریت صفحه
+	Size	اندازه
+	Poster	پوستر
+	Multiple	چند‌گانه
+	Booklet	دفترچه
+	Fit	جا دادن
+	Shrink oversized pages	کوچک‌کردن صفحه‌های بزرگ‌تر از حد
+	Custom scale:	مقیاس سفارشی:
+	Tile scale:	مقیاس کاشی:
+	Overlap:	هم‌پوشانی:
+	Cut marks	نشانه‌های برش
+	Pages per sheet:	صفحه در هر برگ:
+	Page order:	ترتیب صفحه‌ها:
+	Horizontal	افقی
+	Horizontal reversed	افقی معکوس
+	Vertical	عمودی
+	Vertical reversed	عمودی معکوس
+	Print page border	چاپ حاشیه صفحه
+	Auto-rotate pages	چرخش خودکار صفحه‌ها
+	Booklet subset:	زیرمجموعه دفترچه:
+	Both sides	دو طرف
+	Front side only	فقط روی
+	Back side only	فقط پشت
+	Binding:	صحافی:
+	Left	چپ
+	Right	راست
+	Orientation:	جهت:
+	Auto portrait/landscape	خودکار عمودی/افقی
+	Portrait	عمودی
+	Landscape	افقی
+	Comments & Forms	یادداشت‌ها و فرم‌ها
+	Document	سند
+	Document and markups	سند و علامت‌گذاری‌ها
+	Document and stamps	سند و مهر‌ها
+	Form fields only	فقط فیلد‌های فرم
+	Previous sheet	برگ قبلی
+	Next sheet	برگ بعدی
+	No sheets	بدون برگ
+	Sheet {s} of {n}	برگ {s} از {n}
+	Removed 1 hidden item. Save to remove them from the file.	۱ مورد پنهان حذف شد. برای حذف آن‌ها از فایل ذخیره کنید.
+	Removed {n} hidden items. Save to remove them from the file.	{n} مورد پنهان حذف شد. برای حذف آن‌ها از فایل ذخیره کنید.
+	Document sanitized. Save to finish: saving rewrites the whole file.	سند پاک‌سازی شد. برای پایان ذخیره کنید: ذخیره‌سازی کل فایل را باز‌نویسی می‌کند.
+	Applied 1 redaction mark. Save to remove the content from the file.	۱ نشانه سیاه‌کردن اعمال شد. برای حذف محتوا از فایل ذخیره کنید.
+	Applied {n} redaction marks. Save to remove the content from the file.	{n} نشانه سیاه‌کردن اعمال شد. برای حذف محتوا از فایل ذخیره کنید.
+	JavaScript Console	کنسول JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript خاموش است (ترجیحات ▸ JavaScript).
+	Output appears here.	خروجی اینجا نمایش داده می‌شود.
+	Script Name:	نام اسکریپت:
+	This document has no document-level scripts.	این سند اسکریپت سطح سند ندارد.
+	No form fields were detected	هیچ فیلد فرمی شناسایی نشد
+	Detected 1 form field	۱ فیلد فرم شناسایی شد
+	Detected {n} form fields	{n} فیلد فرم شناسایی شد
+	{field}: {e}	{field}: {e}
+	Current page	صفحه جاری
+	Selected pages	صفحه‌های انتخاب‌شده
+	Document language	زبان سند
+	Output	خروجی
+	Searchable Image (Exact)	تصویر قابل‌جستوجو (دقیق)
+	Adds invisible text over each word; the page image is not changed	متن نامرئی روی هر واژه می‌افزاید؛ تصویر صفحه تغییر نمی‌کند
+	Downsample to	کاهش نمونهبرداری به
+	Also recognize pages that already have text	همچنین صفحه‌هایی که از قبل متن دارند را تشخیص بده
+	Pictures on those pages are recognized too; words already in the page's text are not added again	تصویر‌های آن صفحه‌ها نیز تشخیص داده می‌شوند؛ واژه‌هایی که از قبل در متن صفحه هستند دوباره افزوده نمی‌شوند
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	تشخیص متن نصب نیست: فایل‌های مدل آن وجود ندارند. PdfCraft را دوباره نصب کنید، یا PDFCRAFT_MODELS را به پوشه ای که آن‌ها را دارد تنظیم کنید.
+	Settings	تنظیمات
+	Optional	اختیاری
+	Planned · {m}	برنامه‌ریزی‌شده · {m}
+	Planned for milestone {m} — open to see what it will include	برنامه‌ریزی‌شده برای نقطهعطف {m} — باز کنید تا ببینید چه چیزی را شامل می‌شود
+	Coming in milestone {m}. Items marked Ready work today.	در نقطهعطف {m} می‌آید. موارد علامتخورده به‌عنوان آماده امروز کار می‌کنند.
+	1 mark	۱ نشانه
+	{n} marks	{n} نشانه
+	Dynamic	پویا
+	Sign Here	امضا اینجا
+	Standard Business	تجاری استاندارد
+	Choose a stamp, then click on the page to place it.	مهری انتخاب کنید، سپس برای قرار دادن آن روی صفحه کلیک کنید.
+	Note	یادداشت
+	Polyline	چند‌خطی
+	Attachment	پیوست
+	Callout	فراخوان
+	Typewriter	ماشین تحریر
+	Checked	علامتخورده
+	Unchecked	بدون علامت
+	Marked	علامت‌گذاری‌شده
+	Locked	قفل‌شده
+	Search comments	جستوجوی یادداشت‌ها
+	Add a comment	افزودن یادداشت
+	No comments yet.	هنوز یادداشتی نیست.
+	Pick a tool in the quick bar, or type above.	ابزاری در نوار سریع انتخاب کنید، یا در بالا تایپ کنید.
+	No comments match.	هیچ یادداشتی تطابق ندارد.
+	Unknown author	نویسنده ناشناس
+	No colour	بدون رنگ
+	Remove checkmark	حذف علامت تیک
+	Mark with checkmark	علامت‌گذاری با تیک
+	Reply	پاسخ
+	Add a reply	افزودن پاسخ
+	Post	ارسال
+	Page {label}	صفحه {label}
+	{kind} — click to show it on the page	{kind} — برای نمایش آن روی صفحه کلیک کنید
+	Set status	تعیین وضعیت
+	Copy text	رو‌نویسی متن
+	Properties…	ویژگی‌ها…
+	Make Current Properties Default	پیش‌فرض‌کردن ویژگی‌های جاری
+	Make Properties Default	پیش‌فرض‌کردن ویژگی‌ها
+	More options	گزینه‌های بیشتر
+	Sort by	مرتب‌سازی بر اساس
+	Author	نویسنده
+	Type	نوع
+	Colour	رنگ
+	Show all comments	نمایش همه یادداشت‌ها
+	Create PDF comment summary…	ساخت خلاصه یادداشت‌های PDF…
+	Export all to data file…	برونبری همه به فایل داده…
+	Filter comments	پالایش یادداشت‌ها
+	Status	وضعیت
+	Accepted	پذیرفته‌شده
+	Rejected	رد‌شده
+	Cancelled	لغو‌شده
+	Completed	تکمیل‌شده
+	Show all	نمایش همه
+	Yellow	زرد
+	Orange	نارنجی
+	Red	قرمز
+	Pink	صورتی
+	Purple	بنفش
+	Blue	آبی
+	Light blue	آبی روشن
+	Green	سبز
+	Gray	خاکستری
+	Black	سیاه
+	Bookmark options	گزینه‌های نشانک
+	Expand all bookmarks	گشادن همه نشانک‌ها
+	Expand top-level bookmarks	گشادن نشانک‌های سطح اول
+	Collapse all bookmarks	بستن همه نشانک‌ها
+	New bookmark ({key})	نشانک جدید ({key})
+	This document has no bookmarks.	این سند نشانک ندارد.
+	This document has no layers.	این سند لایه ندارد.
+	This document has no attachments.	این سند پیوست ندارد.
+	Hide layer	پنهان‌کردن لایه
+	Layer options	گزینه‌های لایه
+	Reset to Initial Visibility	باز‌نشانی به نمایانبودن اولیه
+	Show layer	نمایش لایه
+	Set layer visibility	تعیین نمایانبودن لایه
+	on page {label}	در صفحه {label}
+	Save attachment…	ذخیره پیوست…
+	Open in a new tab	باز کردن در برگه جدید
+	This document has no pages.	این سند صفحه ندارد.
+	Find text	یافتن متن
+	No matches	بدون تطابق
+	Searching… {s}/{p}	جستوجو… {s}/{p}
+	{c} of {n}{more}	{c} از {n}{more}
+	Previous ({key})	قبلی ({key})
+	Next ({key})	بعدی ({key})
+	Find options	گزینه‌های یافتن
+	Whole words only	فقط واژه‌های کامل
+	Case-sensitive	حساس به بزرگی و کوچکی حروف
+	Close (Esc)	بستن (Esc)
+	Align	تراز‌بندی
+	Top	بالا
+	Bottom	پایین
+	Center horizontally	تراز افقی در وسط
+	Center vertically	تراز عمودی در وسط
+	Distribute	توزیع
+	Horizontally	افقی
+	Vertically	عمودی
+	Set Fields to Same Size	هم‌اندازه‌کردن فیلد‌ها
+	Height	ارتفاع
+	Width	پهنا
+	Both	هر دو
+	Duplicate…	تکثیر…
+	All pages	همه صفحه‌ها
+	Odd pages	صفحه‌های فرد
+	Even pages	صفحه‌های زوج
+	Landscape pages	صفحه‌های افقی
+	Portrait pages	صفحه‌های عمودی
+	Move earlier	جابه‌جایی به قبل
+	Move later	جابه‌جایی به بعد
+	Back to the document	بازگشت به سند
+	Protect Using Password	محافظت با گذرواژه
+	Requires user to enter a password for:	نیاز‌مند وارد کردن گذرواژه توسط کاربر برای:
+	Viewing	نمایش
+	Editing	ویرایش
+	Type Password	گذرواژه را تایپ کنید
+	Re-type Password	گذرواژه را دوباره تایپ کنید
+	Strength: {s}	قدرت: {s}
+	Strong	قوی
+	Medium	متوسط
+	Weak	ضعیف
+	Advanced Options {chevron}	گزینه‌های پیشرفته {chevron}
+	Compatibility	سازگاری
+	Acrobat X and later (256-bit AES)	Acrobat X و بعد از آن (AES ۲۵۶-بیتی)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 و بعد از آن (AES ۱۲۸-بیتی)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 و بعد از آن (RC4 ۱۲۸-بیتی)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 و بعد از آن (RC4 ۴۰-بیتی)
+	Encrypt	رمز‌گذاری
+	All document contents	همه محتوای سند
+	All document contents except metadata	همه محتوای سند بهجز فراداده
+	Printing allowed	چاپ مجاز
+	Low Resolution (150 dpi)	تفکیک‌پذیری پایین (۱۵۰ dpi)
+	Changes allowed	تغییرات مجاز
+	Inserting, deleting, and rotating pages	افزودن، حذف و چرخش صفحه‌ها
+	Filling in form fields and signing existing signature fields	پر کردن فیلد‌های فرم و امضای فیلد‌های امضای موجود
+	Commenting, filling in form fields, and signing existing signature fields	یادداشت‌گذاری، پر کردن فیلد‌های فرم و امضای فیلد‌های امضای موجود
+	Any except extracting pages	هر چیزی بهجز استخراج صفحه‌ها
+	Enable copying of text, images, and other content	امکان کپی متن، تصویر‌ها و سایر محتوا
+	Enable text access for screen reader devices for the visually impaired	امکان دسترسی متنی برای دستگاه‌های صفحهخوان برای افراد کمبینا
+	Type a password.	گذرواژ‌های تایپ کنید.
+	The passwords don't match.	گذرواژه‌ها مطابقت ندارند.
+	This compatibility level supports only plain ASCII passwords.	این سطح سازگاری فقط از گذرواژه‌های ASCII ساده پشتیبانی می‌کند.
+	Anyone opening the document will need this password. It's applied when you save.	هر کسی که سند را باز کند به این گذرواژه نیاز دارد. هنگام ذخیره اعمال می‌شود.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	سند بدون گذرواژه باز می‌شود؛ این گذرواژه برای تغییر محدودیت‌ها لازم است. هنگام ذخیره اعمال می‌شود.
+	Recover unsaved documents?	باز‌یابی سند‌های ذخیره‌نشده؟
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft به درستی بسته نشد. این سند‌ها تغییراتی داشتند که ذخیره خودکار شدهاند:
+	just now	همین حالا
+	{n} min ago	{n} دقیقه پیش
+	{n} h ago	{n} ساعت پیش
+	 · password-protected	 · محافظت‌شده با گذرواژه
+	Recover	باز‌یابی
+	Discard	دور انداختن
+	Version {v}	نگارش {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	یک برنامه PDF متن باز و clean-room نوشته‌شده با Rust. MIT OR Apache-2.0.
+	Part of	بخشی از
+	Summarize Options	گزینه‌های خلاصه‌سازی
+	Choose a layout:	یک چیدمان انتخاب کنید:
+	Comments only	فقط یادداشت‌ها
+	Sort comments by:	مرتب‌سازی یادداشت‌ها بر اساس:
+	Create PDF Comment Summary	ایجاد خلاصه یادداشت‌های PDF
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	باز‌گرداندن به نگارش ذخیره‌شده پیشین «{name}»؟ تغییرات پس از آن دیگر قابل واگردانی نیست.
+	Save over the changed file?	روی فایل تغییریافته ذخیره شود؟
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» پس از باز شدن یا آخرین ذخیره، روی دیسک تغییر کرده است. ذخیره کردن اکنون آن نگارش جدید‌تر را با این یکی جایگزین می‌کند.
+	Save anyway	به هرحال ذخیره کن
+	Number pages	شماره‌گذاری صفحه‌ها
+	Style	سبک
+	None (prefix only)	هیچکدام (فقط پیشوند)
+	Prefix	پیشوند
+	Start	شروع
+	Labels: {preview}. Later pages keep their labels.	برچسب‌ها: {preview}. صفحه‌های بعدی برچسب‌های خود را حفظ می‌کنند.
+	Even and Odd Pages	صفحه‌های زوج و فرد
+	Even Pages Only	فقط صفحه‌های زوج
+	Odd Pages Only	فقط صفحه‌های فرد
+	Landscape and Portrait Pages	صفحه‌های افقی و عمودی
+	Landscape Pages	صفحه‌های افقی
+	Portrait Pages	صفحه‌های عمودی
+	Duplicate Field	تکثیر فیلد
+	Duplicate "{name}" onto:	تکثیر «{name}» روی:
+	1 page selected.	۱ صفحه انتخاب شده است.
+	{n} pages selected.	{n} صفحه انتخاب شده است.
+	Delete pages after extracting	حذف صفحه‌ها پس از استخراج
+	Extract pages as separate files	استخراج صفحه‌ها به‌عنوان فایل‌های جداگانه
+	Rotate Pages	چرخش صفحه‌ها
+	Direction:	جهت:
+	Clockwise 90 degrees	۹۰ درجه در جهت عقربه‌های ساعت
+	Counterclockwise 90 degrees	۹۰ درجه در خلاف جهت عقربه‌های ساعت
+	180 degrees	۱۸۰ درجه
+	Pages:	صفحه‌ها:
+	All	همه
+	Selection	انتخاب
+	From	از
+	Rotate:	چرخش:
+	Repairs	تعمیرات
+	Repair log	گزارش تعمیرات
+	Split document	تقسیم سند
+	Number of pages	تعداد صفحه‌ها
+	Pages per file	صفحه‌ها در هر فایل
+	File size	اندازه فایل
+	At most	حداکثر
+	Top-level bookmarks ({n})	نشانک‌های سطح بالا ({n})
+	Before each selected page (select pages in Organize)	پیش از هر صفحه انتخاب‌شده (صفحه‌ها را در سازمان‌دهی انتخاب کنید)
+	Creates 1 file from {n} pages.	۱ فایل از {n} صفحه می‌سازد.
+	Creates {f} files from {n} pages.	{f} فایل از {n} صفحه می‌سازد.
+	Each file holds as many of the {n} pages as fit.	هر فایل تا جایی که جا شود از {n} صفحه را در خود می‌گنجاند.
+	Replace Pages	جای‌گزینی صفحه‌ها
+	Original: replace pages	اصلی: جای‌گزینی صفحه‌ها
+	to	تا
+	to {n}	تا {n}
+	Replacement: pages of {name}	جایگزین: صفحه‌های {name}
+	of {name}	از {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	فقط محتوای صفحه تغییر می‌کند: پیوند‌ها، یادداشت‌ها، فیلد‌های فرم و نشانک‌های صفحه‌های اصلی باقی می‌مانند.
+	The replacement file doesn't have that many pages.	فایل جایگزین آن تعداد صفحه را ندارد.
+	Tagged PDF	PDF برچسبدار
+	Document Properties	ویژگی‌های سند
+	Description	توضیحات
+	Initial View	نمای اولیه
+	Security	امنیت
+	Fonts	قلم‌ها
+	Advanced	پیشرفته
+	Title	عنوان
+	Subject	موضوع
+	Keywords	کلیدواژه‌ها
+	Application	برنامه
+	PDF producer	تولید‌کننده PDF
+	Layout and Magnification	چیدمان و بزرگنمایی
+	Navigation tab	زبانه پیمایش
+	Page Only	فقط صفحه
+	Bookmarks Panel and Page	پنل نشانک‌ها و صفحه
+	Pages Panel and Page	پنل صفحه‌ها و صفحه
+	Attachments Panel and Page	پنل پیوست‌ها و صفحه
+	Layers Panel and Page	پنل لایه‌ها و صفحه
+	Page layout	چیدمان صفحه
+	Default	پیش‌فرض
+	Single Page	تک‌صفحه
+	Single Page Continuous	تک‌صفحه پیوسته
+	Two-Up (Facing)	دوصفحه (روبهرو)
+	Two-Up Continuous (Facing)	دوصفحه پیوسته (روبهرو)
+	Two-Up (Cover Page)	دوصفحه (صفحه جلد)
+	Two-Up Continuous (Cover Page)	دوصفحه پیوسته (صفحه جلد)
+	Magnification	بزرگنمایی
+	Actual Size	اندازه واقعی
+	Fit Page	تناسب با صفحه
+	Fit Width	تناسب با عرض
+	Fit Height	تناسب با ارتفاع
+	Fit Visible	تناسب با محتوای قابل مشاهده
+	Open to page	باز شدن روی صفحه
+	of {pages}	از {pages}
+	Window Options	گزینه‌های پنجره
+	Resize window to initial page	تغییر اندازه پنجره به صفحه اولیه
+	Center window on screen	وسط چین کردن پنجره روی صفحه نمایش
+	Open in Full Screen mode	باز شدن در حالت تمام صفحه
+	Show:	نمایش:
+	File Name	نام فایل
+	Document Title	عنوان سند
+	User Interface Options	گزینه‌های رابط کاربری
+	Hide menu bar	پنهان کردن نوار منو
+	Hide toolbars	پنهان کردن نوار‌های ابزار
+	Hide window controls	پنهان کردن کنترل‌های پنجره
+	Security method	روش امنیت
+	No security	بدون امنیت
+	Restrictions	محدودیت‌ها
+	None — everything is allowed	هیچکدام — همه‌چیز مجاز است
+	Password security	امنیت گذرواژه
+	Encryption	رمز‌گذاری
+	Opened with	باز‌شده با
+	— (protection is applied when you save)	— (محافظت هنگام ذخیره اعمال می‌شود)
+	Owner password (no restrictions apply)	گذرواژه مالک (هیچ محدودیتی اعمال نمی‌شود)
+	User password	گذرواژه کاربر
+	Change settings…	تغییر تنظیمات…
+	Printing	چاپ
+	Not allowed	مجاز نیست
+	Allowed	مجاز
+	High resolution	تفکیک‌پذیری بالا
+	Low resolution	تفکیک‌پذیری پایین
+	Changing the document	تغییر سند
+	Document assembly	مونتاژ سند
+	Content copying	کپی محتوا
+	Content copying for accessibility	کپی محتوا برای دسترس‌پذیری
+	Commenting	یادداشت‌گذاری
+	Filling of form fields	پر کردن فیلد‌های فرم
+	No fonts are referenced by the pages.	هیچ قلمی توسط صفحه‌ها ارجاع داده نشده است.
+	PDF version	نگارش PDF
+	Location	مکان
+	Page size	اندازه صفحه
+	Yes	بله
+	No	خیر
+	Revisions	باز‌بینی‌ها
+	View revision {n}	نمایش باز‌بینی {n}
+	Open the file as it was saved then	باز کردن فایل همان‌گونه که آن زمان ذخیره شده بود
+	Binding	صحافی
+	Left Edge	لبه چپ
+	Right Edge	لبه راست
+	Language	زبان
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	ذخیره‌شده {place}: {before} → {after} ({pct}% کوچک‌تر){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	این فایل از قبل تا حد امکان کوچک است ({size}). هیچ نسخ‌های ذخیره نشد.
+	Saved {place}: {before} → {after} (not smaller){detail}	ذخیره‌شده {place}: {before} → {after} (کوچک‌تر نشد){detail}
+	Couldn't save the image: {e}	ذخیره تصویر ممکن نشد: {e}
+	Adding images arrives on the web with file pickers for images	افزودن تصویر‌ها در نسخه وب با انتخابگر فایل برای تصویر‌ها ارائه می‌شود
+	Replacing images on page {p} arrives on the web with image pickers ({i})	جای‌گزینی تصویر‌ها در صفحه {p} در نسخه وب با انتخابگر تصویر ارائه می‌شود ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: انتخاب تصویر‌ها در نسخه وب با انتخابگر فایل برای تصویر‌ها ارائه می‌شود
+	Replacing images arrives on the web with image file pickers	جای‌گزینی تصویر‌ها در نسخه وب با انتخابگر فایل تصویر ارائه می‌شود
+	Couldn't create a PDF: {e}	ایجاد PDF ممکن نشد: {e}
+	The clipboard has no image or text	بریدهدان هیچ تصویر یا متنی ندارد
+	On the web, open or drop an image to convert it	در نسخه وب، تصویری را باز کنید یا رها کنید تا تبدیل شود
+	Couldn't optimize the file: {e}	بهینه‌سازی فایل ممکن نشد: {e}
+	Couldn't write {path}: {e}	نوشتن {path} ممکن نشد: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	فرم درخواست ارسال به {u} را دارد؛ PdfCraft داده‌های فرم را ارسال نمی‌کند. سند را ذخیره کنید تا ورودی‌هایتان حفظ شوند.
+	This PDF uses the unsupported {s} action.	این PDF از کنش {s} پشتیبانی‌نشده استفاده می‌کند.
+	{name}: the {other} action isn't supported yet	{name}: کنش {other} هنوز پشتیبانی نمی‌شود
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} فرم را به {url} ارسال می‌کند؛ PdfCraft داده‌های فرم را ارسال نمی‌کند. سند را ذخیره کنید تا ورودی‌هایتان حفظ شوند.
+	Export stopped: {e}	برونبری متوقف شد: {e}
+	Exported 1 image	۱ تصویر برونبری شد
+	Exported {n} images	{n} تصویر برونبری شد
+	 ({s} not exported: {first})	 ({s} برونبری نشد: {first})
+	Exported the text of 1 page	متن ۱ صفحه برونبری شد
+	Exported the text of {n} pages	متن {n} صفحه برونبری شد
+	{msg} to {dir}	{msg} به {dir}
+	Exporting… {d} of {t}	در حال برونبری… {d} از {t}
+	Choose a folder for the exported files	یک پوشه برای فایل‌های برونبری‌شده انتخاب کنید
+	New {tool} comments will look like this one	یادداشت‌های جدید {tool} به این شکل خواهند بود
+	This document can't be checked: it couldn't be read for editing	این سند بررسی نمی‌شود: برای ویرایش خوانده نشد
+	The checker found no problems in this document.	بررسی‌کننده هیچ مشکلی در این سند پیدا نکرد.
+	The checker found 1 problem which may prevent the document from being fully accessible.	بررسی‌کننده ۱ مشکل پیدا کرد که ممکن است مانع دسترس‌پذیری کامل سند شود.
+	The checker found {n} problems which may prevent the document from being fully accessible.	بررسی‌کننده {n} مشکل پیدا کرد که ممکن است مانع دسترس‌پذیری کامل سند شوند.
+	The text is the same	متن یکسان است
+	1 difference found	۱ تفاوت پیدا شد
+	{n} differences found	{n} تفاوت پیدا شد
+	Added 1 comment	۱ یادداشت افزوده شد
+	Added {n} comments	{n} یادداشت افزوده شد
+	Choose a folder for the results	یک پوشه برای نتایج انتخاب کنید
+	Files for {name}	فایل‌های {name}
+	An action is already running	یک کنش از قبل در حال اجراست
+	Running action… file {d} of {t}	در حال اجرای کنش… فایل {d} از {t}
+	No unlinked web addresses were found in the text	هیچ نشانی وب پیوندنشد‌های در متن پیدا نشد
+	Created 1 link	۱ پیوند ایجاد شد
+	Created {n} links	{n} پیوند ایجاد شد
+	Text recognition is already running	باز‌شناسی متن از قبل در حال اجراست
+	Optimizing… removing user data	در حال بهینه‌سازی… حذف داده‌های کاربر
+	Optimizing… image {d} of {t}	در حال بهینه‌سازی… تصویر {d} از {t}
+	Optimizing… cleaning up	در حال بهینه‌سازی… پاک‌سازی
+	Optimizing… merging identical objects	در حال بهینه‌سازی… ادغام اشیای یکسان
+	Optimizing… writing the copy	در حال بهینه‌سازی… نوشتن نسخه
+	Cancelling…	در حال لغو…
+	Optimization is already running	بهینه‌سازی از قبل در حال اجراست
+	Optimization cancelled	بهینه‌سازی لغو شد
+	Couldn't optimize the file	بهینه‌سازی فایل ممکن نشد
+	Recognizing text… file {d} of {t}	در حال باز‌شناسی متن… فایل {d} از {t}
+	Recognizing text… page {d} of {t}	در حال باز‌شناسی متن… صفحه {d} از {t}
+	Recognized 1 word	۱ واژه باز‌شناسی شد
+	Recognized {n} words	{n} واژه باز‌شناسی شد
+	{words} on {pages}	{words} در {pages}
+	; 1 page already had text	؛ ۱ صفحه از قبل متن داشت
+	; {n} pages already had text	؛ {n} صفحه از قبل متن داشتند
+	Recognized {w} words in 1 file	{w} واژه در ۱ فایل باز‌شناسی شد
+	Recognized {w} words in {n} files	{w} واژه در {n} فایل باز‌شناسی شد
+	; failed: {list}	؛ ناموفق: {list}
+	1 file done	۱ فایل انجام شد
+	{n} files done	{n} فایل انجام شد
+	The selected area has been copied ({w} × {h} pixels)	ناحیه انتخاب‌شده کپی شد ({w} × {h} پیکسل)
+	Couldn't take the snapshot: {e}	گرفتن تصویر لحظ‌های ممکن نشد: {e}
+	Couldn't recover {name}: {e}	باز‌یابی {name} ممکن نشد: {e}
+	The document now conforms to {level}; save it to keep the changes	سند اکنون با {level} منطبق است؛ برای حفظ تغییرات آن را ذخیره کنید
+	Fixed what could be fixed; 1 problem remains	آنچه قابل رفع بود رفع شد؛ ۱ مشکل باقی مانده است
+	Fixed what could be fixed; {n} problems remain	آنچه قابل رفع بود رفع شد؛ {n} مشکل باقی مانده است
+	Custom stamps arrive on the web with file pickers for images	مهر‌های سفارشی در نسخه وب با انتخابگر فایل برای تصویر‌ها ارائه می‌شوند
+	{file} is too large for a stamp (at most {n} MB)	{file} برای یک مهر بیش از حد بزرگ است (حداکثر {n} MB)
+	Sent to {printer}	به {printer} فرستاده شد
+	Sent to {printer}: {msg}	به {printer} فرستاده شد: {msg}
+	Looking for printers…	در حال جستوجوی چاپگر‌ها…
+	Sending sheet {s} of {n} to {printer}…	در حال فرستادن برگ {s} از {n} به {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	هیچ چاپ‌گری پیدا نشد. بررسی کنید که چاپگر نصب شده و صف چاپ در حال اجراست، سپس دوباره چاپ را باز کنید.
+	Reading the printer's settings…	در حال خواندن تنظیمات چاپگر…
+	Sending to {printer}…	در حال فرستادن به {printer}…
+	Choose a folder for the searchable files	یک پوشه برای فایل‌های قابل جستوجو انتخاب کنید
+	Files are combined in this order. Leave Pages empty to take every page.	فایل‌ها به این ترتیب ترکیب می‌شوند. صفحه‌ها را خالی بگذارید تا همه صفحه‌ها گرفته شوند.
+	Files are combined from top to bottom. Leave Pages empty to take every page.	فایل‌ها از بالا به پایین ترکیب می‌شوند. صفحه‌ها را خالی بگذارید تا همه صفحه‌ها گرفته شوند.
+	Unlock…	باز کردن قفل…
+	Select a password-protected file first	نخست یک فایل محافظت‌شده با گذرواژه انتخاب کنید
+	Enter the permissions password to allow combining	گذرواژه مجوز‌ها را وارد کنید تا ترکیب مجاز شود
+	Enter the password that opens it	گذرواژ‌های را وارد کنید که آن را باز می‌کند
+	Unlock {name}	باز کردن قفل {name}
+	Unlock {n} files	باز کردن قفل {n} فایل
+	The same password is tried on each file.	گذرواژه یکسان روی هر فایل آزموده می‌شود.
+	Hide password	پنهان کردن گذرواژه
+	Show password	نمایش گذرواژه
+	Wrong password	گذرواژه نادرست
+	The password is only used to read the file; it isn't saved.	گذرواژه فقط برای خواندن فایل استفاده می‌شود؛ ذخیره نمی‌شود.
+	Unlock	باز کردن قفل
+	Opened, but its security settings don't allow combining. Enter the permissions password.	باز شد، اما تنظیمات امنیتی آن ترکیب را مجاز نمی‌کند. گذرواژه مجوز‌ها را وارد کنید.
+	Unlocked: the combined file won't be password-protected	قفل باز شد: فایل ترکیب‌شده محافظت‌شده با گذرواژه نخواهد بود
+	Unlocked {n} of {m} files	قفل {n} از {m} فایل باز شد
+	Drop PDFs, images, text files or folders here, or choose them.	فایل‌های PDF، تصویر‌ها، فایل‌های متنی یا پوشه‌ها را اینجا رها کنید، یا آن‌ها را انتخاب کنید.
+	Add folder…	افزودن پوشه…
+	Add folder and subfolders…	افزودن پوشه و زیرپوشه‌ها…
+	More ways to add files	راه‌های بیشتر برای افزودن فایل
+	Every PDF, image and text file in the folder	همه فایل‌های PDF، تصویر و متنی در پوشه
+	Every PDF, image and text file in the folder and the folders inside it	همه فایل‌های PDF، تصویر و متنی در پوشه و پوشه‌های داخل آن
+	Add folder	افزودن پوشه
+	Add folder and subfolders	افزودن پوشه و زیرپوشه‌ها
+	No PDFs, images or text files found in {folder}	هیچ فایل PDF، تصویر یا متنی در {folder} پیدا نشد
+	Added the first {n} files in {folder}	نخستین {n} فایل در {folder} افزوده شد
+comment menu	Edit	ویرایش
+	Undo {action}	واگردانی {action}
+	Redo {action}	ازنو انجام دادن {action}
+signature pad	Type	تایپ
+certificate	Subject	دارنده
+action wizard	Start	شروع
+	Click to sort, drag to move the column. Drag its edge to resize it.	برای مرتب‌سازی کلیک کنید، برای جابه‌جایی ستون آن را بکشید. برای تغییر انداز‌هاش لبه آن را بکشید.
+	Reset columns	باز‌نشانی ستون‌ها
+	Remove {n} files	حذف {n} فایل
+	{n} selected	{n} انتخاب‌شده
+	sorted ascending	مرتب‌شده صعودی
+	sorted descending	مرتب‌شده نزولی
+	Protected: the combined file won't keep its security settings	محافظت‌شده: فایل ترکیب‌شده تنظیمات امنیتی خود را حفظ نخواهد کرد
+	Add open documents	افزودن سند‌های باز
+	All open documents	همه سند‌های باز
+	No documents are open	هیچ سندی باز نیست
+	Select a file first	نخست یک فایل انتخاب کنید
+	1 file	۱ فایل
+	{n} files	{n} فایل
+	1 file needs attention	۱ فایل نیاز به توجه دارد
+	{n} files need attention	{n} فایل نیاز به توجه دارند
+	{name} can't be combined: {why}	{name} ترکیب نمی‌شود: {why}
+	Check the pages of {name}: {why}	صفحه‌های {name} را بررسی کنید: {why}
+	Add the files to combine	فایل‌هایی را که می‌خواهید ترکیب کنید بی‌فزایید
+	File name	نام فایل
+	Warnings	هشدار‌ها
+	Drag to reorder	برای مرتب‌سازی مجدد بکشید
+	{k} of {n}	{k} از {n}
+	? of {n}	؟ از {n}
+	Added more than once	بیش از یک بار افزوده شده
+	yesterday	دیروز
+	{n} days ago	{n} روز پیش
+	No pages selected	هیچ صفح‌های انتخاب نشده
+	Password-protected	محافظت‌شده با گذرواژه
+	Its security settings don't allow copying pages	تنظیمات امنیتی آن کپی صفحه‌ها را مجاز نمی‌کند
+	Can't be read: {e}	خوانده نمی‌شود: {e}
+	Leave out files that can't be read?	فایل‌هایی که خوانده نمی‌شوند کنار گذاشته شوند؟
+	These files can't be read, so they won't be in the combined PDF:	این فایل‌ها خوانده نمی‌شوند، بنابراین در PDF ترکیب‌شده نخواهند بود:
+	Combine the rest	ترکیب بقیه
+	and {n} more	و {n} مورد دیگر
+	Includes unsaved changes	شامل تغییرات ذخیره‌نشده
+	Pages of {name} to combine, e.g. 1-3, 6	صفحه‌های {name} برای ترکیب، مثلاً ۱-۳، ۶
+	Remove {name}	حذف {name}
+	Add files…	افزودن فایل‌ها…
+	Add at least two files	دستکم دو فایل بی‌فزایید
+	Couldn't add {name}: {e}	افزودن {name} ممکن نشد: {e}
+	Couldn't combine files: {e}	ترکیب فایل‌ها ممکن نشد: {e}
+	Export comments	برونبری یادداشت‌ها
+	Export form data	برونبری داده‌های فرم
+	Comment and form data	داده‌های یادداشت و فرم
+	Export	برونبری
+	Select data files to merge	فایل‌های داده برای ادغام را انتخاب کنید
+	Form data and PDF forms	داده‌های فرم و فرم‌های PDF
+	Save the spreadsheet	ذخیره صفحهگسترده
+	Save the accessibility report	ذخیره گزارش دسترس‌پذیری
+	Save image	ذخیره تصویر
+	Export certificate	برونبری گواهی
+	Choose a folder for the extracted pages	یک پوشه برای صفحه‌های استخراج‌شده انتخاب کنید
+	Choose a folder for the split files	پوشه ای برای فایل‌های تقسیم‌شده انتخاب کنید
+	Couldn't use {name}: {e}	استفاده از {name} ممکن نشد: {e}
+	Couldn't extract pages: {e}	استخراج صفحه‌ها ممکن نشد: {e}
+	Couldn't write {name}: {e}	نوشتن {name} ممکن نشد: {e}
+	the name is not a plain file name	نام یک نام فایل ساده نیست
+	Wrote 1 file to {dir}	۱ فایل در {dir} نوشته شد
+	Wrote {n} files to {dir}	{n} فایل در {dir} نوشته شد
+	No pages match those choices	هیچ صفحه ای با آن گزینه‌ها مطابقت ندارد
+	Couldn't split: {e}	تقسیم ممکن نشد: {e}
+	Couldn't summarize comments: {e}	خلاصه‌کردن یادداشت‌ها ممکن نشد: {e}
+	Couldn't open the result: {e}	باز کردن نتیجه ممکن نشد: {e}
+	Importing data arrives on the web with file pickers for data files	ورود داده در نسخه وب با انتخابگر فایل برای فایل‌های داده ارائه می‌شود
+	Exported to {path}	به {path} خروجی گرفته شد
+	Merging data files needs the desktop app	ادغام فایل‌های داده نیاز‌مند برنامه رومیزی است
+	Merged 1 file into {path}	۱ فایل در {path} ادغام شد
+	Merged {n} files into {path}	{n} فایل در {path} ادغام شد
+	Combined {n} files	{n} فایل ترکیب شد
+	Extracted 1 page	۱ صفحه استخراج شد
+	Extracted {n} pages	{n} صفحه استخراج شد
+	Created a comment summary	خلاصه یادداشت‌ها ساخته شد
+	Couldn't open {name}: {e}	باز کردن {name} ممکن نشد: {e}
+	Couldn't read {name}: {e}	خواندن {name} ممکن نشد: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	حالت قابل حمل خاموش است: نوشتن در {folder} ممکن نیست ({error}). در عوض تنظیمات در پوشه کاربر شما نگهداری می‌شود.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft بدون پردازنده گرافیکی رسم می‌کند، بنابراین ممکن است کند باشد. به‌روز‌رسانی درایور گرافیکی می‌تواند کمک کند.
+	Couldn't save: {e}	ذخیره ممکن نشد: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	دانلود پیوست‌ها در نسخه وب با M3.10 ارائه می‌شود ({n} بایت آماده)
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	در نقطهعطف {m} ارائه می‌شود
+	needs an AI provider (off by default)	نیاز‌مند یک ارائهدهنده هوش مصنوعی است (به‌طور پیش‌فرض خاموش)
+	is available	در دسترس است
+	is not available yet	هنوز در دسترس نیست
+	{label} failed: {e}	{label} ناموفق بود: {e}
+	Undid {label}	{label} واگردانی شد
+	Redid {label}	{label} ازنو انجام شد
+	A document needs at least one page: copy instead	یک سند به حداقل یک صفحه نیاز دارد: در عوض رونوشت بگیرید
+	Cut {what}	{what} بریده شد
+	Copied {what}	{what} رونوشت شد
+	1 page	۱ صفحه
+	{n} pages	{n} صفحه
+	Copy or cut pages first	ابتدا صفحه‌ها را رونوشت یا ببرید
+	Couldn't save {name}: {e}	ذخیره {name} ممکن نشد: {e}
+	Saved {name}	{name} ذخیره شد
+	Saved, but reopening failed: {e}	ذخیره شد، اما باز‌گشایی مجدد ناموفق بود: {e}
+	Downloaded {name}	{name} دانلود شد
+	Couldn't download {name}: {e}	دانلود {name} ممکن نشد: {e}
+	Reverted to the last saved version	به آخرین نسخه ذخیره‌شده باز‌گردانده شد
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	این کار نشد: یک خطای داخلی آن را متوقف کرد ({m}). اسناد شما تغییری نکرده اند.
+	Nothing to undo	چیزی برای واگردانی نیست
+	Nothing to redo	چیزی برای ازنو انجام دادن نیست
+	This document has no form fields you can fill in	این سند هیچ فیلد فرمی ندارد که بتوانید پر کنید
+	This document has no comments to flatten	این سند هیچ یادداشتی برای مسطح‌کردن ندارد
+	This document has no form fields to flatten	این سند هیچ فیلد فرمی برای مسطح‌کردن ندارد
+	There are no redaction marks (mark text, areas or pages first)	هیچ علامت سیاهکردنی وجود ندارد (ابتدا متن، ناحیه یا صفحه‌ها را علامت بزنید)
+	This document has no {kind} to change	این سند هیچ {kind} برای تغییر ندارد
+	header or footer	سرصفحه یا پاصفحه
+	watermark	واترمارک
+	background	پس‌زمینه
+	This document isn't password-protected	این سند با گذرواژه محافظت نشده است
+	Enter permissions password…	گذرواژه مجوز‌ها را وارد کنید…
+	Permissions password	گذرواژه مجوز‌ها
+	“{name}” has security restrictions. Enter its permissions password to lift them.	«{name}» محدودیت‌های امنیتی دارد. برای برداشتن آن‌ها گذرواژه مجوز‌هایش را وارد کنید.
+	Restrictions lifted	محدودیت‌ها برداشته شد
+	Couldn't unlock {name}: {e}	باز کردن قفل {name} ممکن نشد: {e}
+	This document has no restrictions to lift	این سند هیچ محدودیتی برای برداشتن ندارد
+	The document's security settings don't allow this change	تنظیمات امنیتی سند این تغییر را مجاز نمی‌داند
+	The document's security settings don't allow copying text and images	تنظیمات امنیتی سند رونوشت متن و تصویر را مجاز نمی‌داند
+	The document's security settings don't allow printing	تنظیمات امنیتی سند چاپ را مجاز نمی‌داند
+	Open a document first	ابتدا یک سند باز کنید
+	Security will be removed when you save	با ذخیره کردن، امنیت برداشته می‌شود
+	Click text or an image to edit it	روی یک متن یا تصویر کلیک کنید تا ویرایشش کنید
+	Drag a rectangle to create a link; double-click a link to edit it	برای ساختن پیوند یک مستطیل بکشید؛ برای ویرایش پیوند روی آن دوبار کلیک کنید
+	There are no redaction marks to apply	هیچ علامت سیاه کردنی برای اعمال وجود ندارد
+	Drag to draw the area where the signature should appear.	بکشید تا ناحیه ای که امضا باید در آن ظاهر شود رسم کنید.
+	Couldn't fit the visible content: {e}	جا دادن محتوای قابل مشاهده ممکن نشد: {e}
+	Drag a rectangle around the area to copy	دور ناحی‌های که می‌خواهید رونوشت بگیرید یک مستطیل بکشید
+	Click on the page to add a {tool}, or drag to set its size	برای افزودن {tool} روی صفحه کلیک کنید، یا برای تعیین انداز‌هاش بکشید
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	برای برش صفحه، روی آن یک مستطیل بکشید؛ برای «تعیین کادر‌های صفحه» روی یک صفحه دوبار کلیک کنید
+	Keep tool selected: on	نگه داشتن ابزار انتخاب‌شده: روشن
+	Keep tool selected	نگه داشتن ابزار انتخاب‌شده
+	Opacity	کدری
+	Line thickness	ضخامت خط
+	What word or phrase would you like to search for?	چه واژه یا عبارتی را می‌خواهید جستوجو کنید؟
+	Searching… {s} of {p} pages	در حال جستوجو… {s} از {p} صفحه
+	 (searching… {s} of {p} pages)	 (در حال جستوجو… {s} از {p} صفحه)
+	1 instance	۱ مورد
+	{n} instances	{n} مورد
+	Go to this result	رفتن به این نتیجه
+	Highlight	برجسته‌سازی
+	Draw	رسم
+	Polygon	چند‌ضلعی
+	Connected lines	خطوط متصل
+	Eraser	پاککن
+	Sign	امضا کردن
+	Certified by {by}	گواهی‌شده توسط {by}
+	At least one signature is invalid.	حداقل یک امضا نامعتبر است.
+	Signed and all signatures are valid.	امضا شده و همه امضا‌ها معتبرند.
+	At least one signature has problems.	حداقل یک امضا مشکل دارد.
+	This document is secured. Some changes are restricted by its security settings.	این سند محافظت شده است. برخی تغییر‌ها توسط تنظیمات امنیتی آن محدود شدهاند.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	این یک فرم XFA پویاست که PdfCraft هنوز نمی‌تواند نمایش دهد. آنچه می‌بینید صفحه جانگهدار فایل است.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	این فرم همچنین داده XFA دارد که PdfCraft هنوز نمی‌خواند. می‌توانید فیلد‌هایش را پر کنید، اما Acrobat ممکن است به‌جای آن مقادیر XFA را نشان دهد.
+	This document contains {n} interactive form fields.	این سند {n} فیلد فرم تعاملی دارد.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	این فایل آسیب دیده بود و ترمیم شده است. ذخیره کردن نسخه ترمیم‌شده را حفظ می‌کند.
+	Dismiss	بستن
+	Hide field highlights	پنهان‌کردن برجسته‌سازی فیلد‌ها
+	Highlight fields	برجسته‌سازی فیلد‌ها
+	Security settings	تنظیمات امنیت
+	Details	جزئیات
+	Select (V)	انتخاب (V)
+	Hand (H)	دست (H)
+	Delete pages (Delete)	حذف صفحه‌ها (Delete)
+	Insert a blank page after the selection	درج یک صفحه خالی پس از انتخاب
+	Insert pages from a file…	درج صفحه‌ها از یک فایل…
+	Extract pages to a new document	استخراج صفحه‌ها به یک سند جدید
+	Split into files…	تقسیم به فایل‌ها…
+	Select pages	انتخاب صفحه‌ها
+	Cut	برش
+	Copy	رونوشت
+	Paste after	چسباندن پس از
+	Rename	تغییر نام
+	Set to current page ({n})	تعیین به‌عنوان صفحه فعلی ({n})
+	Move up	بالا بردن
+	Move down	پایین بردن
+	Indent	افزایش تورفتگی
+	Outdent	کاهش تورفتگی
+	This document has no form fields.	این سند هیچ فیلد فرمی ندارد.
+	Tab order: move a field with its arrows.	ترتیب تب: یک فیلد را با فلش‌هایش جابهجا کنید.
+	Unplaced	جاینگرفته
+	Has JavaScript actions (run in M6)	دارای کنش‌های JavaScript است (در M6 اجرا می‌شوند)
+	Page	صفحه
+	None	هیچکدام
+	Delete selected fields	حذف فیلد‌های انتخاب‌شده
+	Diagnostic details	جزئیات تشخیصی
+	The operation failed.	عملیات ناموفق بود.
+	no such document	چنین سندی وجود ندارد
+	nothing to undo	چیزی برای واگردانی نیست
+	nothing to redo	چیزی برای ازنو انجام دادن نیست
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	این سند امضا شده است: باز‌نویسی آن امضا‌هایش را بی‌اعتبار می‌کند (در عوض آن را به‌صورت افزایشی ذخیره کنید)
+	the document is protected by a password	سند با گذرواژه محافظت شده است
+	the password is incorrect	گذرواژه نادرست است
+	the document has no page tree	سند هیچ درخت صفح‌های ندارد
+	a document must keep at least one page	یک سند باید حداقل یک صفحه را حفظ کند
+	a bookmark cannot be moved inside itself	نشانک را نمی‌توان داخل خودش جابهجا کرد
+	the title must not be empty	عنوان نباید خالی باشد
+	the document has no form fields	سند هیچ فیلد فرمی ندارد
+	there are no redaction marks to apply	هیچ علامت سیاهکردنی برای اعمال وجود ندارد
+	there are no pages to print	هیچ صفح‌های برای چاپ وجود ندارد
+	the document has no tags	سند هیچ برچسبی ندارد
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	مدل‌های تشخیص متن نصب نشدهاند (PdfCraft را دوباره نصب کنید، یا PDFCRAFT_MODELS را روی پوش‌های که آن‌ها را نگه می‌دارد تنظیم کنید)
+	the image is empty	تصویر خالی است
+	this file isn't XFDF, FDF, XML or text form data	این فایل داده فرم XFDF، FDF، XML یا متنی نیست
+	nothing in the file matches this document	هیچچیز در فایل با این سند مطابقت ندارد
+	This page couldn't be displayed.\n{e}	نمایش این صفحه ممکن نشد.\n{e}
+	Go to page {p}	رفتن به صفحه {p}
+	{s} action	کنش {s}
+	Page {p} of {n}	صفحه {p} از {n}
+	1 page selected	۱ صفحه انتخاب شد
+	{n} pages selected	{n} صفحه انتخاب شد
+	{name} — unsaved changes	{name} — تغییر‌های ذخیره‌نشده
+	{kind} field	فیلد {kind}
+	Select a file for the stamp	یک فایل برای مهر انتخاب کنید
+	JavaScript, e.g. getField("total").value	JavaScript، مثلاً getField("total").value
+	Font: Helvetica	قلم: Helvetica
+	e.g. en-US	مثلاً fa-IR
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	رندر: hayro (bootstrap) · رابط کاربری: egui · آیکون‌ها: Lucide (ISC) · قلم‌ها: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	کادر انتخاب
+	Radio	دکمه رادیویی
+	PushButton	دکمه فشاری
+	Combo	فهرست باز‌شو
+	List	فهرست
+	Unknown	ناشناخته
+	The document has no XMP metadata	سند هیچ فراداده XMP ندارد
+	The title in the metadata and the document information differ	عنوان در فراداده و اطلاعات سند متفاوتاند
+	The document is encrypted	سند رمز‌گذاری شده است
+	Device colour is used, but there is no PDF/A output intent	از رنگ دستگاه استفاده می‌شود، اما هیچ هدف خروجی PDF/A وجود ندارد
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	از DeviceCMYK استفاده می‌شود: به یک هدف خروجی CMYK نیاز دارد (به‌طور خودکار افزوده نمی‌شود)
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	از DeviceCMYK استفاده می‌شود، اما هدف خروجی PDF/A یک نمایه CMYK نیست
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	از DeviceRGB استفاده می‌شود، اما هدف خروجی PDF/A یک نمایه RGB نیست
+	The document has additional actions (/AA)	سند کنش‌های افزودنی دارد (/AA)
+	The document has document-level JavaScript	سند JavaScript در سطح سند دارد
+	The form asks viewers to make appearances (NeedAppearances)	فرم از نمایشگر‌ها می‌خواهد ظاهر‌ها را بسازند (NeedAppearances)
+	A form field has additional actions	یک فیلد فرم کنش‌های افزودنی دارد
+	A stream uses LZW compression	یک جریان از فشرده‌سازی LZW استفاده می‌کند
+	A stream refers to an external file	یک جریان به یک فایل خارجی ارجاع می‌دهد
+	An image asks to be interpolated	یک تصویر درخواست درون‌یابی دارد
+	An image has alternates or OPI information	یک تصویر جانشین‌ها یا اطلاعات OPI دارد
+	PostScript XObjects aren't allowed	XObjectهای PostScript مجاز نیستند
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	فایل‌های جا‌سازی‌شده خودشان باید فایل PDF/A باشند (برای سایرین از PDF/A-3 استفاده کنید)
+	An embedded file has no AFRelationship	یک فایل جا‌سازی‌شده AFRelationship ندارد
+	Select Icon	انتخاب آیکون
+	Choose images	انتخاب تصویر‌ها
+	{dpi} pixels/inch	{dpi} پیکسل بر اینچ
+	Type your {what}.	{what} خود را تایپ کنید.
+	Draw your {what} below.	{what} خود را در پایین رسم کنید.
+	Your name	نام شما
+	Images and text (converted to PDF)	تصویر‌ها و متن (تبدیل‌شده به PDF)
+	Images and text	تصویر‌ها و متن
+	Check Box Style:	سبک کادر انتخاب:
+	Button Style:	سبک دکمه:
+	Check	تیک
+	Circle	دایره
+	Diamond	لوزی
+	Square	مربع
+	Star	ستاره
+	{month} {y}	{month} {y}
+	Change {key}	تغییر {key}
+	Insert pages from {name}	درج صفحه‌ها از {name}
+	Insert pages from {name} — 1 field renamed	درج صفحه‌ها از {name} — ۱ فیلد تغییر نام یافت
+	Insert pages from {name} — fields renamed	درج صفحه‌ها از {name} — فیلد‌ها تغییر نام یافتند
+	Fill in {name}	پر کردن {name}
+	Set the image of {name}	تعیین تصویر {name}
+	Edit script of {name}	ویرایش اسکریپت {name}
+	Import {name}	درون‌ریزی {name}
+	Add bookmark	افزودن نشانک
+	Rename bookmark	تغییر نام نشانک
+	Delete bookmark	حذف نشانک
+	Move bookmark	جابه‌جایی نشانک
+	Set bookmark destination	تعیین مقصد نشانک
+	Add stamp	افزودن مهر
+	Delete comment	حذف یادداشت
+	Edit comment	ویرایش یادداشت
+	Erase	پاک کردن
+	Lock comment	قفل کردن یادداشت
+	Unlock comment	باز کردن قفل یادداشت
+	Move comment	جابه‌جایی یادداشت
+	Resize comment	تغییر اندازه یادداشت
+	Change comment properties	تغییر ویژگی‌های یادداشت
+	Add field	افزودن فیلد
+	Change field properties	تغییر ویژگی‌های فیلد
+	Delete field	حذف فیلد
+	Duplicate field	تکثیر فیلد
+	Set tab order	تعیین ترتیب تب
+	Set calculation order	تعیین ترتیب محاسبه
+	Change initial view	تغییر نمای اولیه
+	Set alternate text	تعیین متن جانشین
+	Mark figure as decorative	علامت‌گذاری تصویر به‌عنوان تزئینی
+	Run JavaScript	اجرای JavaScript
+	Delete document JavaScript	حذف JavaScript سند
+	Edit document JavaScript	ویرایش JavaScript سند
+	Edit text	ویرایش متن
+	Load document font	بار‌گذاری قلم سند
+	Move image	جابه‌جایی تصویر
+	Rotate image	چرخاندن تصویر
+	Flip image	وارونه کردن تصویر
+	Delete image	حذف تصویر
+	Add header & footer	افزودن سرصفحه و پاصفحه
+	Update header & footer	به‌روز‌رسانی سرصفحه و پاصفحه
+	Update watermark	به‌روز‌رسانی واترمارک
+	Add background	افزودن پس‌زمینه
+	Update background	به‌روز‌رسانی پس‌زمینه
+	Add image	افزودن تصویر
+	Edit content	ویرایش محتوا
+	Delete content	حذف محتوا
+	Remove redaction marks	برداشتن علامت‌های سیاه‌کردن
+	Add link	افزودن پیوند
+	Change link properties	تغییر ویژگی‌های پیوند
+	Delete link	حذف پیوند
+	Create link	ساختن پیوند
+	Flatten	مسطح‌سازی
+	Flatten Fill & Sign	مسطح‌سازی پر کردن و امضا
+	Add sticky note	افزودن یادداشت چسبان
+	Add highlight	افزودن برجسته‌سازی
+	Add underline	افزودن زیرخط
+	Add strikethrough	افزودن خط خوردگی
+	Add squiggly underline	افزودن زیرخط موجدار
+	Add rectangle	افزودن مستطیل
+	Add oval	افزودن بیضی
+	Add arrow	افزودن پیکان
+	Add line	افزودن خط
+	Add drawing	افزودن ترسیم
+	Add text box	افزودن جعبه متن
+	Add checkmark	افزودن تیک
+	Add cross	افزودن ضربدر
+	Add dot	افزودن نقطه
+	Add signature	افزودن امضا
+	Add redaction mark	افزودن علامت سیاه‌کردن
+	Add cloud	افزودن ابر
+	Add polygon	افزودن چند‌ضلعی
+	Add connected lines	افزودن خطوط متصل
+	Add callout	افزودن فراخوان
+	Add inserted text	افزودن متن درج‌شده
+	Add file attachment	افزودن پیوست فایل
+	Set status Accepted	تعیین وضعیت پذیرفته‌شده
+	Set status Rejected	تعیین وضعیت رد‌شده
+	Set status Cancelled	تعیین وضعیت لغو‌شده
+	Set status Completed	تعیین وضعیت تکمیل‌شده
+	Set status None	تعیین وضعیت هیچکدام
+	Set status Unmarked	تعیین وضعیت علامتنخورده
+	Save as PDF/A-1b	ذخیره به‌عنوان PDF/A-1b
+	Save as PDF/A-2b	ذخیره به‌عنوان PDF/A-2b
+	Save as PDF/A-3b	ذخیره به‌عنوان PDF/A-3b
+	Fill & Sign: change signature	پر کردن و امضا: تغییر امضا
+	Fill & Sign: change initials	پر کردن و امضا: تغییر حروف اول
+	Fill & Sign: remove saved signature	پر کردن و امضا: برداشتن امضای ذخیره‌شده
+	Fill & Sign: remove saved initials	پر کردن و امضا: برداشتن حروف اول ذخیره‌شده
+	Change signature	تغییر امضا
+	Change initials	تغییر حروف اول
+	Measure distance	اندازه‌گیری فاصله
+	Measure perimeter	اندازه‌گیری محیط
+	Measure area	اندازه‌گیری مساحت
+	Set measurement scale	تعیین مقیاس اندازه‌گیری
+	Measurement information	اطلاعات اندازه‌گیری
+	Measurement snapping	چسبیدن اندازه‌گیری
+	Export measurements as CSV	خروجی اندازه‌گیری‌ها به‌صورت CSV
+	Distance	فاصله
+	Perimeter	محیط
+	Area	مساحت
+	Drawing scale	مقیاس ترسیم
+	Scale	مقیاس
+	Common scales	مقیاس‌های رایج
+	Enter a scale such as 1:50.	مقیاسی مانند ۱:۵۰ وارد کنید.
+	Applying a scale switches units to m / mm.	اعمال مقیاس، واحد‌ها را به m / mm تغییر می‌دهد.
+	Snapping	چسبیدن
+	Export measurements	خروجی اندازه‌گیری‌ها
+	Open a PDF to measure it.	برای اندازه‌گیری آن یک PDF باز کنید.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	روی رأس‌ها کلیک کنید. Enter یا دوبار کلیک یک محیط یا مساحت را تمام می‌کند. برای بستن یک مساحت روی نقطه اول کلیک کنید.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift به ۴۵ درجه محدود می‌کند. Backspace یک رأس را برمی‌دارد. Escape لغو می‌کند.
+	Angle	زاویه
+	Click the first point to begin.	برای شروع روی نقطه اول کلیک کنید.
+	Snap to drawing	چسبیدن به ترسیم
+	Endpoints	نقاط انت‌هایی
+	Midpoints	نقاط میانی
+	Intersections	تقاطع‌ها
+	Paths	مسیر‌ها
+	Sensitivity	حساسیت
+	Unit	واحد
+	Decimals	اعشار
+	Calibrate from two points	کالیبره کردن از دو نقطه
+	Entire page	تمام صفحه
+	Viewport rectangle in page points (x, y, width, height)	مستطیل نمایشگر در نقاط صفحه (x، y، عرض، ارتفاع)
+	Viewport	نمایشگر
+	Apply scale	اعمال مقیاس
+	Saved measurements	اندازه‌گیری‌های ذخیره‌شده
+	Saved measurements.	اندازه‌گیری‌های ذخیره‌شده.
+	Endpoint	نقطه انت‌هایی
+	Midpoint	نقطه میانی
+	Intersection	تقاطع
+	Path	مسیر
+	This drawing exceeds the snapping limit; only the first paths are used.	این ترسیم از حد چسبیدن فرا‌تر می‌رود؛ فقط مسیر‌های اول استفاده می‌شوند.
+	Some page content couldn't be read; snapping uses the rest.	بخشی از محتوای صفحه خوانده نشد؛ چسبیدن از بقیه استفاده می‌کند.
+	Unsupported measurements	اندازه‌گیری‌های پشتیبانی‌نشده
+	Label	برچسب
+	{n} measurements use an unsupported format and are left out.	{n} اندازه‌گیری از یک قالب پشتیبانی‌نشده استفاده می‌کنند و کنار گذاشته می‌شوند.
+	This area has too many overlapping paths; intersection snapping is limited.	این ناحیه مسیر‌های هم‌پوشان بیش از حد دارد؛ چسبیدن به تقاطع‌ها محدود است.
+	This measurement needs at least {n} points.	این اندازه‌گیری به حداقل {n} نقطه نیاز دارد.
+	Change {what}	تغییر {what}
+	Cut and stack	برش و رویهمچینی
+	Default workspace mode	حالت پیش‌فرض فضای کاری
+	Documents and view	سند‌ها و نمایش
+	Open email app	باز کردن برنامهٔ ایمیل
+	Open link	باز کردن پیوند
+	Open this web page?	این صفحهٔ وب باز شود؟
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	اسکریپت‌ها در محیطی ایزوله و بدون دسترسی به فایل یا شبکه اجرا می‌شوند. اسکریپتی که درخواست باز کردن یک صفحهٔ وب را دارد، ابتدا به اجازهٔ شما نیاز دارد. با خاموش بودن JavaScript، توابع استاندارد قالب‌بندی، اعتبارسنجی و محاسبهٔ Acrobat همچنان کار می‌کنند.
+	Sign yourself	خودتان امضا کنید
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	هنگام باز کردن PDFها استفاده می‌شود. حالت اجرا یا کنترل صریح برای آن نشست اولویت دارد.
+	Write this email?	این ایمیل نوشته شود؟
+	{who} in this document wants to open this address in your browser:	{who} در این سند می‌خواهد این نشانی را در مرورگر شما باز کند:
+	{who} in this document wants to open your email app with this address:	{who} در این سند می‌خواهد برنامهٔ ایمیل شما را با این نشانی باز کند:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	این نشانی وب حروفی از الفبا‌های مختلف را با هم می‌آمیزد؛ روشی رایج برای جعل نام سایت دیگر.
+	This web address uses letters from another alphabet, which can look like familiar ones.	این نشانی وب از حروف الفبای دی‌گری استفاده می‌کند که می‌توانند شبیه حروف آشنا به نظر برسند.
+	Create PDF from images	ساخت PDF از تصاویر
+	Selected image files: {count}	فایل‌های تصویری انتخاب‌شده: {count}
+	Use image resolution	استفاده از وضوح تصویر
+	Use each image's embedded DPI; use 72 DPI when it is absent.	از DPI جا‌سازی‌شدهٔ هر تصویر استفاده کن؛ اگر نبود، ۷۲ DPI به‌کار ببر.
+	Use 72 DPI (one point per pixel)	استفاده از ۷۲ DPI (یک نقطه بر هر پیکسل)
+	Use custom DPI	استفاده از DPI سفارشی
+	DPI sets the printed page size without resampling the image.	DPI اندازهٔ صفحهٔ چاپی را بدون نمونهبرداری مجدد تصویر تعیین می‌کند.
+	Create	ساخت
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	فرم XFA پویا که از قالب آن چیده شده است: {pages}، {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	اسکریپت‌های این فرم خاموش شدهاند چون یکی از آن‌ها بیش از حد طول کشید. سند را دوباره باز کنید تا دوباره اجرا شوند.
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	فرم XFA: فیلد‌ها و داده‌های XFA آن هم‌گام نگه داشته می‌شوند، تا سایر نمایشگر‌ها آنچه را پر می‌کنید نشان دهند.
+@plural	{n} page|{n} pages	{n} صفحه|{n} صفحه
+@plural	{n} field|{n} fields	{n} فیلد|{n} فیلد
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} نام فیلد با فایل‌های قبلی تداخل دارد و تغییر نام داده می‌شود: {list}|{n} نام فیلد با فایل‌های قبلی تداخل دارند و تغییر نام داده می‌شوند: {list}
+	Switch to two-page view first to show the cover page	برای نمایش صفحهٔ جلد، ابتدا به نمایش دوصفح‌های بروید
+	Page display: {layout}	نمایش صفحه: {layout}
+	Fit to width scrolling	پیمایش متناسب با عرض
+	Fit one full page	تناسب یک صفحهٔ کامل
+	Default page display	نمایش صفحهٔ پیش‌فرض
+	Default zoom	بزرگنمایی پیش‌فرض
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	وقتی PDF طرح‌بندی یا بزرگنمایی خاصی درخواست نمی‌کند استفاده می‌شود. پیمایش پیوسته هرگز بین صفحه‌ها نمی‌پرد.
+	Show	نمایش
+	Sort	مرتب‌سازی
+	Reverse the order	معکوس کردن ترتیب
+	Grab bag	متفرقه
+	Table	جدول
+	Username	نام کاربری
+	Display name	نام نمایشی
+	Real name	نام واقعی
+	Name (A–Z)	نام (A–Z)
+	Merged PRs	PRهای ادغام‌شده
+	PRs	PRها
+	Commits	کامیت‌ها
+	Lines added	خطوط افزوده‌شده
+	+LOC	+LOC
+	Lines deleted	خطوط حذف‌شده
+	−LOC	−LOC
+	Line delta	دلتای خطوط
+	ΔLOC	ΔLOC
+	Binary assets added	دارایی‌های دودویی افزوده‌شده
+	+Bin	+Bin
+	Binary assets removed	دارایی‌های دودویی حذف‌شده
+	−Bin	−Bin
+	First commit	نخستین کامیت
+	First	نخستین
+	Last commit	آخرین کامیت
+	Last	آخرین
+	No contributor data was built into this copy.	هیچ داد‌های از هم‌کاران در این نسخه گنجانده نشده است.
+	No model credits were built into this copy.	هیچ اعتبار مدلی در این نسخه گنجانده نشده است.
+	{n} contributors · {c} commits	{n} هم‌کار · {c} کامیت
+	Company	شرکت
+	Model	مدل
+	% of all commits	٪ از همهٔ کامیت‌ها
+	Lines +/−	خطوط +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR، {commits} کامیت، +{added} / −{deleted} خط (Δ {delta})، +{bin_added} / −{bin_deleted} دارایی دودویی، {first} – {last}
+	Reopen the files that were open when PdfCraft last closed	باز‌گشایی فایل‌هایی که هنگام آخرین بسته شدن PdfCraft باز بودند
+	Restore the last view (page, zoom and page display) when a document is opened again	باز‌یابی آخرین نما (صفحه، بزرگنمایی و نمایش صفحه) هنگام باز شدن دوبارهٔ سند
+	Add {what}	افزودن {what}
+	Use {what}	استفاده از {what}
+	Place saved {what}	قرار دادن {what} ذخیره‌شده
+	Remove saved {what}	حذف {what} ذخیره‌شده
+	A link	یک پیوند
+	A button	یک دکمه
+	A script	یک اسکریپت
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} در این سند تلاش کرد نشانیای را باز کند که PdfCraft باز نمی‌کند: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} در این سند تلاش کرد نشانیای را باز کند که PdfCraft باز نمی‌کند: {e}. از میان سند‌ها فقط پیوند‌های وب (http، https) و ایمیل (mailto) باز می‌شوند.
+	Another file dialog is still open. Finish with it first.	یک پنجرهٔ گفتوگوی فایل دیگر هنوز باز است. ابتدا آن را تمام کنید.
+	Couldn't show the file picker. Please try again.	انتخابگر فایل نمایش داده نشد. لطفاً دوباره تلاش کنید.
+	The document changed while you were choosing a file, so nothing was changed.	سند در حین انتخاب فایل تغییر کرد، بنابراین چیزی تغییر نکرد.
+	The document was closed before it could be saved.	سند پیش از آنکه ذخیره شود بسته شد.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	صفحه‌ها استخراج شدند اما حذف نشدند، زیرا سند در حین انتخاب پوشه تغییر کرد.
+	That didn't work: an internal error stopped it ({m}).	انجام نشد: یک خطای داخلی آن را متوقف کرد ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	شناسه‌های دیجیتال مخزن Windows فهرست نشدند: {e}
+	Align fields	هم‌ترازی فیلد‌ها
+	Distribute fields	توزیع فیلد‌ها
+	Match field sizes	یکسان‌سازی اندازهٔ فیلد‌ها
+	Mark for redaction	علامت‌گذاری برای سیاه‌کردن
+	Mark pages for redaction	علامت‌گذاری صفحه‌ها برای سیاه‌کردن
+	Change document properties	تغییر ویژگی‌های سند
+	Mark differences	علامت‌گذاری تفاوت‌ها
+	Run form script	اجرای اسکریپت فرم
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	محتوای اسکریپتی باید با صفحه کلید و فناوری‌های کمکی قابل استفاده باشد. اسکریپت‌های سند را بررسی کنید.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	سطر‌های جدول مستقیماً به جدول یا سر، بدنه یا پای آن تعلق دارند. برچسب‌های جدول را اصلاح کنید.
+	Basic constraints	محدودیت‌های پایه
+	SHA-1 digest	چکیده SHA-1
+	SHA-256 digest	چکیده SHA-256
+	Squiggly	موجدار
+	Home / End	Home / End
+	H / Space (hold)	H / فاصله (نگهداشتن)
+	Reload documents when their files change on disk	بار‌گذاری مجدد سند‌ها وقتی فایل‌هایشان روی دیسک تغییر می‌کنند
+	Don't show again	دیگر نشان نده
+	Show a notice when a document is secured	نمایش اعلان وقتی سند محافظت شده است
+	Always use my default zoom and page layout	همیشه از بزرگنمایی و طرح‌بندی صفحهٔ پیش‌فرض من استفاده کن
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	این فایل روی دیسک تغییر کرد. «بار‌گذاری مجدد» نسخهٔ جدید را نشان می‌دهد و تغییرات ذخیره‌نشدهٔ شما را از دست می‌دهد؛ «ذخیره» آن را با این نسخه جایگزین می‌کند.
+	Reload	بار‌گذاری مجدد
+	Couldn't reload {name}: {e}	بار‌گذاری مجدد {name} ممکن نشد: {e}
+	Created a PDF from {n} files	یک PDF از {n} فایل ساخته شد
+	PDF, images and text	PDF، تصاویر و متن
+	Insert a file before page {label}	درج یک فایل پیش از صفحهٔ {label}
+	Insert a file at the end	درج یک فایل در پایان
+	Save pages	ذخیرهٔ صفحه‌ها
+	Save these pages as one PDF	ذخیرهٔ این صفحه‌ها به‌صورت یک PDF
+	No changes to save	تغییری برای ذخیره نیست
+	Created a PDF from {n} files; left out: {names}	یک PDF از {n} فایل ساخته شد؛ کنار گذاشته شد: {names}
+	Created a PDF from the first {n} files	یک PDF از {n} فایل نخست ساخته شد
+	None of those files can be made into a PDF; use PDFs, images or .txt files	هیچ یک از آن فایل‌ها را نمی‌توان به PDF تبدیل کرد؛ از فایل‌های PDF، تصویر یا .txt استفاده کنید
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	یک تصویر PNG یا JPEG انتخاب کنید (حداکثر ۴ MiB). شفافیت حفظ می‌شود.
+	Couldn't import the signature image: {e}	تصویر امضا وارد نشد: {e}
+	Go to page…	رفتن به صفحه…
+	About	درباره
+	Contributors	هم‌کاران
+	Models	مدل‌ها
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	فقط اگر به این سند اعتماد دارید ادامه دهید. یک نشانی می‌تواند اطلاعاتی از سند را با خود حمل کند، مانند آنچه در فرم آن تایپ کردهاید.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	یکرو چاپ کنید. برگه‌ها را به ترتیب نگه دارید، روی علامت‌ها ببرید، سپس دسته‌ها را از چپ به راست و از بالا به پایین روی هم بگذارید.
+	For page sizes and margins.	برای اندازه‌های صفحه و حاشیه‌ها.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	قلم‌های متن PDF نمی‌توانند «{c}» را بکشند ({code}). متن پشتیبانی‌شده انتخاب کنید.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	قلم‌های استاندارد نمی‌توانند «{c}» را بکشند ({code}). فعلاً فقط نویسه‌های اروپای غربی می‌توانند به‌عنوان متن افزوده شوند.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	قلم این فیلد نمی‌تواند «{c}» را بکشد ({code})، بنابراین PdfCraft به‌جای آن ? نشان می‌دهد. مقدار ذخیره می‌شود و سایر نمایشگر‌های PDF فیلد را از آن باز‌ترسیم می‌کنند.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	قلم‌هایی که PdfCraft با آن‌ها می‌نویسد نمی‌توانند «{c}» را بکشند ({code})، بنابراین در همهٔ نمایشگر‌های PDF به‌صورت ? نمایش داده می‌شود. متن ذخیره می‌شود.
+	Open arrow	پیکان باز
+	Closed arrow	پیکان بسته
+	Butt	انت‌های صاف
+	Reverse open arrow	پیکان باز معکوس
+	Reverse closed arrow	پیکان بستهٔ معکوس
+	Slash	اسلش
+	Larger pages	صفحه‌های بزرگ‌تر
+	Smaller pages	صفحه‌های کوچک‌تر
+	Reset page size	باز‌نشانی اندازهٔ صفحه
+	Date format	قالب تاریخ
+	Fill & Sign dates	تاریخ‌های Fill & Sign
+	Pattern	الگو
+	Today: {date}	امروز: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy یا yy سال · m یا mm ماه · mmm یا mmmm نام ماه · d یا dd روز · ddd یا dddd روز هفته. H، h، M، s و t حروف زمان هستند و نمی‌توانند بهتن‌هایی استفاده شوند: برای نمایش حرف به همان صورت، {escape} را پیش از آن بگذارید.
+	Same as interface ({language})	یکسان با رابط کاربری ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} هنوز نمی‌تواند در PDF نوشته شود: متن Fill & Sign فقط اروپای غربی است. قالبی عددی مانند dd.mm.yyyy انتخاب کنید.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	ترجیحات درایور چاپگر را باز می‌کند. آن‌ها برای هر چاپ از این رایانه ذخیره می‌شوند؛ تعداد نسخه، دورو، مقیاس خاکستری و کاغذ انتخاب‌شده در اینجا همچنان اعمال می‌شوند.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	تنظیمات خود درایور چاپگر برای این چاپ: سینی کاغذ، نوع کاغذ، تکمیل و موارد دیگر.
+	Couldn't open the printer's preferences: {e}	ترجیحات چاپگر باز نشد: {e}
+	Printer properties	ویژگی‌های چاپگر
+	Reset to printer defaults	باز‌نشانی به پیش‌فرض‌های چاپگر
+	This printer offers no settings of its own.	این چاپگر تنظیمات اختصاصی خود را ارائه نمی‌دهد.
+	Scroll tabs left	پیمایش زبانه‌ها به چپ
+	Scroll tabs right	پیمایش زبانه‌ها به راست
+	Shared Field Properties	ویژگی‌های مشترک فیلد‌ها
+	{n} fields selected	{n} فیلد انتخاب‌شده
+	Mixed	متفاوت
+	Custom font	قلم سفارشی
+	Only checked properties will change. Mixed means the selected fields have different values.	فقط ویژگی‌های علامتخورده تغییر می‌کنند. «متفاوت» یعنی فیلد‌های انتخاب‌شده مقادیر متفاوتی دارند.
+	Shift- or Ctrl/Command-click to select several fields.	برای انتخاب چند فیلد، با Shift یا Ctrl/Command کلیک کنید.
+	Font size 0 uses automatic sizing.	اندازهٔ قلم ۰ از اندازه‌گذاری خودکار استفاده می‌کند.
+	Character limit:	محدودیت نویسه:
+	Character limit 0 means no limit. A comb of characters needs a limit.	محدودیت نویسهٔ ۰ یعنی بدون محدودیت. شانهٔ نویسه‌ها به محدودیت نیاز دارد.
+	To change locked fields, also set Locked to No.	برای تغییر فیلد‌های قفل‌شده، «قفل‌شده» را هم روی «خیر» بگذارید.
+	Comb of characters	شانهٔ نویسه‌ها
+	The document changed while you were editing field properties.	سند در حین ویرایش ویژگی‌های فیلد تغییر کرد.
+	The document is no longer open.	سند دیگر باز نیست.
+	The field properties dialog is no longer open.	پنجرهٔ ویژگی‌های فیلد دیگر باز نیست.
+	The field properties could not be changed.	ویژگی‌های فیلد تغییر نکردند.
+	The selected fields could not be found. Select them again.	فیلد‌های انتخاب‌شده یافت نشدند. دوباره آن‌ها را انتخاب کنید.
+	The field {name} no longer exists.	فیلد {name} دیگر وجود ندارد.
+	A selected field has no widget on any page, so the fields can't be edited together.	یک فیلد انتخاب‌شده در هیچ صفحه ای ویجت ندارد، بنابراین فیلد‌ها را نمی‌توان با هم ویرایش کرد.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} در {dpi} dpi، بزرگ‌ترین انداز‌های که می‌توانند در آن کشیده شوند)
+	The security settings don't allow screen readers to read the text	تنظیمات امنیتی اجازه نمی‌دهند صفحه خوان‌ها متن را بخوانند
+	No page has text: the document appears to be images of pages	هیچ صفحه ای متن ندارد: به نظر می‌رسد سند تصویر‌هایی از صفحه‌ها باشد
+	The document has no tags (structure tree)	سند برچسبی ندارد (درخت ساختار)
+	The document isn't marked as tagged (MarkInfo Marked)	سند به‌عنوان برچسبدار علامت‌گذاری نشده است (MarkInfo Marked)
+	No document language is set	زبان سند تعیین نشده است
+	The document has no title	سند عنوانی ندارد
+	The window shows the file name, not the title (Initial View > Show)	پنجره نام فایل را نشان می‌دهد، نه عنوان را (نمای اولیه > نمایش)
+	{n} pages and no bookmarks	{n} صفحه و بدون نشانک
+	The document isn't tagged, so none of its content is	سند برچسبدار نیست، بنابراین هیچ یک از محتوای آن نیز برچسب ندارد
+	Page {p}: {n} untagged content item	صفحهٔ {p}: {n} مورد محتوای بدون برچسب
+	Page {p}: {n} untagged content items	صفحهٔ {p}: {n} مورد محتوای بدون برچسب
+	Form field on page {p} isn't tagged	فیلد فرم در صفحهٔ {p} برچسبدار نیست
+	{} annotation on page {p} isn't tagged	یادداشت {} در صفحهٔ {p} برچسبدار نیست
+	Page {p} doesn't tab in structure order	صفحهٔ {p} به ترتیب ساختار پیمایش زبانه نمی‌شود
+	Font {} on page {p} doesn't map its characters to Unicode	قلم {} در صفحهٔ {p} نویسه‌هایش را به Unicode نگاشت نمی‌کند
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	قلم (بینام) در صفحهٔ {p} نویسه‌هایش را به Unicode نگاشت نمی‌کند
+	Field "{}" on page {p} has no description (tooltip)	فیلد «{}» در صفحهٔ {p} توضیحی ندارد (راهنمای ابزار)
+	{ty} element: {what}	عنصر {ty}: {what}
+	{ty} element on page {p}: {what}	عنصر {ty} در صفحهٔ {p}: {what}
+	no alternate text	بدون متن جایگزین
+	its alternate text is inside another element's and will never be read	متن جایگزین آن داخل متن عنصری دیگر است و هرگز خوانده نمی‌شود
+	alternate text on an element with no page content	متن جایگزین روی عنصری بدون محتوای صفحه
+	alternate text hides an annotation inside it	متن جایگزین یادداشتی را در داخل خود پنهان می‌کند
+	not in a Table, THead, TBody or TFoot	داخل Table، THead، TBody یا TFoot نیست
+	not in a TR	داخل TR نیست
+	no header cells (TH)	بدون سلول‌های سرصفحه (TH)
+	rows have between {min} and {max} columns	سطر‌ها بین {min} و {max} ستون دارند
+	no summary	بدون خلاصه
+	not in an L (list)	داخل L (فهرست) نیست
+	not in an LI (list item)	داخل LI (مورد فهرست) نیست
+	the first heading is an H{n}; headings should not skip levels	نخستین سرفصل یک H{n} است؛ سرفصل‌ها نباید سطوح را جا بی‌ندازند
+	H{n} follows an H{d}; headings should not skip levels	H{n} بعد از H{d} می‌آید؛ سرفصل‌ها نباید سطوح را جا بی‌ندازند
+	… and {n} more	… و {n} مورد دیگر
+	Accessibility Report	گزارش دسترس‌پذیری
+	Filename	نام فایل
+	Report created	گزارش ایجاد شد
+	The checker found problems which may prevent the document from being fully accessible.	بررسی‌کننده مشکلاتی یافت که ممکن است مانع دسترس‌پذیری کامل سند شوند.
+	Detailed Report	گزارش تفصیلی
+	Rule Name	نام قاعده
+	The metadata doesn't identify the file as {}	فراداده فایل را به‌عنوان {} شناسایی نمی‌کند
+	Page {} has additional actions	صفحهٔ {} اقدام‌های اضافی دارد
+	A {} action isn't allowed	اقدام {} مجاز نیست
+	{} annotations aren't allowed	یادداشت‌های {} مجاز نیستند
+	A {} annotation isn't set to print, or is hidden	یادداشت {} برای چاپ تنظیم نشده، یا پنهان است
+	A {} annotation has no appearance stream	یادداشت {} جریان ظاهری ندارد
+	A {} annotation has additional actions	یادداشت {} اقدام‌های اضافی دارد
+	The font {} isn't embedded	قلم {} جا‌سازی نشده است
+	A font isn't embedded	قلمی جا‌سازی نشده است
+	The signature has no valid byte range.	امضا باز‌های از بایت‌های معتبر ندارد.
+	The signature's byte range does not match the file.	بازهٔ بایت‌های امضا با فایل مطابقت ندارد.
+	The signature's byte range does not exclude exactly its contents.	بازهٔ بایت‌های امضا دقیقاً محتوای آن را مستثنا نمی‌کند.
+	The signature contents are not hexadecimal.	محتوای امضا هگزادسیمال نیست.
+	The signature could not be read ({}).	امضا خوانده نشد ({}).
+	PdfCraft can't check this signature yet: {}.	PdfCraft هنوز نمی‌تواند این امضا را بررسی کند: {}.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	امضا از قالب قدیمی adbe.x509.rsa_sha1 استفاده می‌کند.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	امضا به‌صورت BER رمز‌گذاری شده است (طول‌های نامعین) نه DER؛ با اغماض خوانده شد.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	محتوای امضا‌شده یک OCTET STRING ساخته‌شده (بخشبخش) است، همان‌طور که BER اجازه می‌دهد؛ به هرحال خوانده شد.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	مقدار امضای RSA طول پیمان‌های کلید را ندارد (بایت‌های صفر ابتدایی حذف یا افزوده شدهاند)؛ به هرحال خوانده شد.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo امضای RSA پارامتر NULL ندارد (امضاکنندگان قدیمی‌تر آن را چنین می‌نویسند)؛ به هرحال خوانده شد.
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	امضای ECDSA در DER متعارف نیست (بایت‌های انت‌هایی، پرشدگی یا نبود بایت علامت)؛ بههرحال خوانده شد.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	امضای ECDSA مقادیر خام r و s است نه یک دنبالهٔ DER؛ بههرحال خوانده شد.
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	الگوریتم امضا و الگوریتم چکیدهٔ SignerInfo هش‌های متفاوتی را نام می‌برند؛ امضا با هش SignerInfo ساخته شده است.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	ویژگی‌های امضا‌شدهٔ امضا نوع محتوا ندارند، که CMS آن را الزامی می‌داند؛ بههرحال خوانده شد.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	این امضا از SHA-1 استفاده می‌کند، یک الگوریتم هش ضعیف: برخورد‌ها در آن به اثبات رسیده است. همچنان معتبر است چون بسیاری از اسناد امضا‌شده سال‌ها پیش از آن استفاده می‌کنند، اما نباید به آن اعتماد کرد.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	این امضا از RIPEMD-160 استفاده می‌کند، یک الگوریتم هش قدیمی ۱۶۰ بیتی که دیگر برای امضا توصیه نمی‌شود. همچنان معتبر است، اما نباید به آن اعتماد کرد.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	این امضا از یک کلید RSA کوتاه‌تر از ۲۰۴۸ بیت استفاده می‌کند که دیگر برای امضا‌ها بهاندازهٔ کافی قوی در نظر گرفته نمی‌شود. همچنان معتبر است، اما نباید به آن اعتماد کرد.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	ویژگی‌های امضا‌شدهٔ امضا چکیدهٔ پیام ندارند، بنابراین امضا سند را پوشش نمی‌دهد.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	ویژگی‌های امضا‌شدهٔ امضا نوع محتوایی غیر از داده را نام می‌برند، بنابراین امضای سند نیست.
+	The document has been altered or corrupted since the signature was applied.	سند از زمان اعمال امضا تغییر کرده یا خراب شده است.
+	The signer's certificate is not in the signature.	گواهی امضا‌کننده در امضا نیست.
+	The signature value does not match the signer's certificate: the signature is corrupt.	مقدار امضا با گواهی امضا‌کننده مطابقت ندارد: امضا خراب است.
+	The signature could not be checked ({}).	امضا بررسی نشد ({}).
+	The signature could not be verified ({}).	امضا تأیید نشد ({}).
+	This document has not been modified since this signature was applied.	این سند از زمان اعمال این امضا تغییر نکرده است.
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	سند از زمان اعمال این امضا تغییر کرده است، اما تغییرات مجاز هستند ({}).
+	The document has been altered since this signature was applied in ways it does not permit ({}).	سند از زمان اعمال این امضا به روش‌هایی تغییر کرده که مجاز نمی‌داند ({}).
+	The signer's certificate was not valid at the time of signing.	گواهی امضا‌کننده در زمان امضا معتبر نبود.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	گواهی امضا‌کننده امضا‌های دیجیتال را مجاز نمی‌داند (کاربرد کلید آن نه امضای دیجیتال دارد و نه انکارنا‌پذیری).
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	گواهی امضا‌کننده برای امضای اسناد صادر نشده است (کاربرد کلید گستردهٔ آن هیچ هدف امضای سند ندارد).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	گواهی امضا‌کننده افزونه‌های حیاتی دارد که PdfCraft آن‌ها را نمی‌شناسد ({}).
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	گواهی {} یک گواهی CA که بتواند گواهی صادر کند نیست، بنابراین برای تأیید {} استفاده نمی‌شود.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	گواهی {} افزونه‌های حیاتی دارد که PdfCraft آن‌ها را نمی‌شناسد، بنابراین برای تأیید {} استفاده نمی‌شود.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	گواهی {} این تعداد گواهی CA در زیر خود را مجاز نمی‌داند (طول مسیر)، بنابراین برای تأیید {} استفاده نمی‌شود.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	گواهی {} در زمان امضا معتبر نبود، بنابراین برای تأیید {} استفاده نمی‌شود.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	هویت امضا‌کننده ناشناخته است زیرا در فهرست گواهی‌های مورد اعتماد شما گنجانده نشده و هیچیک از گواهی‌های والد آن گواهی مورد اعتماد نیستند.
+	The signer's identity is valid.	هویت امضا‌کننده معتبر است.
+	The signature includes an embedded timestamp.	امضا شامل یک مهر زمانی جا‌سازی‌شده است.
+	Signing time is from the clock on the signer's computer.	زمان امضا از ساعت رایانهٔ امضا‌کننده گرفته شده است.
+	The signature's timestamp token does not cover the signature value.	نشانهٔ مهر زمانی امضا مقدار امضا را پوشش نمی‌دهد.
+	The signature's timestamp token could not be verified ({}).	نشانهٔ مهر زمانی امضا تأیید نشد ({}).
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	نشانهٔ مهر زمانی جا‌سازی‌شده معتبر است و مرجع آن مورد اعتماد است؛ زمان مورد اعتماد {} است.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	امضا یک مهر زمانی تأیید‌نشده حمل می‌کند ({}): مرجع مهر زمانی در فهرست گواهی‌های مورد اعتماد شما نیست، بنابراین در عوض از زمان امضایی که امضا‌کننده ادعا می‌کند استفاده می‌شود.
+	The signer's certificate has been revoked ({}).	گواهی امضا‌کننده باطل شده است ({}).
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	اطلاعات ابطال جا‌سازی‌شده در سند نشان می‌دهد که گواهی امضا‌کننده باطل نشده است.
+	The timestamp has no valid byte range.	مهر زمانی بازهٔ بایت‌های معتبر ندارد.
+	The timestamp's byte range does not match the file.	بازهٔ بایت‌های مهر زمانی با فایل مطابقت ندارد.
+	The timestamp's byte range does not exclude exactly its contents.	بازهٔ بایت‌های مهر زمانی دقیقاً محتوای آن را مستثنا نمی‌کند.
+	The timestamp contents are not hexadecimal.	محتوای مهر زمانی هگزادسیمال نیست.
+	The timestamp token could not be read ({}).	نشانهٔ مهر زمانی خوانده نشد ({}).
+	The document has been altered or corrupted since the timestamp was applied.	سند از زمان اعمال مهر زمانی تغییر کرده یا خراب شده است.
+	The timestamp authority's certificate was not valid at the time of timestamping.	گواهی مرجع مهر زمانی در زمان مهر زدن معتبر نبود.
+	The timestamp authority's certificate is not issued for time stamping.	گواهی مرجع مهر زمانی برای مهر زدن زمان صادر نشده است.
+	This document has not been modified since this timestamp was applied.	این سند از زمان اعمال این مهر زمانی تغییر نکرده است.
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	سند از زمان اعمال این مهر زمانی تغییر کرده است، اما تغییرات مجاز هستند ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	سند از زمان اعمال این مهر زمانی به روش‌هایی تغییر کرده که مجاز نمی‌داند ({}).
+	The timestamp token is valid and its authority is trusted.	نشانهٔ مهر زمانی معتبر است و مرجع آن مورد اعتماد است.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	نشانهٔ مهر زمانی معتبر است، اما مرجع مهر زمانی در فهرست گواهی‌های مورد اعتماد شما نیست.
+	Unsigned signature field	فیلد امضای امضا‌نشده
+	Signature is valid	امضا معتبر است
+	Signature validity is unknown	اعتبار امضا ناشناخته است
+	Signature is invalid	امضا نامعتبر است
+	page content	محتوای صفحه
+	form fill	پرشدن فرم
+	comments	یادداشت‌ها
+	document security store	مخزن امنیت سند
+	metadata	فراداده
+	links	پیوند‌ها
+	document structure	ساختار سند
+	pages added or removed	صفحه‌های افزوده یا حذف‌شده
+	other changes	تغییرات دیگر
+	the signed version could not be read	نسخهٔ امضا‌شده خوانده نشد
+	page {n} is out of range (1–{count})	صفحهٔ {n} خارج از محدوده است (۱–{count})
+	{page} is not a page number or label	{page} یک شماره یا برچسب صفحه نیست
+	Change Title	تغییر عنوان
+	Change Author	تغییر نویسنده
+	Change Subject	تغییر موضوع
+	Change Keywords	تغییر کلیدواژه‌ها
+	Save as {level}	ذخیره به‌صورت {level}
+	Remove {standard} identification	حذف شناسهٔ {standard}
+	Create links	ایجاد پیوند‌ها
+@plural	{n} object selected|{n} objects selected	{n} شیء انتخاب‌شده|{n} شیء انتخاب‌شده
+	Drag the selection to move it. Esc clears the selection.	برای جابه‌جایی، انتخاب را بکشید. Esc انتخاب را پاک می‌کند.
+	Shift-click to select several objects. Drag empty space to select an area.	برای انتخاب چند شیء، با Shift کلیک کنید. برای انتخاب یک ناحیه، فضای خالی را بکشید.
+	Select at most 1000 objects at a time.	حداکثر ۱۰۰۰ شیء را در یک زمان انتخاب کنید.
+	Finish or discard the text being edited before selecting several objects.	پیش از انتخاب چند شیء، ویرایش متن را تمام کنید یا رهایش کنید.
+	Move object	جابه‌جایی شیء
+	Move objects	جابه‌جایی اشیا
+	Vertical text cannot be moved with this selection.	متن عمودی را نمی‌توان با این انتخاب جابهجا کرد.
+	Text used as a clipping path cannot be moved with this selection.	متنی که به‌عنوان مسیر برش استفاده شده را نمی‌توان با این انتخاب جابهجا کرد.
+	These objects could not be moved. Select them again and try a smaller move.	این اشیا جابه جا نشدند. دوباره آن‌ها را انتخاب کنید و جابه‌جایی کوچکتری را امتحان کنید.
+	This page contains objects that cannot be selected together.	این صفحه شامل اشیایی است که نمی‌توان آن‌ها را با هم انتخاب کرد.
+	Fill colour	رنگ پر‌کردن
+	No fill	بدون پرشدگی
+	Fill colour: none	رنگ پر‌کردن: هیچ
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	فاصله
+	Grid view	نمای شبکه ای
+	List view	نمای فهرستی
+	Files are combined in the order shown. Drag them to change it.	فایل‌ها به ترتیب نمایش‌داده‌شده ترکیب می‌شوند. برای تغییر آن، آن‌ها را بکشید.
+	Preview unavailable: {e}	پیش‌نمایش در دسترس نیست: {e}
+	Pages: {k} of {n}	صفحه‌ها: {k} از {n}
+	Check the pages	صفحه‌ها را بررسی کنید
+	Switch to List view to change the pages it takes.	برای تغییر صفحه‌هایی که برمی‌دارد، به نمای فهرستی بروید.
+	Expand all	گسترش همه
+	Collapse all	جمع کردن همه
+	Collapse all pages	جمع کردن همهٔ صفحه‌ها
+	Expand all pages	گسترش همهٔ صفحه‌ها
+	Remove page	حذف صفحه
+	Remove {n} pages	حذف {n} صفحه
+	Reset panel layout	باز‌نشانی چیدمان پنل‌ها
+	Float panel	شناور کردن پنل
+	Move to group	انتقال به گروه
+	Panels	پنل‌ها
+	Resize panels	تغییر اندازهٔ پنل‌ها
+	Resize panel window	تغییر اندازهٔ پنجرهٔ پنل
+	Tools	ابزار‌ها
+	Inspector	بازرس
+	PDF page: {size}	صفحهٔ PDF: {size}
+	Match page at 100%	تناسب کاغذ با صفحه در ۱۰۰٪
+	PDF scale: {scale}%	مقیاس PDF: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	کاغذ و مقیاس چاپگر ممکن است متفاوت باشد. تنظیمات درایور را بررسی کنید.
+	Drawing scale changes. Use Actual size for full-scale plans.	مقیاس نقشه تغییر می‌کند. برای نقشه‌های با اندازه کامل از «اندازه واقعی» استفاده کنید.
+	Select page {label}	انتخاب صفحه {label}
+	Rotate page {label} counterclockwise	چرخش صفحه {label} در خلاف جهت عقربه‌های ساعت
+	Rotate page {label} clockwise	چرخش صفحه {label} در جهت عقربه‌های ساعت
+	Delete page {label}	حذف صفحه {label}
+	Scroll speed (mouse wheel and arrow keys)	سرعت پیمایش (چرخ ماوس و کلید‌های جهت)
+scroll speed	Slow	کند
+scroll speed	Normal	عادی
+scroll speed	Fast	تند
+	Animation effects	جلوه‌های پویانمایی
+animation effects	On	روشن
+animation effects	Off	خاموش
+	Enhance camera image	بهبود تصویر دوربین
+	Drag the corners onto the document's edges, then choose Enhance page.	گوشه‌ها را روی لبه‌های سند بکشید، سپس «بهبود صفحه» را انتخاب کنید.
+	Enhance page	بهبود صفحه
+	Done adding text	پایان افزودن متن
+	Discard this text (Esc)	کنار گذاشتن این متن (Esc)
+	Certificate authority	مرجع گواهی
+	End entity	موجودیت نهایی
+	Clean-up	پاک‌سازی
+	Original	اصلی
+	Greyscale	خاکستری
+	Black and white	سیاه و سفید
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	درایور این چاپگر تنظیمات دوطرفه را از برنامه‌های دیگر نمی‌پذیرد، بنابراین تنظیم خودش اعمال می‌شود. آن را در «ویژگی‌ها…» تغییر دهید…
+	Browser's print dialog	پنجره چاپ مرورگر
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	تعداد نسخه‌ها، چاپ دوطرفه و رنگ در پنجره چاپ مرورگر انتخاب می‌شوند.
+	Preparing {n} sheets for printing…	آماده‌سازی {n} برگ برای چاپ…
+	Preparing sheet {done} of {total} for printing…	آماده‌سازی برگ {done} از {total} برای چاپ…
+	Opening the browser's print dialog…	باز کردن پنجره چاپ مرورگر…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	چاپ از مرورگر ممکن نشد ({e})؛ در عوض {name} برای چاپ بار‌گیری شد
+	Tools panel side	سمت پنل ابزار‌ها
+	Add comment	افزودن یادداشت
+	Change tag properties	تغییر ویژگی‌های برچسب
+	Tags panel	پنل برچسب‌ها
+	Tags	برچسب‌ها
+	Tag type	نوع برچسب
+	Actual text	متن واقعی
+	Find a tag	یافتن برچسب
+	Collapse tag	جمع‌کردن برچسب
+	Expand tag	گستردن برچسب
+	Revert changes	باز‌گرداندن تغییرات
+	Save tag properties	ذخیره ویژگی‌های برچسب
+	This document has no editable structure tags.	این سند هیچ برچسب ساختاری قابل ویرایشی ندارد.
+	{n} tags	{n} برچسب
+	Save or revert changes before selecting another tag.	پیش از انتخاب برچسبی دیگر، تغییرات را ذخیره یا باز‌گردانید.
+	Left out: {names}	کنار گذاشته‌شده: {names}
+	already a PDF	از قبل PDF است
+	no unused output name	نام خروجی بدون استفاده موجود نیست
+	no output folder was chosen	هیچ پوشه خروجی انتخاب نشد
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF بار‌گیری شد|{n} PDF بار‌گیری شد
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} محاسبه اکنون از نام جدید استفاده می‌کند.|{n} محاسبه اکنون از نام جدید استفاده می‌کنند.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	ترتیب محاسبه {n} مورد دارد که چیزی محاسبه نمی‌کند. «اصلاح ترتیب» آن را حذف می‌کند.|ترتیب محاسبه {n} مورد دارد که چیزی محاسبه نمی‌کنند. «اصلاح ترتیب» آن‌ها را حذف می‌کند.
+@plural	{fields} reads it|{fields} read it	{fields} آن را می‌خواند|{fields} آن را می‌خوانند
+@plural	{n} field shows an old value|{n} fields show old values	{n} فیلد مقدار قدیمی نشان می‌دهد|{n} فیلد مقدار‌های قدیمی نشان می‌دهند
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} پیش از {fields} محاسبه می‌شود، در حالی که آن را می‌خواند.|{field} پیش از {fields} محاسبه می‌شود، در حالی که آن‌ها را می‌خواند.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} فیلد دیگر زود‌تر از موعد محاسبه می‌شود.|{n} فیلد دیگر زود‌تر از موعد محاسبه می‌شوند.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} در ترتیب ذخیره‌شده در PDF وجود ندارد، بنابراین سایر نمایشگر‌های PDF ممکن است آن را محاسبه نکنند.|{fields} در ترتیب ذخیره‌شده در PDF وجود ندارند، بنابراین سایر نمایشگر‌های PDF ممکن است آن‌ها را محاسبه نکنند.
+	Scan	اسکن
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	روی یک برگ کاغذ سفید امضا کنید و از آن در نور روشن و یکنواخت عکس بگیرید (از فلاش استفاده کنید). عکس را انتخاب کنید یا آن را اینجا رها کنید: PdfCraft امضا را پیدا می‌کند و کاغذ را حذف می‌کند.
+	Choose photo…	انتخاب عکس…
+	No photo chosen	هیچ عکسی انتخاب نشده
+	Photo	عکس
+	Ink sensitivity	حساسیت جوهر
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	هیچ امضایی در کادر یافت نشد. کادر را روی امضا ببرید یا حساسیت جوهر را بالا ببرید.
+	Couldn't use the photo: {e}	استفاده از عکس ممکن نشد: {e}
+	Close Tab	بستن زبانه
+	Reopen Closed Tab	باز‌گشایی زبانه بسته‌شده
+	Reveal in Finder	نمایش در Finder
+	Reveal in File Explorer	نمایش در File Explorer
+	Other colour…	رنگ دیگر…
+	Recent colours	رنگ‌های اخیر
+	Reading colours	رنگ‌های خواندن
+	Replace document colours	جای‌گزینی رنگ‌های سند
+	Page background	پس‌زمینه صفحه
+	Only change the colour of black text or line art	فقط رنگ متن سیاه یا طرح‌های خطی را تغییر دهید
+	Change the colour of line art as well as text	رنگ طرح‌های خطی و همچنین متن را تغییر دهید
+	Colours are remapped while rendering; the document itself never changes.	رنگ‌ها هنگام نمایش باز‌تصویر می‌شوند؛ خود سند هرگز تغییر نمی‌کند.
+	Black on white	سیاه روی سفید
+	White on black	سفید روی سیاه
+	Yellow on black	زرد روی سیاه
+	Green on black	سبز روی سیاه
+	Couldn't follow linked PDF: {reason}	پی‌گیری PDF پیوند‌شده ممکن نشد: {reason}
+	The linked PDF opened, but its named destination was not applied.	PDF پیوند‌شده باز شد، اما مقصد نامدار آن اعمال نشد.
+	The linked PDF opened, but its page destination was out of range.	PDF پیوند‌شده باز شد، اما مقصد صفحه آن خارج از محدوده بود.
+	Local cross-PDF links require the desktop app	پیوند‌های محلی میان PDF به کاربردسطح رومیزی نیاز دارند
+	The existing action will be preserved.	کنش موجود حفظ خواهد شد.
+	Cut Image	برش تصویر
+	Redact Image	سیاه‌کردن تصویر
+	Create Link…	ایجاد پیوند…
+	Recognize Text…	تشخیص متن…
+	Minimize	کوچک‌کردن
+	Maximize	بزرگ‌کردن
+	Restore	باز‌گرداندن
+	Use system title bar	استفاده از نوار عنوان سیستم
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	به‌جای نوار زبانه‌ها، یک نوار عنوان ساده برای دکمه‌های پنجره نمایش دهید. GNOME برای برنامه‌ها نوار عنوان نمی‌کشد، بنابراین این یکی از پوسته آن پیروی نمی‌کند.
+	Allow	اجازه دادن
+	Only allow this if you trust the source document.	فقط اگر به سند منبع اعتماد دارید این را اجازه دهید.
+	Open in Full Screen mode?	در حالت تمامصفحه باز شود؟
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	این سند درخواست باز شدن در حالت تمام صفحه را دارد: صفحه تمام نمایشگر را پر می‌کند و چیز دی‌گری نمایش داده نمی‌شود. هر زمان برای خروج Esc را فشار دهید.
+	Full Screen	تمامصفحه
+	Not now	اکنون نه
+	Open this local PDF?	این PDF محلی باز شود؟
+	This document is trying to open a local file:	این سند تلاش می‌کند یک فایل محلی را باز کند:
+	Move tag earlier	انتقال برچسب به قبل
+	Move tag later	انتقال برچسب به بعد
+	Turn upside down (180°)	چرخش وارونه (۱۸۰°)
+	4 x 6 in label (101.6 x 152.4 mm)	برچسب 4 x 6 in (101.6 x 152.4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	هر صفحه را به ناحیه چاپ شد‌ه اش می‌برد، آن را مستقیم می‌کند و بدون کشیدگی روی برگ جا می‌دهد. یک برچسب در هر برگ.
+	Find untagged content	یافتن محتوای بدون برچسب
+	No untagged content was found.	هیچ محتوای بدون برچسبی یافت نشد.
+	Found {n} untagged content problems.	{n} مشکل محتوای بدون برچسب یافت شد.
+	Tag form fields	برچسب‌گذاری فیلد‌های فرم
+	Mark as artifact	علامت‌گذاری به‌عنوان قطعه
+	Remove this leaf tag from reading order and mark its direct content as an artifact	این برچسب برگ را از ترتیب خواندن حذف کنید و محتوای مستقیم آن را به‌عنوان قطعه علامت‌گذاری کنید
+	Mark content as artifact	علامت‌گذاری محتوا به‌عنوان قطعه
+	Word count	شمارش واژه‌ها
+	Current page only	فقط صفحه کنونی
+	Exclude tagged tables	کنار گذاشتن جدول‌های برچسبدار
+	Exclude tagged code blocks	کنار گذاشتن بلوک‌های کد برچسبدار
+	Exclude image/OCR text	کنار گذاشتن متن تصویر/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	کنارگذاشتن‌ها از برچسب‌های PDF استفاده می‌کنند. جدول‌ها و کد‌های بدون برچسب همچنان شامل می‌شوند. کنار گذاشتن تصویر متن نامرئی را نیز حذف می‌کند.
+	Words	واژه‌ها
+	Characters	نویسه‌ها
+	Characters without spaces	نویسه‌ها بدون فاصله
+	Pages counted	صفحه‌های شمرده‌شده
+	Some pages contain no countable text. Scanned images need OCR first.	برخی صفحه‌ها هیچ متن قابل شمارشی ندارند. تصویر‌های اسک‌ن شده نخست به OCR نیاز دارند.
+	Some content could not be classified safely and was kept in the count.	برخی محتوا به‌طور ایمن طبقه‌بندی نشد و در شمارش نگه داشته شد.
+	Counting words… {n} pages read	شمارش واژه‌ها… {n} صفحه خوانده شد
+	Word counting stopped unexpectedly.	شمارش واژه‌ها به‌طور غیر‌منتظره متوقف شد.
+	Word count…	شمارش واژه‌ها…
+	Collapse all tools	جمع‌کردن همه ابزارها
+	Expand all tools	گسترش همه ابزارها
+	Create & Edit	ایجاد و ویرایش
+	Customize & Automate	شخصی‌سازی و خودکارسازی
+	Forms & Signatures	فرم‌ها و امضاها
+	Protect & Standardize	محافظت و استانداردسازی
+	Review & Compare	بازبینی و مقایسه
+	No tools match your search.	هیچ ابزاری با جست‌وجوی شما مطابقت ندارد.
+@plural	{n} reply|{n} replies	{n} پاسخ|{n} پاسخ
+@id	file.word_count	شمارش واژه‌ها…
+	Standard	استاندارد
+	Mobile	موبایل
+	Merge image fragments	ادغام قطعه‌های تصویر
+	Optimizing… merging image fragments	بهینه‌سازی… ادغام قطعه‌های تصویر
+	Side by side	کنار هم
+	New file only	فقط فایل جدید
+	Old file: {name}	فایل قدیمی: {name}
+	New file: {name}	فایل جدید: {name}
+	Print as image	چاپ به‌صورت تصویر
+	Resolution:	تفکیک‌پذیری:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	زمانی از آن استفاده کنید که چاپگر متن، سایه یا شفافیت را نادیده می‌گیرد. چاپ دیگر متن قابل جستوجو نیست؛ با «چاپ در مقیاس خاکستری»، تصاویر خاکستری می‌شوند.
+	Crop Image	برش تصویر
+	Remove Crop	حذف برش
+	Trim the picture with its handles; Enter or Done applies	تصویر را با دستگیره‌هایش برش دهید؛ Enter یا «انجام شد» آن را اعمال می‌کند
+	Redaction mark appearance	ظاهر نشانه سیاه‌کردن
+	Outline colour:	رنگ خط دور:
+	Fill colour:	رنگ پر‌کردن:
+	Shown while the pointer is over a mark.	زمانی که اشاره گر روی یک نشانه است نمایش داده می‌شود.
+	Opacity:	کدری:
+	Make properties default	ویژگی‌ها را پیش‌فرض کن
+	Pages selected	صفحه‌های انتخاب‌شده
+	Page properties	ویژگی‌های صفحه
+	Font	قلم
+	Bulleted list	فهرست نشانهدار
+	Numbered list	فهرست شمارهدار
+	Alignment	هم‌ترازی
+	Superscript	بالانویس
+	Subscript	زیرنویس
+	Paragraph spacing	فاصله بند‌ها
+	Less	کمتر
+	Other options	گزینه‌های دیگر
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	شما در حال مشاهده نسخه امضا‌شده «{from}» (باز‌نگری {rev}) هستید. این یک تصویر لحظ‌های است: تغییرات اینجا بر نسخه اصلی اثر نمی‌گذارد.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	شما در حال مشاهده باز‌نگری {rev} از «{from}» هستید. این یک تصویر لحظ‌های است: تغییرات اینجا بر نسخه اصلی اثر نمی‌گذارد.
+	Attach a file…	پیوست یک فایل…
+	Delete attachment	حذف پیوست
+	Attaching files is not available on the web yet	پیوست‌کردن فایل‌ها هنوز در وب در دسترس نیست
+	Attach {name}	پیوست {name}
+	Delete attachment {key}	حذف پیوست {key}
+	Thumbnail size	اندازه بندانگشتی‌ها
+	Smaller thumbnails	بندانگشتی‌های کوچک‌تر
+	Larger thumbnails	بندانگشتی‌های بزرگ‌تر
+	Reshape comment	تغییر شکل یادداشت
+calendar date	January	ژانویه
+calendar date	February	فوریه
+calendar date	March	مارس
+calendar date	April	آوریل
+calendar date	May	مه
+calendar date	June	ژوئن
+calendar date	July	ژوئیه
+calendar date	August	اوت
+calendar date	September	سپتامبر
+calendar date	October	اکتبر
+calendar date	November	نوامبر
+calendar date	December	دسامبر
+calendar weekday	Mo	دو
+calendar weekday	Tu	سه
+calendar weekday	We	چه
+calendar weekday	Th	پن
+calendar weekday	Fr	جم
+calendar weekday	Sa	شن
+calendar weekday	Su	یک
+certificate	Issued to	صادر‌شده برای
+certificate	Issued by	صادر‌شده توسط
+certificate	Issuer	صادر‌کننده
+certificate	Serial number	شماره سریال
+certificate	Version	نگارش
+certificate	Public key	کلید عمومی
+certificate	Key usage	کاربرد کلید
+certificate	Intended usage	کاربرد موردنظر
+certificate	Basic constraints	محدودیت‌های پایه
+certificate	Self-signed	خودامضا
+certificate	Valid from	معتبر از
+certificate	Valid to	معتبر تا
+certificate	Validity starts	آغاز اعتبار
+certificate	Validity ends	پایان اعتبار
+certificate	SHA-1 digest	چکیده SHA-1
+certificate	SHA-256 digest	چکیده SHA-256
+	Digital Signature	امضای دیجیتال
+	Non-Repudiation	انکارنا‌پذیری
+	Key Encipherment	رمز‌گذاری کلید
+	Data Encipherment	رمز‌گذاری داده
+	Key Agreement	توافق کلید
+	Certificate Signing	امضای گواهی
+	CRL Signing	امضای CRL
+	Encipher Only	فقط رمز‌گذاری
+	Decipher Only	فقط رمزگشایی
+	{who}, certificate issued by {issuer}.	{who}، گواهی صادر‌شده توسط {issuer}.
+	{who}, certificate issued by an unknown issuer.	{who}، گواهی صادر‌شده توسط صادرکنند‌های ناشناخته.
+	Rev. {rev}: Signed by {name}	باز‌نگری {rev}: امضا‌شده توسط {name}
+	Rev. {rev}: Signed by an unknown signer	باز‌نگری {rev}: امضا‌شده توسط امضاکنند‌های ناشناخته
+	Rev. {rev}: Certified by {name}	باز‌نگری {rev}: گواهی‌شده توسط {name}
+	Rev. {rev}: Certified by an unknown signer	باز‌نگری {rev}: گواهی‌شده توسط امضاکنند‌های ناشناخته
+	Unsigned signature field: {name}	فیلد امضای بدون امضا: {name}
+	Choose a digital ID.	یک شناسه دیجیتال انتخاب کنید.
+	There is no folder to save the digital ID in.	هیچ پوش‌های برای ذخیره شناسه دیجیتال وجود ندارد.
+	The password is incorrect.	گذرواژه نادرست است.
+	The password must have at least 6 characters.	گذرواژه باید دستکم ۶ نویسه داشته باشد.
+	The password must have at least 8 characters.	گذرواژه باید دستکم ۸ نویسه داشته باشد.
+	The passwords do not match.	گذرواژه‌ها یکسان نیستند.
+	Only the document's owner can change its security (open it with the permissions password)	فقط مالک سند می‌تواند امنیت آن را تغییر دهد (آن را با گذرواژه مجوز‌ها باز کنید)
+@plural	{n} byte|{n} bytes	{n} بایت|{n} بایت
+@plural	{n} pixel|{n} pixels	{n} پیکسل|{n} پیکسل
+@plural	{n} file|{n} files	{n} فایل|{n} فایل
+@plural	{n} comment|{n} comments	{n} یادداشت|{n} یادداشت
+@plural	{n} result|{n} results	{n} نتیجه|{n} نتیجه
+@plural	{n} image optimized|{n} images optimized	{n} تصویر بهینه شد|{n} تصویر بهینه شد
+@plural	{n} item discarded|{n} items discarded	{n} مورد کنار گذاشته شد|{n} مورد کنار گذاشته شد
+@plural	Delete {n} field|Delete {n} fields	حذف {n} فیلد|حذف {n} فیلد
+	Add the PDFs to combine	PDFهایی را که می‌خواهید ادغام کنید اضافه کنید
+	Drop PDFs or folders here, or choose them.	PDFها یا پوشه‌ها را اینجا رها کنید، یا آن‌ها را انتخاب کنید.
+	Every PDF in the folder	هر PDF درون پوشه
+	Every PDF in the folder and the folders inside it	هر PDF درون پوشه و پوشه‌های داخل آن
+	Added the first {n} PDFs in {folder}	نخستین {n} PDF در {folder} افزوده شد
+	No PDFs found in {folder}	هیچ PDFی در {folder} یافت نشد
+	Panel layout could not be restored: {error}	چیدمان پنل باز‌گردانده نشد: {error}
+	Panel move was not applied: {error}	جابه‌جایی پنل اعمال نشد: {error}
+	Rendering…	در حال نمایش…
+	Still rendering — this page is unusually complex…	هنوز در حال نمایش — این صفحه به‌طور غیر‌معمول پیچیده است…
+	Loading…	در حال بار‌گذاری…
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	این فایل روی دیسک تغییر کرده است. برای دیدن نسخه جدید آن را دوباره بار‌گذاری کنید؛ تغییرات ذخیره‌نشده شما از دست خواهد رفت.
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	تشخیص متن نصب نشده است: مدل‌های آن وجود ندارند (`cargo xtask models` را اجرا کنید یا PDFCRAFT_MODELS را تنظیم کنید).
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	برش و چیدن به «دوطرفه: خاموش» نیاز دارد. برگ‌ها را یکرو چاپ کنید.
+	Error	خطا
+	Warning	هشدار
+	Information	اطلاعات
+	Success	موفق
+	Enter a name.	نامی وارد کنید.
+	Enter a page number	شماره صفحه وارد کنید
+	Enter a URL	نشانی URL وارد کنید
+	Enter the field names	نام فیلد‌ها را وارد کنید
+	Choose…	انتخاب…
+	Choose a file…	انتخاب یک فایل…
+	Choose a folder…	انتخاب یک پوشه…
+	Create folder	ایجاد پوشه
+	Open folder	باز کردن پوشه
+	Save file	ذخیره فایل
+	Save changes?	تغییرات ذخیره شود؟
+	Theme	پوسته
+theme	Appearance	ظاهر
+	System	سیستم
+	English	انگلیسی
+	Always	همیشه
+	Never	هرگز
+	Automatically	به‌طور خودکار
+	On	روشن
+	Enabled	فعال
+	Disabled	غیر‌فعال
+	Mouse wheel scroll speed	سرعت پیمایش چرخ ماوس
+	Margins (in)	حاشیه‌ها (in)
+	Color	رنگ
+	Folder	پوشه
+	Comment	یادداشت
+	Comment and review	یادداشت و باز‌بینی
+	Creator	سازنده
+	Producer	تولید‌کننده
+	Organize	سازمان‌دهی
+	Import	درون‌ریزی
+	Move	جابه‌جایی
+	Duplicate	تکثیر
+	Paste	جای‌گذاری
+	Select all	انتخاب همه
+	Refresh	تازه‌سازی
+	Next	بعدی
+	Previous	قبلی
+	of	از
+	No results	بدون نتیجه
+	Search results	نتایج جستوجو
+	Copy to clipboard	رونوشت در بریدهدان
+	Copied to clipboard	در بریده دان رونوشت شد
+	Help…	راهنما…
+	 on page {label}	 در صفحه {label}
+	Page {n}	صفحه {n}
+	Page {n} of {total}	صفحه {n} از {total}
+	Open a PDF (⌘O)	باز کردن یک PDF (⌘O)
+	Print (⌘P)	چاپ (⌘P)
+	Document properties (⌘D)	ویژگی‌های سند (⌘D)
+	New bookmark (⌘B)	نشانک جدید (⌘B)
+	Next (⌘G)	بعدی (⌘G)
+	Previous (⇧⌘G)	قبلی (⇧⌘G)
+	Zoom in (⌘+)	بزرگنمایی (⌘+)
+	Zoom out (⌘−)	کوچکنمایی (⌘−)
+	Zoom in / out (also pinch or ⌘-scroll)	بزرگنمایی / کوچکنمایی (همچنین با دو انگشت یا ⌘ + پیمایش)
+	Rotate view clockwise (⇧⌘+)	چرخش نما در جهت عقربه‌های ساعت (⇧⌘+)
+	Save (M4)	ذخیره (M4)
+	Add text field table	افزودن جدول فیلد‌های متنی
+	Text field table	جدول فیلد‌های متنی
+	Text Field Table	جدول فیلد‌های متنی
+	Columns	ستون‌ها
+	Row spacing	فاصله سطر‌ها
+	Column spacing	فاصله ستون‌ها
+	First row number	شماره نخستین سطر
+	Column widths	پهنای ستون‌ها
+	Distribute evenly	تقسیم یکنواخت
+	Field names	نام فیلد‌ها
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N یا {row} شماره سطر است، {col} شماره ستون و {seq} شماره خانه. اگر هیچکدام نباشد، شماره سطر در آخر می‌آید.
+	Column {n}	ستون {n}
+	Add fields	افزودن فیلد‌ها
+	a table has 1 to {max} rows	یک جدول از ۱ تا {max} سطر دارد
+	a table has 1 to {max} columns	یک جدول از ۱ تا {max} ستون دارد
+	the first row number can be at most {max}	شماره نخستین سطر حداکثر می‌تواند {max} باشد
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	ناحیه، فاصله و پهنای ستون‌ها باید عدد باشند، فاصله ۰ یا بیشتر و هر پهنا بیشتر از ۰
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	سطر‌ها بیش از حد کوتاه اند: ناحیه را بلند‌تر کنید، یا سطر‌های کمتر یا فاصله سطر کمتری به کار ببرید
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	یک ستون بیش از حد باریک است: ناحیه را پهن‌تر کنید، سهم بیشتری به ستون بدهید، یا ستون‌های کمتر یا فاصله ستون کمتری به کار ببرید
+	field names can't contain a period: {name}	نام فیلد‌ها نمی‌تواند شامل نقطه باشد: {name}
+	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
+	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
+	Today	امروز
