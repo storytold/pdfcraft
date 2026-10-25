@@ -3267,10 +3267,60 @@ fn thai_comb_field_groups_base_and_combining_marks() {
     assert_eq!(units, vec!["กิ่".to_string()]);
 
     let units2 = appearance::comb_units("น้ำใจ", 5);
-    assert_eq!(units2, vec!["น้ำ".to_string(), "ใ".to_string(), "จ".to_string()]);
+    assert_eq!(units2, vec!["น้ำ".to_string(), "ใจ".to_string()]);
 
     let units_limited = appearance::comb_units("น้ำใจ", 2);
-    assert_eq!(units_limited, vec!["น้ำ".to_string(), "ใ".to_string()]);
+    assert_eq!(units_limited, vec!["น้ำ".to_string(), "ใจ".to_string()]);
+
+    let units_limited1 = appearance::comb_units("น้ำใจ", 1);
+    assert_eq!(units_limited1, vec!["น้ำ".to_string()]);
+
+    let units_keng = appearance::comb_units("เก่ง", 5);
+    assert_eq!(units_keng, vec!["เก่".to_string(), "ง".to_string()]);
+}
+
+#[test]
+fn thai_field_with_t3thai_da_font_preserves_both_fonts() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/T3Thai 12 Tf 0 g) /DR << /Font << >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (conflict) /DA (/T3Thai 12 Tf 0 g) /Rect [50 500 250 530] /P 3 0 R >>".into(),
+    ]);
+    author::ensure_thai_font(&mut doc).unwrap();
+    let af_obj = doc.get(pdfcraft_cos::ObjRef::new(4, 0));
+    let dr = doc.resolve(af_obj.as_dict().unwrap().get(b"DR").unwrap());
+    let mut dr_dict = dr.as_dict().unwrap().clone();
+    let thai_font_ref = dr_dict.get(b"Font").unwrap().as_dict().unwrap().get(b"Thai").unwrap().clone();
+    let mut fonts_dict = dr_dict.get(b"Font").unwrap().as_dict().unwrap().clone();
+    fonts_dict.set(b"T3Thai".to_vec(), thai_font_ref);
+    dr_dict.set(b"Font".to_vec(), Object::Dict(fonts_dict));
+    let _ = doc.update_dict(pdfcraft_cos::ObjRef::new(4, 0), |af| {
+        af.set(b"DR".to_vec(), Object::Dict(dr_dict));
+    });
+    let text = "สวัสดี Hello";
+    set_value(&mut doc, "conflict", &FieldValue::Text(text.into())).unwrap();
+    let f = fields(&doc).into_iter().find(|f| f.name == "conflict").unwrap();
+    let w = &f.widgets[0];
+    let w_obj = doc.get(w.obj);
+    let ap = w_obj.as_dict().unwrap().get(b"AP").unwrap();
+    let ap_obj = doc.resolve(ap);
+    let ap_dict = ap_obj.as_dict().unwrap();
+    let n_obj = ap_dict.get(b"N").unwrap();
+    let n_resolved = doc.resolve(n_obj);
+    let Object::Stream(n_stream) = &*n_resolved else { panic!("appearance stream") };
+    let res = n_stream.dict.get(b"Resources").unwrap();
+    let res_obj = doc.resolve(res);
+    let res_dict = res_obj.as_dict().unwrap();
+    let fonts_obj = doc.resolve(res_dict.get(b"Font").unwrap());
+    let fonts = fonts_obj.as_dict().unwrap();
+    assert!(fonts.get(b"T3Thai").is_some(), "T3Thai must be registered");
+    assert!(fonts.get(b"T3Thai0").is_some(), "original /DA font must be preserved as T3Thai0");
 }
 
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,

@@ -1990,7 +1990,7 @@ impl Automation {
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
             let safe = |t: &str| {
                 t.chars()
-                    .map(|c| if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') { c } else { '_' })
+                    .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c })
                     .collect::<String>()
             };
             let mut base = match titles.iter().find(|t| t.0 + 1 == *first) {

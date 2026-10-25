@@ -641,10 +641,10 @@ pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
 }
 
 pub fn document_thai_font() -> Option<&'static CraftFont> {
-    if let Some(f) = CRAFT_FONTS.iter().find(|f| f.covers("Thai")) {
+    if let Some(f) = get_active_thai_font() {
         return Some(f);
     }
-    if let Some(f) = get_active_thai_font() {
+    if let Some(f) = CRAFT_FONTS.iter().find(|f| f.covers("Thai")) {
         return Some(f);
     }
     #[cfg(not(target_arch = "wasm32"))]

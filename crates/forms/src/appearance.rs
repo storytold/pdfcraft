@@ -349,20 +349,34 @@ pub fn is_thai_combining(c: char) -> bool {
     )
 }
 
+/// Whether a Thai character is a preposed vowel (เ–ไ).
+pub fn is_thai_preposed(c: char) -> bool {
+    matches!(c, '\u{0E40}'..='\u{0E44}')
+}
+
 /// Group a string into visual comb units (grapheme-like units), keeping Thai combining marks
-/// attached to their preceding base letter.
+/// attached to their preceding base letter, and Thai preposed vowels (เ–ไ) grouped with their
+/// following base character and trailing combining marks.
 pub fn comb_units(text: &str, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
     let mut units: Vec<String> = Vec::new();
     for ch in text.chars() {
-        if is_thai_combining(ch) && let Some(last) = units.last_mut() {
+        if is_thai_combining(ch)
+            && let Some(last) = units.last_mut()
+        {
+            last.push(ch);
+        } else if let Some(last) = units.last_mut()
+            && last.chars().all(is_thai_preposed)
+            && !is_thai_preposed(ch)
+        {
             last.push(ch);
         } else {
-            if units.len() >= limit {
-                break;
-            }
             units.push(ch.to_string());
         }
     }
+    units.truncate(limit);
     units
 }
 
@@ -889,10 +903,14 @@ fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[St
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
     let thai_font_res_name = "T3Thai";
+    let font_name = if t3_font.is_some() && font_name == thai_font_res_name { format!("{font_name}0") } else { font_name };
     let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str, size: f64| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
-        if t3_font.is_some() && text.chars().any(is_thai) && let Ok(clusters) = pdfcraft_fonts::shape_thai(&text) {
+        if t3_font.is_some()
+            && text.chars().any(is_thai)
+            && let Ok(clusters) = pdfcraft_fonts::shape_thai(&text)
+        {
             let mut pen = x;
             body.extend(format!("/{} {} Tf ", thai_font_res_name, n(size)).bytes());
             for c in clusters {
@@ -1025,7 +1043,8 @@ fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[St
     content.extend(body);
     content.extend_from_slice(b"ET\nQ\nEMC\n");
     let mut fonts = Dict::new();
-    fonts.set(font_name.into_bytes(), font_obj);
+    let da_font_name = if t3_font.is_some() && font_name == thai_font_res_name { format!("{font_name}0") } else { font_name };
+    fonts.set(da_font_name.into_bytes(), font_obj);
     if let Some(t3) = t3_font {
         fonts.set(thai_font_res_name.as_bytes().to_vec(), Object::Ref(t3));
     }
