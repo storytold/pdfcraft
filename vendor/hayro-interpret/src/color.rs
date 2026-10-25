@@ -391,6 +391,13 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceGray)
     }
 
+    // PdfCraft patch (63).
+    /// Whether this is `/DeviceCMYK` itself, not an ICC-based or default colour space that
+    /// stands in for it.
+    pub(crate) fn is_device_cmyk(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::DeviceCmyk)
+    }
+
     /// Get the number of components of the color space.
     pub(crate) fn num_components(&self) -> u8 {
         match self.0.as_ref() {
@@ -1050,6 +1057,8 @@ pub(crate) struct Separation {
     /// `eval_tint_transform`).
     tint_transform: Option<Function>,
     is_none_separation: bool,
+    /// PdfCraft patch (66): the colourant is the special name `All`.
+    is_all: bool,
 }
 
 /// PdfCraft patch (55): `tint_transform` run on the tints of one colour, or, when it cannot be
@@ -1080,20 +1089,33 @@ impl Separation {
         // PdfCraft patch (55): an unreadable tint transform keeps the space (see
         // `eval_tint_transform`).
         let tint_transform = iter.next::<Object<'_>>().and_then(|f| Function::new(&f));
-        // Either I did something wrong, or no other viewers properly handles
-        // `All`, so let's just ignore it as well.
         let is_none_separation = name.as_str() == "None";
+        // PdfCraft patch (66): `All` names every colourant of the output device at once
+        // (ISO 32000-2 §8.6.6.4), so its tints never go through the alternate space.
+        let is_all = name.as_str() == "All";
 
         Some(Self {
             alternate_space,
             tint_transform,
             is_none_separation,
+            is_all,
         })
     }
 }
 
 impl ToRgb for Separation {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
+        if self.is_all {
+            // PdfCraft patch (66): §8.6.6.4: the tint applies to every colourant, and on an
+            // additive device it is complemented first, so tint t is the gray 1 − t on each of
+            // R, G and B whatever the alternate space and tint transform say.
+            for (tint, rgb) in input.iter().zip(output.chunks_exact_mut(3)) {
+                // `clamp` keeps NaN, and `f32_to_u8`'s cast saturates it to 0.
+                let gray = f32_to_u8(1.0 - tint.clamp(0.0, 1.0));
+                rgb.copy_from_slice(&[gray, gray, gray]);
+            }
+            return Some(());
+        }
         count_tint_transform_runs(input.len());
         // PdfCraft patch (55): see `eval_tint_transform`.
         let evaluated = input
@@ -1327,6 +1349,18 @@ fn f32_to_u8(val: f32) -> u8 {
     (val * 255.0 + 0.5) as u8
 }
 
+// PdfCraft patch (63).
+/// The `/DeviceCMYK` to `/DeviceGray` conversion of ISO 32000-2 §10.4.2.3,
+/// `gray = 1.0 - min(1.0, 0.3 c + 0.59 m + 0.11 y + k)`, which §11.5.3 also gives for the
+/// luminosity of a soft mask whose group is in `/DeviceCMYK`. A missing component counts as
+/// zero, and each component is clamped to `[0, 1]` first (`NaN` and infinities read as zero).
+pub(crate) fn device_cmyk_to_gray(cmyk: &[f32]) -> f32 {
+    let component = |i: usize| clamp_component(cmyk.get(i).copied().unwrap_or(0.0), 0.0, 1.0);
+    let ink = 0.3 * component(0) + 0.59 * component(1) + 0.11 * component(2) + component(3);
+    // Every component is in [0, 1], so `ink` is not negative and the result is in [0, 1].
+    1.0 - ink.min(1.0)
+}
+
 /// Clamp an input-derived colour component to `[lo, hi]` without panicking on
 /// NaN or on a reversed range. Non-finite values map to zero.
 fn clamp_component(value: f32, lo: f32, hi: f32) -> f32 {
@@ -1433,5 +1467,38 @@ pub(crate) trait ToRgb {
             output[2],
             (opacity * 255.0 + 0.5) as u8,
         ))
+    }
+}
+
+#[cfg(test)]
+mod device_cmyk_gray_tests {
+    use super::device_cmyk_to_gray;
+
+    fn assert_close(cmyk: &[f32], expected: f32) {
+        let got = device_cmyk_to_gray(cmyk);
+        assert!(
+            (got - expected).abs() < 1e-5,
+            "{cmyk:?}: gray {got}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn each_ink_darkens_by_its_iso_weight() {
+        assert_close(&[0.0, 0.0, 0.0, 0.0], 1.0);
+        assert_close(&[0.0, 0.0, 0.0, 1.0], 0.0);
+        assert_close(&[0.0, 0.0, 0.0, 0.5], 0.5);
+        assert_close(&[1.0, 0.0, 0.0, 0.0], 0.7);
+        assert_close(&[0.0, 1.0, 0.0, 0.0], 0.41);
+        assert_close(&[0.0, 0.0, 1.0, 0.0], 0.89);
+        assert_close(&[0.5, 0.5, 0.5, 0.25], 0.25);
+    }
+
+    #[test]
+    fn ink_past_full_coverage_is_black_and_bad_components_read_as_zero() {
+        assert_close(&[1.0, 1.0, 1.0, 1.0], 0.0);
+        assert_close(&[0.0, 0.0, 0.0, 1.5], 0.0);
+        assert_close(&[2.0, -1.0, f32::NAN, f32::INFINITY], 0.7);
+        assert_close(&[], 1.0);
+        assert_close(&[0.0, 0.0], 1.0);
     }
 }

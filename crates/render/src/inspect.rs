@@ -6,6 +6,7 @@
 //! are empty and `warnings` says why.
 
 use std::cell::OnceCell;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -110,6 +111,10 @@ pub struct DocInfo {
     pub attachments: Vec<Attachment>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
+    /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
+    /// named destinations resolved. `None` without one, for an action that goes nowhere in this
+    /// document (a script, say), or for one that doesn't resolve to a page of it.
+    pub open_dest: Option<(usize, DestView)>,
     pub warnings: Vec<String>,
 }
 
@@ -401,6 +406,9 @@ pub struct OutlineItem {
     /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
     pub view: DestView,
     pub children: Vec<OutlineItem>,
+    /// Whether the bookmark starts open: only a positive `/Count` says so (ISO 32000-2 §12.3.3,
+    /// Table 151). A negative one is closed, and so is a missing one, which a bookmark with
+    /// children should not have.
     pub open: bool,
     /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), or `None` for the
     /// default black or a value that isn't three numbers.
@@ -417,9 +425,17 @@ pub struct Annotation {
     pub author: Option<String>,
     pub contents: Option<String>,
     pub modified: Option<String>,
-    /// `/NM` of this annotation, and of the one it replies to (`/IRT`), for threading.
+    /// `/NM` of this annotation, and of the one it replies to (`/IRT`).
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// The page and `/Annots` position of the comment `/IRT` points at, found by object
+    /// reference. Threads follow this rather than `/NM`, which need not be unique: PyMuPDF
+    /// names the first comment on every page `fitz-A0`. `None` when `/IRT` leads to no listed
+    /// comment ([`link_replies`]).
+    pub parent: Option<(usize, usize)>,
+    /// `/RT /Group`: grouped with the annotation `/IRT` points at (Replace Text's caret with its
+    /// strikeout) rather than a reply to it.
+    pub grouped: bool,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -449,6 +465,23 @@ impl Annotation {
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
+    }
+
+    /// A reply (or status reply) to another comment rather than a comment of its own.
+    pub fn is_reply(&self) -> bool {
+        self.parent.is_some()
+    }
+
+    /// A comment of its own: not a reply, and not a status or checkmark. One whose comment can't
+    /// be found (deleted from another page, or never listed) has nothing to show, so it is listed
+    /// nowhere: not as a card, on the page or in a count.
+    pub fn is_comment(&self) -> bool {
+        !self.is_reply() && self.state.is_none()
+    }
+
+    /// Whether this annotation's `/IRT` points at `other`.
+    pub fn replies_to(&self, other: &Annotation) -> bool {
+        self.parent == Some((other.page, other.index))
     }
 
     /// Where the comment is drawn on a page turned by `rotation` (`PageInfo::rotation`), in user
@@ -502,6 +535,55 @@ fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
         _ => return [s0, s1, s2, s3],
     };
     [x0, y1 - h, x0 + w, y1]
+}
+
+/// Settle the reply links of a document's annotations: a reply keeps its `parent` only when
+/// following the links reaches a comment of its own within 64 steps. An `/IRT` to an unlisted
+/// object, a pop-up, the annotation itself or a loop leaves it a comment of its own, so it stays
+/// in view instead of hanging off nothing. Both comment readers (inspect, and the engine's list
+/// after an edit) run this.
+///
+/// Only comments can be parents: both readers leave links, form widgets, pop-ups and other
+/// non-markup annotations out of `annotations` (`pdfcraft_annot::is_comment_subtype`), so an
+/// `/IRT` to one of those finds no parent here. Pop-ups are skipped again in case a caller's list
+/// has them.
+pub fn link_replies(annotations: &mut [Annotation]) {
+    let at: HashMap<(usize, usize), usize> =
+        annotations.iter().enumerate().filter(|(_, a)| a.subtype != "Popup").map(|(i, a)| ((a.page, a.index), i)).collect();
+    let links: Vec<Option<usize>> =
+        annotations.iter().enumerate().map(|(i, a)| a.parent.and_then(|p| at.get(&p).copied()).filter(|&j| j != i)).collect();
+    for (i, a) in annotations.iter_mut().enumerate() {
+        let mut up = links.get(i).copied().flatten();
+        let mut settled = false;
+        for _ in 0..64 {
+            let Some(j) = up else { break };
+            up = links.get(j).copied().flatten();
+            if up.is_none() {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            a.parent = None;
+        }
+    }
+}
+
+/// The comment each reply's thread starts from, by the reply's page and `/Annots` position: a
+/// reply to a reply files under that comment too. Expects links [`link_replies`] settled.
+pub fn thread_tops(annotations: &[Annotation]) -> HashMap<(usize, usize), (usize, usize)> {
+    let parents: HashMap<(usize, usize), (usize, usize)> = annotations.iter().filter_map(|a| Some(((a.page, a.index), a.parent?))).collect();
+    parents
+        .iter()
+        .map(|(&reply, &first)| {
+            let mut top = first;
+            for _ in 0..64 {
+                let Some(&up) = parents.get(&top) else { break };
+                top = up;
+            }
+            (reply, top)
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -825,6 +907,25 @@ impl<'a> Inspector<'a> {
         {
             info.has_javascript = true;
         }
+        info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
+    }
+
+    /// The destination `/OpenAction` opens at (ISO 32000-2 §7.7.2 Table 29): an explicit
+    /// destination array, a `/GoTo` action's `/D`, or (leniently, since Table 29 asks for an array
+    /// or an action) a destination name or string; a name or string is looked up as a named
+    /// destination (§12.3.2.4). Any other action (a script, a remote go-to) has none here, and
+    /// neither has a page number past the end of the document.
+    fn open_dest(&self, action: &Object) -> Option<(usize, DestView)> {
+        let dest = match self.resolve(action) {
+            Object::Dictionary(d) => {
+                if d.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) != Some(&b"GoTo"[..]) {
+                    return None;
+                }
+                d.get(b"D").ok()?
+            }
+            other => other,
+        };
+        self.dest(dest, 0).filter(|(page, _)| *page < self.page_ids.len())
     }
 
     // ── object helpers ──────────────────────────────────────────────────────────────────────
@@ -1306,13 +1407,12 @@ impl<'a> Inspector<'a> {
         pages.sort_unstable_by_key(|&(_, page)| page);
         // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
         // first of them (§12.5.2 allows one page per annotation). Both are told apart by the object
-        // a reference resolves to, since an indirect object may itself hold a reference.
+        // a reference resolves to, since an indirect object may itself hold a reference. Where each
+        // annotation is listed is collected before any is read, so a reply's `/IRT` finds its
+        // parent by reference even when the parent comes later.
         let mut seen_arrays = HashSet::new();
-        let mut seen_annotations = HashSet::new();
-        let mut kept = 0usize;
-        // Once the comment budget is spent, comments are no longer built, but links and attachments
-        // are still listed.
-        let mut comments_full = false;
+        let mut slots: HashMap<ObjectId, (usize, usize)> = HashMap::new();
+        let mut entries = Vec::new();
         for (id, page) in pages {
             let Ok(page_dict) = self.doc.get_dictionary(id) else { continue };
             if let Ok(annots) = page_dict.get(b"Annots")
@@ -1323,107 +1423,116 @@ impl<'a> Inspector<'a> {
             }
             let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
             for (index, a) in annots.iter().enumerate() {
-                if let Some(r) = self.resolved_id(a)
-                    && !seen_annotations.insert(r)
-                {
-                    continue;
+                if let Some(r) = self.resolved_id(a) {
+                    let Entry::Vacant(slot) = slots.entry(r) else { continue };
+                    slot.insert((page, index));
                 }
-                let Some(d) = self.dict(a) else { continue };
-                let Some(subtype) = self.name(d, b"Subtype") else { continue };
-                if subtype == "FileAttachment"
-                    && let Ok(fs) = d.get(b"FS")
-                {
-                    let fallback = |budget: &mut usize| self.budgeted_text(d, b"Contents", budget);
-                    info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
-                }
-                if subtype == "Link" {
-                    if let Some(link) = self.link(page, index, d, text_budget) {
-                        if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
-                            info.has_javascript = true;
-                        }
-                        info.links.push(link);
-                    }
-                    continue;
-                }
-                // Not comments: form widgets, pop-ups and non-markup annotations such as the
-                // Screen annotation that drives a LaTeX `animate` player (keep in step with
-                // `pdfcraft_annot::is_comment_subtype`).
-                if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
-                {
-                    continue;
-                }
-                if comments_full {
-                    continue;
-                }
-                let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
-                let mut color = match d.get(b"C").map(|o| self.resolve(o)) {
-                    Ok(Object::Array(c)) if c.len() == 3 => {
-                        let f = |i: usize| c[i].as_float().unwrap_or(0.0);
-                        Some([f(0), f(1), f(2)])
-                    }
-                    _ => None,
-                };
-                // A text box's /C is its background; its text colour is in /DA.
-                if subtype == "FreeText"
-                    && let Some(da) = self.text(d, b"DA")
-                {
-                    let t: Vec<&str> = da.split_whitespace().collect();
-                    if let Some(i) = t.iter().position(|x| *x == "rg")
-                        && i >= 3
-                    {
-                        let f = |k: usize| t[k].parse::<f32>().unwrap_or(0.0);
-                        color = Some([f(i - 3), f(i - 2), f(i - 1)]);
-                    }
-                }
-                let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
-                    Ok(Object::Array(q)) => {
-                        let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
-                        v.as_chunks::<8>().0.to_vec()
-                    }
-                    _ => Vec::new(),
-                };
-                let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
-                let fill_sign = self.is_fill_sign(d, &subtype);
-                // Keep in step with `pdfcraft_annot::summaries`.
-                let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
-                let points = match d.get(key).map(|o| self.resolve(o)) {
-                    Ok(Object::Array(v)) if matches!(subtype.as_str(), "Line" | "PolyLine" | "Polygon") => {
-                        let v: Vec<f32> = v.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
-                        let pts: Vec<[f32; 2]> = v.as_chunks::<2>().0.to_vec();
-                        if subtype == "Line" && pts.len() != 2 { Vec::new() } else { pts }
-                    }
-                    _ => Vec::new(),
-                };
-                let annotation = Annotation {
-                    page,
-                    subtype,
-                    author: self.text(d, b"T"),
-                    // Acrobat ends lines with CR, which the interface would draw as nothing (keep
-                    // in step with `pdfcraft_annot::summaries`).
-                    contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
-                    modified: self.text(d, b"M").map(|m| pretty_date(&m)),
-                    name: self.text(d, b"NM"),
-                    in_reply_to,
-                    rect,
-                    color,
-                    index,
-                    state: self.text(d, b"State"),
-                    quads,
-                    locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
-                    intent: self.name(d, b"IT"),
-                    fill_sign,
-                    no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
-                    points,
-                };
-                kept = kept.saturating_add(retained(&annotation));
-                if kept > MAX_ANNOTATION_BYTES {
-                    comments_full = true;
-                    continue;
-                }
-                info.annotations.push(annotation);
+                entries.push((page, index, a));
             }
         }
+        let mut kept = 0usize;
+        // Once the comment budget is spent, comments are no longer built, but links and attachments
+        // are still listed.
+        let mut comments_full = false;
+        for (page, index, a) in entries {
+            let Some(d) = self.dict(a) else { continue };
+            let Some(subtype) = self.name(d, b"Subtype") else { continue };
+            if subtype == "FileAttachment"
+                && let Ok(fs) = d.get(b"FS")
+            {
+                let fallback = |budget: &mut usize| self.budgeted_text(d, b"Contents", budget);
+                info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
+            }
+            if subtype == "Link" {
+                if let Some(link) = self.link(page, index, d, text_budget) {
+                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                        info.has_javascript = true;
+                    }
+                    info.links.push(link);
+                }
+                continue;
+            }
+            // Not comments: form widgets, pop-ups and non-markup annotations such as the
+            // Screen annotation that drives a LaTeX `animate` player (keep in step with
+            // `pdfcraft_annot::is_comment_subtype`).
+            if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark") {
+                continue;
+            }
+            if comments_full {
+                continue;
+            }
+            let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
+            let mut color = match d.get(b"C").map(|o| self.resolve(o)) {
+                Ok(Object::Array(c)) if c.len() == 3 => {
+                    let f = |i: usize| c[i].as_float().unwrap_or(0.0);
+                    Some([f(0), f(1), f(2)])
+                }
+                _ => None,
+            };
+            // A text box's /C is its background; its text colour is in /DA.
+            if subtype == "FreeText"
+                && let Some(da) = self.text(d, b"DA")
+            {
+                let t: Vec<&str> = da.split_whitespace().collect();
+                if let Some(i) = t.iter().position(|x| *x == "rg")
+                    && i >= 3
+                {
+                    let f = |k: usize| t[k].parse::<f32>().unwrap_or(0.0);
+                    color = Some([f(i - 3), f(i - 2), f(i - 1)]);
+                }
+            }
+            let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+                Ok(Object::Array(q)) => {
+                    let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
+                    v.as_chunks::<8>().0.to_vec()
+                }
+                _ => Vec::new(),
+            };
+            let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+            let parent = d.get(b"IRT").ok().and_then(|o| self.resolved_id(o)).and_then(|r| slots.get(&r).copied());
+            let fill_sign = self.is_fill_sign(d, &subtype);
+            // Keep in step with `pdfcraft_annot::summaries`.
+            let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
+            let points = match d.get(key).map(|o| self.resolve(o)) {
+                Ok(Object::Array(v)) if matches!(subtype.as_str(), "Line" | "PolyLine" | "Polygon") => {
+                    let v: Vec<f32> = v.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
+                    let pts: Vec<[f32; 2]> = v.as_chunks::<2>().0.to_vec();
+                    if subtype == "Line" && pts.len() != 2 { Vec::new() } else { pts }
+                }
+                _ => Vec::new(),
+            };
+            let annotation = Annotation {
+                page,
+                subtype,
+                author: self.text(d, b"T"),
+                // Acrobat ends lines with CR, which the interface would draw as nothing (keep
+                // in step with `pdfcraft_annot::summaries`).
+                contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
+                modified: self.text(d, b"M").map(|m| pretty_date(&m)),
+                name: self.text(d, b"NM"),
+                in_reply_to,
+                parent,
+                grouped: self.name(d, b"RT").as_deref() == Some("Group"),
+                rect,
+                color,
+                index,
+                state: self.text(d, b"State"),
+                quads,
+                locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
+                intent: self.name(d, b"IT"),
+                fill_sign,
+                no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
+                points,
+            };
+            kept = kept.saturating_add(retained(&annotation));
+            if kept > MAX_ANNOTATION_BYTES {
+                comments_full = true;
+                continue;
+            }
+            info.annotations.push(annotation);
+        }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
+        link_replies(&mut info.annotations);
     }
 
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
@@ -2400,6 +2509,8 @@ mod tests {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
+            grouped: false,
             rect: [40.0, 50.0, 70.0, 70.0],
             color: None,
             index: 0,
@@ -2970,6 +3081,39 @@ trailer << /Root 1 0 R >>
             let mut info = DocInfo { pages: vec![page.clone(), page.clone()], ..Default::default() };
             Inspector::new(reader).fill(&mut info);
             assert_eq!(info.links.len(), 1, "{:?}", info.links);
+        }
+    }
+
+    /// A reply finds its comment where the listing keeps it: on the first page of a page-shared
+    /// `/Annots` array, whether its `/IRT` names the comment or an object holding a reference to it.
+    #[test]
+    fn a_reply_finds_its_comment_through_a_reference_chain_and_a_shared_array() {
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >> endobj\n\
+             5 0 obj 6 0 R endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (comment) >> endobj\n\
+             7 0 obj [5 0 R 8 0 R 9 0 R] endobj\n\
+             8 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (to the comment) /IRT 6 0 R >> endobj\n\
+             9 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (through the chain) /IRT 5 0 R >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let mut doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut saved = Vec::new();
+        doc.save_to(&mut saved).expect("saves");
+        let lazy = LazyStructure::new(Arc::new(saved), None).expect("opens");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        for reader in [&doc as &dyn Structure, &lazy] {
+            let mut info = DocInfo { pages: vec![page.clone(), page.clone()], ..Default::default() };
+            Inspector::new(reader).fill(&mut info);
+            let notes = &info.annotations;
+            assert_eq!(notes.len(), 3, "{notes:?}");
+            let comment = notes.iter().find(|a| a.contents.as_deref() == Some("comment")).expect("listed");
+            assert_eq!((comment.page, comment.index, comment.is_reply()), (0, 0, false));
+            for reply in ["to the comment", "through the chain"] {
+                let a = notes.iter().find(|a| a.contents.as_deref() == Some(reply)).expect("listed");
+                assert_eq!((a.page, a.parent), (0, Some((0, 0))), "{reply}");
+            }
         }
     }
 
@@ -4112,5 +4256,114 @@ mod open_action_javascript_tests {
         let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
         let info = inspect(Arc::new(bytes), None).expect("inspects");
         assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod open_dest_tests {
+    use std::sync::Arc;
+
+    use super::{DestView, inspect};
+
+    /// Three 612×792 pages (objects 3, 4, 5); `catalog` is added to the catalog dictionary and
+    /// `extra` become objects 6, 7, ….
+    fn pdf(catalog: &str, extra: &[String]) -> Vec<u8> {
+        let mut objs =
+            vec![format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"), "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_string()];
+        for _ in 0..3 {
+            objs.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_string());
+        }
+        objs.extend(extra.iter().cloned());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    fn open_dest(catalog: &str, extra: &[String]) -> Option<(usize, DestView)> {
+        inspect(Arc::new(pdf(catalog, extra)), None).expect("inspects").open_dest
+    }
+
+    const XYZ: DestView = DestView::Xyz { left: Some(100.0), top: Some(500.0), zoom: Some(2.0) };
+
+    #[test]
+    fn an_explicit_destination_opens_at_its_page_and_position() {
+        assert_eq!(open_dest("/OpenAction [5 0 R /XYZ 100 500 2]", &[]), Some((2, XYZ)));
+        assert_eq!(open_dest("/OpenAction [4 0 R /FitH 400]", &[]), Some((1, DestView::FitH { top: Some(400.0) })));
+        // Indirect, and a zoom of 0 keeps the zoom (Table 149).
+        assert_eq!(
+            open_dest("/OpenAction 6 0 R", &["[4 0 R /XYZ 0 792 0]".into()]),
+            Some((1, DestView::Xyz { left: Some(0.0), top: Some(792.0), zoom: None }))
+        );
+    }
+
+    #[test]
+    fn a_go_to_action_opens_at_its_destination_explicit_or_named() {
+        assert_eq!(open_dest("/OpenAction << /S /GoTo /D [5 0 R /XYZ 100 500 2] >>", &[]), Some((2, XYZ)));
+        // A name, through the PDF 1.1 catalog /Dests dictionary (§12.3.2.4).
+        assert_eq!(open_dest("/OpenAction << /S /GoTo /D /there >> /Dests << /there [5 0 R /XYZ 100 500 2] >>", &[]), Some((2, XYZ)));
+        // A byte string, through the /Names /Dests name tree, whose value is a dictionary with /D.
+        assert_eq!(
+            open_dest(
+                "/OpenAction << /S /GoTo /D (there) >> /Names << /Dests 6 0 R >>",
+                &["<< /Kids [7 0 R] >>".into(), "<< /Names [(here) [3 0 R /Fit] (there) << /D [5 0 R /XYZ 100 500 2] >>] >>".into()]
+            ),
+            Some((2, XYZ))
+        );
+    }
+
+    #[test]
+    fn an_open_action_given_as_a_name_or_string_is_looked_up() {
+        assert_eq!(open_dest("/OpenAction /there /Dests << /there [4 0 R /Fit] >>", &[]), Some((1, DestView::Fit)));
+        assert_eq!(
+            open_dest("/OpenAction (there) /Names << /Dests << /Names [(there) [5 0 R /FitV 30]] >> >>", &[]),
+            Some((2, DestView::FitV { left: Some(30.0) }))
+        );
+    }
+
+    #[test]
+    fn an_open_action_that_goes_nowhere_here_has_no_destination() {
+        for catalog in [
+            "",
+            "/OpenAction << /S /JavaScript /JS (app.alert(1)) >>",
+            // A remote go-to's /D is a page of another file.
+            "/OpenAction << /S /GoToR /F (other.pdf) /D [1 /Fit] >>",
+            "/OpenAction << /D [4 0 R /Fit] >>",
+            // An unknown name, and no name dictionaries at all.
+            "/OpenAction << /S /GoTo /D /missing >> /Dests << /there [4 0 R /Fit] >>",
+            "/OpenAction /missing",
+            // A page number past the end, and a page reference that is no page.
+            "/OpenAction [7 /Fit]",
+            "/OpenAction [2 0 R /Fit]",
+            "/OpenAction 42",
+        ] {
+            assert_eq!(open_dest(catalog, &[]), None, "{catalog}");
+        }
+    }
+
+    #[test]
+    fn cyclic_and_deep_named_destinations_end() {
+        // Names that refer to each other.
+        assert_eq!(open_dest("/OpenAction /a /Dests << /a /b /b /a >>", &[]), None);
+        assert_eq!(open_dest("/OpenAction /a /Dests << /a << /D /a >> >>", &[]), None);
+        // A name tree whose node is its own kid.
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &["<< /Kids [6 0 R] >>".into()]), None);
+        // A name tree deeper than the depth bound: the leaf past it isn't read.
+        let depth = 40;
+        let mut nodes: Vec<String> = (0..depth).map(|i| format!("<< /Kids [{} 0 R] >>", 7 + i)).collect();
+        nodes.push("<< /Names [(x) [4 0 R /Fit]] >>".into());
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &nodes), None);
+        // A shallow one is read.
+        let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
     }
 }

@@ -1145,6 +1145,41 @@ fn nothing_to_apply_and_clearing_marks() {
     assert!(content(&doc, 0).contains("(AB) Tj"));
 }
 
+/// Clearing marks puts a page's annotation list back as it was: a page that had none has no
+/// `/Annots` again, replies to the marks included, and one listed through an indirect array keeps
+/// pointing at that array.
+#[test]
+fn clearing_marks_leaves_the_annotation_list_as_it_was() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB) Tj ET", "", vec![]);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let before = doc.get(page);
+    mark(&mut doc, 0, &[[0.0, 0.0, 50.0, 50.0]], "");
+    pdfcraft_annot::add_reply(&mut doc, 0, 0, "a reply", "Tester", &Meta::default()).unwrap();
+    // And a reply written inline, as a file can.
+    let mut inline = Dict::new();
+    inline.set(b"Subtype".to_vec(), Object::name("Text"));
+    inline.set(b"IRT".to_vec(), Object::Ref(marks(&doc)[0].obj));
+    let mut listed = annots_of(&doc, doc.get(page).as_dict().unwrap());
+    listed.push(Object::Dict(inline));
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(listed))).unwrap();
+    assert_eq!(clear_marks(&mut doc, None), Ok(1), "one mark");
+    assert_eq!(doc.get(page), before, "the page has no /Annots again: both replies went with their mark");
+
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots 4 0 R >>".to_vec(),
+        b"[5 0 R]".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] >>".to_vec(),
+    ]);
+    let (page, list) = (ObjRef::new(3, 0), ObjRef::new(4, 0));
+    let before = (doc.get(page), doc.get(list));
+    mark(&mut doc, 0, &[[0.0, 0.0, 50.0, 50.0]], "");
+    assert_eq!(doc.get(list).as_array().map(|a| a.len()), Some(2), "the mark is listed in the shared array");
+    clear_marks(&mut doc, None).unwrap();
+    assert_eq!((doc.get(page), doc.get(list)), before, "the page points at its array, which lists the link alone");
+}
+
 #[test]
 fn unreadable_content_fails_closed() {
     let mut doc = one_page(b"", "", vec![]);
@@ -2671,6 +2706,27 @@ fn removing_form_fields_takes_hidden_widgets_and_their_values_out_of_the_file() 
     remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
     assert_no_secret(&doc, b"LEAK_");
     assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
+}
+
+/// F-021: removing form fields on a document with an AcroForm dictionary (even one with no
+/// enumerable terminal fields) removes the AcroForm dictionary, processes widgets, and requires full save.
+#[test]
+fn removing_form_fields_removes_acroform_even_without_terminal_fields() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc =
+        one_page(b"BT /F1 10 Tf 10 100 Td (Visible) Tj ET", "", vec![b"<< /Type /Annot /Subtype /Widget /Rect [10 200 150 220] >>".to_vec()]);
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), fields_dict(&[]))).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), ref_array(&[7]))).unwrap();
+    let counts = scan(&doc);
+    assert_eq!(counts.iter().find(|c| c.0 == Hidden::FormFields).map(|c| c.1), Some(1));
+    assert!(doc.get(doc.root().unwrap()).as_dict().is_some_and(|d| d.contains(b"AcroForm")));
+    assert!(!doc.full_save_required());
+
+    let done = remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
+    assert_eq!(done, [(Hidden::FormFields, 1)]);
+    assert!(!doc.get(doc.root().unwrap()).as_dict().is_some_and(|d| d.contains(b"AcroForm")));
+    assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
+    assert!(doc.full_save_required());
 }
 
 /// Removing hidden text cleans the structure tree as redaction does: the elements describing the

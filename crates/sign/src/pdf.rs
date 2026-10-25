@@ -2202,8 +2202,11 @@ fn sign_inner(
     let mut apd = Dict::new();
     apd.set(b"N".to_vec(), Object::Ref(ap_ref));
     doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(apd)))?;
-    // Write with the placeholders, then patch them.
-    let save = SaveOptions { mod_date: Some(opts.date.clone()), object_streams: false, ..SaveOptions::default() };
+    // Write with the placeholders, then patch them. What the user removed again before signing
+    // (a cleared redaction mark) stays out of the file, as in a save; what signing added is
+    // reachable (the signature through the field's `/V`), and the placeholders are found in the
+    // written bytes.
+    let save = SaveOptions { mod_date: Some(opts.date.clone()), object_streams: false, drop_unlinked: true, ..SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;
     let (br_at, gap) = locate(&out, reserve)?;
     let (start, end) = gap;
@@ -2252,6 +2255,10 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
         ));
     }
     let mut doc = doc.clone();
+    // What the user removed again before this (a cleared redaction mark) stays out of the file,
+    // as in a save. Nothing refers to the timestamp either, so the leftovers go first and the
+    // save keeps everything.
+    doc.free_unlinked_additions();
     let mut v = Dict::new();
     v.set(b"Type".to_vec(), Object::name("DocTimeStamp"));
     v.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));

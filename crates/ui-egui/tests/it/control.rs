@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::control::{ControlClient, Reply};
@@ -86,6 +86,25 @@ fn call(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, 
 
 fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
+}
+
+#[test]
+fn comment_pin_is_reported_and_persistent() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], false);
+    for pinned in [true, false] {
+        ok(&mut h, &c, "ui.set", json!({"key":"comment-tool-pinned","value":pinned}));
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], pinned);
+        let mut restored = PdfCraftApp::new();
+        restored.comment_prefs.pinned = !pinned;
+        restored.restore(&h.state().persist());
+        assert_eq!(restored.comment_prefs.pinned, pinned);
+        for invalid in [json!("yes"), json!(1), json!(null), json!([]), json!({})] {
+            assert!(call(&mut h, &c, "ui.set", json!({"key":"comment-tool-pinned","value":invalid})).is_err());
+            assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["comment_tool_pinned"], pinned);
+        }
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["dirty"], false);
+    }
 }
 
 #[test]
@@ -401,16 +420,16 @@ fn lithuanian_inspector_title_updates_through_the_control_channel() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector");
+    h.get_by_label("Inspector");
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspektorius");
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").is_none());
+    h.get_by_label("Inspektorius");
+    assert!(h.query_by_label("Inspector").is_none());
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector");
+    h.get_by_label("Inspector");
 }
 
 /// Switching the interface language changes labels only: documents, their dirty state and the
@@ -1478,135 +1497,72 @@ fn a_plan_scale_picked_or_typed_applies_at_once() {
 }
 
 #[test]
-fn docking_pointer_group_float_close_restore_and_document_commands() {
-    use pdfcraft_ui_egui::docking::Panel;
+fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    h.run_steps(4);
-    // Tools docked alone has no tab strip (as Acrobat's tool pane), so it is grouped by command.
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Tools").is_none());
-    ok(&mut h, &c, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
-    h.run_steps(4);
-    assert_eq!(h.state().docking.layout.location(&Panel::Inspector).unwrap().anchor, Some(Panel::Tools));
-    // Grouped, Tools has its tab again.
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools");
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").click_button(egui::PointerButton::Secondary);
     h.run_steps(3);
-    h.get_by_label("Float panel").click();
-    h.run_steps(5);
-    let rect = h.state().docking.layout.floating.iter().find(|g| g.panels.contains(&Panel::Inspector)).unwrap().rect;
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").click_button(egui::PointerButton::Secondary);
+    let state = ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width": 401.6}));
+    assert_eq!(state["side_panels"]["side_width"], 401.6f32 as f64);
+    // Widths are clamped to the panel's limits.
+    let state = ok(&mut h, &c, "ui.panel", json!({"panel":"tools", "width": 9000}));
+    assert_eq!(state["side_panels"]["tools_width"], 520.0);
+    ok(&mut h, &c, "ui.panel", json!({"panel":"tools", "width": 300, "open": false}));
     h.run_steps(3);
-    // Scope to the open context menu; the Tools body also has a close icon.
-    h.get_by_label("Float panel").parent().unwrap().get_by_label("Close panel").click();
-    h.run_steps(4);
-    assert!(!h.state().docking.layout.contains(&Panel::Inspector));
-    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    h.run_steps(4);
-    assert_eq!(h.state().docking.layout.floating.iter().find(|g| g.panels.contains(&Panel::Inspector)).unwrap().rect, rect);
+    assert!(!h.state().left_open);
+    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "open": false}));
+    h.run_steps(3);
+    assert_eq!(h.state().right, None);
+    assert!(h.query_by_label("This document has no bookmarks.").is_none());
+    // Reopening the side panel brings back the one open last.
+    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "open": true}));
+    h.run_steps(3);
+    h.get_by_label("This document has no bookmarks.");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["side_panels"]["side_panel"], "Bookmarks");
     let saved = h.state().persist();
-    let expected = serde_json::to_value(&h.state().docking).unwrap();
     let (mut reloaded, client) = harness();
     reloaded.state_mut().restore(&saved);
-    reloaded.run_steps(5);
-    assert_eq!(serde_json::to_value(&reloaded.state().docking).unwrap(), expected);
-    ok(&mut reloaded, &client, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
     reloaded.run_steps(4);
-    ok(&mut reloaded, &client, "ui.command", json!({"id":"page.insert_blank"}));
-    assert_eq!(ok(&mut reloaded, &client, "ui.state", json!({}))["documents"][0]["pages"], 6);
-    ok(&mut reloaded, &client, "ui.command", json!({"id":"edit.undo"}));
+    let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
+    assert_eq!(
+        state,
+        json!({"tools_side":"left", "tools_open":false, "tools_width":300.0, "side_open":true, "side_panel":"Bookmarks", "side_width":401.6f32 as f64})
+    );
+    // The ui.command form and the reset command.
+    ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.panel", "params":{"panel":"tools", "open":true}}));
+    assert!(reloaded.state().left_open);
+    ok(&mut reloaded, &client, "ui.panel", json!({"panel":"tools", "width": 300}));
+    ok(&mut reloaded, &client, "ui.set", json!({"key":"tools-side", "value":"right"}));
+    ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.dock.reset"}));
+    let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
+    assert_eq!((state["tools_side"].clone(), state["tools_width"].clone(), state["side_width"].clone()), (json!("left"), json!(272.0), json!(330.0)));
     assert_eq!(ok(&mut reloaded, &client, "ui.state", json!({}))["documents"][0]["pages"], 5);
 }
 
 #[test]
-fn invalid_docking_requests_are_atomic_and_do_not_change_documents() {
+fn invalid_panel_requests_change_nothing() {
     let (mut h, c) = harness();
-    let before = serde_json::to_value(&h.state().docking).unwrap();
+    let before = ok(&mut h, &c, "ui.state", json!({}))["side_panels"].clone();
     for params in [
-        json!({"operation":"close", "panel":"canvas"}),
-        json!({"operation":"move", "panel":"tools", "target":"canvas", "zone":"center"}),
-        json!({"operation":"float", "panel":"tools", "rect":[0,0,-1,100]}),
-        json!({"operation":"move", "panel":"unknown", "target":"tools", "zone":"center"}),
+        json!({"panel":"canvas"}),
+        json!({"panel":"inspector", "open": true}),
+        json!({}),
+        json!({"panel":"tools", "open":"yes"}),
+        json!({"panel":"tools", "width":"wide"}),
+        json!({"panel":"side", "width": 300, "open": 1}),
     ] {
-        assert!(call(&mut h, &c, "ui.dock", params).is_err());
-        assert_eq!(serde_json::to_value(&h.state().docking).unwrap(), before);
+        assert!(call(&mut h, &c, "ui.panel", params).is_err());
         let state = ok(&mut h, &c, "ui.state", json!({}));
+        assert_eq!(state["side_panels"], before);
         assert_eq!(state["documents"][0]["pages"], 5);
         assert_eq!(state["documents"][0]["dirty"], false);
     }
 }
 
+/// #3580 review: a panel a script opens (`app.execMenuItem("ShowHideBookmarks")`) is shown.
 #[test]
-fn docking_renders_real_pdf_default_floating_and_redocked() {
-    for width in [900.0, 1400.0] {
-        for scale in [1.0, 2.0] {
-            let (mut h, c) = harness_pages_at(5, width, scale);
-            ok(&mut h, &c, "ui.resize", json!({"width":width,"height":900}));
-            ok(&mut h, &c, "ui.set", json!({"key":"panel","value":"bookmarks"}));
-            h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
-                parent: vec![],
-                index: 0,
-                title: "Overview".into(),
-                page: 0,
-                left: None,
-                top: None,
-            });
-            h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
-                parent: vec![],
-                index: 1,
-                title: "Details".into(),
-                page: 2,
-                left: None,
-                top: None,
-            });
-            for state in ["default", "floating", "redocked"] {
-                if state == "floating" {
-                    ok(&mut h, &c, "ui.dock", json!({"operation":"float", "panel":"inspector", "rect":[160,100,330,480]}));
-                } else if state == "redocked" {
-                    ok(&mut h, &c, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
-                }
-                h.run_steps(5);
-                h.state().docking.validate().unwrap();
-                if let Ok(directory) = std::env::var("CRAFT_UI_DOCKING_DIR") {
-                    let _gpu = crate::gpu();
-                    std::fs::create_dir_all(&directory).unwrap();
-                    h.render().unwrap().save(format!("{directory}/pdf-{width}-{scale}-{state}.png")).unwrap();
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn explicit_panel_requests_reveal_inactive_group_members() {
-    let (mut h, c) = harness();
-    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"activate", "panel":"tools"}));
-    ok(&mut h, &c, "ui.command", json!({"id":"form.fields"}));
-    h.run_steps(4);
-    h.get_by_label("Fields");
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools").click();
-    h.run_steps(4);
-    // Ordinary frames must preserve the user's selected tab.
-    h.get_by_label("View more");
-    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    h.run_steps(4);
-    h.get_by_label("This document has no bookmarks.");
-    ok(&mut h, &c, "ui.command", json!({"id":"edit.edit_text"}));
-    h.run_steps(4);
-    // The Edit panel's own row: the tool's name is on the floating toolbar too while it is on.
-    h.get_by_label("Header and footer");
-}
-
-/// #3580 review: a panel a script opens (`app.execMenuItem("ShowHideBookmarks")`) is shown even
-/// when the inspector is a background tab of a custom docking layout.
-#[test]
-fn a_script_opened_panel_reveals_an_inactive_inspector() {
+fn a_script_opened_panel_shows() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"pages"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"activate", "panel":"tools"}));
     h.run_steps(3);
     assert!(h.query_by_label("This document has no bookmarks.").is_none());
     let id = h.state().active_ids().unwrap().1;
@@ -1616,12 +1572,11 @@ fn a_script_opened_panel_reveals_an_inactive_inspector() {
 }
 
 #[test]
-fn home_and_combine_suppress_inspector_without_forgetting_layout_or_choice() {
-    use pdfcraft_ui_egui::docking::Panel;
+fn home_and_combine_hide_the_side_panel_without_forgetting_it() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"float", "panel":"inspector", "rect":[170,120,330,470]}));
-    let before = serde_json::to_value(&h.state().docking).unwrap();
+    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width": 380}));
+    let before = ok(&mut h, &c, "ui.state", json!({}))["side_panels"].clone();
     for combine in [false, true] {
         if combine {
             h.state_mut().open_combine_tab();
@@ -1629,62 +1584,41 @@ fn home_and_combine_suppress_inspector_without_forgetting_layout_or_choice() {
             h.state_mut().active = None;
         }
         h.run_steps(4);
-        assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").is_none());
-        if let Ok(directory) = std::env::var("CRAFT_UI_DOCKING_DIR") {
-            let _gpu = crate::gpu();
-            std::fs::create_dir_all(&directory).unwrap();
-            let state = if combine { "combine" } else { "home" };
-            h.render().unwrap().save(format!("{directory}/availability-{state}.png")).unwrap();
-        }
-        assert!(h.state().docking.layout.contains(&Panel::Inspector));
+        assert!(h.query_by_label("This document has no bookmarks.").is_none());
         assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
-        assert_eq!(serde_json::to_value(&h.state().docking).unwrap(), before);
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["side_panels"], before);
         h.state_mut().active = Some(0);
         h.state_mut().combine_tab.focused = false;
         h.run_steps(4);
         h.get_by_label("This document has no bookmarks.");
-        if let Ok(directory) = std::env::var("CRAFT_UI_DOCKING_DIR") {
-            let _gpu = crate::gpu();
-            h.render().unwrap().save(format!("{directory}/availability-return.png")).unwrap();
-        }
-        assert_eq!(serde_json::to_value(&h.state().docking).unwrap(), before);
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["side_panels"], before);
     }
 }
 
 #[test]
-fn malformed_docking_settings_preserve_other_preferences() {
+fn malformed_panel_settings_preserve_other_preferences() {
     let mut app = PdfCraftApp::new();
     app.restore(r#"{"docking":{"layout":{"root":null,"floating":[]},"hidden":[]},"default_mode":"edit","flatten_fill_sign":true}"#);
     assert_eq!(app.default_mode, pdfcraft_ui_egui::Mode::Edit);
-    app.docking.validate().unwrap();
+    assert_eq!(app.side_panels, pdfcraft_ui_egui::side_panels::SidePanels::default());
     let saved: Value = serde_json::from_str(&app.persist()).unwrap();
     assert_eq!(saved["default_mode"], "edit");
     assert_eq!(saved["flatten_fill_sign"], true);
+    // The old value is dropped on the next save.
+    assert!(saved.get("docking").is_none());
+    assert_eq!(saved["side_panels"]["version"], 1);
 }
 
 #[test]
-fn rail_reveals_its_remembered_inactive_inspector_then_closes_the_visible_panel() {
-    use pdfcraft_ui_egui::docking::Panel;
+fn rail_opens_a_panel_then_closes_the_open_one() {
     let (mut h, c) = harness();
-    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
-    ok(&mut h, &c, "ui.dock", json!({"operation":"activate", "panel":"tools"}));
-    h.run_steps(3);
     let document = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
-    let mut preferences: Value = serde_json::from_str(&h.state().persist()).unwrap();
-    preferences.as_object_mut().unwrap().remove("docking");
-    assert!(h.query_by_label("This document has no bookmarks.").is_none());
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Bookmarks").click();
     h.run_steps(4);
     h.get_by_label("This document has no bookmarks.");
-    let mut after: Value = serde_json::from_str(&h.state().persist()).unwrap();
-    after.as_object_mut().unwrap().remove("docking");
-    assert_eq!(after, preferences, "revealing a group member only changes layout activation");
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], document);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Bookmarks").click();
     h.run_steps(4);
     assert_eq!(h.state().right, None);
-    assert!(!h.state().docking.layout.contains(&Panel::Inspector));
     assert!(h.query_by_label("This document has no bookmarks.").is_none());
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], document);
 }

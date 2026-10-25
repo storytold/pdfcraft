@@ -118,6 +118,9 @@ pub struct Widget {
     pub caption: Option<String>,
     /// List boxes: where the options are drawn, so a click can pick the one under the pointer.
     pub list: Option<appearance::ListRows>,
+    /// Drawn round: a radio button, or a check box laid out for a round XFA check button
+    /// (`/PCXfaRound true`).
+    pub round: bool,
 }
 
 /// A terminal form field.
@@ -570,7 +573,21 @@ pub fn fields_with_adopted(doc: &Document) -> Fields {
     Fields { items, adopted_page_fields }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whole-form readings ([`enumerate`]) on this thread.
+    static FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has read the whole form.
+#[cfg(test)]
+fn form_reads() -> usize {
+    FORM_READS.with(std::cell::Cell::get)
+}
+
 fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
+    #[cfg(test)]
+    FORM_READS.with(|n| n.set(n.get() + 1));
     let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
@@ -882,6 +899,7 @@ fn walk(
                     })
                     .flatten(),
                 list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
+                round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })
         })
         .collect();
@@ -931,23 +949,93 @@ pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, script
     if all.is_empty() {
         return Err(FormError::NoForm);
     }
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let named: Vec<usize> = all.iter().enumerate().filter(|(_, f)| f.name == name).map(|(i, _)| i).collect();
+    fill(doc, &all, &named, name, value, scripts)?;
+    recalculate_with(doc, scripts)?;
+    Ok(())
+}
+
+/// Fill several fields, as [`set_value`] fills each in turn, but reading the form once and
+/// recalculating once, after the last value. Filling fields one by one reads the whole form twice
+/// per field, which takes minutes on a form with thousands of fields.
+///
+/// Returns each value's result, in order. The outer `Err` is the recalculation failing, after
+/// which, as with [`set_value`], no value counts as filled (though each was written).
+pub fn set_values(doc: &mut Document, values: &[(String, FieldValue)]) -> Result<Vec<Result<(), FormError>>, FormError> {
+    let mut scripts = NoScripts;
+    let mut form = NamedFields::read(doc);
+    // The field objects this batch wrote since the form was last read.
+    let mut written = std::collections::HashSet::new();
+    let mut results = Vec::with_capacity(values.len());
+    let mut filled = false;
+    for (name, value) in values {
+        if form.all.is_empty() {
+            results.push(Err(FormError::NoForm));
+            continue;
+        }
+        // A field written earlier in the batch (named twice, or a twin's name) is read again,
+        // so this write starts from what the earlier one left, as it would one by one.
+        if form.objs(name).any(|o| written.contains(&o)) {
+            form = NamedFields::read(doc);
+            written.clear();
+        }
+        let named = form.named(name);
+        let result = fill(doc, &form.all, named, name, value, &mut scripts);
+        written.extend(form.objs(name));
+        filled |= result.is_ok();
+        results.push(result);
+    }
+    if filled {
+        recalculate_with(doc, &mut scripts)?;
+    }
+    Ok(results)
+}
+
+/// The form's fields, with the positions of each fully qualified name in them (in field order).
+struct NamedFields {
+    all: Vec<Field>,
+    by_name: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl NamedFields {
+    fn read(doc: &Document) -> Self {
+        let all = fields(doc);
+        let mut by_name: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        for (i, f) in all.iter().enumerate() {
+            by_name.entry(f.name.clone()).or_default().push(i);
+        }
+        NamedFields { all, by_name }
+    }
+
+    fn named(&self, name: &str) -> &[usize] {
+        self.by_name.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// The field objects named `name`.
+    fn objs<'a>(&'a self, name: &str) -> impl Iterator<Item = ObjRef> + 'a {
+        self.named(name).iter().filter_map(|&i| self.all.get(i)).map(|f| f.obj)
+    }
+}
+
+/// Write `value` into the field `name`, without recalculating: `named` are the positions in
+/// `all` (the form as read before this write) of the fields with that name, in field order.
+fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    let f = named.first().and_then(|&i| all.get(i)).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     if f.read_only() {
         return Err(FormError::ReadOnly(name.into()));
     }
     write_value(doc, f, value, scripts)?;
-    author::form_fonts_as_objects(doc, &all)?;
+    author::form_fonts_as_objects(doc, all)?;
     // Fields with the same fully qualified name are one field (§12.7.3.1). Writers that repeat a
     // name as separate field dictionaries, instead of widgets under one parent, get the value
     // the first one took after its scripts, without running them again.
-    let twins: Vec<&Field> = all.iter().filter(|t| t.name == name && t.obj != f.obj && t.kind == f.kind).collect();
+    let twins: Vec<&Field> = named.iter().filter_map(|&i| all.get(i)).filter(|t| t.obj != f.obj && t.kind == f.kind).collect();
     if !twins.is_empty() {
         let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
         for t in twins {
             share_value(doc, f.obj, t, &taken, scripts)?;
         }
     }
-    recalculate_with(doc, scripts)?;
     Ok(())
 }
 
@@ -1253,6 +1341,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
     };
+    let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     let mut undrawn = false;
     for w in &f.widgets {
         let (stream, missing) = match &shown {
@@ -1260,7 +1349,23 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
-        let ap = doc.add(Object::Stream(stream));
+        let existing_ap = in_place
+            .then(|| {
+                doc.get(w.obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"AP").map(|a| doc.resolve(a)))
+                    .and_then(|a| a.as_dict().and_then(|a| a.get(b"N").cloned()))
+                    .and_then(|n| n.as_ref())
+                    .filter(|r| doc.is_edited(r.num) && matches!(&*doc.get(*r), Object::Stream(_)))
+            })
+            .flatten();
+        let ap = match existing_ap {
+            Some(r) => {
+                doc.set(r, Object::Stream(stream));
+                r
+            }
+            None => doc.add(Object::Stream(stream)),
+        };
         let mut fresh = Dict::new();
         fresh.set(b"N".to_vec(), Object::Ref(ap));
         let apd = merged_appearance(doc, w.obj, &fresh);
@@ -1315,7 +1420,7 @@ fn password_fields(doc: &Document) -> Vec<Field> {
 /// again only makes the answer cautious. It reads only `/Ff`, `/Kids` and `/Parent`, so a save
 /// or recovery snapshot of a form without such a field doesn't build every [`Field`]. Like
 /// [`fields`], it looks at the form's field tree and at the widgets on the pages, which may be
-/// missing from `/Fields`. Each dictionary is visited once and at most 32 levels deep.
+/// missing from `/Fields`. Each dictionary is visited once and at most 64 levels deep.
 fn has_password_flag(doc: &Document) -> bool {
     let sets_it = |r: ObjRef| doc.get(r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
     let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
@@ -1323,7 +1428,7 @@ fn has_password_flag(doc: &Document) -> bool {
     let mut seen = std::collections::HashSet::new();
     while let Some((o, depth)) = stack.pop() {
         let Object::Ref(r) = o else { continue };
-        if depth > 32 || !seen.insert(r) {
+        if depth > 64 || !seen.insert(r) {
             continue;
         }
         if sets_it(r) {
@@ -1363,11 +1468,11 @@ pub fn restore_password_values(doc: &mut Document, values: &[(String, String)]) 
     Ok(())
 }
 
-/// `r` and its field ancestors (`/Parent`), nearest first, at most 32 deep and without repeats.
+/// `r` and its field ancestors (`/Parent`), nearest first, at most 64 deep and without repeats.
 fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
     let mut chain = vec![r];
     let mut cur = r;
-    while chain.len() < 32 {
+    while chain.len() < 64 {
         let Some(Object::Ref(parent)) = doc.get(cur).as_dict().and_then(|d| d.get(b"Parent").cloned()) else { break };
         if chain.contains(&parent) {
             break;
@@ -1448,8 +1553,9 @@ pub fn need_appearances(doc: &Document) -> bool {
 /// writer left the appearances to the viewer), and otherwise each widget without a normal
 /// appearance (`/AP /N`), as typing the value would draw it (#3470). Check boxes and radio buttons
 /// with no normal appearance for their state (`/AS`) are drawn from their `/MK` background, border
-/// and caption, and push buttons with none from their `/MK` and `/BS` (Table 192). `doc` is not
-/// changed: saving writes the file as it was.
+/// and caption, and with `/NeedAppearances` every one that has an `/MK` is, over its own
+/// appearance; push buttons with none are drawn from their `/MK` and `/BS` (Table 192). `doc` is
+/// not changed: saving writes the file as it was.
 pub fn with_field_appearances(doc: &Document) -> Option<Document> {
     with_field_appearances_cached(doc, &mut FieldAppearanceCache::default())
 }
@@ -1467,19 +1573,25 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 .and_then(|d| d.get(b"AP"))
                 .and_then(|ap| doc.resolve(ap).as_dict().and_then(|ap| ap.get(b"N").map(|n| doc.resolve(n))));
             // A check box or radio button shows the appearance of its state (12.7.5.2.3): `/AS`,
-            // else a check box's value, else Off. An Off state may go without one (it shows
-            // nothing); an on state needs one.
+            // else the value when it names this widget's on state (any check box value when the
+            // widget names none), else Off. An Off state may go without one (it shows nothing);
+            // an on state needs one.
             let state = match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio => {
-                    let value = f.value.first().filter(|v| f.kind == FieldKind::CheckBox && !v.is_empty() && v.as_str() != "Off");
+                    let mine = |v: &&String| w.on_state.as_ref().map_or(f.kind == FieldKind::CheckBox, |on| on == *v);
+                    let value = f.value.first().filter(|v| !v.is_empty() && v.as_str() != "Off").filter(mine);
                     Some(w.state.clone().or_else(|| value.cloned()).unwrap_or_else(|| "Off".into()))
                 }
                 _ => None,
             };
+            // With /NeedAppearances a check box or radio button that describes its look in /MK is
+            // drawn from it (Table 192), its own appearance or not; one without /MK keeps its own.
+            let described = || widget.as_dict().and_then(|d| d.get(b"MK")).is_some_and(|mk| doc.resolve(mk).as_dict().is_some());
             let missing = match f.kind {
                 FieldKind::Text | FieldKind::Combo | FieldKind::List => normal.is_none() || all,
                 FieldKind::PushButton => normal.is_none(),
                 FieldKind::CheckBox | FieldKind::Radio => match (normal.as_deref(), state.as_deref()) {
+                    _ if all && described() => true,
                     (None, _) => true,
                     (Some(Object::Dict(states)), Some(s)) => s != "Off" && !states.contains(&name_bytes(s)),
                     _ => false,

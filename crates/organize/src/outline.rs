@@ -265,6 +265,15 @@ fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8
     }
 }
 
+/// The explicit destination array `dest` stands for: itself, a dictionary whose `/D` is one, or a
+/// named destination (a name or string, ISO 32000-2 §12.3.2.4) looked up in the `/Names /Dests`
+/// tree, then the catalog `/Dests`. `None` when a name names nothing.
+pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>> {
+    // Names only: the page map is not needed to look one up.
+    let mut targets = Targets { pages: HashMap::new(), names: None };
+    explicit_dest(doc, &mut targets, dest, 0)
+}
+
 /// The page index an explicit destination array names.
 fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
@@ -553,10 +562,7 @@ pub fn add_bookmark_at(
     let at = index.min(kids.len());
     kids.insert(at, item);
     relink(doc, parent, &kids)?;
-    // Show the new bookmark: open its parent (the root is always open).
-    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
-        put(doc, parent, b"Count", Some(Object::Int(1)))?;
-    }
+    show_children(doc, parent, parent_path)?;
     recount(doc)?;
     let mut path = parent_path.to_vec();
     path.push(at);
@@ -699,9 +705,21 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
     let at = index.min(kids.len());
     kids.insert(at, r);
     relink(doc, parent, &kids)?;
+    if parent != old_parent {
+        show_children(doc, parent, &to_parent)?;
+    }
     recount(doc)?;
     to_parent.push(at);
     Ok(to_parent)
+}
+
+/// Open `parent` so a bookmark just added or moved into it shows (the root is always open).
+/// Only the sign of `/Count` matters here: [`recount`] sets its value.
+fn show_children(doc: &mut Document, parent: ObjRef, parent_path: &[usize]) -> Result<()> {
+    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
+        put(doc, parent, b"Count", Some(Object::Int(1)))?;
+    }
+    Ok(())
 }
 
 /// Expand or collapse a bookmark that has children.

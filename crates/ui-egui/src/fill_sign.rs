@@ -9,6 +9,7 @@ use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, Signature
 use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -626,6 +627,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     tool: FillTool,
@@ -637,10 +639,7 @@ pub(crate) fn page_input(
     author: &str,
     date_text: &Result<String, String>,
 ) -> Option<FillAction> {
-    let pointer = ui.input(|i| i.pointer.hover_pos())?;
-    if !resp.contains_pointer() || !xf.rect.contains(pointer) {
-        return None;
-    }
+    let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
     let saved = match tool {
@@ -712,7 +711,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
     let pos = xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph);
-    let zoom = xf.rect.width() / xf.pw.max(1.0);
+    let zoom = xf.zoom();
     let mut commit = false;
     let mut cancel = false;
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it.

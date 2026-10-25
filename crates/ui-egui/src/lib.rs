@@ -32,6 +32,7 @@ macro_rules! tl_ctx {
 
 mod a11y_ui;
 mod actions_ui;
+mod all_tools_ui;
 mod appearance;
 mod calc_order_ui;
 pub mod canvas;
@@ -41,7 +42,6 @@ mod image_pick;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
-pub mod docking;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod camera_ui;
 mod commands;
@@ -64,6 +64,7 @@ mod measure_ui;
 mod ocr_ui;
 mod optimize_ui;
 mod search_ui;
+pub mod side_panels;
 mod sign_ui;
 mod stamps_ui;
 mod standards_ui;
@@ -101,6 +102,7 @@ pub mod icons;
 pub mod last_session;
 pub mod last_view;
 pub mod motion;
+mod page_pointer;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -200,7 +202,7 @@ pub enum LeftPanel {
 }
 
 /// Right-hand panels, opened from the rail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RightPanel {
     Comments,
     Bookmarks,
@@ -374,7 +376,18 @@ pub enum PropsTab {
     InitialView,
     Security,
     Fonts,
+    Custom,
     Advanced,
+    SpaceAudit,
+}
+
+/// Document Properties ▸ Custom being edited: the properties as they will be after OK, in order,
+/// and the Name and Value fields.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CustomDraft {
+    pub props: Vec<(String, String)>,
+    pub name: String,
+    pub value: String,
 }
 
 /// Duplicate Field: the field and the pages (all, or a range, 1-based).
@@ -610,8 +623,8 @@ pub struct RecentFile {
 }
 
 pub struct PdfCraftApp {
-    pub docking: docking::Workspace,
-    pub(crate) pending_panel_reveals: Vec<docking::Panel>,
+    /// Tools side and pane widths; which panes are open is `left_open` and `right`.
+    pub side_panels: side_panels::SidePanels,
     pub session: Session,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
@@ -634,6 +647,8 @@ pub struct PdfCraftApp {
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
+    /// The side panel F4 reopens: the one open last.
+    pub(crate) last_right: RightPanel,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.
@@ -698,6 +713,12 @@ pub struct PdfCraftApp {
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
+    /// The All tools view fills the workspace (its sidebar's expand button).
+    pub all_tools_full: bool,
+    pub all_tools_query: String,
+    /// The tab that showed when the expanded All tools view opened ([`Self::shown_tab`]). Another
+    /// tab coming to the front (Home, a document, Combine files) puts the view away.
+    all_tools_tab: (Option<DocId>, bool),
     pub recent: Vec<RecentFile>,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
@@ -784,6 +805,8 @@ pub struct PdfCraftApp {
     pub props_draft: Option<(DocId, [String; 4])>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
+    /// Document Properties ▸ Custom being edited.
+    pub custom_draft: Option<(DocId, CustomDraft)>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
     /// Native file pickers in flight (they never block the frame; see `pickers`).
@@ -838,6 +861,8 @@ pub struct PdfCraftApp {
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
+    /// The document and edit generation `space_audit` was measured from.
+    pub(crate) space_audit_of: Option<(DocId, u64)>,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
     /// The combine list's field-name conflict preview (computed once per list, never saved).
@@ -969,6 +994,8 @@ pub struct PdfCraftApp {
     pub replace_draft: Option<files::ReplaceDraft>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
+    /// The home screen's community card was closed; it comes back next launch (not remembered).
+    pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
     pub pending_link: Option<PendingLink>,
     /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
@@ -1080,10 +1107,10 @@ impl PdfCraftApp {
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
-            docking: docking::Workspace::default(),
-            pending_panel_reveals: Vec::new(),
+            side_panels: Default::default(),
             left_open: true,
             right: None,
+            last_right: RightPanel::Comments,
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
@@ -1118,6 +1145,9 @@ impl PdfCraftApp {
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
+            all_tools_full: false,
+            all_tools_query: String::new(),
+            all_tools_tab: (None, false),
             recent: Vec::new(),
             reopen_last_session: false,
             restore_last_view: true,
@@ -1164,6 +1194,7 @@ impl PdfCraftApp {
             save_override: None,
             props_draft: None,
             view_draft: None,
+            custom_draft: None,
             requests: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
@@ -1198,6 +1229,7 @@ impl PdfCraftApp {
             os_key_store_ids: false,
             cert_viewer: None,
             space_audit: Vec::new(),
+            space_audit_of: None,
             combine_draft: Vec::new(),
             combine_conflicts: Default::default(),
             combine_tab: Default::default(),
@@ -1242,6 +1274,7 @@ impl PdfCraftApp {
             control: None,
             bookmark_rename: None,
             last_opened_url: None,
+            community_card_closed: false,
             pending_link: None,
             pending_full_screen: None,
             pending_remote_link: None,
@@ -1287,14 +1320,19 @@ impl PdfCraftApp {
     }
 
     /// Open a document the way it asks to be opened: navigation panel, layout, magnification,
-    /// page (Document Properties ▸ Initial View). With Always use my default zoom and page
-    /// layout on, the layout and magnification stay at the defaults the view opened with.
+    /// page and the place on it (Document Properties ▸ Initial View, `/OpenAction`). With Always
+    /// use my default zoom and page layout on, the layout and magnification stay at the defaults
+    /// the view opened with, and the view goes to the opening page's top.
     fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
         // A right panel the user closed stays closed, whatever the document asks for (#2884).
+        // A document that asks for full screen gets the panel it names for outside it
+        // (`/NonFullScreenPageMode`, Table 147), there when the prompt is declined or full
+        // screen is left.
+        let navigation = if v.full_screen { v.non_full_screen } else { v.navigation };
         if self.active == Some(index) && !self.right_panel_closed {
-            match v.navigation {
+            match navigation {
                 N::PageOnly => {}
                 N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
                 N::Pages => self.right = Some(RightPanel::Pages),
@@ -1328,8 +1366,19 @@ impl PdfCraftApp {
                 M::FitHeight => view.fit = canvas::Fit::Height,
             }
         }
-        if v.page > 0 && v.page < pages {
-            view.go_to_page(v.page);
+        // The opening destination (`/OpenAction`, named destinations resolved): its page, and
+        // where on it and how large, as a bookmark or link to it would (ISO 32000-2 Table 149).
+        // With the default view kept, only the page.
+        let info = self.session.get(view.id).map(|d| &d.info);
+        match info.and_then(|i| i.open_dest.filter(|(page, _)| *page < pages).map(|d| (i, d))) {
+            Some((info, (page, dest))) if !self.always_default_view => view.go_to_dest(page, dest, info),
+            Some((_, (page, _))) => {
+                if page > 0 {
+                    view.go_to_page(page);
+                }
+            }
+            None if v.page > 0 && v.page < pages => view.go_to_page(v.page),
+            None => {}
         }
     }
 
@@ -1529,16 +1578,18 @@ impl PdfCraftApp {
         // Read mode opens with the panes closed; the rail still opens them (#932). A right panel
         // the user closed stays closed (#1590).
         let opening_mode = self.mode_override.unwrap_or(self.default_mode);
+        let initial = doc.initial_view();
         if activate && self.right.is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
             self.right = if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
-            } else if !doc.info.outline.is_empty() {
+            // A full-screen document names its panel for outside full screen, and with
+            // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
+            } else if !doc.info.outline.is_empty() && !initial.full_screen {
                 Some(RightPanel::Bookmarks)
             } else {
                 None
             };
         }
-        let initial = doc.initial_view();
         let view = DocView::new(id, &doc.info, self.view_defaults);
         self.views.push(view);
         if activate {
@@ -1564,6 +1615,10 @@ impl PdfCraftApp {
             && let Some(view) = self.views.last_mut()
         {
             view.open_organize();
+        }
+        // The document shows, not the expanded All tools view over it (whichever workspace opens).
+        if activate {
+            self.all_tools_full = false;
         }
         if activate && let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
@@ -2421,12 +2476,13 @@ impl PdfCraftApp {
 
     pub(crate) fn reveal_tools(&mut self) {
         self.left_open = true;
-        self.pending_panel_reveals.push(docking::Panel::Tools);
     }
 
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
     /// workspace, so opening its panel also opens the page grid (without toggling it off).
     pub(crate) fn select_tool(&mut self, id: &'static str) {
+        // The tool's panel shows, not the expanded All tools view over it.
+        self.all_tools_full = false;
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
@@ -2461,6 +2517,10 @@ impl PdfCraftApp {
     /// Edit puts the editing tools down again and applies a paragraph still open in the editor.
     pub(crate) fn enter_mode(&mut self, mode: Mode) {
         self.mode = mode;
+        // Another workspace puts the expanded All tools view away.
+        if mode != Mode::AllTools {
+            self.all_tools_full = false;
+        }
         if mode == Mode::Edit {
             self.quick_tool = QuickTool::EditText;
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
@@ -2471,6 +2531,21 @@ impl PdfCraftApp {
         if mode == Mode::Read {
             self.quick_tool = QuickTool::Select;
         }
+    }
+
+    /// Fill the workspace with the expanded All tools view, entering All tools the way the mode
+    /// bar does: leaving Read restores its right panel and leaving Edit puts the editing tool down.
+    pub(crate) fn expand_all_tools(&mut self) {
+        if self.mode != Mode::AllTools {
+            self.switch_mode(Mode::AllTools, true);
+        }
+        self.all_tools_full = true;
+        self.all_tools_tab = self.shown_tab();
+    }
+
+    /// The tab at the front: the active document, or else whether Combine files shows over Home.
+    fn shown_tab(&self) -> (Option<DocId>, bool) {
+        (self.active.and_then(|i| self.views.get(i)).map(|v| v.id), self.combine_showing())
     }
 
     /// Back to the Select tool from an editing tool. A paragraph still open in the editor is
@@ -2509,9 +2584,6 @@ impl PdfCraftApp {
             if self.right.is_none() {
                 self.right = before;
             }
-            if self.right.is_some() {
-                self.pending_panel_reveals.push(docking::Panel::Inspector);
-            }
         }
     }
 
@@ -2533,17 +2605,21 @@ impl PdfCraftApp {
             self.right_panel_closed = true;
         }
         self.right = panel;
-        if panel.is_some() {
-            self.pending_panel_reveals.push(docking::Panel::Inspector);
+        if let Some(panel) = panel {
+            self.last_right = panel;
         }
+    }
+
+    /// F4: closes the side panel, or reopens the one open last.
+    pub(crate) fn toggle_side_panel(&mut self) {
+        self.choose_right_panel(if self.right.is_some() { None } else { Some(self.last_right) });
     }
 
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         let mut v = serde_json::json!({
-            "docking": self.docking,
-            "docking_left_open": self.left_open,
+            "side_panels": self.side_panels.to_json(self.left_open),
             "docking_right": self.right,
             "recent": self.recent,
             "reopen_last_session": self.reopen_last_session,
@@ -2610,6 +2686,7 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["touchpad_scroll_speed"] = serde_json::json!(self.touchpad_speed);
+        v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
@@ -2620,14 +2697,13 @@ impl PdfCraftApp {
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
-        if let Some(saved) = v.get("docking")
-            && let Ok(workspace) = serde_json::from_value::<docking::Workspace>(saved.clone())
-            && workspace.validate().is_ok()
-        {
-            self.docking = workspace;
-            self.left_open =
-                v.get("docking_left_open").and_then(serde_json::Value::as_bool).unwrap_or(self.docking.layout.contains(&docking::Panel::Tools));
-            self.right = v.get("docking_right").and_then(|value| serde_json::from_value(value.clone()).ok()).flatten();
+        let panels = side_panels::restore(&v);
+        self.side_panels = panels.panels;
+        if let Some(open) = panels.tools_open {
+            self.left_open = open;
+        }
+        if let Some(right) = v.get("docking_right") {
+            self.right = serde_json::from_value(right.clone()).ok().flatten().filter(|_| !panels.side_closed);
         }
         self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
         if let Some(view) = v["combine_view"].as_str().and_then(combine_ui::CombineView::parse) {
@@ -2745,6 +2821,9 @@ impl PdfCraftApp {
         if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
             self.comment_prefs.hide_empty_highlight_hover = hide;
         }
+        if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
+            self.comment_prefs.pinned = pinned;
+        }
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
         if let Some(styles) = v["comment_styles"].as_array() {
@@ -2860,6 +2939,10 @@ impl PdfCraftApp {
                 let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
                 self.mode_override = Some(mode);
                 self.mode = mode;
+                // As switch_mode: another workspace puts the expanded All tools view away.
+                if mode != Mode::AllTools {
+                    self.all_tools_full = false;
+                }
             }
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
@@ -2871,13 +2954,20 @@ impl PdfCraftApp {
                 self.select_tool(g.id);
             }
             ("left", _) => self.left_open = value != "closed",
-            ("home", _) => self.active = None,
+            ("home", _) => {
+                self.active = None;
+                // With no document open the expanded All tools view covers Home itself, so no
+                // other tab comes forward to put it away.
+                self.all_tools_full = false;
+            }
             ("dialog", _) => {
                 self.dialog = match value {
                     "properties" => Some(Dialog::Properties(PropsTab::Description)),
                     "security" => Some(Dialog::Properties(PropsTab::Security)),
                     "fonts" => Some(Dialog::Properties(PropsTab::Fonts)),
+                    "custom" => Some(Dialog::Properties(PropsTab::Custom)),
                     "advanced" => Some(Dialog::Properties(PropsTab::Advanced)),
+                    "space-audit" => Some(Dialog::Properties(PropsTab::SpaceAudit)),
                     "shortcuts" => Some(Dialog::Shortcuts),
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
@@ -2914,7 +3004,11 @@ impl PdfCraftApp {
                     _ => Some(Dialog::About),
                 }
             }
-            ("tools", _) => self.all_tools_expanded = value != "collapsed",
+            ("tools", _) if value == "full" => self.expand_all_tools(),
+            ("tools", _) => {
+                self.all_tools_full = false;
+                self.all_tools_expanded = value != "collapsed";
+            }
             ("palette", _) => {
                 self.palette_open = true;
                 self.palette_query = value.to_string();
@@ -2979,11 +3073,13 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
-            ("tools-side", _) => self.docking.set_tools_on_right(match value {
-                "left" => false,
-                "right" => true,
-                _ => return Err("tools-side must be left or right".into()),
-            })?,
+            ("tools-side", _) => {
+                self.side_panels.tools_side = match value {
+                    "left" => side_panels::ToolsSide::Left,
+                    "right" => side_panels::ToolsSide::Right,
+                    _ => return Err("tools-side must be left or right".into()),
+                }
+            }
             ("organize", Some(v)) => {
                 if value == "off" {
                     v.organize = false;
@@ -3089,6 +3185,13 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("comment-tool-pinned", _) => {
+                self.comment_prefs.pinned = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("comment-tool-pinned must be true or false".into()),
+                };
+            }
             ("hide-empty-highlight-hover", _) => {
                 self.comment_prefs.hide_empty_highlight_hover = match value {
                     "true" => true,
@@ -3163,12 +3266,6 @@ impl PdfCraftApp {
                 return Err(format!("`{k}` needs an open document"));
             }
             (other, _) => return Err(format!("unknown option {other}")),
-        }
-        if key == "panel" && self.right.is_some() {
-            self.pending_panel_reveals.push(docking::Panel::Inspector);
-        }
-        if key == "left" && self.left_open {
-            self.pending_panel_reveals.push(docking::Panel::Tools);
         }
         Ok(())
     }
@@ -3583,6 +3680,9 @@ impl eframe::App for PdfCraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
         }
+        // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
+        // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
+        ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
         if self.full_screen && self.active.is_some() {
             // Full screen: the page on black, nothing else, as Acrobat's Full Screen Mode (Esc
             // or ⌘L to leave).
@@ -3607,23 +3707,16 @@ impl eframe::App for PdfCraftApp {
         }
         chrome::tab_strip(self, ui);
         chrome::mode_bar(self, ui);
-        if self.active.is_some() {
-            chrome::right_rail(self, ui);
-            // Read mode hides the tools, not the navigation panes: the rail stays visible
-            // there, so its buttons (Bookmarks, Page thumbnails, ...) must open their panels.
-            // Outside Read mode the docking workspace draws the inspector.
-            if self.mode == Mode::Read && self.right.is_some() {
-                egui::Panel::right("read_right_panel")
-                    .resizable(true)
-                    .default_size(330.0)
-                    .size_range(260.0..=520.0)
-                    .frame(egui::Frame::NONE)
-                    .show(ui, |ui| panels::right_panel(self, ui));
-            }
+        // Whichever way another tab came to the front, it shows instead of the expanded view.
+        if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
+            self.all_tools_full = false;
         }
+        side_panels::show(self, ui);
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::Read {
+            if self.mode == Mode::AllTools && self.all_tools_full {
+                all_tools_ui::show(self, ui);
+            } else {
                 match self.active {
                     None if self.combine_showing() => combine_ui::page(self, ui),
                     None => home::show(self, ui),
@@ -3632,8 +3725,6 @@ impl eframe::App for PdfCraftApp {
                         None => canvas::document_area(self, index, ui),
                     },
                 }
-            } else {
-                docking::show(self, ui);
             }
         });
         self.process_pending_edits();

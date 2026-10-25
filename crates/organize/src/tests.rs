@@ -528,6 +528,29 @@ fn custom_document_properties_are_listed_set_removed_and_their_names_checked() {
     assert!(custom_info(&doc).is_empty());
 }
 
+/// An `/Info` dictionary written directly in the trailer: a cleared entry is removed, and the
+/// other entries are kept.
+#[test]
+fn document_info_entries_are_cleared_from_an_info_dictionary_in_the_trailer() {
+    let b = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+            body("X"),
+        ],
+        "/Root 1 0 R /Info << /Title (Report) /Project (Apollo) /Revision (7) >>",
+    );
+    let mut doc = open(b);
+    set_info(&mut doc, "Missing", "").unwrap();
+    assert!(matches!(doc.trailer().get(b"Info"), Some(Object::Dict(_))), "clearing an absent entry changes nothing");
+    set_info(&mut doc, "Project", "").unwrap();
+    set_info(&mut doc, "Title", "").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(custom_info(&doc), [("Revision".to_string(), "7".to_string())]);
+    assert_eq!(info(&doc, "Title"), None);
+}
+
 /// Padding is not part of a custom value, in any mix of NULs and whitespace, a value that is only
 /// padding is not listed, and such entries don't count towards the 256 listed: a real property
 /// after 300 blank ones is still there.
@@ -1725,6 +1748,18 @@ fn bookmarks_add_rename_move_delete() {
     assert_eq!(crate::move_bookmark(&mut d, &[0], &[2], 9).unwrap(), vec![1, 1]);
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Figure 1]"]);
     assert_eq!(crate::move_bookmark(&mut d, &[1], &[1, 0], 0), Err(crate::OutlineError::IntoItself));
+    // Into a bookmark with no children yet (Indent): it opens, so the moved one shows.
+    assert_eq!(crate::move_bookmark(&mut d, &[1, 1], &[0], 0).unwrap(), vec![0, 0]);
+    let intro = crate::bookmarks(&d)[0].obj;
+    assert_eq!(count_of(&d, intro), Some(1));
+    // Reordering inside a closed parent leaves it closed.
+    crate::add_bookmark(&mut d, &[0], 1, "Second", 0).unwrap();
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    crate::move_bookmark(&mut d, &[0, 1], &[0], 0).unwrap();
+    assert_eq!(count_of(&d, intro), Some(-2));
+    crate::delete_bookmark(&mut d, &[0, 0]).unwrap();
+    crate::move_bookmark(&mut d, &[0, 0], &[1], 9).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Figure 1]"]);
     crate::delete_bookmark(&mut d, &[1, 0]).unwrap();
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Figure 1]"]);
 
@@ -2390,6 +2425,125 @@ fn initial_view_round_trips_and_keeps_scripts() {
     crate::set_initial_view(&mut doc, &crate::InitialView { layout: Layout::SinglePage, ..Default::default() }).unwrap();
     assert!(doc.get(root).as_dict().unwrap().get(b"OpenAction").and_then(|o| o.as_dict()).is_some_and(|d| d.name(b"S") == Some(b"JavaScript")));
     assert!(crate::set_initial_view(&mut doc, &crate::InitialView { page: 9, ..Default::default() }).is_err());
+}
+
+#[test]
+fn an_unchanged_opening_destination_keeps_its_position_and_name() {
+    use crate::view::{Magnification, Navigation};
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    let xyz = Object::Array(vec![page2.clone(), Object::name("XYZ"), Object::Int(100), Object::Int(500), Object::Int(2)]);
+    let mut named = pdfcraft_cos::Dict::new();
+    named.set(b"S".to_vec(), Object::name("GoTo"));
+    named.set(b"D".to_vec(), Object::name("there"));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page2, Object::name("Fit")]));
+    let mut prefs = pdfcraft_cos::Dict::new();
+    prefs.set(b"NonFullScreenPageMode".to_vec(), Object::name("UseOutlines"));
+    for action in [xyz, Object::Dict(named)] {
+        let mut doc = open(fixture());
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"OpenAction".to_vec(), action.clone());
+            c.set(b"Dests".to_vec(), Object::Dict(dests.clone()));
+            c.set(b"PageMode".to_vec(), Object::name("FullScreen"));
+            c.set(b"ViewerPreferences".to_vec(), Object::Dict(prefs.clone()));
+        })
+        .unwrap();
+        // Another option changes: the opening action is written back as it was, and so is the
+        // full-screen panel, which the dialog doesn't edit.
+        let v = crate::initial_view(&doc);
+        assert_eq!(v.non_full_screen, Navigation::Bookmarks);
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_eq!(catalog.get(b"OpenAction"), Some(&action));
+        let doc = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&doc), crate::InitialView { hide_toolbar: true, ..v.clone() });
+        // A changed magnification writes a destination of its own.
+        let mut doc = doc;
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitWidth, ..v }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_ne!(catalog.get(b"OpenAction"), Some(&action));
+        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitWidth);
+    }
+}
+
+/// A document whose `/OpenAction` is `action`, with the named destination `there` (page 3 at
+/// 200%) in the catalog `/Dests` and `here` (page 1, fit) in a `/Names /Dests` tree.
+fn doc_opening_at(action: Object) -> Document {
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let page3 = Object::Ref(pdfcraft_cos::ObjRef::new(6, 0));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page3, Object::name("XYZ"), Object::Null, Object::Null, Object::Int(2)]));
+    let mut tree = pdfcraft_cos::Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("here")), Object::Array(vec![page1, Object::name("Fit")])]));
+    let mut names = pdfcraft_cos::Dict::new();
+    names.set(b"Dests".to_vec(), Object::Dict(tree));
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"OpenAction".to_vec(), action);
+        c.set(b"Dests".to_vec(), Object::Dict(dests));
+        c.set(b"Names".to_vec(), Object::Dict(names));
+    })
+    .unwrap();
+    doc
+}
+
+fn open_action(doc: &Document) -> Option<Object> {
+    doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"OpenAction").cloned())
+}
+
+/// ISO 32000-2 §12.3.2.4: a named destination stands for the explicit one it names. Choosing
+/// page 1 in Document Properties on a document that opens at a named destination elsewhere
+/// writes a destination to page 1; it used to read the name as page 1 and change nothing.
+#[test]
+fn choosing_page_one_replaces_a_named_opening_destination() {
+    use crate::view::Magnification;
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let mut goto = pdfcraft_cos::Dict::new();
+    goto.set(b"S".to_vec(), Object::name("GoTo"));
+    goto.set(b"D".to_vec(), Object::name("there"));
+    for action in [Object::Dict(goto), Object::name("there"), Object::String(PdfString::text("there"))] {
+        let mut doc = doc_opening_at(action.clone());
+        // The dialog shows where the document really opens.
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (2, Magnification::Percent(200.0)), "{action:?}");
+        // Page 1 at the same magnification: an explicit destination to page 1.
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, ..v.clone() }).unwrap();
+        let written = Object::Array(vec![page1.clone(), Object::name("XYZ"), Object::Null, Object::Null, Object::Real(2.0)]);
+        assert_eq!(open_action(&doc), Some(written), "{action:?}");
+        let reopened = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&reopened), crate::InitialView { page: 0, ..v.clone() }, "{action:?}");
+        // Page 1 at the default magnification: no opening action, so the first page opens.
+        let mut doc = doc_opening_at(action.clone());
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, magnification: Magnification::Default, ..v }).unwrap();
+        assert_eq!(open_action(&doc), None, "{action:?}");
+        assert_eq!(crate::initial_view(&save_and_reopen(&doc)).page, 0, "{action:?}");
+    }
+}
+
+/// A named opening destination that already goes to the chosen page and magnification is kept,
+/// and so is one that names nothing (it reads as page 1) until another page is chosen.
+#[test]
+fn a_named_opening_destination_is_kept_while_it_still_holds() {
+    use crate::view::Magnification;
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    for (action, magnification) in
+        [(Object::String(PdfString::text("here")), Magnification::FitPage), (Object::name("nowhere"), Magnification::Default)]
+    {
+        let mut doc = doc_opening_at(action.clone());
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (0, magnification), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        assert_eq!(open_action(&doc), Some(action.clone()), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 1, ..v.clone() }).unwrap();
+        let kind = if magnification == Magnification::FitPage { "Fit" } else { "XYZ" };
+        assert_eq!(
+            open_action(&doc).as_ref().and_then(Object::as_array).map(|a| (a.first().cloned(), a.get(1).cloned())),
+            Some((Some(page2.clone()), Some(Object::name(kind)))),
+            "{action:?}"
+        );
+    }
 }
 
 // ── Split / Extract keep only the resources the part draws (#204) ──────────────────────────────

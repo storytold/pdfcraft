@@ -36,14 +36,14 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     );
 }
 
-/// A panel's title row: Back (with `back` as its tooltip) when given, the title and Close.
-/// Returns whether Back and Close were clicked.
-pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Option<&str>) -> (bool, bool) {
+/// A panel's title row: a leading button (`lead`: its icon and tooltip) when given, the title
+/// and Close. Returns whether the leading button and Close were clicked.
+pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, lead: Option<(&str, &str)>) -> (bool, bool) {
     let mut go_back = false;
     let mut close = false;
     ui.horizontal(|ui| {
-        if let Some(tip) = back
-            && icons::button(ui, "chevron-left", 26.0, false, tip).clicked()
+        if let Some((icon, tip)) = lead
+            && icons::button(ui, icon, 26.0, false, tip).clicked()
         {
             go_back = true;
         }
@@ -62,8 +62,14 @@ pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Opt
     (go_back, close)
 }
 
+/// The All tools sidebar: Expand (the full view) and Close, then the tool list, the first few
+/// tools until View more shows them all.
 fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let (_, close) = panel_header(ui, t, "All tools", None);
+    // Labels distinct from the Combine grid's Expand and Collapse, which can show beside them.
+    let (expand, close) = panel_header(ui, t, "All tools", Some(("maximize-2", tl!("Expand all tools"))));
+    if expand {
+        app.expand_all_tools();
+    }
     if close {
         app.left_open = false;
     }
@@ -154,7 +160,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         edit_panel(app, ui, t, g);
         return;
     }
-    let (back, close) = panel_header(ui, t, g.label, Some(tl!("Back to all tools")));
+    let (back, close) = panel_header(ui, t, g.label, Some(("chevron-left", tl!("Back to all tools"))));
     if back {
         app.left = LeftPanel::AllTools;
         app.enter_mode(crate::Mode::AllTools);
@@ -699,11 +705,22 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
                 };
+                // Comments count like Acrobat (no replies); the replies go in small text below.
+                let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
-                    if let Some(c) = count {
-                        ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
-                    }
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
+                            if let Some(c) = count {
+                                ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
+                            }
+                        });
+                        if replies > 0 {
+                            let text = crate::i18n::trn(crate::i18n::current(), replies as u64, "{n} reply", "{n} replies");
+                            ui.label(egui::RichText::new(text).font(theme::regular(11.0)).color(t.text_faint));
+                        }
+                    });
                     if panel == RightPanel::Pages && view.selected.len() > 1 {
                         let n = view.selected.len().to_string();
                         let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
@@ -712,6 +729,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
                             close = true;
+                        }
+                        if panel == RightPanel::Pages
+                            && let Some(c) = page_tools(ui, !modal && view.panel_drag.is_none() && bm_editable)
+                        {
+                            panel_command = Some(c);
                         }
                         // Right to left: close, "…", filter, search (Acrobat's order left to right).
                         if panel == RightPanel::Comments {
@@ -896,42 +918,87 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
                         for (ai, a) in info.attachments.iter().enumerate() {
-                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add(icons::image("paperclip", 16.0, t.icon));
-                                    ui.vertical(|ui| {
-                                        ui.set_width(ui.available_width() - 70.0);
-                                        ui.add(egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate());
-                                        let mut meta = a.size.map(human_size).unwrap_or_default();
-                                        if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
-                                            let on_page = crate::i18n::fmt(
-                                                tl!("on page {label}"),
-                                                &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                            let is_pdf = a.name.to_lowercase().ends_with(".pdf");
+                            // Only an attachment of the document itself can be deleted here.
+                            let deletable = match &a.source {
+                                pdfcraft_render::AttachmentSource::Document { key } if attachable => Some(key),
+                                _ => None,
+                            };
+                            // The whole row answers a double-click and a right-click (#3466), below
+                            // its buttons, which still take their own clicks.
+                            let mut buttons: Vec<egui::Response> = Vec::new();
+                            let row = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add(icons::image("paperclip", 16.0, t.icon));
+                                        ui.vertical(|ui| {
+                                            ui.set_width(ui.available_width() - 70.0);
+                                            // Not selectable, so a click on the name or the details reaches the row.
+                                            ui.add(
+                                                egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate().selectable(false),
                                             );
-                                            meta = format!("{meta}  ·  {on_page}");
-                                        }
-                                        if let Some(d) = &a.description {
-                                            meta = format!("{meta}  ·  {d}");
-                                        }
-                                        ui.add(egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate());
+                                            let mut meta = a.size.map(human_size).unwrap_or_default();
+                                            if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
+                                                let on_page = crate::i18n::fmt(
+                                                    tl!("on page {label}"),
+                                                    &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                                                );
+                                                meta = format!("{meta}  ·  {on_page}");
+                                            }
+                                            if let Some(d) = &a.description {
+                                                meta = format!("{meta}  ·  {d}");
+                                            }
+                                            ui.add(
+                                                egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate().selectable(false),
+                                            );
+                                        });
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            let save = icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…"));
+                                            if save.clicked() {
+                                                attachment_action = Some((ai, false));
+                                            }
+                                            buttons.push(save);
+                                            if is_pdf {
+                                                let open = icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab"));
+                                                if open.clicked() {
+                                                    attachment_action = Some((ai, true));
+                                                }
+                                                buttons.push(open);
+                                            }
+                                            if let Some(key) = deletable {
+                                                let delete = icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment"));
+                                                if delete.clicked() {
+                                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                                }
+                                                buttons.push(delete);
+                                            }
+                                        });
                                     });
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…")).clicked() {
-                                            attachment_action = Some((ai, false));
-                                        }
-                                        if a.name.to_lowercase().ends_with(".pdf")
-                                            && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
-                                        {
-                                            attachment_action = Some((ai, true));
-                                        }
-                                        if let pdfcraft_render::AttachmentSource::Document { key } = &a.source
-                                            && attachable
-                                            && icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment")).clicked()
-                                        {
-                                            panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
-                                        }
-                                    });
-                                });
+                                })
+                            });
+                            // A double-click opens a PDF in a new tab, as Acrobat opens an attachment;
+                            // any other file is saved, since PdfCraft opens only PDFs.
+                            if row.response.double_clicked() {
+                                attachment_action = Some((ai, is_pdf));
+                            }
+                            // A right-click on one of the row's buttons is a right-click on the row:
+                            // the union keeps the row's id, so it is one menu either way.
+                            let menu = buttons.into_iter().fold(row.response.clone(), |row, button| row | button);
+                            menu.context_menu(|ui| {
+                                if is_pdf && ui.button(tl!("Open in a new tab")).clicked() {
+                                    attachment_action = Some((ai, true));
+                                    ui.close();
+                                }
+                                if ui.button(tl!("Save attachment…")).clicked() {
+                                    attachment_action = Some((ai, false));
+                                    ui.close();
+                                }
+                                if let Some(key) = deletable
+                                    && ui.button(tl!("Delete attachment")).clicked()
+                                {
+                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                    ui.close();
+                                }
                             });
                         }
                     }
@@ -1139,7 +1206,10 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
     if let Some(levels) = cx.expand {
         ui.data_mut(|d| d.insert_temp(id, depth < levels));
     }
-    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open || depth == 0);
+    // A bookmark opens as the file says at every level: a positive /Count is open, a negative
+    // one (or none) closed (ISO 32000-2 §12.3.3, Table 151). The reader's own toggles and a
+    // search override it.
+    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open);
     let x_text = indent + 20.0;
     if let Some((rpath, text)) = cx.rename.as_mut()
         && rpath.as_slice() == path
@@ -1268,6 +1338,38 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
             outline_item(ui, t, info, c, &p, item.children.len(), cx);
         }
     }
+}
+
+/// Page tools in the Pages panel's header (#4415): a menu, as Bookmark options is in its panel,
+/// to insert a blank page or pages from a file, rotate, extract and delete. Each runs its
+/// command on the selected pages (the current page when none is), so it does what Pages ▸ …
+/// does; the items say so, apart from the thumbnails' own menu. `enabled` is false while the
+/// document may not be assembled or a dialog is open. Returns the command a click asks for.
+fn page_tools(ui: &mut egui::Ui, enabled: bool) -> Option<&'static str> {
+    let tools: [(&'static str, &str); 6] = [
+        ("page.insert_blank", tl!("Insert a blank page after the selection")),
+        ("page.insert", tl!("Insert pages from a file after the selection…")),
+        ("page.rotate_ccw", tl!("Rotate the selected pages counterclockwise")),
+        ("page.rotate", tl!("Rotate the selected pages clockwise")),
+        ("page.extract", tl!("Extract the selected pages…")),
+        ("page.delete", tl!("Delete the selected pages")),
+    ];
+    let mut picked = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Page tools"));
+        egui::Popup::menu(&more).show(|ui| {
+            ui.set_min_width(260.0);
+            for (id, label) in tools {
+                let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+                let item = egui::Button::image_and_text(icons::image(spec.icon, 16.0, ui.visuals().text_color()), label);
+                if ui.add(item).clicked() {
+                    picked = Some(id);
+                    ui.close();
+                }
+            }
+        });
+    });
+    picked
 }
 
 /// Size controls stay above the scroll area, so they remain reachable on long documents.

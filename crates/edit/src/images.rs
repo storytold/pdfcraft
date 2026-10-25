@@ -539,6 +539,11 @@ pub(crate) fn selectable_images(
 /// Find the saved graphics-state scope containing just this image and its crop. Applying
 /// the transform before that scope moves the actual clipping path as well as the pixels.
 /// A shared clip must never be moved along with unrelated artwork or text.
+///
+/// Under a clip set outside every scope that holds only this image (a report or table drawing
+/// each picture as `q re W n cm Do Q` inside a section's clip), no scope contains every active
+/// clip. The outermost scope holding only the image is used then: it contains all of the
+/// image's private clips, which move with it, while the outer clip is shared and stays.
 fn image_transform_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usize, Matrix)>, EditError> {
     struct Scope {
         start: usize,
@@ -556,6 +561,7 @@ fn image_transform_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
     let mut text = false;
     let mut at_image = None;
     let mut isolated = None;
+    let mut outermost = None;
     for (index, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             b"q" => {
@@ -566,9 +572,13 @@ fn image_transform_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
             }
             b"Q" => {
                 if let Some(scope) = stack.pop() {
-                    if scope.selected && !scope.other_paint && !scope.inherited_clip && !scope.inherited_path {
-                        // Prefer the innermost scope that contains every active clipping path.
-                        isolated.get_or_insert((scope.start, index, scope.matrix));
+                    if scope.selected && !scope.other_paint && !scope.inherited_path {
+                        if !scope.inherited_clip {
+                            // Prefer the innermost scope that contains every active clipping path.
+                            isolated.get_or_insert((scope.start, index, scope.matrix));
+                        }
+                        // Scopes close inner first, so the last one recorded is the outermost.
+                        outermost = Some((scope.start, index, scope.matrix));
                     }
                     matrix = scope.matrix;
                     clipped = scope.inherited_clip;
@@ -611,7 +621,7 @@ fn image_transform_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
     if !clipped {
         return Ok(Some((target, target, placement)));
     }
-    Ok(isolated)
+    Ok(isolated.or(outermost))
 }
 
 fn transform_image(

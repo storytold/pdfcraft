@@ -229,6 +229,47 @@ fn delete_takes_popup_and_reply_chain() {
     assert_eq!(delete_annotation(&mut doc, 0, 9), Err(AnnotError::NoSuchAnnotation { page: 0, index: 9 }));
 }
 
+/// A reply or pop-up written inline in `/Annots` (a file can, though the standard asks for
+/// references) goes with the comment it points at, and so does a pop-up an inline reply or an
+/// inline comment names. An unrelated inline comment stays until it is deleted itself.
+#[test]
+fn delete_takes_inline_replies_and_popups() {
+    let mut doc = fixture();
+    let mut popup = |note: &str| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Popup"));
+        d.set(b"Contents".to_vec(), PdfString::text(note));
+        doc.add(Object::Dict(d))
+    };
+    let (reply_popup, square_popup) = (popup("of the reply"), popup("of the square"));
+    let inline = |subtype: &str, links: &[(&[u8], ObjRef)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        links.iter().for_each(|(key, r)| d.set(key.to_vec(), Object::Ref(*r)));
+        Object::Dict(d)
+    };
+    let stamp = ObjRef::new(6, 0);
+    let entries = vec![
+        Object::Ref(stamp),
+        inline("Text", &[(b"IRT", stamp), (b"Popup", reply_popup)]),
+        Object::Ref(reply_popup),
+        inline("Popup", &[(b"Parent", stamp)]),
+        inline("Square", &[(b"Popup", square_popup)]),
+        Object::Ref(square_popup),
+    ];
+    doc.set(ObjRef::new(5, 0), Object::Array(entries));
+    let subtypes = |doc: &Document| -> Vec<String> {
+        list(doc, 1).iter().map(|d| String::from_utf8_lossy(d.name(b"Subtype").unwrap()).into_owned() + ":" + &text(d, b"Contents")).collect()
+    };
+    delete_annotation(&mut doc, 1, 0).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(subtypes(&doc), ["Square:", "Popup:of the square"]);
+    delete_annotation(&mut doc, 1, 0).unwrap();
+    assert!(subtypes(&reopen(&doc)).is_empty(), "the inline comment's pop-up went with it");
+}
+
 #[test]
 fn deleting_the_last_comment_removes_annots() {
     let mut doc = fixture();
@@ -1866,4 +1907,231 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
     let doc = document_of(&[b"<< /Subtype /Caret /Rect [30 30 30 30] /Sy /P >>"]);
     let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
     assert!(appearance::build(&d).is_some());
+}
+
+// ── Line annotations: leader lines and captions (ISO 32000-2 §12.5.6.7, Table 178) ──────────
+
+/// A red Line from `l` with a 1 pt border, a generous `/Rect`, and `extra` entries.
+fn table_178_line(l: [f64; 4], extra: &[(&str, Object)]) -> Dict {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Line"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 600.0, 800.0].map(Object::Real).to_vec()));
+    d.set(b"C".to_vec(), Object::Array([1.0, 0.0, 0.0].map(Object::Real).to_vec()));
+    d.set(b"L".to_vec(), Object::Array(l.map(Object::Real).to_vec()));
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    d
+}
+
+/// The built appearance's content.
+fn line_drawing(d: &Dict) -> String {
+    let s = crate::appearance::build(d).expect("the line is drawn");
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+/// Every straight two-point stroke (`x0 y0 m x1 y1 l S`) in a drawing.
+fn segments(content: &str) -> Vec<[f64; 4]> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let t: Vec<&str> = line.split_whitespace().collect();
+            if t.len() != 7 || t[2] != "m" || t[5] != "l" || t[6] != "S" {
+                return None;
+            }
+            let v: Vec<f64> = [t[0], t[1], t[3], t[4]].iter().map(|x| x.parse().unwrap()).collect();
+            Some([v[0], v[1], v[2], v[3]])
+        })
+        .collect()
+}
+
+/// The caption's text matrix (`a b c d e f Tm`), if any.
+fn caption_matrix(content: &str) -> Option<[f64; 6]> {
+    let at = content.find(" Tm")?;
+    let before: Vec<f64> = content[..at].split_whitespace().rev().take(6).map(|x| x.parse().unwrap()).collect();
+    Some([before[5], before[4], before[3], before[2], before[1], before[0]])
+}
+
+fn has(segs: &[[f64; 4]], want: [f64; 4]) -> bool {
+    segs.iter().any(|s| s.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01))
+}
+
+#[test]
+fn a_positive_leader_length_puts_the_line_above_a_left_to_right_line_and_a_negative_one_below() {
+    let up = segments(&line_drawing(&table_178_line([72.0, 620.0, 272.0, 620.0], &[("LL", Object::Real(20.0))])));
+    assert!(has(&up, [72.0, 640.0, 272.0, 640.0]), "the line is 20 above /L: {up:?}");
+    assert!(has(&up, [72.0, 620.0, 72.0, 640.0]) && has(&up, [272.0, 620.0, 272.0, 640.0]), "leader lines from /L up to it: {up:?}");
+    assert!(!has(&up, [72.0, 620.0, 272.0, 620.0]), "nothing along /L itself: {up:?}");
+
+    let down = segments(&line_drawing(&table_178_line([72.0, 540.0, 272.0, 540.0], &[("LL", Object::Real(-20.0)), ("LLE", Object::Real(10.0))])));
+    assert!(has(&down, [72.0, 520.0, 272.0, 520.0]), "the line is 20 below /L: {down:?}");
+    assert!(has(&down, [72.0, 540.0, 72.0, 510.0]) && has(&down, [272.0, 540.0, 272.0, 510.0]), "leaders run 10 past it: {down:?}");
+}
+
+#[test]
+fn a_leader_offset_leaves_a_gap_and_the_endings_sit_on_the_line_itself() {
+    let d = table_178_line(
+        [72.0, 460.0, 272.0, 460.0],
+        &[("LL", Object::Real(20.0)), ("LLO", Object::Real(10.0)), ("LE", Object::Array(vec![Object::name("OpenArrow"), Object::name("OpenArrow")]))],
+    );
+    let content = line_drawing(&d);
+    let segs = segments(&content);
+    assert!(has(&segs, [72.0, 490.0, 272.0, 490.0]), "the line sits |LL| + LLO above /L: {segs:?}");
+    assert!(has(&segs, [72.0, 470.0, 72.0, 490.0]) && has(&segs, [272.0, 470.0, 272.0, 490.0]), "leaders start LLO from /L: {segs:?}");
+    // The open arrows' tips (`tip l`) are at the ends of the line, not of /L.
+    assert!(content.contains(" 72 490 l ") && content.contains(" 272 490 l "), "arrows at the moved line: {content}");
+    assert!(!content.contains(" 72 460 l "), "no arrow on /L: {content}");
+}
+
+#[test]
+fn an_inline_caption_breaks_the_line_around_its_text() {
+    let d =
+        table_178_line([72.0, 380.0, 272.0, 380.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("Inline 50 mm")))]);
+    let content = line_drawing(&d);
+    assert!(content.contains("(Inline 50 mm) Tj"), "the caption is drawn: {content}");
+    assert!(content.contains("/Helv 10 Tf"), "in Helvetica 10: {content}");
+    let m = caption_matrix(&content).expect("text matrix");
+    let width = crate::appearance::text_width("Inline 50 mm", 10.0);
+    assert!((m[4] - (172.0 - width / 2.0)).abs() < 0.01 && m[5] < 380.0 && m[5] > 380.0 - 10.0, "centred on the line: {m:?}");
+    let segs = segments(&content);
+    assert_eq!(segs.len(), 2, "two pieces: {segs:?}");
+    assert!(segs.iter().all(|s| s[2] <= 172.0 - width / 2.0 || s[0] >= 172.0 + width / 2.0), "no stroke under the text: {segs:?}");
+    assert!(has(&segs, [72.0, 380.0, 172.0 - width / 2.0 - 2.0, 380.0]), "the left piece starts at the line's start: {segs:?}");
+}
+
+#[test]
+fn a_top_caption_sits_above_the_unbroken_line() {
+    let d = table_178_line(
+        [72.0, 300.0, 272.0, 300.0],
+        &[("Cap", Object::Bool(true)), ("CP", Object::name("Top")), ("Contents", Object::String(PdfString::text("Top 50 mm")))],
+    );
+    let content = line_drawing(&d);
+    let m = caption_matrix(&content).expect("text matrix");
+    assert!(m[5] > 300.0 && m[5] < 305.0, "baseline just above the line: {m:?}");
+    assert_eq!(segments(&content), vec![[72.0, 300.0, 272.0, 300.0]], "the line is whole");
+}
+
+#[test]
+fn a_caption_offset_moves_it_along_and_off_the_line_with_a_tick() {
+    let co = |h: f64, v: f64| Object::Array(vec![Object::Real(h), Object::Real(v)]);
+    let text = ("Contents", Object::String(PdfString::text("Offset 15")));
+    let base = caption_matrix(&line_drawing(&table_178_line([330.0, 700.0, 530.0, 700.0], &[("Cap", Object::Bool(true)), text.clone()]))).unwrap();
+    let content = line_drawing(&table_178_line([330.0, 700.0, 530.0, 700.0], &[("Cap", Object::Bool(true)), ("CO", co(0.0, 15.0)), text.clone()]));
+    let up = caption_matrix(&content).unwrap();
+    assert!((up[5] - base[5] - 15.0).abs() < 0.01 && (up[4] - base[4]).abs() < 0.01, "15 up: {base:?} → {up:?}");
+    let segs = segments(&content);
+    assert!(has(&segs, [330.0, 700.0, 530.0, 700.0]), "a caption off the line leaves it whole: {segs:?}");
+    assert!(segs.iter().any(|s| s[0] == 430.0 && s[2] == 430.0 && s[1] == 700.0 && s[3] > 705.0), "a tick from the midpoint up: {segs:?}");
+    let along =
+        caption_matrix(&line_drawing(&table_178_line([330.0, 700.0, 530.0, 700.0], &[("Cap", Object::Bool(true)), ("CO", co(-30.0, 0.0)), text])))
+            .unwrap();
+    assert!((along[4] - base[4] + 30.0).abs() < 0.01 && (along[5] - base[5]).abs() < 0.01, "30 left: {base:?} → {along:?}");
+}
+
+#[test]
+fn without_cap_true_no_caption_is_drawn() {
+    for cap in [None, Some(Object::Bool(false)), Some(Object::Int(1))] {
+        let mut extra = vec![("Contents", Object::String(PdfString::text("Hidden caption")))];
+        if let Some(c) = cap.clone() {
+            extra.push(("Cap", c));
+        }
+        let d = table_178_line([330.0, 620.0, 530.0, 620.0], &extra);
+        let content = line_drawing(&d);
+        assert!(!content.contains("Tj"), "{cap:?}: {content}");
+        assert_eq!(segments(&content), vec![[330.0, 620.0, 530.0, 620.0]]);
+        assert!(crate::appearance::undrawable_text(&d).is_none());
+    }
+}
+
+#[test]
+fn a_diagonal_lines_leaders_are_perpendicular_and_its_caption_turns_with_it() {
+    let d = table_178_line(
+        [330.0, 460.0, 530.0, 560.0],
+        &[
+            ("LL", Object::Real(20.0)),
+            ("LLE", Object::Real(10.0)),
+            ("Cap", Object::Bool(true)),
+            ("Contents", Object::String(PdfString::text("Diagonal"))),
+        ],
+    );
+    let content = line_drawing(&d);
+    let segs = segments(&content);
+    let (ux, uy) = (200.0 / 100f64.hypot(200.0), 100.0 / 100f64.hypot(200.0));
+    let leaders: Vec<&[f64; 4]> = segs.iter().filter(|s| (s[2] - s[0]) * ux + (s[3] - s[1]) * uy < 1e-2).collect();
+    assert_eq!(leaders.len(), 2, "two leader lines across the line: {segs:?}");
+    for l in leaders {
+        let (dx, dy) = (l[2] - l[0], l[3] - l[1]);
+        assert!((dx.hypot(dy) - 30.0).abs() < 0.01, "|LL| + LLE long: {l:?}");
+        assert!(dx < 0.0 && dy > 0.0, "up and to the left (left of travel): {l:?}");
+    }
+    let m = caption_matrix(&content).expect("caption");
+    assert!((m[0] - ux).abs() < 1e-3 && (m[1] - uy).abs() < 1e-3, "the text runs along the line: {m:?}");
+    // Drawn right to left, it still reads left to right.
+    let back = caption_matrix(&line_drawing(&table_178_line(
+        [530.0, 560.0, 330.0, 460.0],
+        &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("x")))],
+    )))
+    .unwrap();
+    assert!(back[0] > 0.0, "{back:?}");
+}
+
+#[test]
+fn a_caption_from_rich_text_and_one_the_font_cant_draw() {
+    let rc = "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\"><p>Dim &amp; <b>5</b>0&#x20;mm &lt;x&gt;</p></body>";
+    let d = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("RC", Object::String(PdfString::text(rc)))]);
+    let s = crate::appearance::build(&d).unwrap().decoded().unwrap();
+    assert!(s.windows(17).any(|w| w == b"(Dim & 50 mm <x>)"), "{}", String::from_utf8_lossy(&s));
+    let cjk = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("長さ")))]);
+    assert_eq!(crate::appearance::undrawable_text(&cjk), Some(("the line's caption", '長')));
+    // A PdfCraft measurement's label is its caption: the comment text isn't drawn a second time.
+    let mut measured = cjk.clone();
+    measured.set(b"PCMeasureValue".to_vec(), Object::String(PdfString::text("5 mm")));
+    assert_eq!(crate::appearance::undrawable_text(&measured), None);
+    let content = line_drawing(&measured);
+    assert_eq!(content.matches(" Tj").count(), 1, "{content}");
+}
+
+#[test]
+fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
+    let cap = ("Cap", Object::Bool(true));
+    let text = ("Contents", Object::String(PdfString::text(&"w".repeat(10_000))));
+    // A zero-length line has no direction: no leader lines, no caption, no NaN.
+    let point =
+        line_drawing(&table_178_line([50.0, 50.0, 50.0, 50.0], &[("LL", Object::Real(20.0)), ("LLE", Object::Real(5.0)), cap.clone(), text.clone()]));
+    assert!(!point.contains("NaN") && !point.contains("inf") && !point.contains("Tj"), "{point}");
+    assert_eq!(segments(&point).len(), 1);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, -1e300, f64::MAX] {
+        let d = table_178_line(
+            [0.0, 0.0, 100.0, 0.0],
+            &[
+                ("LL", Object::Real(bad)),
+                ("LLE", Object::Real(bad)),
+                ("LLO", Object::Real(bad)),
+                ("CO", Object::Array(vec![Object::Real(bad), Object::Real(bad)])),
+                cap.clone(),
+                text.clone(),
+            ],
+        );
+        let content = line_drawing(&d);
+        assert!(!content.contains("NaN") && !content.contains("inf"), "{bad}: {content}");
+        for s in segments(&content) {
+            assert!(s.iter().all(|x| x.abs() <= 50_000.0), "{bad}: {s:?}");
+        }
+    }
+    // Negative LLE and LLO count as 0.
+    let neg = segments(&line_drawing(&table_178_line(
+        [0.0, 0.0, 100.0, 0.0],
+        &[("LL", Object::Real(10.0)), ("LLE", Object::Real(-5.0)), ("LLO", Object::Real(-5.0))],
+    )));
+    assert!(has(&neg, [0.0, 0.0, 0.0, 10.0]) && has(&neg, [0.0, 10.0, 100.0, 10.0]), "{neg:?}");
+    // Huge endpoints whose midpoint would overflow fall back to the plain line.
+    let huge = line_drawing(&table_178_line([f64::MAX, f64::MAX, f64::MAX / 2.0, f64::MAX], &[("LL", Object::Real(20.0)), cap, text]));
+    assert!(!huge.contains("NaN") && !huge.contains("inf"), "{huge}");
+    // The caption is cut to 256 characters.
+    let long = line_drawing(&table_178_line(
+        [0.0, 0.0, 100.0, 0.0],
+        &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text(&"w".repeat(10_000))))],
+    ));
+    assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
+    assert!(!long.contains(&"w".repeat(257)));
 }

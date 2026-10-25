@@ -302,13 +302,14 @@ fn text_turn(d: &Dict) -> i64 {
 
 /// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
 /// they can't, which would come out as `?`: what it is (for the message) and the character. The
-/// text of a text box, callout or Fill & Sign text, a measurement's label, a dynamic stamp's
-/// "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
+/// text of a text box, callout or Fill & Sign text, a line's caption, a measurement's label, a
+/// dynamic stamp's "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
 /// it can be drawn.
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
         b"FreeText" => ("the comment's text", text(b"Contents")?),
+        b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
         // Drawn in Helvetica when the redaction is applied: refused when it is marked.
@@ -389,6 +390,8 @@ pub fn build(d: &Dict) -> Option<Stream> {
     let w = border_width(d);
     let mut res = Dict::new();
     let mut c = String::new();
+    // Content after `c` that isn't UTF-8 (WinAnsi text).
+    let mut tail: Vec<u8> = Vec::new();
     let markup = matches!(subtype.as_slice(), b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly");
     if let Some(gs) = ext_gstate(opacity, subtype == b"Highlight") {
         res.set(b"ExtGState".to_vec(), Object::Dict(gs));
@@ -513,12 +516,28 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 return None;
             }
             let fill = interior_color(d, Some(col)).unwrap_or(col);
+            let layout = line_layout(d, [(l[0], l[1]), (l[2], l[3])], w);
+            let [p, q] = layout.line;
             c.push_str(&format!("{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(fill), n(w), dash(d)));
-            c.push_str(&format!("{} {} m {} {} l S\n[] 0 d\n", n(l[0]), n(l[1]), n(l[2]), n(l[3])));
-            for (end, (tip, from)) in ends.iter().zip([((l[0], l[1]), (l[2], l[3])), ((l[2], l[3]), (l[0], l[1]))]) {
+            for [s, e] in layout.leaders.iter().chain(&layout.strokes).chain(&layout.tick) {
+                c.push_str(&format!("{} {} m {} {} l S\n", n(s.0), n(s.1), n(e.0), n(e.1)));
+            }
+            c.push_str("[] 0 d\n");
+            for (end, (tip, from)) in ends.iter().zip([(p, q), (q, p)]) {
                 if !line_end(&mut c, end, tip, from, w) {
                     return None;
                 }
+            }
+            if let Some((text, m)) = layout.caption {
+                // The caption is black, in the standard font the measurement label uses.
+                tail.extend(
+                    format!("q 0 g BT /Helv {} Tf {} {} {} {} {} {} Tm ", n(CAPTION_SIZE), n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5]))
+                        .bytes(),
+                );
+                // WinAnsi bytes go into the stream as-is, not through UTF-8.
+                tail.extend(literal(&win_ansi(&text)));
+                tail.extend_from_slice(b" Tj ET Q\n");
+                res.set(b"Font".to_vec(), helvetica_resource());
             }
         }
         b"Polygon" | b"PolyLine" => {
@@ -866,6 +885,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
     // PdfCraft measurement captions are kept separate from the comment's free-form text.
     // A restyle regenerates the path and its value together.
     let mut out = c.into_bytes();
+    out.extend(tail);
     if let Some(value) = d.get(b"PCMeasureValue").and_then(Object::as_string) {
         let value = value.to_text();
         if value.chars().count() <= 256 && matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
@@ -967,6 +987,190 @@ pub(crate) fn display_stamp(d: &Dict) -> Option<Stream> {
         n(b0)
     ));
     Some(form(rect, c.as_bytes(), res))
+}
+
+/// Size of a line's caption, as of a measurement's label.
+const CAPTION_SIZE: f64 = 10.0;
+
+/// Characters of a line's caption drawn at most, as for a measurement's label.
+const MAX_CAPTION_CHARS: usize = 256;
+
+/// Leader lengths and caption offsets (Table 178) are held within this many points (200 inches,
+/// the largest page side ISO 32000-2 Annex C allows), so an absurd value can't overflow.
+const MAX_LINE_EXTENT: f64 = 14_400.0;
+
+/// A Table 178 length or offset: finite and within [`MAX_LINE_EXTENT`], 0 when absent or not one.
+fn line_length(v: Option<f64>) -> f64 {
+    v.filter(|v| v.is_finite()).map_or(0.0, |v| v.clamp(-MAX_LINE_EXTENT, MAX_LINE_EXTENT))
+}
+
+/// The caption a Line with `/Cap true` shows (ISO 32000-2 Table 178): its `/Contents`, else the
+/// plain text of its `/RC`, on one line and cut to [`MAX_CAPTION_CHARS`]. `None` without a
+/// caption, and for PdfCraft's own measurements, whose label (`/PCMeasureValue`) is the caption.
+fn line_caption(d: &Dict) -> Option<String> {
+    if !matches!(d.get(b"Cap"), Some(Object::Bool(true))) || d.contains(b"PCMeasureValue") {
+        return None;
+    }
+    let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
+    let raw = text(b"Contents").filter(|t| !t.trim().is_empty()).or_else(|| text(b"RC").map(|rc| rich_plain(&rc)))?;
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    let caption: String = words.join(" ").chars().filter(|c| !c.is_control()).take(MAX_CAPTION_CHARS).collect();
+    (!caption.is_empty()).then_some(caption)
+}
+
+/// The text of rich text (§12.7.4.3, XHTML): its markup dropped, the five XML entities and
+/// numeric character references read, block ends read as spaces.
+fn rich_plain(rc: &str) -> String {
+    let mut out = String::new();
+    let mut tag: Option<String> = None;
+    // Rich text past this is not caption material; it bounds the work.
+    for ch in rc.chars().take(MAX_CAPTION_CHARS * 64) {
+        match (&mut tag, ch) {
+            (None, '<') => tag = Some(String::new()),
+            (Some(name), '>') => {
+                let name =
+                    name.trim_start_matches('/').split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or_default().to_ascii_lowercase();
+                if matches!(name.as_str(), "p" | "br" | "div" | "li") {
+                    out.push(' ');
+                }
+                tag = None;
+            }
+            (Some(name), c) => {
+                if name.len() < 16 {
+                    name.push(c);
+                }
+            }
+            (None, c) => out.push(c),
+        }
+    }
+    let mut text = String::new();
+    let mut rest = out.as_str();
+    while let Some(at) = rest.find('&') {
+        text.push_str(rest.get(..at).unwrap_or_default());
+        let after = rest.get(at + 1..).unwrap_or_default();
+        let entity = after.find(';').filter(|&end| end <= 10).and_then(|end| Some((after.get(..end)?, end)));
+        let decoded = entity.and_then(|(name, end)| {
+            let c = match name {
+                "amp" => '&',
+                "lt" => '<',
+                "gt" => '>',
+                "quot" => '"',
+                "apos" => '\'',
+                _ => {
+                    let num = name.strip_prefix('#')?;
+                    let code = match num.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => num.parse().ok()?,
+                    };
+                    char::from_u32(code)?
+                }
+            };
+            Some((c, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                text.push(c);
+                rest = after.get(end + 1..).unwrap_or_default();
+            }
+            None => {
+                text.push('&');
+                rest = after;
+            }
+        }
+    }
+    text.push_str(rest);
+    text
+}
+
+/// Where a Line annotation's parts go (ISO 32000-2 §12.5.6.7, Table 178).
+#[derive(Debug, Default)]
+struct LineLayout {
+    /// The line itself, start to end: `/L`, or `/L` moved out by its leader lines.
+    line: [(f64, f64); 2],
+    /// Strokes along the line: the whole line, or the two pieces either side of an inline caption.
+    strokes: Vec<[(f64, f64); 2]>,
+    /// The leader lines, from `/L` (past the `/LLO` gap) to the line and on by `/LLE`.
+    leaders: Vec<[(f64, f64); 2]>,
+    /// A short stroke from the line to a caption `/CO` moved off it.
+    tick: Option<[(f64, f64); 2]>,
+    /// The caption and its text matrix.
+    caption: Option<(String, [f64; 6])>,
+}
+
+/// Lay out a Line annotation from `/L` = `[a b]`, line width `w`, and its leader and caption
+/// entries.
+///
+/// Leader lines: a positive `/LL` puts the line on the left of travel from `a` to `b` (above `/L`
+/// for a line drawn left to right), so the leader lines, followed from the line to `/L`, turn
+/// clockwise from the direction of travel; a negative one puts it on the right. The line sits
+/// `|LL| + LLO` from `/L`. `/LLE` and `/LLO` are non-negative: a negative one counts as 0.
+///
+/// Caption (`/Cap true`): centred on the line's midpoint and turned with it so it reads left to
+/// right (bottom to top for a vertical line). `/CP /Inline` (the default) centres it on the line,
+/// which is broken around it; `/Top` sets it on top of the unbroken line. `/CO [h v]` moves it `h`
+/// along the line and `v` across it (positive: up in reading direction); a caption moved off an
+/// inline line gets a tick from the line to it.
+///
+/// A zero-length or overflowing `/L` has no direction: it gets neither leader lines nor caption.
+/// Every point is finite; if anything derived from the entries is not, they are left out.
+fn line_layout(d: &Dict, [a, b]: [(f64, f64); 2], w: f64) -> LineLayout {
+    let plain = LineLayout { line: [a, b], strokes: vec![[a, b]], ..LineLayout::default() };
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = dx.hypot(dy);
+    if !len.is_finite() || len <= 0.0 {
+        return plain;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let mut out = LineLayout { line: [a, b], ..LineLayout::default() };
+    let ll = line_length(d.get(b"LL").and_then(Object::as_f64));
+    if ll != 0.0 {
+        // The unit normal from `/L` towards the line: left of travel for a positive /LL.
+        let s = ll.signum();
+        let (nx, ny) = (-uy * s, ux * s);
+        let llo = line_length(d.get(b"LLO").and_then(Object::as_f64)).max(0.0);
+        let lle = line_length(d.get(b"LLE").and_then(Object::as_f64)).max(0.0);
+        let at = |p: (f64, f64), k: f64| (p.0 + nx * k, p.1 + ny * k);
+        let off = ll.abs() + llo;
+        out.line = [at(a, off), at(b, off)];
+        out.leaders = vec![[at(a, llo), at(a, off + lle)], [at(b, llo), at(b, off + lle)]];
+    }
+    let [p, _] = out.line;
+    let along = |t: f64| (p.0 + ux * t, p.1 + uy * t);
+    let mut gap = None;
+    if let Some(text) = line_caption(d) {
+        let size = CAPTION_SIZE;
+        let width = text_width(&text, size);
+        // Reading direction, and "up" across it.
+        let (tx, ty) = if ux < 0.0 || (ux == 0.0 && uy < 0.0) { (-ux, -uy) } else { (ux, uy) };
+        let (vx, vy) = (-ty, tx);
+        let co = nums(d, b"CO").filter(|c| c.len() == 2).unwrap_or_default();
+        let h = line_length(co.first().copied());
+        let v = line_length(co.get(1).copied());
+        let top = d.name(b"CP") == Some(b"Top");
+        // The caption's centre, as a distance along the line from `p`.
+        let centre = len / 2.0 + h * (tx * ux + ty * uy);
+        let mid = along(centre);
+        // Baseline across the line: on top of it, or with the text centred on it.
+        let base = if top { w.max(0.0) / 2.0 + 2.0 + v } else { v - size * 0.35 };
+        let origin = (mid.0 - tx * width / 2.0 + vx * base, mid.1 - ty * width / 2.0 + vy * base);
+        out.caption = Some((text, [tx, ty, -ty, tx, origin.0, origin.1]));
+        if !top && v.abs() < size / 2.0 {
+            let half = width / 2.0 + 2.0;
+            gap = Some(((centre - half).clamp(0.0, len), (centre + half).clamp(0.0, len)));
+        } else if !top {
+            let reach = v - v.signum() * size * 0.4;
+            out.tick = Some([mid, (mid.0 + vx * reach, mid.1 + vy * reach)]);
+        }
+    }
+    out.strokes = match gap {
+        Some((g0, g1)) => [(0.0, g0), (g1, len)].into_iter().filter(|(s, e)| e > s).map(|(s, e)| [along(s), along(e)]).collect(),
+        None => vec![out.line],
+    };
+    let finite = |q: &(f64, f64)| q.0.is_finite() && q.1.is_finite();
+    let all_finite =
+        out.line.iter().chain(out.strokes.iter().flatten()).chain(out.leaders.iter().flatten()).chain(out.tick.iter().flatten()).all(finite)
+            && out.caption.as_ref().is_none_or(|(_, m)| m.iter().all(|x| x.is_finite()));
+    if all_finite { out } else { plain }
 }
 
 /// A rubber stamp: a rounded frame (a pointed tag for sign-here stamps) with the label in bold

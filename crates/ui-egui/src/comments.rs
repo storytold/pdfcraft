@@ -17,6 +17,7 @@ use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewS
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{QuickTool, icons};
 
@@ -594,6 +595,8 @@ pub enum SortBy {
 pub(crate) struct PageCx<'a> {
     pub page: usize,
     pub xf: &'a PageXform,
+    /// The pointer as the pages see it this frame.
+    pub ptr: &'a PagePointer,
     pub info: &'a DocInfo,
     pub tool: QuickTool,
     pub prefs: &'a CommentPrefs,
@@ -630,7 +633,7 @@ impl PageCx<'_> {
 
     /// Top-level comments on this page, in paint order.
     fn comments(&self) -> impl Iterator<Item = &Annotation> {
-        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.in_reply_to.is_none() && a.subtype != "Popup")
+        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
     }
 
     /// Where a comment is on screen: one rectangle, or one per marked line for text markup.
@@ -808,13 +811,12 @@ pub(crate) fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2, aspect_ratio: 
 /// Comment input on one page, before text selection runs. Returns `true` when the pointer
 /// gesture belongs to commenting (text selection must ignore it).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
-    let origin = ui.input(|i| i.pointer.press_origin());
+    let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
-    let fill_grab = fill_grabs(ui, cx, view);
-    let draw_grab = draw_grabs(ui, cx, view);
+    let fill_grab = fill_grabs(cx, view);
+    let draw_grab = draw_grabs(cx, view);
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -1083,20 +1085,20 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
 /// moves it and the selected one's handles resize it. Elsewhere the tool places its mark. While
 /// the button is down the press decides; otherwise the pointer (egui clears the press origin on
 /// release, so a click is located by the pointer).
-pub(crate) fn fill_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
-    matches!(cx.tool, QuickTool::Fill(_)) && grabs(ui, cx, view, |a| a.fill_sign)
+pub(crate) fn fill_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
+    matches!(cx.tool, QuickTool::Fill(_)) && grabs(cx, view, |a| a.fill_sign)
 }
 
 /// With the Select tool, a comment that would move (not text markup) is picked up before a form
 /// field under it, so a signature placed over a field can still be dragged off it.
-pub(crate) fn select_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
-    cx.tool == QuickTool::Select && grabs(ui, cx, view, |a| !is_markup(&a.subtype))
+pub(crate) fn select_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
+    cx.tool == QuickTool::Select && grabs(cx, view, |a| !is_markup(&a.subtype))
 }
 
 /// With a shape tool (rectangle, oval, line, polygon…), the selected comment's resize handles
 /// are picked up as with the Select tool, so the shape just drawn can be resized straight away
 /// (#2338). Only the handles: a press anywhere else, the shape itself included, still draws.
-pub(crate) fn draw_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
+pub(crate) fn draw_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
     let QuickTool::Comment(tool) = cx.tool else { return false };
     if !(tool.draws() || tool.clicks_points()) || tool == CommentTool::Eraser || cx.hidden {
         return false;
@@ -1109,12 +1111,12 @@ pub(crate) fn draw_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool
     if cv.gesture.is_some() {
         return false;
     }
-    press_point(ui, cx).is_some_and(|p| on_handle(cx, view, p, |_| true))
+    press_point(cx).is_some_and(|p| on_handle(cx, view, p, |_| true))
 }
 
 /// Whether the press (or, with no button down, the pointer) is on a `pick` comment or on the
 /// selected one's resize handles.
-fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) -> bool {
+fn grabs(cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) -> bool {
     if cx.hidden {
         return false;
     }
@@ -1122,15 +1124,14 @@ fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotati
     {
         return true;
     }
-    let Some(p) = press_point(ui, cx) else { return false };
+    let Some(p) = press_point(cx) else { return false };
     on_handle(cx, view, p, &pick) || cx.hit(p).is_some_and(pick)
 }
 
 /// Where a gesture on this page is decided: the press while the button is down, otherwise the
 /// pointer (egui clears the press origin on release). `None` off the page.
-fn press_point(ui: &egui::Ui, cx: &PageCx<'_>) -> Option<Pos2> {
-    let (pointer, origin, down) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.press_origin(), i.pointer.any_down()));
-    (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p))
+fn press_point(cx: &PageCx<'_>) -> Option<Pos2> {
+    (if cx.ptr.any_down { cx.ptr.origin } else { cx.ptr.pos }).filter(|p| cx.xf.rect.contains(*p))
 }
 
 /// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
@@ -1320,7 +1321,7 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 /// Paint comment selection, hover and gesture previews on a page.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
     if cv.gesture.is_none()
@@ -1471,7 +1472,7 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
             CommentTool::Polygon | CommentTool::PolyLine | CommentTool::Cloud => {
                 // The vertices so far, and a rubber band to the pointer.
                 let mut line = pts.clone();
-                if let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos()) {
+                if let Some(p) = cx.ptr.pos {
                     line.push(p);
                 }
                 painter.add(egui::Shape::line(line, stroke));
@@ -1582,7 +1583,17 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         }
         return None;
     };
-    let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false, redact_mark: ([0.89, 0.13, 0.13], 1.0) };
+    let cx = PageCx {
+        page,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info,
+        tool: QuickTool::Select,
+        prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.89, 0.13, 0.13], 1.0),
+    };
     let anchor = cx.to_screen(c.at);
     let viewport = view.viewport_rect();
     let t = Tokens::get(ctx);
@@ -1870,8 +1881,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
         return;
     }
     let Some((page, index)) = cv.selected else { return };
-    let movable =
-        info.annotations.iter().any(|a| a.page == page && a.index == index && a.in_reply_to.is_none() && !is_markup(&a.subtype) && !a.locked);
+    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !is_markup(&a.subtype) && !a.locked);
     let (Some(xf), Some(p)) = (view.page_xform(page), info.pages.get(page)) else { return };
     if !movable {
         return;
@@ -1934,7 +1944,7 @@ pub(crate) fn context_menu(
     can_modify: bool,
 ) -> Option<CanvasAction> {
     let mut action = None;
-    let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
+    let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && !a.is_reply()));
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
@@ -1979,7 +1989,7 @@ pub(crate) fn context_menu(
                     }
                 });
             });
-            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
+            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| r.replies_to(a)).collect();
             let marked = crate::comments_panel::is_marked(&thread);
             if ui.add_enabled(allowed, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
@@ -2305,6 +2315,8 @@ mod tests {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
+            grouped: false,
             rect: [40.0, 20.0, 70.0, 40.0],
             color: None,
             index: 0,
@@ -2326,6 +2338,7 @@ mod tests {
             let cx = PageCx {
                 page: 0,
                 xf: &xf,
+                ptr: &PagePointer::default(),
                 info: &info,
                 tool: QuickTool::Select,
                 prefs: &prefs,
@@ -2543,6 +2556,8 @@ mod tests {
                 modified: None,
                 name: None,
                 in_reply_to: None,
+                parent: None,
+                grouped: false,
                 rect: [10.0, 10.0, 50.0, 50.0],
                 color: None,
                 index: 0,

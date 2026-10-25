@@ -20,7 +20,7 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
-fn source(name: &str) -> egui::ImageSource<'static> {
+pub(crate) fn source(name: &str) -> egui::ImageSource<'static> {
     // PdfCraft caches an unknown name under the resolved fallback name.
     white_icons().source(white_icons().canonical_name(name).unwrap_or("square"))
 }

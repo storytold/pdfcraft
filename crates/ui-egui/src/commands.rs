@@ -157,10 +157,12 @@ impl PdfCraftApp {
         let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
         match id {
             "ui.dock.reset" => {
-                if let Err(error) = crate::docking::command(self, true, &serde_json::Value::Null) {
+                if let Err(error) = crate::side_panels::command(self, true, &serde_json::Value::Null) {
                     self.notify(error);
                 }
             }
+            "view.side_panel" => self.toggle_side_panel(),
+            "view.tools_pane" => self.left_open = !self.left_open,
             "file.open" => self.open_dialog(),
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.
@@ -390,6 +392,7 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
             }
             "edit.bates" => {
@@ -400,6 +403,7 @@ impl PdfCraftApp {
                     self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
                 }
                 self.marks_draft.focused_box = 5;
+                self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
             "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {

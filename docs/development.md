@@ -28,6 +28,24 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
 
+## Annotation tool pin
+
+The annotation quick bar's **Keep tool selected** pin is a shared preference, stored as the
+boolean `comment_tool_pinned`. It survives application restarts, including when switched off.
+Startup uses Select; the remembered pin applies when an annotation tool is picked. Older settings
+without the key keep the default one-shot behavior. Non-boolean values are ignored, preserving
+the current choice and the other valid settings.
+
+The existing opt-in UI control channel uses the same preference:
+
+```sh
+pdfcraft-cli ui --control /path/to/control.json set key=comment-tool-pinned value=true
+pdfcraft-cli ui --control /path/to/control.json state
+```
+
+`ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses
+other values before changing the preference. This changes interface settings only.
+
 ## Interface appearance
 
 Display theme saves System, Light or Dark separately from the palette currently drawn. New

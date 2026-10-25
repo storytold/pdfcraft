@@ -265,6 +265,35 @@ fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     assert_eq!(tint, egui::Color32::from_rgb(255, 255, 217), "the default pale yellow, opaque");
 }
 
+/// The preview's page stepper, beside its "page N of M" label: the dialog's own button, not the
+/// page navigation's of the same name.
+fn preview_step(h: &mut Harness<'static, PdfCraftApp>, label: &str, now: &str) {
+    let row = h.get_by_label(now).rect().center().y;
+    h.query_all_by_label(label).find(|n| (n.rect().center().y - row).abs() < 15.0).unwrap_or_else(|| panic!("{label} beside {now:?}")).click();
+    h.run_steps(2);
+}
+
+#[test]
+fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
+    let mut h = harness();
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    h.get_by_label("Preview: page 2 of 3");
+    preview_step(&mut h, "Next page", "Preview: page 2 of 3");
+    h.get_by_label("Preview: page 3 of 3");
+    preview_step(&mut h, "Previous page", "Preview: page 3 of 3");
+    preview_step(&mut h, "Previous page", "Preview: page 2 of 3");
+    h.get_by_label("Preview: page 1 of 3");
+    // Opened again, the preview is back at the current page.
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    h.get_by_label("Preview: page 2 of 3");
+}
+
 /// Pages from 1 to 1 stays one page: the dialog used to turn "to" back into the last page on
 /// every frame while both were 1, so only page 1 could not be chosen alone. The field starts on
 /// the last page.

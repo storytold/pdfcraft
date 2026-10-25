@@ -77,9 +77,6 @@ impl PdfCraftApp {
                     };
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
-                    if self.right.is_some() {
-                        self.pending_panel_reveals.push(crate::docking::Panel::Inspector);
-                    }
                 }
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
@@ -340,16 +337,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     );
     ui.horizontal(|ui| {
         ui.label(tl!("Tools panel side"));
-        let right = app.docking.tools_on_right();
-        if ui.selectable_label(!right, tl!("Left")).clicked()
-            && let Err(error) = app.docking.set_tools_on_right(false)
-        {
-            app.notify(error);
+        let right = app.side_panels.tools_on_right();
+        if ui.selectable_label(!right, tl!("Left")).clicked() {
+            app.side_panels.tools_side = crate::side_panels::ToolsSide::Left;
         }
-        if ui.selectable_label(right, tl!("Right")).clicked()
-            && let Err(error) = app.docking.set_tools_on_right(true)
-        {
-            app.notify(error);
+        if ui.selectable_label(right, tl!("Right")).clicked() {
+            app.side_panels.tools_side = crate::side_panels::ToolsSide::Right;
         }
     });
     ui.add_space(8.0);
