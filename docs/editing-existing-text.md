@@ -10,6 +10,13 @@ moved because an earlier row wrapped, are rewritten, and formatting a selection 
 only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
 every row.
 
+A paragraph drawn under an explicit PDF path clip (`W` or `W*`) shows a warning in
+**Format text** as soon as its editor opens. The original clip stays in force after Apply:
+added rows or moved text outside that area will be invisible, even if the inline editor
+shows them. This is a conservative warning for any path-clipped paragraph, not a prediction
+of which glyphs will be cut off. It does not enlarge or remove clips that may also protect
+neighbouring text or artwork. The editor does not yet draw the clipping path itself.
+
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Draft boxes grow to the page edge
 before wrapping, and the saved item uses that width. A single visual source row grows across font/style boundaries;

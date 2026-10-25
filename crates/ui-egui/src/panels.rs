@@ -533,6 +533,10 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     {
         use crate::format_text_ui::{FontChoice, Fonts};
         let mut ed = ed;
+        if ed.path_clipped() {
+            ui.add(egui::Label::new(egui::RichText::new(tl!("This paragraph has a PDF clipping area. Added rows or moved text outside it will be invisible after applying, even if shown in the editor.")).color(ui.visuals().warn_fg_color)).wrap());
+            ui.add_space(6.0);
+        }
         let sources: Vec<(String, String)> = app
             .session
             .get(app.views[i].id)

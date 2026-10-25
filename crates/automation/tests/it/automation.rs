@@ -9175,3 +9175,38 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+#[test]
+fn path_clipped_paragraph_warns_through_tools_before_edit_and_after_reopen() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
+    let dir = workdir("path-clipped-paragraph");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    let content = b"0 0.23 0.45 rg 50 634 496 79 re f q 50 674 496 39 re W n 1 1 1 rg BT /F1 14 Tf 1 0 0 1 65 695 Tm (Banner heading) Tj ET BT /F1 9 Tf 1 0 0 1 65 681 Tm (A short line of text set inside the banner) Tj ET Q 0 g BT /F1 11 Tf 1 0 0 1 50 600 Tm (Body text below the banner.) Tj ET";
+    let stream = cos.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    cos.update_dict(page, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(stream));
+        d.set(b"MediaBox".to_vec(), Object::Array([0, 0, 595, 842].map(Object::Int).to_vec()));
+    })
+    .unwrap();
+    std::fs::write(dir.join("banner.pdf"), write_incremental(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"banner.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(before["paragraphs"][0]["path_clipped"], true);
+    assert_eq!(before["paragraphs"][1]["path_clipped"], false);
+    let draft = "Banner heading\nA short line of text set inside the banner, now with a few more words added at its end";
+    let layout = ok(&mut a, "text_edit_layout", json!({"doc":doc,"page":1,"paragraph":1,"text":draft}));
+    assert_eq!(layout["path_clipped"], true);
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1})), before, "warning/preview is read-only");
+    let edited = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":draft}));
+    assert_eq!(edited["path_clipped"], true);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/banner.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"out/banner.pdf"}))["doc"].as_u64().unwrap();
+    let saved = ok(&mut a, "text_paragraphs", json!({"doc":reopened,"page":1}));
+    assert_eq!(saved["paragraphs"][0]["path_clipped"], true);
+    assert_eq!(saved["paragraphs"][1]["path_clipped"], false);
+    let moved = ok(&mut a, "text_edit", json!({"doc":reopened,"page":1,"paragraph":1,"dy":-45}));
+    assert_eq!(moved["path_clipped"], true);
+    std::fs::remove_dir_all(dir).unwrap();
+}

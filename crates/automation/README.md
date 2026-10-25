@@ -229,3 +229,12 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+### Existing text inside a clipping path
+
+`text_paragraphs` and `text_edit_layout` report `path_clipped` before an edit; paragraph
+`text_edit` returns the same flag. When true, at least one source run is drawn under an
+explicit `W`/`W*` path clip. The rewrite preserves it, so new rows or text moved outside it
+will be invisible after applying, even if an inline editor shows them. The flag is a
+conservative warning, not an exact visibility/overflow test; it does not describe glyph
+clipping modes (`4 Tr`–`7 Tr`), implicit page bounds or a Form's `/BBox`.

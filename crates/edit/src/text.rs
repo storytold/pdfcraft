@@ -51,6 +51,9 @@ pub struct TextLine {
     pub decodable: bool,
     /// Whether the font requires visual-order Indic text.
     pub visual_order: bool,
+    /// At least one run is drawn under an explicit `W`/`W*` path clip. This is distinct
+    /// from text whose glyphs themselves define a clip (`4 Tr`–`7 Tr`).
+    pub path_clipped: bool,
     /// The Japanese or Hebrew fallback face the font subsets, when the line is in one (see [`same_font`]).
     face: Option<String>,
     /// Its box along and across its baseline, `[along0, across0, along1, across1]` (see
@@ -425,6 +428,9 @@ pub struct TextBlock {
     /// Every line is invisible text (rendering mode 3): an OCR layer over a scanned image, whose
     /// pixels show the words. A rewrite draws the new text visibly (see [`BlockStyle::cover`]).
     pub invisible: bool,
+    /// At least one source run is subject to a path clip. Rewriting preserves that clip,
+    /// so added rows or moved text outside it will not be painted.
+    pub path_clipped: bool,
 }
 
 impl TextBlock {
@@ -676,6 +682,7 @@ pub struct LineEdit {
 #[derive(Clone)]
 struct Ts {
     ctm: Matrix,
+    path_clipped: bool,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     fill: Vec<Op>,
     font: Option<(Vec<u8>, Rc<Metrics>)>,
@@ -1029,6 +1036,9 @@ struct Carry {
     layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     text_left: usize,
+    /// `W` takes effect at the next path-ending operator, and the current path is not
+    /// part of the graphics state saved by q/Q (ISO 32000-2 §8.5.4).
+    pending_clip: bool,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -1040,6 +1050,7 @@ impl Carry {
     fn new() -> Self {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
+            path_clipped: false,
             fill: Vec::new(),
             font: None,
             face: None,
@@ -1059,7 +1070,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, pending_clip: false }
     }
 }
 
@@ -1122,6 +1133,7 @@ fn interpret(
                     let mut items = tail.into_iter();
                     if let Some(mut first) = items.next() {
                         for shown in items {
+                            first.state.path_clipped |= shown.state.path_clipped;
                             first.glyph_count = first.glyph_count.saturating_add(shown.glyph_count);
                             first.extra_ops.push(shown.op);
                             first.extra_ops.extend(shown.extra_ops);
@@ -1147,6 +1159,12 @@ fn interpret(
                         first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
                         out.push(first);
                     }
+                }
+            }
+            b"W" | b"W*" => carry.pending_clip = true,
+            b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if std::mem::take(&mut carry.pending_clip) {
+                    ts.path_clipped = true;
                 }
             }
             b"q" => stack.push(ts.clone()),
@@ -1527,6 +1545,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.decodable &= s.decodable;
             l.visual_order |= s.visual_order;
             l.actual_text |= s.actual_text;
+            l.path_clipped |= s.state.path_clipped;
             l.clips |= s.state.render_mode >= 4;
             if l.unreadable_mode.is_none() {
                 l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
@@ -1552,6 +1571,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 paint: s.paint.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
+                path_clipped: s.state.path_clipped,
                 clips: s.state.render_mode >= 4,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
@@ -1642,6 +1662,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.decodable &= s.decodable;
         l.visual_order |= s.visual_order;
         l.actual_text |= s.actual_text;
+        l.path_clipped |= s.state.path_clipped;
         l.clips |= s.state.render_mode >= 4;
         if l.unreadable_mode.is_none() {
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
@@ -1666,6 +1687,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             paint: s.paint.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
+            path_clipped: s.state.path_clipped,
             clips: s.state.render_mode >= 4,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
@@ -1819,7 +1841,14 @@ fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), E
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
+        let mut carry = Carry {
+            ts: Ts { ctm: form.ctm, ..ts },
+            stack: Vec::new(),
+            marked: Vec::new(),
+            layers: Vec::new(),
+            text_left: *text_left,
+            pending_clip: false,
+        };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
@@ -3542,6 +3571,7 @@ mod tests {
             editor_text: text.into(),
             spans: Vec::new(),
             invisible: false,
+            path_clipped: false,
         }
     }
 

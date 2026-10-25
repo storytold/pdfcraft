@@ -7457,3 +7457,57 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
+
+#[test]
+fn path_clipped_paragraphs_report_the_clip_before_growth_or_movement() {
+    let mut doc = text_page(
+        "0 0.23 0.45 rg 50 634 496 79 re f q 50 674 496 39 re W n 1 1 1 rg BT /F1 14 Tf 1 0 0 1 65 695 Tm (Banner heading) Tj ET BT /F1 9 Tf 1 0 0 1 65 681 Tm (A short line of text set inside the banner) Tj ET Q 0 g BT /F1 11 Tf 1 0 0 1 50 600 Tm (Body text below the banner.) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(blocks[0].path_clipped);
+    assert!(!blocks[1].path_clipped);
+    let session = text::TextSession::open(&doc, 0, 0).unwrap();
+    assert!(session.source().path_clipped, "the warning is available before applying");
+    let draft = "Banner heading\nA short line of text set inside the banner, now with a few more words added at its end";
+    session.commit(&mut doc, Some(draft), &Default::default()).unwrap();
+    assert!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].path_clipped);
+    let moved = text::TextSession::open(&doc, 0, 0).unwrap();
+    assert!(moved.source().path_clipped);
+    moved.commit(&mut doc, None, &text::BlockStyle { offset: Some([0.0, -45.0]), ..Default::default() }).unwrap();
+    assert!(text::text_blocks(&reopen(&doc), 0).unwrap().iter().any(|b| b.path_clipped));
+}
+
+#[test]
+fn path_clip_tracking_follows_path_endings_and_graphics_state() {
+    let show = "BT /F1 10 Tf 72 700 Td (Text) Tj ET";
+    for end in ["n", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*"] {
+        for clip in ["W", "W*"] {
+            let doc = text_page(&format!("q 0 0 300 800 re {clip} {show} q {end} {show} Q {show} Q {show}"));
+            let lines = text::text_lines(&doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.path_clipped).collect::<Vec<_>>(), [false, true, false, false], "{clip} {end}");
+        }
+    }
+    // The pending path/clip is not saved by q/Q: W before q still takes effect inside it.
+    let doc = text_page(&format!("0 0 300 800 re W q n {show} Q {show}"));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines[0].path_clipped);
+    assert!(!lines[1].path_clipped);
+    // Joining adjacent show operators must keep a warning from a later clipped run.
+    let doc = text_page("BT /F1 10 Tf 72 700 Td (First ) Tj 0 0 300 800 re W n (second) Tj ET");
+    assert!(text::text_blocks(&doc, 0).unwrap()[0].path_clipped);
+}
+
+#[test]
+fn path_clip_warning_survives_stream_boundaries_and_actual_text() {
+    let mut doc = text_page("");
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let pieces: [&[u8]; 3] = [b"q 0 0 300 800 re W", b"n BT /F1 10 Tf 72 700 Td (Clipped) Tj ET", b"Q BT /F1 10 Tf 72 600 Td (Unclipped) Tj ET"];
+    let refs = pieces.into_iter().map(|b| Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), b))))).collect();
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Array(refs))).unwrap();
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert!(blocks[0].path_clipped);
+    assert!(!blocks[1].path_clipped);
+    // ActualText may join several drawings. A clip in a later drawing must not be lost.
+    let doc = text_page("/Span << /ActualText (First second) >> BDC BT /F1 10 Tf 72 700 Td (First ) Tj 0 0 300 800 re W n (second) Tj ET EMC");
+    assert!(text::text_blocks(&doc, 0).unwrap()[0].path_clipped);
+}

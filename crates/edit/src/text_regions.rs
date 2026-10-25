@@ -293,6 +293,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 lines: Vec::new(),
                 rows: Vec::new(),
                 invisible: true,
+                path_clipped: false,
             });
         }
         let Some(block) = blocks.last_mut() else { continue };
@@ -302,6 +303,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         for &index in &row {
             let Some(line) = lines.get(index) else { continue };
+            block.path_clipped |= line.path_clipped;
             // Some producers position separate words without encoding a space.
             if let Some(prev) = block.lines.last().filter(|i| row.contains(i)).and_then(|i| lines.get(*i))
                 && !row_text.ends_with(char::is_whitespace)

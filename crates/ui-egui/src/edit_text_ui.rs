@@ -379,6 +379,11 @@ impl LineEditor {
         self.focus = true;
     }
 
+    /// Whether the source PDF will clip this paragraph after Apply, including moved text.
+    pub(crate) fn path_clipped(&self) -> bool {
+        self.source.as_ref().is_some_and(|(block, _)| block.path_clipped)
+    }
+
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
     pub(crate) fn refresh_source(&mut self, block: &pdfcraft_engine::TextBlock, lines: Vec<pdfcraft_engine::TextLine>) {
         self.source_rect = block.rect.map(|v| v as f32);

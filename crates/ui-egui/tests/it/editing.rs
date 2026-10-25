@@ -6498,3 +6498,24 @@ fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
         assert_eq!(blocks(&h).iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Page 1"], "undo restores it");
     }
 }
+
+#[test]
+fn path_clipped_paragraph_warns_before_typing_and_apply() {
+    let warning =
+        "This paragraph has a PDF clipping area. Added rows or moved text outside it will be invisible after applying, even if shown in the editor.";
+    for clipped in [false, true] {
+        let text = "BT /F1 14 Tf 72 320 Td (Banner heading) Tj ET";
+        let content = if clipped { format!("q 60 310 250 30 re W n {text} Q") } else { text.to_owned() };
+        let bytes = paragraph_drag_fixture(&content, 0, 1);
+        let mut h = paragraph_drag_harness(bytes, 0);
+        let (at, _) = paragraph_drag_points(&h, "Banner heading", [0.0, 0.0]);
+        click_at(&mut h, at);
+        h.run_steps(3);
+        assert!(h.state().views[0].line_editor.is_some());
+        assert_eq!(h.query_by_label(warning).is_some(), clipped, "warn before any edit");
+        h.get_by_label("Text editing line").type_text("Banner heading with more words");
+        h.run_steps(3);
+        assert_eq!(h.query_by_label(warning).is_some(), clipped, "keep warning while typing");
+        assert!(h.state().views[0].line_editor.is_some(), "warning does not apply the edit");
+    }
+}

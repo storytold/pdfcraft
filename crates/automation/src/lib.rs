@@ -607,6 +607,7 @@ impl Automation {
                             "paragraph": i + 1,
                             "text": b.text,
                             "editor_text": b.editor_text,
+                            "path_clipped": b.path_clipped,
                             "rows": b.rows.iter().map(|row| row.iter().map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
@@ -692,7 +693,7 @@ impl Automation {
                 };
                 let fonts: Vec<_> = doc.text_editor_fonts(page).into_iter().map(|f| json!({"resource": f.resource, "face": f.face})).collect();
                 json!({ "page": page + 1, "paragraph": k, "source_rect": view_rect(layout.source_rect),
-                    "draft_rect": layout.draft_rect.map(view_rect), "overflow": layout.overflow, "embedded_fonts": fonts })
+                    "draft_rect": layout.draft_rect.map(view_rect), "overflow": layout.overflow, "path_clipped": source.path_clipped, "embedded_fonts": fonts })
             }
             "text_edit" if a.get("paragraph").is_some() => {
                 let page = self.page(&a)?;
@@ -703,6 +704,7 @@ impl Automation {
                 };
                 let index = self.paragraph_index(id, page, k, &blocks)?;
                 let block = blocks.get(index).cloned().ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range")))?;
+                let path_clipped = block.path_clipped;
                 let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
                 let mut style = pdfcraft_engine::BlockStyle {
                     ranges: parse_style_ranges(a.get("ranges"))?,
@@ -746,6 +748,7 @@ impl Automation {
                 let moved = [block.rect[0] + dx, block.rect[1] + dy, block.rect[2] + dx, block.rect[3] + dy];
                 let wanted: String = text.split_whitespace().collect();
                 let mut out = self.apply(&a, Edit::EditTextBlock { page, block: index, text, style })?;
+                out["path_clipped"] = json!(path_clipped);
                 let doc = self.doc(&a)?;
                 let after = doc.text_blocks(page);
                 // Without `text` the paragraph keeps the document's own words: not echoed when
