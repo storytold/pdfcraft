@@ -2134,7 +2134,7 @@ fn plus_between_pages_inserts_picked_files_there_in_order() {
     assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "a note", "Page 2", "Page 3", "a note"]);
     // A file that can't be converted changes nothing.
     let before = texts_of(h.state(), 0);
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("archive.zip".into(), b"PK\x03\x04".to_vec())]);
     h.run_steps(2);
     assert_eq!(texts_of(h.state(), 0), before);
 }
