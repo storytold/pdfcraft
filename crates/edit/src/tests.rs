@@ -4,6 +4,9 @@ use pdfcraft_cos::{Document, SaveOptions, write_full, write_incremental};
 
 use super::*;
 
+#[path = "paragraph_grouping_tests.rs"]
+mod paragraph_grouping;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {
@@ -5834,12 +5837,13 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
 
 #[test]
 fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
-    // Each row has its own background box drawn immediately before its BT..ET, as cards and
-    // highlighted headings exported from LibreOffice or browsers do (#2377).
-    let card = "0 0.45 0.25 rg 60 696 240 16 re f BT /F1 10 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
-                0 0.45 0.25 rg 60 668 240 24 re f BT /F1 16 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
-                0 0.45 0.25 rg 60 632 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
-                0 0.45 0.25 rg 60 596 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
+    // Layered paragraph-wide backgrounds still paint between rows (#2377), but every row has
+    // the same container membership. Compatible size changes retain the mixed-style rewrite
+    // without asking the grouping heuristic to merge independent panels or headings.
+    let card = "0 0.45 0.25 rg 60 540 240 180 re f BT /F1 16 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 20 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
     let shown_at = |ops: &[pdfcraft_content::Op], needle: &str| {
         ops.iter()
             .position(|op| {
@@ -5852,6 +5856,13 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
     // 1. Editing the title rows emits all rewritten rows after all four background fills.
     let mut doc = text_page(card);
     assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    let source_ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let source_fills: Vec<usize> = source_ops.iter().enumerate().filter_map(|(i, op)| op.is("f").then_some(i)).collect();
+    assert_eq!(source_fills.len(), 4);
+    for (row, needle) in ["SEMINARIO", "pratica:", "metodo", "complesso"].iter().enumerate() {
+        let shown = shown_at(&source_ops, needle);
+        assert!(source_fills[row] < shown && source_fills.get(row + 1).is_none_or(|next| shown < *next), "backgrounds must stay interleaved");
+    }
     let edited = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio\nun progetto nuovo";
     text::rewrite_block(&mut doc, 0, 0, Some(edited), &text::BlockStyle::default()).unwrap();
     let doc = reopen(&doc);
@@ -5887,6 +5898,9 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
     let wrapped_edit = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio e metodo approfondito\nun progetto complesso";
     text::rewrite_block(&mut doc, 0, 0, Some(wrapped_edit), &text::BlockStyle::default()).unwrap();
     let doc = reopen(&doc);
+    let wrapped = text::text_blocks(&doc, 0).unwrap();
+    assert!(wrapped[0].rows.len() > 4, "the long edit must wrap and push the suffix row down");
+    assert_eq!(wrapped[0].text, wrapped_edit.replace('\n', " "));
     let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
     let last_fill = ops.iter().rposition(|op| op.is("f")).unwrap();
     assert!(
@@ -5896,8 +5910,8 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
 
     // 4. Single-style paragraph path across a CTM change between rows, with movement, underline,
     // and a trailing unrelated line sharing the second row's BT..ET.
-    let cross_ctm = "0.9 0.9 0.2 rg 60 696 240 18 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
-                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 668 240 18 re f \
+    let cross_ctm = "0.9 0.9 0.2 rg 60 676 240 38 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
+                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 664 240 38 re f \
                      BT /F1 12 Tf 0 0 0 rg 54 672 Td (Second highlighted row) Tj 246 -40 Td (Side footer) Tj ET Q";
     let mut doc = text_page(cross_ctm);
     let para = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.text.starts_with("First highlighted")).unwrap();

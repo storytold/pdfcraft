@@ -5096,7 +5096,7 @@ fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
 fn one_editor_contains_mixed_styles_and_visual_rows() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
@@ -5173,7 +5173,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
 fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
     // It was one row of the region's first (18 pt) size tall, reaching into the row below.
     let bytes = source_font_fixture_with_text(
-        "BT 0 0.2 0.5 rg /F1 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
+        "BT 0 0.2 0.5 rg /F2 1 Tf 18 0 0 18 20 240 Tm (Heading) Tj ET \
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
