@@ -7962,7 +7962,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/storytold/winit.git?rev=a517b3846ee8457d84ee4975110bfda6797c44dc#a517b3846ee8457d84ee4975110bfda6797c44dc"
+source = "git+https://github.com/storytold/winit.git?rev=8de7c1c7f3f9eb90b8355d1b49e57c73e6efc745#8de7c1c7f3f9eb90b8355d1b49e57c73e6efc745"
 dependencies = [
  "ahash",
  "android-activity",
@@ -7999,6 +7999,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wayland-backend",
  "wayland-client",
+ "wayland-cursor",
  "wayland-protocols",
  "wayland-protocols-plasma",
  "web-sys",

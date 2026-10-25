@@ -199,6 +199,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-25 (M3, pen on Wayland, #3650):** A pen tablet works on native Wayland: it hovers, clicks, selects and drags like a mouse, the tip as the left button and the barrel buttons as right and middle. KWin since Plasma 6.3 (and Hyprland) send no pointer input for a pen to a client without the tablet protocol, which winit 0.30 lacked; the winit pin moves to storytold/winit with W28 (tablet-v2). Checked on KDE Plasma 6.8.1 with a GAOMON tablet. Pressure reaches winit's per-window samples but ink does not use it yet. Estimates unchanged.
+
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
