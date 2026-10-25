@@ -1,6 +1,6 @@
 //! A document reloads when its file changes on disk (#431): a LaTeX or Typst build rewriting the
 //! open PDF. Here the watcher looks once per frame on the test's thread (`run_inline`); in the
-//! app a worker thread looks every quarter second.
+//! app a worker thread looks when the system says the file's folder changed (`file_watch`).
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};

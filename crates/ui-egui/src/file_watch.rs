@@ -1,26 +1,32 @@
 //! Reload a document when its file changes on disk (#431): a LaTeX or Typst build rewriting the
 //! PDF that is open shows its new version without reopening it.
 //!
-//! Cheap by design. One worker thread looks at each open file's metadata (no reading) every
-//! [`IDLE`], and blocks without waking at all while no open document has a file. A changed file
-//! is read only once it has stopped changing ([`SETTLE`] apart) and ends like a whole PDF: its
-//! last KiB is read first, so a file still being written costs one small read. The new bytes go
-//! to the UI thread, which is woken for them: a clean document is reloaded in place, keeping its
-//! tab, page, zoom and scroll; one with unsaved changes gets a notice instead. PdfCraft's own
-//! saves are recognised by the file's stamp after writing, so they never reload.
+//! Cheap by design. One worker thread looks at each open file's metadata (no reading) when there
+//! may be something new to see: when the system says something changed in the file's folder
+//! (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows), and every [`IDLE`]
+//! for a file it can't say that about: one on a network or FUSE volume, which another computer can
+//! change without the system seeing it, one whose folder is missing or couldn't be watched, and
+//! every file on other systems. So while nothing changes the worker doesn't wake at all, and it
+//! blocks without waking while no open document has a file. A changed file is read only once it
+//! has stopped changing ([`SETTLE`] apart) and ends like a whole PDF: its last KiB is read first,
+//! so a file still being written costs one small read. The new bytes go to the UI thread, which is
+//! woken for them: a clean document is reloaded in place, keeping its tab, page, zoom and scroll;
+//! one with unsaved changes gets a notice instead. PdfCraft's own saves are recognised by the
+//! file's stamp after writing, so they never reload.
 
 use std::collections::HashMap;
 use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use pdfcraft_engine::DocId;
 
 use crate::PdfCraftApp;
 
-/// How often an unchanged file is looked at.
+/// How often a file is looked at when the system can't say it changed (see the module docs).
 pub const IDLE: Duration = Duration::from_millis(250);
 /// How long a changed file must stay the same before it is read: writers pause between chunks.
 pub const SETTLE: Duration = Duration::from_millis(40);
@@ -104,6 +110,9 @@ struct Entry {
     known: Option<Stamp>,
     /// A changed version seen once, waiting to be seen unchanged again.
     pending: Option<Stamp>,
+    /// The system reports changes to this file ([`Notifications::follow`]), so it isn't looked at
+    /// every [`IDLE`].
+    notified: bool,
 }
 
 /// Looks at the watched files: on the worker thread, or on the UI thread in tests.
@@ -124,6 +133,7 @@ impl Watcher {
                 Entry {
                     known: w.known.or(prev.and_then(|e| e.known)),
                     pending: prev.and_then(|e| e.pending),
+                    notified: false,
                     doc: w.doc,
                     path: w.path,
                     epoch: w.epoch,
@@ -234,35 +244,266 @@ fn read_whole_pdf(path: &str, stamp: Stamp) -> Version {
     Version::Ready(Arc::new(bytes))
 }
 
+/// What wakes the worker thread.
+enum Wake {
+    /// The files to watch now, from the UI thread.
+    Files(Vec<Watched>),
+    /// The system says something changed in the folder of a watched file, or that it lost track
+    /// of what changed: look.
+    Notified,
+    /// The app is gone (see [`FileWatch`]'s `Drop`).
+    Stop,
+}
+
 /// The worker thread: watches the newest list the UI thread sent and hands back new versions,
-/// waking the UI for them. It ends when the app (its inbox's sender) is gone.
-fn run(inbox: mpsc::Receiver<Vec<Watched>>, out: Arc<Mutex<Vec<Changed>>>, ctx: egui::Context) {
+/// waking the UI for them. It looks at the files when the system says one may have changed, every
+/// [`IDLE`] while one of them can't be followed that way, and [`SETTLE`] after a look that found
+/// a file still changing; otherwise it sleeps. `wake` is its own inbox, for the system's
+/// notifications. It ends on [`Wake::Stop`], or when its inbox is gone.
+fn run(inbox: mpsc::Receiver<Wake>, wake: mpsc::Sender<Wake>, out: Arc<Mutex<Vec<Changed>>>, looks: Arc<AtomicU64>, ctx: egui::Context) {
     let mut watcher = Watcher::default();
-    // `None`: nothing to watch, so block until there is.
-    let mut wait = None;
+    let mut notifications = Notifications::new(wake);
+    // When the files are to be looked at next; `None`: only when something says so.
+    let mut due: Option<Instant> = None;
+    // The last look, and whether it found a file still changing.
+    let mut last: Option<Instant> = None;
+    let mut settling = false;
     loop {
-        let message = match wait {
+        let first = match due {
             None => inbox.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            Some(wait) => inbox.recv_timeout(wait),
+            Some(at) => inbox.recv_timeout(at.saturating_duration_since(Instant::now())),
         };
-        match message {
-            Ok(list) => watcher.set(list),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return,
+        let (mut listed, mut notified) = (false, false);
+        for message in std::iter::once(first).chain(std::iter::from_fn(|| inbox.try_recv().ok().map(Ok))) {
+            match message {
+                Ok(Wake::Files(list)) => {
+                    watcher.set(list);
+                    listed = true;
+                }
+                Ok(Wake::Notified) => notified = true,
+                Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
         }
-        while let Ok(list) = inbox.try_recv() {
-            watcher.set(list);
+        let now = Instant::now();
+        if listed {
+            // Stop following folders no open file is in any more, and follow the new ones.
+            notifications.follow(&mut watcher.files);
+            if watcher.files.is_empty() {
+                (due, settling) = (None, false);
+                continue;
+            }
+            // A file not seen before is stamped at once.
+            due = Some(now);
+        } else if notified && !settling {
+            // No sooner than SETTLE after the last look: a folder that never stops changing costs
+            // one look per SETTLE, not one per change. A file still settling is looked at when
+            // its SETTLE is up anyway.
+            let at = last.map_or(now, |l| (l + SETTLE).max(now));
+            due = Some(due.map_or(at, |d| d.min(at)));
         }
-        if watcher.files.is_empty() {
-            wait = None;
+        let Some(at) = due else { continue };
+        if at > now || watcher.files.is_empty() {
             continue;
         }
-        let (found, settling) = watcher.tick();
+        looks.fetch_add(1, Ordering::Relaxed);
+        last = Some(now);
+        // Changes from here on ring again; the ones before are what this look sees.
+        notifications.heard();
+        let (found, still) = watcher.tick();
+        settling = still;
         if !found.is_empty() {
             out.lock().unwrap_or_else(PoisonError::into_inner).extend(found);
             ctx.request_repaint();
         }
-        wait = Some(if settling { SETTLE } else { IDLE });
+        // A file that appeared or went, or a folder made anew, changes what is followed.
+        notifications.follow(&mut watcher.files);
+        due = if settling {
+            Some(now + SETTLE)
+        } else if watcher.files.iter().any(|e| !e.notified) {
+            Some(now + IDLE)
+        } else {
+            None
+        };
+    }
+}
+
+use notifications::Notifications;
+
+/// The system's file change notifications, for the folders of the watched files: FSEvents on
+/// macOS, inotify on Linux, ReadDirectoryChangesW on Windows (through `notify`).
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+mod notifications {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+
+    use notify::Watcher as _;
+
+    use super::{Entry, IDLE, Wake};
+
+    pub(super) struct Notifications {
+        /// `None`: the system gave none, and every file is looked at every [`IDLE`].
+        watcher: Option<notify::RecommendedWatcher>,
+        /// The folders followed, each with what it was when following started: inotify and
+        /// ReadDirectoryChangesW follow a folder, not its name, so one deleted and made again
+        /// is followed anew.
+        folders: HashMap<PathBuf, Option<[u64; 2]>>,
+        /// Set by the first notification since the worker last looked: a burst of them sends one
+        /// [`Wake::Notified`], not one each.
+        rung: Arc<AtomicBool>,
+    }
+
+    impl Notifications {
+        pub(super) fn new(wake: mpsc::Sender<Wake>) -> Self {
+            let rung = Arc::new(AtomicBool::new(false));
+            let bell = rung.clone();
+            // Any event (or an error: some were lost) is a reason to look; the stamps tell what
+            // changed, so a change is never missed for a path spelled differently.
+            let watcher = notify::recommended_watcher(move |_: notify::Result<notify::Event>| {
+                if !bell.swap(true, Ordering::AcqRel) {
+                    let _ = wake.send(Wake::Notified);
+                }
+            });
+            if let Err(e) = &watcher {
+                log::warn!("no file change notifications ({e}): open files are looked at every {} ms", IDLE.as_millis());
+            }
+            Self { watcher: watcher.ok(), folders: HashMap::new(), rung }
+        }
+
+        /// The worker is about to look: the next notification wakes it again.
+        pub(super) fn heard(&self) {
+            self.rung.store(false, Ordering::Release);
+        }
+
+        /// Follow the folders of `files`, and only those, and mark the files whose changes are
+        /// notified: every folder the file is in is followed, and its volume reports every change.
+        pub(super) fn follow(&mut self, files: &mut [Entry]) {
+            let Some(watcher) = self.watcher.as_mut() else {
+                files.iter_mut().for_each(|e| e.notified = false);
+                return;
+            };
+            let per_file: Vec<Vec<PathBuf>> = files.iter().map(|e| folders_of(Path::new(&e.path))).collect();
+            let mut wanted: HashMap<&Path, Option<[u64; 2]>> = HashMap::new();
+            for folder in per_file.iter().flatten() {
+                wanted.entry(folder.as_path()).or_insert_with(|| identity(folder));
+            }
+            // Folders no file is in any more, or made anew since they were followed.
+            self.folders.retain(|folder, was| {
+                let keep = wanted.get(folder.as_path()).is_some_and(|now| now == was);
+                if !keep {
+                    let _ = watcher.unwatch(folder);
+                }
+                keep
+            });
+            for (folder, id) in wanted {
+                if !self.folders.contains_key(folder) && watcher.watch(folder, notify::RecursiveMode::NonRecursive).is_ok() {
+                    self.folders.insert(folder.to_path_buf(), id);
+                }
+            }
+            for (e, folders) in files.iter_mut().zip(&per_file) {
+                e.notified = !folders.is_empty() && folders.iter().all(|f| self.folders.contains_key(f) && reports_changes(f));
+            }
+        }
+    }
+
+    /// The folders whose notifications cover a change to `path`: its own folder, and, when it is
+    /// a link, the folder of the file it leads to, which is what a build rewrites. Real paths, as
+    /// notifications name them; none when the folder is missing.
+    fn folders_of(path: &Path) -> Vec<PathBuf> {
+        let own = path.parent().filter(|p| !p.as_os_str().is_empty()).and_then(|p| std::fs::canonicalize(p).ok());
+        let target = std::fs::canonicalize(path).ok().and_then(|p| p.parent().map(Path::to_path_buf));
+        let mut out: Vec<PathBuf> = own.into_iter().collect();
+        if let Some(target) = target.filter(|t| !out.contains(t)) {
+            out.push(target);
+        }
+        out
+    }
+
+    /// Tells a folder from one made again under its name.
+    fn identity(folder: &Path) -> Option<[u64; 2]> {
+        let meta = std::fs::metadata(folder).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some([meta.dev(), meta.ino()])
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            Some([meta.creation_time(), 0])
+        }
+    }
+
+    /// Whether the system is told of every change to the files in `folder`: not on a network
+    /// share or a FUSE volume, whose files another computer (or the FUSE server) can change
+    /// without going through this one, so their changes are looked for every [`IDLE`].
+    #[cfg(target_os = "macos")]
+    pub(super) fn reports_changes(folder: &Path) -> bool {
+        // `MNT_LOCAL` in <sys/mount.h>: "filesystem is stored locally". SMB, AFP, NFS, WebDAV and
+        // FUSE volumes (unless mounted `local`) don't set it.
+        const MNT_LOCAL: u32 = 0x0000_1000;
+        rustix::fs::statfs(folder).is_ok_and(|s| s.f_flags & MNT_LOCAL != 0)
+    }
+
+    /// Whether the system is told of every change to the files in `folder`: not on a network
+    /// file system or a FUSE volume, whose files another computer (or the FUSE server) can change
+    /// without going through this one, so their changes are looked for every [`IDLE`].
+    #[cfg(target_os = "linux")]
+    pub(super) fn reports_changes(folder: &Path) -> bool {
+        // statfs(2) `f_type`s, from <linux/magic.h> (and Lustre's): NFS, SMB, CIFS, SMB2, FUSE,
+        // 9P (WSL drives, VM shares), Ceph, AFS (two), Coda, NCP, OCFS2, GFS2, VirtualBox
+        // shared folders, Lustre.
+        const ELSEWHERE: &[u32] = &[
+            0x6969,
+            0x517B,
+            0xFF53_4D42,
+            0xFE53_4D42,
+            0x6573_5546,
+            0x0102_1997,
+            0x00C3_6400,
+            0x5346_414F,
+            0x6B41_4653,
+            0x7375_7245,
+            0x564C,
+            0x7461_636F,
+            0x0116_1970,
+            0x786F_4256,
+            0x0BD0_0BD0,
+        ];
+        // `f_type` is a signed word on most architectures; the magic numbers are 32 bits, and
+        // the ones past `i32::MAX` (CIFS, SMB2) arrive sign-extended.
+        rustix::fs::statfs(folder).is_ok_and(|s| !ELSEWHERE.contains(&(s.f_type as u32)))
+    }
+
+    /// Whether the system is told of every change to the files in `folder`. On Windows
+    /// ReadDirectoryChangesW reports changes on network shares too.
+    #[cfg(windows)]
+    pub(super) fn reports_changes(_: &Path) -> bool {
+        true
+    }
+}
+
+/// No file change notifications on this system: every file is looked at every [`IDLE`].
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+mod notifications {
+    use std::sync::mpsc;
+
+    use super::{Entry, Wake};
+
+    pub(super) struct Notifications;
+
+    impl Notifications {
+        pub(super) fn new(_: mpsc::Sender<Wake>) -> Self {
+            Self
+        }
+
+        pub(super) fn heard(&self) {}
+
+        pub(super) fn follow(&mut self, files: &mut [Entry]) {
+            files.iter_mut().for_each(|e| e.notified = false);
+        }
     }
 }
 
@@ -270,8 +511,10 @@ fn run(inbox: mpsc::Receiver<Vec<Watched>>, out: Arc<Mutex<Vec<Changed>>>, ctx: 
 #[derive(Default)]
 pub struct FileWatch {
     /// The worker's inbox (`None` until a document with a file is open).
-    inbox: Option<mpsc::Sender<Vec<Watched>>>,
+    inbox: Option<mpsc::Sender<Wake>>,
     found: Arc<Mutex<Vec<Changed>>>,
+    /// How many times the worker has looked at the files.
+    looks: Arc<AtomicU64>,
     /// What the watcher was last told.
     sent: Vec<Watched>,
     /// In tests ([`PdfCraftApp::run_inline`]) there is no thread: each frame looks once.
@@ -290,7 +533,22 @@ pub struct FileWatch {
     pub reload_request: Option<DocId>,
 }
 
+impl Drop for FileWatch {
+    /// The worker's own notifications keep its inbox open, so it is told to end.
+    fn drop(&mut self) {
+        if let Some(inbox) = self.inbox.take() {
+            let _ = inbox.send(Wake::Stop);
+        }
+    }
+}
+
 impl FileWatch {
+    /// How many times the worker has looked at the files.
+    #[cfg(test)]
+    fn looks(&self) -> u64 {
+        self.looks.load(Ordering::Relaxed)
+    }
+
     /// PdfCraft read or wrote `path` for `doc`: that version is not a change, and anything the
     /// watcher found before it is stale.
     pub fn known_now(&mut self, doc: DocId, path: &str) {
@@ -382,13 +640,13 @@ impl PdfCraftApp {
             }
             let Some(ctx) = self.ctx.clone() else { return false };
             let (tx, rx) = mpsc::channel();
-            let out = self.watch.found.clone();
-            if std::thread::Builder::new().name("pdfcraft-watch".into()).spawn(move || run(rx, out, ctx)).is_err() {
+            let (wake, out, looks) = (tx.clone(), self.watch.found.clone(), self.watch.looks.clone());
+            if std::thread::Builder::new().name("pdfcraft-watch".into()).spawn(move || run(rx, wake, out, looks, ctx)).is_err() {
                 return false;
             }
             self.watch.inbox = Some(tx);
         }
-        let delivered = self.watch.inbox.as_ref().is_some_and(|tx| tx.send(list).is_ok());
+        let delivered = self.watch.inbox.as_ref().is_some_and(|tx| tx.send(Wake::Files(list)).is_ok());
         if !delivered {
             // The worker ended (it panicked): start a new one next frame.
             self.watch.inbox = None;
@@ -652,5 +910,187 @@ mod tests {
         assert_eq!(d.path.as_deref(), Some(new_path.as_str()));
         assert_eq!(d.info.pages.len(), 2, "the old file's version was not applied to the new one");
         assert!(d.can_undo().is_some() && !d.dirty, "the saved document and its history stay");
+    }
+
+    /// Dropping the app's side tells the worker to end: its own notifications keep its inbox open.
+    #[test]
+    fn dropping_the_app_side_tells_the_worker_to_end() {
+        let (tx, rx) = mpsc::channel();
+        let mut watch = FileWatch::default();
+        watch.inbox = Some(tx);
+        drop(watch);
+        assert!(matches!(rx.try_recv(), Ok(Wake::Stop)));
+    }
+
+    /// The worker thread on its own, with the system's change notifications, as the app runs it.
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    mod worker {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Arc, Mutex, mpsc};
+        use std::thread::JoinHandle;
+        use std::time::{Duration, Instant};
+
+        use pdfcraft_engine::DocId;
+
+        use super::super::{Changed, IDLE, Stamp, Wake, Watched, notifications, run};
+        use super::{TempDir, fixture, rebuild};
+
+        /// Long enough for a change notification on a busy machine; a poll every [`IDLE`] looks four
+        /// times in it.
+        const QUIET: Duration = Duration::from_secs(1);
+
+        struct Worker {
+            inbox: mpsc::Sender<Wake>,
+            found: Arc<Mutex<Vec<Changed>>>,
+            looks: Arc<AtomicU64>,
+            thread: Option<JoinHandle<()>>,
+        }
+
+        impl Worker {
+            fn start() -> Self {
+                let (inbox, rx) = mpsc::channel();
+                let (found, looks) = (Arc::<Mutex<Vec<Changed>>>::default(), Arc::<AtomicU64>::default());
+                let (wake, out, counter) = (inbox.clone(), found.clone(), looks.clone());
+                let thread = std::thread::spawn(move || run(rx, wake, out, counter, egui::Context::default()));
+                Self { inbox, found, looks, thread: Some(thread) }
+            }
+
+            fn watch(&self, path: &str, known: Option<Stamp>) {
+                let file = Watched { doc: DocId(1), path: path.to_owned(), known, epoch: 0 };
+                self.inbox.send(Wake::Files(vec![file])).unwrap();
+            }
+
+            fn looks(&self) -> u64 {
+                self.looks.load(Ordering::Relaxed)
+            }
+
+            /// How many looks the worker takes in `QUIET`, after any late notification of the
+            /// test's own writing has come in.
+            fn looks_while_quiet(&self) -> u64 {
+                std::thread::sleep(Duration::from_millis(300));
+                let before = self.looks();
+                std::thread::sleep(QUIET);
+                self.looks() - before
+            }
+
+            fn until(&self, what: &str, done: impl Fn(&Self) -> bool) {
+                let end = Instant::now() + Duration::from_secs(20);
+                while !done(self) {
+                    assert!(Instant::now() < end, "timed out waiting until {what}");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+
+            fn next_version(&self) -> Changed {
+                self.until("a new version is found", |w| !w.found.lock().unwrap().is_empty());
+                self.found.lock().unwrap().remove(0)
+            }
+        }
+
+        impl Drop for Worker {
+            fn drop(&mut self) {
+                let _ = self.inbox.send(Wake::Stop);
+                if let Some(thread) = self.thread.take() {
+                    let _ = thread.join();
+                }
+            }
+        }
+
+        /// The worker doesn't look at an unchanged file at all: it waits for the system to say its
+        /// folder changed, and then reads the new version as before.
+        #[test]
+        fn the_worker_rests_until_the_system_says_the_file_changed() {
+            let (_dir, path) = TempDir::new("notified", &fixture(2));
+            let worker = Worker::start();
+            worker.watch(&path, Stamp::at(&path));
+            worker.until("the file is first looked at", |w| w.looks() >= 1);
+            let quiet = worker.looks_while_quiet();
+            assert!(quiet <= 1, "{quiet} looks at an unchanged file in {QUIET:?} (every {IDLE:?} would be 4)");
+            let before = worker.looks();
+            rebuild(&path, &fixture(3));
+            let found = worker.next_version();
+            assert_eq!((found.path.as_str(), found.bytes.as_slice()), (path.as_str(), fixture(3).as_slice()));
+            assert_eq!(Some(found.stamp), Stamp::at(&path));
+            let looks = worker.looks() - before;
+            assert!(looks <= 8, "a few looks for one build, not a poll: {looks}");
+        }
+
+        /// A file the system can't report on (here: its folder is gone, as a clean build leaves
+        /// it) is looked at every IDLE, as before. Once it is back its folder is followed and the
+        /// looking stops.
+        #[test]
+        fn a_file_without_notifications_is_looked_at_until_its_folder_can_be_followed() {
+            let (dir, _) = TempDir::new("unfollowed", &fixture(1));
+            let folder = dir.0.join("build");
+            let path = folder.join("thesis.pdf").to_string_lossy().into_owned();
+            let worker = Worker::start();
+            // The document came from a version that is gone now.
+            worker.watch(&path, Some(Stamp { len: 1, modified: None, extra: [0; 4] }));
+            let polled = worker.looks_while_quiet();
+            assert!(polled >= 2, "looked at every {IDLE:?} with no folder to follow: {polled} looks in {QUIET:?}");
+            std::fs::create_dir(&folder).unwrap();
+            std::fs::write(&path, fixture(3)).unwrap();
+            assert_eq!(worker.next_version().bytes.as_slice(), fixture(3).as_slice());
+            let quiet = worker.looks_while_quiet();
+            assert!(quiet <= 1, "the folder is followed now: {quiet} looks in {QUIET:?}");
+        }
+
+        /// The worker ends when told to, with its notifications.
+        #[test]
+        fn a_stopped_worker_ends() {
+            let (_dir, path) = TempDir::new("stop", &fixture(1));
+            let mut worker = Worker::start();
+            worker.watch(&path, Stamp::at(&path));
+            worker.until("the file is first looked at", |w| w.looks() >= 1);
+            worker.inbox.send(Wake::Stop).unwrap();
+            let thread = worker.thread.take().unwrap();
+            let end = Instant::now() + Duration::from_secs(20);
+            while !thread.is_finished() {
+                assert!(Instant::now() < end, "the worker didn't end");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        /// A local folder reports its changes (a temporary folder is local), and a missing one
+        /// can't be asked.
+        #[test]
+        fn a_local_folder_reports_its_changes() {
+            let (dir, _) = TempDir::new("local", &fixture(1));
+            let folder = std::fs::canonicalize(&dir.0).unwrap();
+            assert!(notifications::reports_changes(&folder));
+            #[cfg(unix)]
+            assert!(!notifications::reports_changes(&folder.join("missing")));
+        }
+    }
+
+    /// The app reloads a rebuilt file from the system's notification, its worker resting until
+    /// then.
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[test]
+    fn a_rebuilt_file_reloads_from_the_systems_notification() {
+        let (_dir, path) = TempDir::new("app-notified", &fixture(2));
+        let mut h = harness(&path);
+        // Opened on the test's thread; from here the worker thread watches, as in the app.
+        h.state_mut().run_inline = false;
+        h.state_mut().watch.sent.clear();
+        let id = h.state().views[0].id;
+        let end = std::time::Instant::now() + Duration::from_secs(20);
+        while h.state().watch.looks() == 0 {
+            assert!(std::time::Instant::now() < end, "the worker never looked");
+            h.run_steps(1);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let before = h.state().watch.looks();
+        std::thread::sleep(Duration::from_secs(1));
+        let quiet = h.state().watch.looks() - before;
+        assert!(quiet <= 1, "{quiet} looks at an unchanged file in a second");
+        rebuild(&path, &fixture(3));
+        while doc(&h).info.pages.len() != 3 {
+            assert!(std::time::Instant::now() < end + Duration::from_secs(10), "the rebuilt file never reloaded");
+            h.run_steps(1);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!((h.state().views.len(), h.state().views[0].id), (1, id), "in the same tab");
     }
 }

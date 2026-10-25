@@ -48,6 +48,16 @@ arboard = { version = "3.6", default-features = false, features = ["image-data"]
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).
 pollster = "1.0"
 
+[target.'cfg(any(target_os = "macos", target_os = "linux", windows))'.dependencies]
+# Reloading open documents (#431): the system says when a file's folder changes (FSEvents,
+# inotify, ReadDirectoryChangesW), so the watcher doesn't look every 250 ms (`file_watch`).
+notify = "8.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Which volumes report every change (`statfs`): network and FUSE files are still looked at every
+# 250 ms (`file_watch`). macOS has it below; already in the tree through tempfile and wayland.
+rustix = { version = "1", features = ["fs"] }
+
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.
 fontconfig-parser = "0.5.8"
@@ -60,8 +70,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
 block2 = "0.6"
 plist = "1.10"
-# A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE); already in
-# the tree through pdfcraft-cli.
+# A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE), and which
+# volumes report every change (`file_watch`); already in the tree through pdfcraft-cli.
 rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
