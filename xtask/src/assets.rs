@@ -28,7 +28,6 @@ pub const ALLOWED_LICENCES: &[&str] = &[
     "BSD-3-Clause",
     "Apache-2.0",
     "OFL-1.1",
-    "GPL-2.0-with-font-exception",
     "Ubuntu-font-1.0",
     "Bitstream-Vera",
     "CC0-1.0",

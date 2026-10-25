@@ -26,25 +26,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
-# Ensure cargo, dotnet tools (wix), and Windows SDK rc.exe are on PATH
-$dotnetCmd = Get-Command 'dotnet' -ErrorAction SilentlyContinue
-if ($dotnetCmd) {
-  $env:DOTNET_ROOT = Split-Path $dotnetCmd.Source
-} elseif (Test-Path 'C:\Program Files\dotnet') {
-  $env:DOTNET_ROOT = 'C:\Program Files\dotnet'
-}
-$dotnetTools = Join-Path $env:USERPROFILE '.dotnet\tools'
-if (Test-Path $dotnetTools) {
-  $env:Path = "$dotnetTools;$env:Path"
-}
-$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-if (-not (Get-Command 'rc.exe' -ErrorAction SilentlyContinue)) {
-  $sdkBins = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\10.*\x64\rc.exe' -ErrorAction SilentlyContinue
-  if ($sdkBins) {
-    $env:Path = "$($sdkBins[0].DirectoryName);$env:Path"
-  }
-}
-
 function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
   & $Block
@@ -81,11 +62,7 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PDFCRAFT_REQUIRE_WINRES = '1'
-  try {
-    Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
-  } finally {
-    [Environment]::SetEnvironmentVariable($flagVar, $null)
-  }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"

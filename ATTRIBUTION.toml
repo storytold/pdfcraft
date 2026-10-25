@@ -3488,7 +3488,6 @@ kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "864ab2f19254e6ac7240bc6a98323197332e8f714d4d3f94831f41309e5ef2f7"
 
-
 [[asset]]
 path = "crates/ui-egui/src/i18n/sq.tsv"
 title = "Albanian interface translation catalog"
