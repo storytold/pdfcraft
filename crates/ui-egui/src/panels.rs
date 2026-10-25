@@ -730,6 +730,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
                             close = true;
                         }
+                        if panel == RightPanel::Pages
+                            && let Some(c) = page_tools(ui, !modal && view.panel_drag.is_none() && bm_editable)
+                        {
+                            panel_command = Some(c);
+                        }
                         // Right to left: close, "…", filter, search (Acrobat's order left to right).
                         if panel == RightPanel::Comments {
                             panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
@@ -1291,6 +1296,38 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
 }
 
 /// Size controls stay above the scroll area, so they remain reachable on long documents.
+/// Page tools in the Pages panel's header (#4415): a menu, as Bookmark options is in its panel,
+/// to insert a blank page or pages from a file, rotate, extract and delete. Each runs its
+/// command on the selected pages (the current page when none is), so it does what Pages ▸ …
+/// does; the items say so, apart from the thumbnails' own menu. `enabled` is false while the
+/// document may not be assembled or a dialog is open. Returns the command a click asks for.
+fn page_tools(ui: &mut egui::Ui, enabled: bool) -> Option<&'static str> {
+    let tools: [(&'static str, &str); 6] = [
+        ("page.insert_blank", tl!("Insert a blank page after the selection")),
+        ("page.insert", tl!("Insert pages from a file after the selection…")),
+        ("page.rotate_ccw", tl!("Rotate the selected pages counterclockwise")),
+        ("page.rotate", tl!("Rotate the selected pages clockwise")),
+        ("page.extract", tl!("Extract the selected pages…")),
+        ("page.delete", tl!("Delete the selected pages")),
+    ];
+    let mut picked = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Page tools"));
+        egui::Popup::menu(&more).show(|ui| {
+            ui.set_min_width(260.0);
+            for (id, label) in tools {
+                let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+                let item = egui::Button::image_and_text(icons::image(spec.icon, 16.0, ui.visuals().text_color()), label);
+                if ui.add(item).clicked() {
+                    picked = Some(id);
+                    ui.close();
+                }
+            }
+        });
+    });
+    picked
+}
+
 fn thumbnail_size(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, enabled: bool) {
     let before = view.thumbnail_zoom();
     let mut zoom = before;

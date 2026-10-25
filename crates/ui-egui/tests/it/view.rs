@@ -2111,3 +2111,62 @@ fn full_screen_clicks_turn_pages_whatever_tool_was_on() {
     assert!(!h.state().full_screen);
     assert_eq!(h.state().quick_tool, QuickTool::Hand, "the tool from before is back");
 }
+
+/// #4415: the Pages panel's Page tools menu. Each tool acts on the selected pages (the current
+/// page when none is): rotate, delete and insert a blank page here, as Pages ▸ … does.
+#[test]
+fn the_pages_panel_tools_act_on_the_selected_pages() {
+    let mut h = harness(&[("panel", "pages")]);
+    let id = h.state().views[0].id;
+    let rotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>();
+    // The panel's Page tools menu, on the right-hand side of the window.
+    let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools in the Pages panel").click();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    };
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    h.run_steps(2);
+    tool(&mut h, "Rotate the selected pages clockwise");
+    assert_eq!(rotations(&h), [0, 90, 90], "pages 2 and 3, the selection");
+    tool(&mut h, "Rotate the selected pages counterclockwise");
+    assert_eq!(rotations(&h), [0, 0, 0]);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    tool(&mut h, "Delete the selected pages");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "page 1 deleted");
+    tool(&mut h, "Insert a blank page after the selection");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "each is one undo step");
+}
+
+/// The Pages panel's Page tools are greyed out on a document whose security doesn't allow
+/// page changes: the menu doesn't open, and nothing changes.
+#[test]
+fn the_pages_panel_tools_are_off_without_page_editing_permission() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness(&[("panel", "pages")]);
+    {
+        let app = h.state_mut();
+        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            ..Default::default()
+        }));
+        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
+    }
+    h.run_steps(6);
+    let i = h.state().active.unwrap();
+    let id = h.state().views[i].id;
+    assert!(!h.state().session.get(id).unwrap().allows_assembly());
+    let tools = h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools");
+    assert!(tools.accesskit_node().is_disabled(), "Page tools is greyed out");
+    tools.click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
+}
