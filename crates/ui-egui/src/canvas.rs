@@ -234,6 +234,18 @@ pub struct Find {
     /// (page, glyph range) in document order.
     pub matches: Vec<(usize, Range<usize>)>,
     pub current: Option<usize>,
+    /// The page a search started from while its match is picked automatically: a text layer
+    /// that arrives out of order can still supply an earlier match, and the automatic choice
+    /// follows this page. Cleared when the user picks a match or moves the view themselves.
+    pub auto_from: Option<usize>,
+    /// The page the automatic choice last put the view on (the search's starting page until it
+    /// chose anything). Compared with the viewed page, it tells an automatic scroll from one
+    /// the reader made themselves; `None` with `auto_from` once the choice is the user's.
+    pub auto_page: Option<usize>,
+    /// The reader ended automatic following (by navigating, scrolling, or picking a match).
+    /// This is distinct from a search that never followed: a late match must be listed without
+    /// being revealed by scrolling, even when the reader moved before the first match arrived.
+    pub follow_ended: bool,
     pub focus: bool,
     pub case_query: String,
     /// Find options (Acrobat's: case-sensitive, whole words only).
@@ -241,6 +253,51 @@ pub struct Find {
     pub whole_words: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
+}
+
+/// What a text layer arriving after a search began may do with the automatic choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Follow {
+    /// The reader has not moved the view since the automatic choice: it may follow `from`.
+    Active(usize),
+    /// The reader navigated, scrolled or picked a match, so no automatic choice may reveal.
+    Ended,
+    /// No automatic choice is being followed (the search has not started, or the reader chose).
+    Never,
+}
+
+impl Find {
+    /// The first match at or after `page`, or the first match when none follows (the search
+    /// wraps round the document).
+    fn first_at_or_after(&self, page: usize) -> Option<usize> {
+        self.matches.iter().position(|(p, _)| *p >= page).or_else(|| (!self.matches.is_empty()).then_some(0))
+    }
+
+    /// How a text layer arriving now relates to the automatic choice. Once the reader has moved
+    /// the view (page box, Pages panel, outline, view history or any scrolling), automatic
+    /// following ends: a later layer must not pull them back to an anchor-derived match.
+    /// `Ended` is deliberately distinct from `Never`, so a first match arriving after that move
+    /// is not revealed by a flash meant only for a search that is still following.
+    fn follow_page(&mut self, viewed: usize) -> Follow {
+        if self.follow_ended {
+            return Follow::Ended;
+        }
+        match (self.auto_from, self.auto_page) {
+            (Some(from), Some(page)) if page == viewed => Follow::Active(from),
+            (Some(_), _) | (_, Some(_)) => {
+                self.stop_following();
+                Follow::Ended
+            }
+            (None, None) => Follow::Never,
+        }
+    }
+
+    /// Ends automatic following: the selected match is now the user's choice to keep.
+    fn stop_following(&mut self) {
+        self.auto_from = None;
+        self.auto_page = None;
+        self.follow_ended = true;
+    }
 }
 
 /// A text selection on one page.
@@ -730,6 +787,30 @@ impl DocView {
         self.auto_scroll.panning()
     }
 
+    /// Abandon only pointer previews: clearing egui's held button must not commit an app-owned
+    /// grab through a tool's `!primary_down` fallback. Keep selections, text drafts and edits
+    /// that were already completed before cancellation.
+    pub(crate) fn cancel_pointer_gestures(&mut self) {
+        self.marquee = None;
+        self.marquee_done = None;
+        self.comments.gesture = None;
+        self.links.drag = None;
+        self.sign.drag = None;
+        self.redact_drag = None;
+        self.crop_drag = None;
+        self.block_drag = None;
+        self.org_drag = None;
+        self.panel_drag = None;
+        self.selection_drag = false;
+        self.auto_scroll.cancel();
+        self.prepare.cancel_pointer_gesture();
+        self.content.cancel_pointer_gesture();
+        self.objects.cancel_pointer_gesture();
+        if let Some(image) = &mut self.image_selection {
+            image.cancel_pointer_gesture();
+        }
+    }
+
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
         let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
@@ -1035,6 +1116,10 @@ impl DocView {
         self.last_queue.clear();
         self.selection = None;
         self.all_text = false;
+        // A content change is not reader navigation: keep the automatic anchor so the
+        // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
+        // took over stays in control. `document_changed` clamps `current`; if the view no longer
+        // sits where the automatic choice left it, `follow_page` ends it.
         if let Some(f) = self.find.as_mut() {
             f.matches.clear();
             f.current = None;
@@ -1225,6 +1310,16 @@ impl DocView {
         f.case_query = f.query.clone();
         f.matches.clear();
         f.current = None;
+        // Refining the query keeps the page the reader started searching from, even when an
+        // automatic choice has already scrolled them to a match. Only a view the reader moved
+        // themselves re-anchors the search on the page now shown.
+        let from = match (f.auto_from, f.auto_page) {
+            (Some(from), Some(page)) if !f.follow_ended && page == self.current => from,
+            _ => self.current,
+        };
+        f.auto_from = Some(from);
+        f.auto_page = Some(self.current);
+        f.follow_ended = false;
         if f.case_query.trim().is_empty() {
             return;
         }
@@ -1236,12 +1331,12 @@ impl DocView {
             }
         }
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
-        if !f.matches.is_empty() {
-            // First match at or after the page being viewed.
-            let cur = self.current;
-            let i = f.matches.iter().position(|(p, _)| *p >= cur).unwrap_or(0);
+        // First match at or after the page the search started from.
+        if let Some(i) = f.first_at_or_after(from)
+            && let Some(&(p, _)) = f.matches.get(i)
+        {
             f.current = Some(i);
-            let (p, _) = f.matches[i];
+            f.auto_page = Some(p);
             self.flash_match(p);
         }
     }
@@ -1251,21 +1346,33 @@ impl DocView {
         if f.case_query.trim().is_empty() {
             return;
         }
-        let current_key = f.current.and_then(|c| f.matches.get(c).cloned());
+        let previous = f.current.and_then(|c| f.matches.get(c).cloned());
+        // An automatic choice follows the page it was anchored on, so a page whose text
+        // arrives late can still supply an earlier match. Once the reader has moved the view,
+        // this arrival must not pull them back; the choice then becomes theirs to keep.
+        let follow = f.follow_page(self.current);
         f.matches.retain(|(p, _)| *p != page);
         f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (page, r)));
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
-        f.current = current_key.as_ref().and_then(|k| f.matches.iter().position(|m| m == k));
-        if f.current.is_none() && !f.matches.is_empty() {
-            // First match at or after the page being viewed.
-            let cur = self.current;
-            let i = f.matches.iter().position(|(p, _)| *p >= cur).unwrap_or(0);
-            f.current = Some(i);
-            let (p, _) = f.matches[i];
-            if current_key.is_none() {
+        if let Follow::Active(from) = follow {
+            f.current = f.first_at_or_after(from);
+            let selected = f.current.and_then(|i| f.matches.get(i).cloned());
+            // Follow a changed automatic choice; the view is still where the last one left it.
+            if selected != previous
+                && let Some((p, _)) = selected
+            {
+                f.auto_page = Some(p);
                 self.flash_match(p);
             }
+            return;
         }
+        // A match the user picked keeps its identity, exactly as before automatic following.
+        // When it is gone (or none was picked), the first match at or after the viewed page is
+        // selected for the panel, but the view stays put: `Ended` and `Never` have no automatic
+        // choice to reveal, and a reader who moved before the first layer arrived must not be
+        // pulled back by that late match.
+        let preserved = previous.as_ref().and_then(|k| f.matches.iter().position(|m| m == k));
+        f.current = preserved.or_else(|| f.first_at_or_after(self.current));
     }
 
     /// Go to match `i` (the Search panel's results).
@@ -1273,6 +1380,7 @@ impl DocView {
         let Some(f) = self.find.as_mut() else { return };
         let Some(&(p, _)) = f.matches.get(i) else { return };
         f.current = Some(i);
+        f.stop_following();
         self.go_to_page(p);
         self.goto_point = None;
         self.flash_match(p);
@@ -1288,6 +1396,7 @@ impl DocView {
         let c = f.current.unwrap_or(0);
         let next = if forward { (c + 1) % n } else { (c + n - 1) % n };
         f.current = Some(next);
+        f.stop_following();
         let p = f.matches[next].0;
         // Only explicit search navigation joins history; background refresh uses flash_match alone.
         self.go_to_page(p);
@@ -1341,8 +1450,18 @@ impl DocView {
         self.wheel_boost_y.reset();
     }
 
+    /// Ends automatic search following after the reader navigated or scrolled the view. A
+    /// programmatic search flash never comes through here; it sets `goto` and `current` directly
+    /// so that its own scroll cannot be mistaken for the reader's.
+    fn end_find_following(&mut self) {
+        if let Some(f) = self.find.as_mut() {
+            f.stop_following();
+        }
+    }
+
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
+        self.end_find_following();
         if page != self.current {
             // The view history (Previous view / Next view).
             if self.back.last() != Some(&self.current) {
@@ -1471,7 +1590,7 @@ impl DocView {
 
     /// Page-editor focus and drafts belong to a document, even while another tab is active.
     pub(crate) fn page_input_id(&self) -> egui::Id {
-        egui::Id::new(("page-input", self.id.0))
+        egui::Id::unique(("page-input", self.id.0))
     }
 
     /// The idle page box and unchanged-input lookup share the same label fallback.
@@ -1504,6 +1623,11 @@ impl DocView {
 
     /// View ▸ Page navigation ▸ Previous view (`false`) / Next view (`true`).
     pub fn view_history(&mut self, forward: bool) -> bool {
+        let has_target = if forward { !self.forward.is_empty() } else { !self.back.is_empty() };
+        if !has_target {
+            return false;
+        }
+        self.end_find_following();
         let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
         let Some(page) = from.pop() else { return false };
         to.push(self.current);
@@ -2127,12 +2251,17 @@ impl DocView {
                     log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
                     self.text_failed.insert(r.request.page);
                     if let Some(f) = self.find.as_mut() {
-                        let current_key = f.current.and_then(|c| f.matches.get(c).cloned());
+                        let previous = f.current.and_then(|c| f.matches.get(c).cloned());
+                        let follow = f.follow_page(self.current);
                         f.matches.retain(|(p, _)| *p != r.request.page);
-                        f.current = current_key.and_then(|k| f.matches.iter().position(|m| *m == k));
-                        if f.current.is_none() && !f.matches.is_empty() {
-                            let cur = self.current;
-                            f.current = Some(f.matches.iter().position(|(p, _)| *p >= cur).unwrap_or(0));
+                        match follow {
+                            // An automatic choice keeps following its anchor; a failure never
+                            // flashes, so the view stays exactly where it was.
+                            Follow::Active(from) => f.current = f.first_at_or_after(from),
+                            Follow::Ended | Follow::Never => {
+                                let preserved = previous.as_ref().and_then(|k| f.matches.iter().position(|m| m == k));
+                                f.current = preserved.or_else(|| f.first_at_or_after(self.current));
+                            }
                         }
                     }
                 }
@@ -2701,15 +2830,14 @@ const SUPPRESS_SECS: f64 = 0.25;
 /// Short rolling extension while egui still has an unprocessed wheel tail.
 const SUPPRESS_TAIL_SECS: f64 = 0.05;
 
-// The viewer moves between docking and the central panel as modes change; keep its scroll
-// identity tied to the document instead of either parent UI.
+// Keep the viewer's scroll identity tied to the document instead of its parent UI.
 fn page_scroll<R>(
     ui: &mut egui::Ui,
     scroll: egui::ScrollArea,
     id: egui::Id,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
-    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| scroll.show_viewport(ui, draw)).inner
+    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
@@ -2718,6 +2846,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // Keyboard scrolling applies to this frame's page view only, never later.
     let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
+    if key_scroll != 0.0 {
+        app.views[index].end_find_following();
+    }
     // The Search panel closed: its search moves to the find bar.
     let search_open = app.right == Some(crate::RightPanel::Search);
     if let Some(f) = app.views[index].find.as_mut()
@@ -2914,7 +3045,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // even while the page can't turn.
         ui.input(|i| {
             for e in &i.events {
-                if let egui::Event::MouseWheel { unit, delta, phase, modifiers } = e {
+                if let egui::Event::MouseWheel { unit, delta, phase, modifiers, .. } = e {
                     // Zooming (⌘ or Ctrl) and sideways scrolling (Shift) never turn pages.
                     let dy = if modifiers.command || modifiers.ctrl || modifiers.shift { 0.0 } else { delta.y };
                     if fits {
@@ -2965,8 +3096,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         line_base.y = 0.0;
         boost_extra.y = 0.0;
     }
-    if now < view.precise_scroll_until {
-        if ui.input(|i| i.is_scrolling()) {
+    // egui smooths a Point event that moved at least 8 points, keeping part of it for later
+    // passes. Suppression must outlive that whole action: once it expired after a fixed 0.25 s,
+    // the last few eased points leaked through the ScrollArea after a precise 1:1 scroll (held
+    // point input measured 33 points for a 30-point event). Keep hiding the eased copy until
+    // egui says the action is over, then forget the suppression.
+    let scrolling = ui.input(|i| i.is_scrolling());
+    if now < view.precise_scroll_until || (view.precise_scroll_until != 0.0 && scrolling) {
+        if scrolling {
             // Keep hiding egui's unprocessed copy until it has drained. The short rolling grace
             // avoids a delayed duplicate without prolonging suppression after the tail is gone.
             view.precise_scroll_until = view.precise_scroll_until.max(now + SUPPRESS_TAIL_SECS);
@@ -2988,10 +3125,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     } else {
         precise_scroll = Vec2::ZERO;
-        if line_base != Vec2::ZERO || has_page {
-            // Selection handling below uses zero to distinguish an inactive window.
-            view.precise_scroll_until = 0.0;
-        }
+        // Selection handling below uses zero to distinguish an inactive window. Clearing a past
+        // deadline also keeps a later line/page action from being mistaken for the old tail.
+        view.precise_scroll_until = 0.0;
     }
     if has_page && paging_owns_vertical {
         // Page input belongs to egui on the free axis; the pager still owns vertical motion.
@@ -3012,6 +3148,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let glide = view.fling.step(now);
     if view.fling.gliding() {
         ui.ctx().request_repaint();
+    }
+    // Any reader-owned motion ends automatic search following, even when it stays on the same
+    // page: the wheel, keyboard, middle-button auto-scroll, a drawing's edge scroll, or the
+    // momentum left by a touchpad swipe. The automatic flash uses `goto`, not these deltas, so
+    // its programmatic scroll is never mistaken for a reader action.
+    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
+    if wheel_scrolled || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO || glide != Vec2::ZERO {
+        view.end_find_following();
     }
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
@@ -3062,6 +3206,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         } else {
             ui.input(|i| i.pointer.delta())
         };
+        if moved != Vec2::ZERO {
+            view.end_find_following();
+        }
         // Within the content, as egui keeps it: past an end the page would show there for a
         // frame and spring back. `max` is never NaN or below zero, so the clamp can't panic.
         let max = vec2((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
@@ -3204,7 +3351,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
-    let out = page_scroll(ui, scroll, egui::Id::new(("page-view-scope", view.id)), |ui, viewport| {
+    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
         // egui's drag responses accept every pointer button. Keep a wheel gesture from also
         // selecting text, drawing a mark, or panning with the Hand tool.
         if middle_gesture {
@@ -4011,6 +4158,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         {
             let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
             if dy != 0.0 {
+                view.end_find_following();
                 ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
                 // Keep scrolling while the pointer rests there and sends no events.
                 ui.ctx().request_repaint();
@@ -4114,7 +4262,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 && let Some((page, at)) = view.comments.context_at
             {
                 // The page's content is parsed once per right-click, not on every frame the menu is open.
-                let key = egui::Id::new("copy-image-under-menu");
+                let key = egui::Id::unique("copy-image-under-menu");
                 let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
                 let hit = match cached {
                     Some(c) => c.2,
@@ -4145,7 +4293,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // below the window's top). Within a point, as for wheel paging, so layout rounding
         // can't hide an edge.
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        (page, out.state.offset.y <= MARGIN - view.page_gap() + 1.0, out.state.offset.y >= max_y - 1.0)
+        (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
 
     view.viewport_screen = out.inner_rect;
@@ -4160,7 +4308,20 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // backdrop/older tiles instead of queueing a storm of interprets (one per frame) that
     // the workers cannot cancel mid-operator. Fresh tiles go out once the pan settles;
     // pages with nothing on screen yet still queue.
-    let scroll_offset = out.state.offset;
+    let scroll_offset = out.state.clamped_offset();
+    // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
+    // above: its two scroll-bar tracks/handles and, for touch or the Hand tool, its drag
+    // background. The output gives us the area id, and egui's pinned ScrollArea registers those
+    // widgets under `id.with(0)` (horizontal), `id.with(1)` (vertical) and `id.with("area")`.
+    // Ask for their exact responses instead of treating any held drag as scrolling: a text
+    // selection, a panel splitter or another widget's drag must not excuse the programmatic jump
+    // a search flash makes, while a track click (which moves the offset with no pointer motion)
+    // must still count as the reader scrolling.
+    let scroll_surface = |id: egui::Id| ui.ctx().read_response(id).is_some_and(|r| r.is_pointer_button_down_on() || r.dragged() || r.clicked());
+    let pointer_scrolling = scroll_surface(out.id.with(0usize)) || scroll_surface(out.id.with(1usize)) || scroll_surface(out.id.with("area"));
+    if pointer_scrolling && (scroll_offset - view.last_scroll).length() > 2.0 {
+        view.end_find_following();
+    }
     let now_settle = ui.input(|i| i.time);
     if (scroll_offset - view.last_scroll).length() > 2.0 {
         view.pan_hold_until = now_settle + 0.25;
@@ -4293,7 +4454,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
-        let tip = egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
+        let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
         tip.fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
@@ -4567,26 +4728,29 @@ fn selection_actions(
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::new(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for (label, action) in [
-                    (tl!("Add comment"), SelectionAction::Note),
-                    (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                    (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                    (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                    (tl!("Replace text"), SelectionAction::Replace),
-                ] {
-                    if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
-                        chosen = Some(action);
+    egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
+        ui.ctx(),
+        |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (label, action) in [
+                        (tl!("Add comment"), SelectionAction::Note),
+                        (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+                        (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+                        (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                        (tl!("Replace text"), SelectionAction::Replace),
+                    ] {
+                        if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
+                            chosen = Some(action);
+                        }
                     }
-                }
-                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
-                    chosen = Some(SelectionAction::Copy);
-                }
+                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                        chosen = Some(SelectionAction::Copy);
+                    }
+                });
             });
-        });
-    });
+        },
+    );
     let Some(action) = chosen else { return false };
     if let SelectionAction::Copy = action {
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
@@ -4755,7 +4919,7 @@ fn page_size_hint(view: &DocView, info: &DocInfo, units: crate::units::Unit, are
         return;
     }
     let text = units.size(f64::from(page.width), f64::from(page.height));
-    egui::Area::new(egui::Id::new("page-size-hint"))
+    egui::Area::new(egui::Id::unique("page-size-hint"))
         .order(egui::Order::Foreground)
         .interactable(false)
         .pivot(egui::Align2::LEFT_BOTTOM)
@@ -4782,7 +4946,7 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
     let mut close = false;
     let mut step: Option<bool> = None;
     let searched = view.texts.len() + view.text_failed.len();
-    egui::Area::new(egui::Id::new("find-bar"))
+    egui::Area::new(egui::Id::unique("find-bar"))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
@@ -4797,11 +4961,11 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::new("find-input"))
+                            .id(egui::Id::unique("find-input"))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
-                        let r = ui.add(edit);
+                        let r = ui.add(edit).accessible_name(tl!("Find text"));
                         if find.focus {
                             r.request_focus();
                             find.focus = false;
@@ -5112,7 +5276,7 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
 fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let pos = area.left_top() + vec2(14.0, 14.0);
-    egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+    egui::Area::new(egui::Id::unique("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.border))
@@ -5174,7 +5338,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                     }
                                     let click = theme::hand(click);
                                     let info = tl!(tool.label()).to_string();
-                                    click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
+                                    click.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, info.clone()));
                                     if click.clicked() {
                                         app.execute(tool.command());
                                         ui.close();
@@ -5253,7 +5417,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 }
                                 let click = theme::hand(click);
                                 let info = tl!(tool.label()).to_string();
-                                click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
+                                click.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, info.clone()));
                                 if click.clicked() {
                                     app.execute(tool.command());
                                     ui.close();
@@ -5387,7 +5551,7 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
                 let percent = egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted))
                     .frame(false);
                 let percent = ui.add_sized([44.0, 30.0], percent);
-                percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
+                percent.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Reset page size")));
                 if percent.on_hover_text(tl!("Reset page size")).clicked() {
                     view.grid_zoom_request = Some(1.0);
                 }
@@ -5450,8 +5614,8 @@ fn copy_modifier(ctx: &egui::Context, m: &egui::Modifiers) -> bool {
 
 /// A "+" on a gap of the page grid: insert files there. Returns whether it was clicked.
 fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: String, t: &Tokens) -> bool {
-    let resp = ui.interact(Rect::from_center_size(at, Vec2::splat(22.0)), ui.id().with(("org-gap", gap)), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
+    let resp = ui.interact(Rect::from_center_size(at, Vec2::splat(22.0)), ui.scope_id().with(("org-gap", gap)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
     let hot = resp.hovered();
     if hot {
         ui.painter().line_segment([pos2(at.x, at.y - height / 2.0), pos2(at.x, at.y + height / 2.0)], Stroke::new(3.0, t.accent));
@@ -5515,7 +5679,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 let Some(p) = info.pages.get(i) else { break };
                 let c = Rect::from_min_size(pos2(row_rect.left() + left + col as f32 * cell.x, row_rect.top()), cell);
                 view.need_thumbnail(i, c.intersects(ui.clip_rect()));
-                let resp = ui.interact(c, ui.id().with(("org", i)), if editable { Sense::click_and_drag() } else { Sense::click() });
+                let resp = ui.interact(c, ui.scope_id().with(("org", i)), if editable { Sense::click_and_drag() } else { Sense::click() });
                 cells.push((i, c));
                 if let Some((_, above)) = anchor.filter(|(page, _)| *page == i) {
                     ui.scroll_to_rect_animation(c.translate(vec2(0.0, -above)), Some(egui::Align::Min), egui::style::ScrollAnimation::none());
@@ -5534,7 +5698,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                     drop = true;
                 }
                 let page_label = crate::i18n::fmt(tl!("Page {label}"), &[("label", &p.label)]);
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, view.selected.contains(&i), page_label.clone()));
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, view.selected.contains(&i), page_label.clone()));
                 let pr = grid_page_rect(c, vec2(p.width, p.height));
                 let size = pr.size();
                 let selected = view.selected.contains(&i) || (view.selected.is_empty() && i == view.current);
@@ -5587,7 +5751,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 let check_rect = Rect::from_min_size(c.min + vec2(8.0, 8.0), Vec2::splat(20.0));
                 let check = ui.push_id(("org-check", i), |ui| ui.put(check_rect, widgets::checkbox_without_text(&mut checked))).inner;
                 let label = crate::i18n::fmt(tl!("Select page {label}"), &[("label", &p.label)]);
-                check.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, checked, label.clone()));
+                check.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, checked, label.clone()));
                 if check.on_hover_text(label).changed() {
                     view.click_page(i, egui::Modifiers::COMMAND, false);
                     // The document shows the page picked here when the grid closes, as after a
@@ -6149,12 +6313,443 @@ trailer << /Root 1 0 R >>
         assert_eq!(v.goto, Some((3, 0.5)));
         assert!(v.back.is_empty());
         assert_eq!(v.forward, vec![4]);
-        v.current = 0;
         v.find.as_mut().unwrap().current = None;
-        v.refresh_find_page(3);
-        assert_eq!(v.current, 3);
-        assert!(v.back.is_empty());
+        v.texts.insert(1, Arc::new(find_test_text("match")));
+        v.refresh_find_page(1);
+        assert_eq!(v.current, 1, "an automatic late match still follows its anchor");
+        assert!(v.back.is_empty(), "automatic search updates do not record history");
         assert_eq!(v.forward, vec![4]);
+    }
+
+    /// One glyph per character on one line, for the search-order tests below.
+    fn find_test_text(s: &str) -> PageText {
+        PageText {
+            glyphs: s
+                .chars()
+                .map(|c| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] })
+                .collect(),
+            line_of: s.chars().map(|_| 0).collect(),
+            space_before: s.chars().map(|_| false).collect(),
+        }
+    }
+
+    /// A text-layer result for `page`, for the search tests below.
+    fn find_text_result(page: usize, text: &str) -> pdfcraft_render::RenderedPage {
+        pdfcraft_render::RenderedPage {
+            request: RenderRequest { page, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() },
+            width: 0,
+            height: 0,
+            rgba: Default::default(),
+            error: None,
+            text: Some(Arc::new(find_test_text(text))),
+            warnings: Vec::new(),
+            millis: 0,
+        }
+    }
+
+    /// Text layers arrive in whatever order the workers finish, not in page order. A search
+    /// started on page 1 must settle on page 1's match even when page 2's text arrives first,
+    /// instead of keeping the later match picked only because page 1 had not been read yet.
+    #[test]
+    fn automatic_search_match_follows_the_viewed_page_when_text_arrives_out_of_order() {
+        let mut v = view(2, PageLayout::Single, true);
+        v.current = 0;
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!(v.find.as_ref().unwrap().current, None, "no text yet, so no match");
+
+        let ctx = egui::Context::default();
+        let request = |page| RenderRequest { page, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+        let result = |page, text: &str| pdfcraft_render::RenderedPage {
+            request: request(page),
+            width: 0,
+            height: 0,
+            rgba: Default::default(),
+            error: None,
+            text: Some(Arc::new(find_test_text(text))),
+            warnings: Vec::new(),
+            millis: 0,
+        };
+        v.last_queue = vec![request(1), request(0)];
+        // Page 2's text finishes first, as it can when the workers race.
+        v.receive_result(&ctx, result(1, "Second page sample text"));
+        assert_eq!(v.find.as_ref().unwrap().current, Some(0), "the only known match is picked while page 1 is pending");
+
+        v.receive_result(&ctx, result(0, "Panel sample draft notes"));
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(f.current, Some(0), "page 1's match takes over once its text arrives");
+        assert_eq!(v.current, 0, "the view follows the first match at or after the page being viewed");
+    }
+
+    /// A match the user picked (a click in the Search panel, or ⌘G) is not moved by a text
+    /// layer that arrives later: only automatic choices follow the viewed page.
+    #[test]
+    fn a_user_picked_search_match_stays_put_when_earlier_text_arrives() {
+        let mut v = view(2, PageLayout::Single, true);
+        v.current = 0;
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        v.texts.insert(1, Arc::new(find_test_text("Second page sample text")));
+        v.refresh_find_page(1);
+        v.go_to_match(0);
+        assert_eq!(v.find.as_ref().unwrap().auto_from, None, "an explicit choice is not automatic");
+
+        v.texts.insert(0, Arc::new(find_test_text("Panel sample draft notes")));
+        v.refresh_find_page(0);
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(f.current, Some(1), "the picked match keeps its identity after page 1 is inserted");
+        assert_eq!(v.current, 1, "the user's page does not change under them");
+    }
+
+    /// The automatic choice may move the view only while the reader has left it where that
+    /// choice put it. Navigating by the page box/Pages panel/outline or by view history is the
+    /// reader's decision: a text layer arriving afterwards must not pull them back to an
+    /// anchor-derived match. (The harness covers same-page wheel and pointer scrolling.)
+    #[test]
+    fn a_late_automatic_match_does_not_override_the_readers_navigation() {
+        enum Nav {
+            Page,
+            History,
+        }
+        for nav in [Nav::Page, Nav::History] {
+            let mut v = view(3, PageLayout::Single, true);
+            v.current = 0;
+            v.texts.insert(2, Arc::new(find_test_text("Second page sample")));
+            v.find = Some(Find { query: "sample".into(), ..Default::default() });
+            v.rerun_find();
+            assert_eq!((v.current, v.find.as_ref().unwrap().auto_page), (2, Some(2)), "the automatic match was shown");
+            match nav {
+                // The page box, the Pages panel and outline destinations all end here.
+                Nav::Page => v.go_to_page(1),
+                // View ▸ Page navigation ▸ Previous view writes `current` directly.
+                Nav::History => {
+                    v.back = vec![1];
+                    assert!(v.view_history(false));
+                }
+            }
+            assert_eq!(v.current, 1);
+            v.texts.insert(0, Arc::new(find_test_text("First page sample")));
+            v.refresh_find_page(0);
+            let f = v.find.as_ref().unwrap();
+            assert_eq!(f.auto_from, None, "the reader's navigation ends automatic following");
+            assert_eq!(f.auto_page, None);
+            assert_eq!(v.current, 1, "a late match cannot pull the reader back");
+        }
+    }
+
+    /// Typing on while the results arrive must not re-anchor the search on a page the automatic
+    /// flash picked. The anchor stays the page the reader was on when they started searching.
+    #[test]
+    fn refining_the_query_keeps_the_page_the_search_started_from() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.texts.insert(2, Arc::new(find_test_text("Second page sample text")));
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!((v.current, v.find.as_ref().unwrap().auto_from), (2, Some(0)), "the first query's match scrolled the view");
+
+        // Page 1 has a match for the refined query, and so has page 3. Anchored on the page the
+        // automatic flash reached, the search would pick page 3; the starting page picks page 1.
+        v.texts.insert(0, Arc::new(find_test_text("Panel draft text")));
+        v.find.as_mut().unwrap().query = "text".into();
+        v.rerun_find();
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.auto_from, Some(0), "refinement keeps the page the reader searched from");
+        assert_eq!(f.matches.first().map(|(p, _)| *p), Some(0));
+        assert_eq!(f.current, Some(0));
+        assert_eq!(v.current, 0);
+    }
+
+    /// ⌘G / Ctrl+G goes through `find_step`, an explicit choice like a Search-panel click: a
+    /// text layer arriving later must not undo it.
+    #[test]
+    fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.texts.insert(1, Arc::new(find_test_text("first sample")));
+        v.texts.insert(2, Arc::new(find_test_text("second sample")));
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!((v.current, v.find.as_ref().unwrap().auto_from), (1, Some(0)));
+
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::G,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            });
+        });
+        shortcuts(&mut v, &ctx, Default::default());
+
+        assert_eq!(v.current, 2, "the keyboard step chose the next match");
+        assert_eq!(v.find.as_ref().unwrap().auto_from, None, "the keyboard step is the user's choice");
+        assert_eq!(v.back, vec![1], "an explicit search jump records its origin");
+
+        v.texts.insert(0, Arc::new(find_test_text("intro sample")));
+        v.refresh_find_page(0);
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(v.current, 2, "the chosen match keeps the view");
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(2));
+    }
+
+    /// A page whose text extraction failed keeps the automatic anchor: the failure selects the
+    /// next match without moving the view, and a later text layer can still follow the anchor.
+    #[test]
+    fn a_failed_text_layer_keeps_the_automatic_anchor_without_jitter() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.texts.insert(1, Arc::new(find_test_text("first sample")));
+        v.texts.insert(2, Arc::new(find_test_text("second sample")));
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!((v.current, v.find.as_ref().unwrap().auto_page), (1, Some(1)));
+
+        let goto = v.goto;
+        let ctx = egui::Context::default();
+        let request = RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() };
+        v.last_queue = vec![request];
+        v.receive_result(
+            &ctx,
+            pdfcraft_render::RenderedPage {
+                request,
+                width: 0,
+                height: 0,
+                rgba: Default::default(),
+                error: Some("extraction failed".into()),
+                text: None,
+                warnings: Vec::new(),
+                millis: 0,
+            },
+        );
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(f.current, Some(0), "the remaining match is selected");
+        assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(1)), "a failure does not end automatic following");
+        assert_eq!(v.current, 1, "a failure never moves the view");
+        assert_eq!(v.goto, goto, "a failure never flashes the match");
+
+        // The search still follows its original page when that page's text arrives.
+        v.last_queue = vec![RenderRequest { page: 0, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() }];
+        v.receive_result(&ctx, find_text_result(0, "intro sample"));
+        assert_eq!(v.current, 0, "the anchor's earlier match takes over");
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0));
+    }
+
+    /// A reader who navigated before a page's text failed is not pulled back by a later
+    /// matching layer: the failure path must preserve the same `Ended` state as a successful
+    /// one, and the result list may select the late match without revealing it.
+    #[test]
+    fn a_failed_text_layer_after_navigation_does_not_reveal_a_late_match() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        v.go_to_page(2);
+        let moved = v.goto;
+        assert!(v.find.as_ref().unwrap().follow_ended, "the reader navigated before any match arrived");
+
+        let ctx = egui::Context::default();
+        let failed = RenderRequest { page: 1, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+        v.last_queue = vec![failed];
+        v.receive_result(
+            &ctx,
+            pdfcraft_render::RenderedPage {
+                request: failed,
+                width: 0,
+                height: 0,
+                rgba: Default::default(),
+                error: Some("extraction failed".into()),
+                text: None,
+                warnings: Vec::new(),
+                millis: 0,
+            },
+        );
+        let f = v.find.as_ref().unwrap();
+        assert!(f.follow_ended, "a failure after navigation does not restart following");
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        assert_eq!(v.current, 2, "a failure never moves the view");
+        assert_eq!(v.goto, moved);
+
+        let arrived = RenderRequest { page: 0, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+        v.last_queue = vec![arrived];
+        v.receive_result(&ctx, find_text_result(0, "intro sample"));
+        let f = v.find.as_ref().unwrap();
+        assert!(f.follow_ended);
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        assert_eq!(v.current, 2, "the late matching layer does not pull the reader back");
+        assert_eq!(v.goto, moved, "no flash was issued");
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the late match");
+    }
+
+    /// The reader can navigate before any text layer has supplied a match. That navigation
+    /// still ends automatic following, so the first late match is listed but not revealed by
+    /// a flash that would pull the reader back.
+    #[test]
+    fn navigation_before_the_first_match_is_not_overridden_by_a_late_text_layer() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.current, None, "no text layer has arrived yet");
+        assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(0)));
+
+        v.go_to_page(2);
+        assert_eq!(v.goto, Some((2, 0.0)), "the reader moved to page 3");
+        assert!(v.find.as_ref().unwrap().follow_ended, "moving the view ends automatic following");
+
+        let ctx = egui::Context::default();
+        let request = RenderRequest { page: 1, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+        v.last_queue = vec![request];
+        v.receive_result(&ctx, find_text_result(1, "late sample"));
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(v.current, 2, "the late first match does not pull the reader back");
+        assert_eq!(v.goto, Some((2, 0.0)), "no flash was issued");
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(1), "the result list still selects the match");
+    }
+
+    /// A page-box jump to the page already shown is still the reader's navigation: automatic
+    /// following must end, so a late earlier match is listed without moving the view. (The
+    /// harness covers wheel, scrollbar and pointer scrolling through the production paint path.)
+    #[test]
+    fn a_same_page_page_box_jump_ends_automatic_following() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.texts.insert(1, Arc::new(find_test_text("first sample")));
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!((v.current, v.find.as_ref().unwrap().auto_page), (1, Some(1)), "the automatic choice is on page 2");
+
+        // Choosing the page already shown still ends following; it stays on page 2 at its top.
+        v.go_to_page(1);
+        let shown = v.goto;
+        assert_eq!(shown, Some((1, 0.0)));
+
+        v.texts.insert(0, Arc::new(find_test_text("intro sample")));
+        v.refresh_find_page(0);
+        let f = v.find.as_ref().unwrap();
+        assert!(f.follow_ended);
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        assert_eq!(v.current, 1, "the late earlier match does not move the reader within the page");
+        assert_eq!(v.goto, shown, "no flash was issued");
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(1), "the page-2 match stays selected");
+    }
+
+    /// A document-wide invalidation (a layer toggle, an edit, undo/redo) clears results for
+    /// re-extraction but is not the reader navigating. Automatic following keeps its anchor so
+    /// the re-extracted layers still reveal the automatic choice; a reader who already took
+    /// over stays in control. If `document_changed` clamps the view away from that anchor, the
+    /// next layer ends following instead of revealing a match from the stale page.
+    #[test]
+    fn content_invalidation_keeps_the_following_state() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.texts.insert(1, Arc::new(find_test_text("first sample")));
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!((v.current, v.find.as_ref().unwrap().auto_page), (1, Some(1)), "the automatic choice is on page 2");
+
+        v.invalidate_content();
+        let f = v.find.as_ref().unwrap();
+        assert!(f.matches.is_empty() && f.current.is_none(), "results wait for the re-extracted text");
+        assert!(!f.follow_ended, "a content change is not reader navigation");
+        assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(1)));
+
+        // Re-extracted text still follows the page the search started from.
+        let ctx = egui::Context::default();
+        let request = RenderRequest { page: 0, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+        v.last_queue = vec![request];
+        v.receive_result(&ctx, find_text_result(0, "intro sample"));
+        assert_eq!(v.current, 0, "the re-extracted match is revealed by the still-active search");
+        let f = v.find.as_ref().unwrap();
+        assert!(!f.follow_ended);
+        assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(0)));
+
+        // A reader who navigated first keeps the view they chose across the invalidation.
+        v.go_to_page(2);
+        let moved = v.goto;
+        assert!(v.find.as_ref().unwrap().follow_ended);
+        v.invalidate_content();
+        let f = v.find.as_ref().unwrap();
+        assert!(f.follow_ended);
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        v.last_queue = vec![request];
+        v.receive_result(&ctx, find_text_result(0, "late sample"));
+        assert_eq!(v.current, 2, "no delayed reveal after the reader navigated");
+        assert_eq!(v.goto, moved, "no flash was issued");
+        let f = v.find.as_ref().unwrap();
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the late match");
+    }
+
+    /// A document edit can shrink the page count. `document_changed` clamps `current` but leaves
+    /// the automatic anchor's page index alone; a re-extracted layer must then end following
+    /// rather than reveal a match by scrolling from a page that no longer exists.
+    #[test]
+    fn a_page_count_shrink_ends_following_before_a_late_reveal() {
+        let mut v = view(5, PageLayout::Single, true);
+        v.current = 0;
+        v.texts.insert(4, Arc::new(find_test_text("last sample")));
+        v.find = Some(Find { query: "sample".into(), ..Default::default() });
+        v.rerun_find();
+        assert_eq!((v.current, v.find.as_ref().unwrap().auto_page), (4, Some(4)), "the automatic choice is on the last page");
+
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..2)
+                .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        v.document_changed(&info);
+        assert_eq!(v.current, 1, "the view clamps to the last remaining page");
+        let f = v.find.as_ref().unwrap();
+        assert!(!f.follow_ended, "the content change itself keeps the automatic state");
+        assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(4)), "the anchor still names the removed page");
+        let goto = v.goto;
+
+        let ctx = egui::Context::default();
+        let request = RenderRequest { page: 0, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+        v.last_queue = vec![request];
+        v.receive_result(&ctx, find_text_result(0, "intro sample"));
+        let f = v.find.as_ref().unwrap();
+        assert!(f.follow_ended, "a layer for the remaining pages ends the stale follow");
+        assert_eq!((f.auto_from, f.auto_page), (None, None));
+        assert_eq!(v.current, 1, "the late layer cannot pull the view back");
+        assert_eq!(v.goto, goto, "no flash was issued");
+        assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the match");
+    }
+
+    /// Typing refinements while text layers keep arriving must keep the page the search began
+    /// on, not re-anchor on whichever page an earlier automatic flash happened to show.
+    #[test]
+    fn rapid_query_edits_interleaved_with_text_results_keep_the_start_anchor() {
+        let mut v = view(3, PageLayout::Single, true);
+        v.current = 0;
+        v.find = Some(Find { query: "sam".into(), ..Default::default() });
+        v.rerun_find();
+        assert!(v.find.as_ref().unwrap().current.is_none());
+
+        let edits = [("samp", 2, "Page three sample", 2), ("sampl", 1, "Page two sample", 1), ("sample", 0, "Page one sample", 0)];
+        for (query, page, text, shown) in edits {
+            v.find.as_mut().unwrap().query = query.into();
+            v.rerun_find();
+            let f = v.find.as_ref().unwrap();
+            assert_eq!(f.auto_from, Some(0), "refinement keeps the page the reader started from");
+            assert!(!f.follow_ended);
+            v.texts.insert(page, Arc::new(find_test_text(text)));
+            v.refresh_find_page(page);
+            let f = v.find.as_ref().unwrap();
+            assert_eq!(v.current, shown, "the late page follows the automatic anchor {shown}");
+            assert_eq!((f.auto_from, f.auto_page), (Some(0), Some(shown)));
+            assert!(!f.follow_ended, "the automatic flash itself does not end following");
+        }
+        assert!(v.back.is_empty(), "automatic search updates do not record history");
     }
 
     #[test]
@@ -6978,6 +7573,7 @@ trailer << /Root 1 0 R >>
             delta: vec2(0.0, -100_000.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         // Well past egui's longest scroll animation (about 0.3 s).
         h.run_steps(40);

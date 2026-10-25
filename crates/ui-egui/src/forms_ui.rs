@@ -322,7 +322,7 @@ pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
 #[allow(clippy::too_many_arguments)]
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, form: &[FormField], f: &FormField, w: &FormWidget, rect: Rect, zoom: f32, widget: usize) {
     let mut enter = false;
-    egui::Area::new(egui::Id::new(("form-editor", view.id.0)))
+    egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -340,8 +340,9 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, form: &[FormField], f: 
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(egui::Id::new(("form-field", view.id.0, &f.name, widget)));
-            let r = ui.add_sized(rect.size(), te);
+                .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
+            // The form field's own logical name; not a visual/preordered label.
+            let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
             if std::mem::take(&mut fx.request_focus) {
                 r.request_focus();
                 // Entered with Tab: typing replaces the value.
@@ -381,7 +382,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
         fx.calendar_text = Some(fx.text.clone());
     }
     let mut picked = None;
-    let area = egui::Area::new(egui::Id::new(("date-picker", view.id.0)))
+    let area = egui::Area::new(egui::Id::unique(("date-picker", view.id.0)))
         .order(egui::Order::Foreground)
         .fixed_pos(field.left_bottom() + vec2(0.0, 2.0))
         .show(ctx, |ui| {
@@ -672,7 +673,7 @@ pub(crate) fn overlay(
             // Over the page, so only where the document shows: a field scrolled under the mode bar
             // or a side panel must leave them their pointer (#2755). It stays on its field, cut off
             // as the page is, rather than pushed back into the window.
-            egui::Area::new(egui::Id::new(("form-editor", view.id.0)))
+            egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
                 .fade_in(false)
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.min)
@@ -697,7 +698,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(egui::Id::new(("form-field", view.id.0, &f.name, focus.widget)));
+                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -705,11 +706,14 @@ pub(crate) fn overlay(
                         te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
                     }
                     let mut laid_out = None;
-                    let r = ui.add_sized(rect.size(), |ui: &mut egui::Ui| {
-                        let out = te.show(ui);
-                        laid_out = Some((out.galley, out.galley_pos));
-                        out.response.response
-                    });
+                    let r = ui
+                        .add_sized(rect.size(), |ui: &mut egui::Ui| {
+                            let out = te.show(ui);
+                            laid_out = Some((out.galley, out.galley_pos));
+                            out.response.response
+                        })
+                        // The form field's own logical name; not a visual/preordered label.
+                        .accessible_name(f.name.clone());
                     if let (Some(tb), Some(before)) = (text_box, before)
                         && fx.text != before
                     {
@@ -784,7 +788,7 @@ pub(crate) fn overlay(
             if editable_combo(f) {
                 combo_editor(ctx, view, form, f, w, rect, zoom, focus.widget);
             }
-            let resp = egui::Area::new(egui::Id::new(("form-choices", view.id.0)))
+            let resp = egui::Area::new(egui::Id::unique(("form-choices", view.id.0)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
                 .show(ctx, |ui| {
@@ -843,10 +847,10 @@ pub(crate) fn overlay(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::new(("form-field", view.id.0, &f.name, focus.widget));
+            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
-            let area = egui::Area::new(egui::Id::new(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
+            let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
             area.fixed_pos(rect.min).show(ctx, |ui| {
                 let r = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
                 if let Some(fx) = view.forms.focus.as_mut()

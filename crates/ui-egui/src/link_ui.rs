@@ -291,7 +291,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
         ui.add_enabled_ui(d.web, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(24.0);
-                ui.add(crate::widgets::line(&mut d.url).desired_width(360.0).hint_text("https://example.org"));
+                ui.add(crate::widgets::line(&mut d.url).desired_width(360.0).hint_text("https://example.org")).accessible_name(tl!("Link URL"));
             });
         });
         widgets::radio_value(ui, &mut d.web, false, tl!("Go to a page view"));

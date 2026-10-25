@@ -471,6 +471,19 @@ pub struct ImageSelection {
     settled: Option<(Rect, Rect)>,
 }
 
+impl ImageSelection {
+    /// Cancel an in-progress text, rotation or crop drag and restore the crop it was previewing.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        self.drag = None;
+        self.turning = false;
+        if let Some(crop) = &mut self.crop
+            && let Some((_, _, before)) = crop.drag.take()
+        {
+            crop.keep = before;
+        }
+    }
+}
+
 /// Cropping a page image: the handles trim instead of resizing, the part that will go is
 /// dimmed, Enter or Done applies and Esc or Cancel leaves it.
 #[derive(Clone, Debug, PartialEq)]
@@ -1615,7 +1628,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
     // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::new("edit-text-line"))
+    egui::Area::new(egui::Id::unique("edit-text-line"))
         .order(egui::Order::Foreground)
         .fade_in(false)
         .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
@@ -1677,7 +1690,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let output = egui::TextEdit::multiline(&mut ed.text)
-                    .id(egui::Id::new("edit-text-line-input"))
+                    .id(egui::Id::unique("edit-text-line-input"))
                     .font(font.clone())
                     .margin(egui::Margin::ZERO)
                     .layouter(&mut layouter)
@@ -1686,6 +1699,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .desired_width(width)
                     .desired_rows(rows)
                     .show(ui);
+                // The editor paints over the page with no visible label; name it for assistive tech.
+                output.response.response.clone().accessible_name(tl!("Text editing line"));
                 if ed.has_changes() {
                     if background_ready {
                         reveal = true;

@@ -44,8 +44,8 @@ pub struct LangInfo {
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese: always 0). A catalog's
     /// `@plural` entries list one form per index.
     pub plural: fn(u64) -> usize,
-    /// The language is written right to left. egui lays text out left to right, so the catalog's
-    /// translations are put into display order when it loads ([`crate::bidi::display_rtl`]).
+    /// The language is written right to left. Catalogs stay in logical order: the egui 0.37 fork
+    /// owns bidi shaping/reordering (E5/E12), so preordering here would reverse Arabic twice.
     pub rtl: bool,
     catalog: OnceLock<Catalog>,
 }
@@ -265,15 +265,16 @@ impl LangInfo {
         (0..=1000).map(self.plural).max().unwrap_or(0).saturating_add(1)
     }
 
+    /// Return the parsed catalogue, building it on first use and warning about entries that fall back to
+    /// English.
     fn catalog(&self) -> &Catalog {
         self.catalog.get_or_init(|| {
-            let (mut catalog, errors) = Catalog::parse(self.source, self.plural_forms());
+            let (catalog, errors) = Catalog::parse(self.source, self.plural_forms());
             for error in errors {
                 log::warn!("{} interface catalog: {error}; that entry shows in English", self.code);
             }
-            if self.rtl {
-                catalog.map_translations(crate::bidi::display_rtl);
-            }
+            // Catalogs keep logical text: the fork shapes and reorders each run once. Accessibility
+            // names, copied text and search therefore see the same logical string as the source.
             catalog
         })
     }
@@ -325,8 +326,17 @@ impl Lang {
     /// Čeština sits under C rather than after Z. Names in other scripts follow the Latin ones in
     /// code point order: Greek, Cyrillic, Arabic, then the CJK languages.
     pub fn for_picker() -> Vec<Lang> {
+        Self::for_picker_by(Lang::name)
+    }
+
+    /// [`for_picker`](Self::for_picker), ordered by the names the picker actually shows.
+    ///
+    /// `shown` must return each language's displayed name. Pass [`Lang::picker_name`] to keep a
+    /// Latin-script fallback with the other Latin names when a script's face is missing, rather
+    /// than sorting it into a block of unrenderable labels.
+    pub fn for_picker_by(mut shown: impl FnMut(Lang) -> &'static str) -> Vec<Lang> {
         let mut rest: Vec<Lang> = Lang::all().filter(|l| l.code() != Lang::EN.code()).collect();
-        rest.sort_by_cached_key(|l| name_sort_key(l.name()));
+        rest.sort_by_cached_key(|l| name_sort_key(shown(*l)));
         std::iter::once(Lang::EN).chain(rest).collect()
     }
 
@@ -334,8 +344,61 @@ impl Lang {
         self.0.name
     }
 
-    /// Whether the language is written right to left. Its translations come back from the
-    /// lookups in display order (see [`LangInfo::rtl`]).
+    /// The language's name in English, used by [`picker_name`](Self::picker_name) when this
+    /// build's fonts cannot draw [`name`](Self::name).
+    pub fn english_name(self) -> &'static str {
+        match self.code() {
+            "en" => "English",
+            "ja" => "Japanese",
+            "zh-hans" => "Simplified Chinese",
+            "zh-hant" => "Traditional Chinese",
+            "cs" => "Czech",
+            "pt-br" => "Portuguese (Brazil)",
+            "de" => "German",
+            "es" => "Spanish",
+            "fr" => "French",
+            "ru" => "Russian",
+            "kk" => "Kazakh",
+            "bg" => "Bulgarian",
+            "te" => "Telugu",
+            "hu" => "Hungarian",
+            "uk" => "Ukrainian",
+            "it" => "Italian",
+            "ar" => "Arabic",
+            "ckb" => "Central Kurdish",
+            "fa" => "Persian",
+            "pl" => "Polish",
+            "sl" => "Slovenian",
+            "el" => "Greek",
+            "tr" => "Turkish",
+            "lt" => "Lithuanian",
+            "id" => "Indonesian",
+            "vi" => "Vietnamese",
+            "fi" => "Finnish",
+            "nb" => "Norwegian Bokmål",
+            "sq" => "Albanian",
+            "th" => "Thai",
+            "ca" => "Catalan",
+            "ro" => "Romanian",
+            "lo" => "Lao",
+            "hi" => "Hindi",
+            "ko" => "Korean",
+            // Only reached if a language is added to `LANGUAGES` without an English name; the
+            // code still tells the reader which entry it is.
+            _ => self.0.code,
+        }
+    }
+
+    /// The name to show in the language picker: the native name when the current fonts can draw
+    /// it, otherwise the English name. With egui 0.37's default `MissingGlyphPolicy::Panic`, a
+    /// native name whose script has no face (for example Hindi in a build without a Devanagari
+    /// face and with installed fonts turned off) would otherwise abort while the list opens.
+    pub fn picker_name(self, drawable: impl FnOnce(&str) -> bool) -> &'static str {
+        if drawable(self.name()) { self.name() } else { self.english_name() }
+    }
+
+    /// Whether the language is written right to left. Lookups stay logical; the egui fork
+    /// shapes and reorders each run for display (see [`LangInfo::rtl`]).
     pub fn rtl(self) -> bool {
         self.0.rtl
     }
@@ -709,6 +772,20 @@ mod tests {
         set_current(Lang::EN);
         assert_eq!(key_name("Delete"), "Delete");
         set_current(previous);
+    }
+
+    /// Regression test: a language picker uses its native name only when a face can draw it, otherwise its
+    /// English name.
+    #[test]
+    fn picker_names_fall_back_to_english_when_their_script_has_no_face() {
+        let hi = Lang::from_code("hi").expect("hi registered");
+        assert_eq!(hi.picker_name(|_| true), "हिन्दी", "the native name is kept when it can be drawn");
+        assert_eq!(hi.picker_name(|_| false), "Hindi", "no Devanagari face: an English name, not an unrenderable label");
+        assert_eq!(Lang::EN.picker_name(|_| false), "English");
+        for language in Lang::all() {
+            assert!(!language.english_name().is_empty(), "{}", language.code());
+            assert_ne!(language.english_name(), language.code(), "{} needs an English picker fallback", language.code());
+        }
     }
 
     #[test]
@@ -1694,25 +1771,24 @@ mod tests {
         assert_eq!(restored.language, "ar");
     }
 
-    /// Lookups return Arabic in display order: egui draws the words left to right as given, and
-    /// joins the letters of each word itself.
+    /// Catalog lookups stay in logical order; the egui 0.37 fork owns bidi shaping and display
+    /// reordering (E5/E12), so preordering here would reverse Arabic twice. Accessibility names,
+    /// copied labels and search therefore see the source string.
     #[test]
-    fn arabic_lookups_are_in_display_order() {
+    fn arabic_catalog_stays_logical() {
         let ar = arabic();
-        // "حفظ باسم…" as typed; the ellipsis ends the phrase on the left.
-        assert_eq!(tr(ar, "Save as…"), "…باسم حفظ");
-        // Latin names keep their own direction inside the phrase.
-        assert_eq!(tr(ar, "About PdfCraft"), "PdfCraft حول");
-        // A caption's colon stays beside the widget on its right.
+        assert_eq!(tr(ar, "Save as…"), "حفظ باسم…");
+        assert_eq!(tr(ar, "About PdfCraft"), "حول PdfCraft");
         assert_eq!(tr(ar, "Name:"), "الاسم:");
-        assert_eq!(tr(ar, "Issued by: "), "عن صادرة: ");
-        // Placeholders survive and are filled in place.
-        assert_eq!(tr(ar, "Couldn't open {name}: {e}"), "{name}: {e} فتح تعذّر");
-        assert_eq!(fmt(tr(ar, "Couldn't open {name}: {e}"), &[("name", "a {e}.pdf"), ("e", "x")]), "a {e}.pdf: x فتح تعذّر");
-        assert_eq!(fmt(tr(ar, "Page {p} of {n}"), &[("p", "3"), ("n", "12")]), "12 من 3 الصفحة");
+        assert_eq!(tr(ar, "Issued by: "), "صادرة عن: ");
+        // Placeholders survive in their logical positions.
+        assert_eq!(tr(ar, "Couldn't open {name}: {e}"), "تعذّر فتح {name}: {e}");
+        assert_eq!(fmt(tr(ar, "Couldn't open {name}: {e}"), &[("name", "a {e}.pdf"), ("e", "x")]), "تعذّر فتح a {e}.pdf: x");
+        assert_eq!(fmt(tr(ar, "Page {p} of {n}"), &[("p", "3"), ("n", "12")]), "الصفحة 3 من 12");
         set_current(ar);
-        assert_eq!(command_label("Undo Insert pages from a.pdf"), "a.pdf من صفحات إدراج عن التراجع");
-        assert_eq!(menu_label("file.saveAs", "Save as…"), "…باسم حفظ");
+        let command = command_label("Undo Insert pages from a.pdf");
+        assert!(command.contains("a.pdf") && command.contains("إدراج صفحات"), "logical command label: {command:?}");
+        assert_eq!(menu_label("file.saveAs", "Save as…"), "حفظ باسم…");
         set_current(Lang::EN);
     }
 
@@ -1744,7 +1820,7 @@ mod tests {
             assert_eq!(lang_from_tag(tag), Some(fa), "{tag}");
         }
         assert_eq!(first_supported("fa-IR\r\nen-US"), Some(fa));
-        // Lookups return Persian (single words in display order).
+        // Lookups return Persian in logical order; epaint handles visual ordering.
         assert_eq!(tr(fa, "Save"), "ذخیره");
         assert_eq!(tr(fa, "Cancel"), "لغو");
         assert_eq!(tr(fa, "File"), "فایل");

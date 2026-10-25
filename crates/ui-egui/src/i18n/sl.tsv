@@ -1636,6 +1636,15 @@
 	Search	Iskanje
 	Search comments	Išči po komentarjih
 	Search tools and commands…	Poišči orodja in ukaze…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Dodano besedilo
+	Link URL	URL povezave
+	Search tools and commands	Poišči orodja in ukaze
+	Text editing line	Vrstica za urejanje besedila
+	Text to place	Besedilo za postavitev
+	Tooltip	Namig
+	Words or phrases to redact	Besede ali fraze za počrnitev
 	Searchable Image (Exact)	Iskalna slika (natančna)
 	Searching… {s} of {p} pages	Iskanje… {s} od {p} strani
 	Searching… {s}/{p}	Iskanje… {s}/{p}

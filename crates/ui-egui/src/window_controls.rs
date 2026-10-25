@@ -96,7 +96,7 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
             Button::Close => tl!("Close"),
         };
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         let response = response.on_hover_text(label);
         if ui.is_rect_visible(rect) {
             paint(ui.painter(), rect, button, maximized, &t, &response);
@@ -203,7 +203,7 @@ pub fn resize_edges(ctx: &egui::Context) {
     }
     let screen = ctx.content_rect();
     let t = Tokens::get(ctx);
-    egui::Area::new(egui::Id::new("window_resize_edges"))
+    egui::Area::new(egui::Id::unique("window_resize_edges"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .pivot(Align2::LEFT_TOP)
@@ -214,7 +214,7 @@ pub fn resize_edges(ctx: &egui::Context) {
                 if rect.width() <= 0.0 || rect.height() <= 0.0 {
                     continue;
                 }
-                let response = ui.interact(rect, ui.id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
+                let response = ui.interact(rect, ui.scope_id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
                 // Sensing only drags, a drag starts on the press itself.
                 if response.drag_started() {
                     desktop_grab(ui.ctx(), egui::ViewportCommand::BeginResize(direction));
@@ -231,8 +231,9 @@ pub fn resize_edges(ctx: &egui::Context) {
         });
 }
 
+/// Return the stable egui id for desktop window-grab state.
 fn grab_id() -> egui::Id {
-    egui::Id::new("window_controls_desktop_grab")
+    egui::Id::unique("window_controls_desktop_grab")
 }
 
 /// Hand the pointer to the desktop to move or resize the window. On Wayland the compositor keeps

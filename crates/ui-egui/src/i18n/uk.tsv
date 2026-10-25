@@ -182,6 +182,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Пошук інструментів і команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Доданий текст
+	Link URL	URL-адреса посилання
+	Search tools and commands	Пошук інструментів і команд
+	Text editing line	Рядок редагування тексту
+	Text to place	Текст для розміщення
+	Tooltip	Підказка
+	Words or phrases to redact	Слова або фрази для вилучення
 	No matching tools	Відповідних інструментів немає
 	Tool	Інструмент
 	Command	Команда

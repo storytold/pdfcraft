@@ -1028,9 +1028,7 @@ fn escape_in_a_name_field_leaves_the_field_not_the_table() {
     let mut h = harness();
     draw_table(&mut h);
     // The app's own text boxes (zoom, page number) are inputs too: take the one in the window.
-    let window = h.get_by_label("Text Field Table").rect();
-    let field =
-        h.query_all(by().role(Role::TextInput)).map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the first column's name field");
+    let field = h.get_by_role_and_label(Role::TextInput, "Column 1").rect();
     h.hover_at(field.center());
     h.drag_at(field.center());
     h.run_steps(1);

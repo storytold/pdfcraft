@@ -1020,6 +1020,15 @@
 	Scroll tabs right	Derulare file la dreapta
 	Search comments	Căutare în comentarii
 	Search tools and commands…	Căutare instrumente și comenzi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text adăugat
+	Link URL	URL-ul linkului
+	Search tools and commands	Căutare instrumente și comenzi
+	Text editing line	Linie de editare a textului
+	Text to place	Text de plasat
+	Tooltip	Sfat ecran
+	Words or phrases to redact	Cuvinte sau expresii de anonimizat
 	Searchable Image (Exact)	Imagine în care se poate căuta (exactă)
 	Searching… {s} of {p} pages	Se caută… {s} din {p} pagini
 	Searching… {s}/{p}	Se caută… {s}/{p}

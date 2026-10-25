@@ -172,6 +172,15 @@
 	Available	พร้อมใช้งาน
 	Ready	พร้อมใช้
 	Search tools and commands…	ค้นหาเครื่องมือและคำสั่ง…
+
+# Accessible names for inputs that have no visible label.
+	Added text	ข้อความที่เพิ่ม
+	Link URL	URL ของลิงก์
+	Search tools and commands	ค้นหาเครื่องมือและคำสั่ง
+	Text editing line	บรรทัดแก้ไขข้อความ
+	Text to place	ข้อความที่จะวาง
+	Tooltip	คำแนะนำเครื่องมือ
+	Words or phrases to redact	คำหรือวลีที่จะปิดทับ
 	No matching tools	ไม่มีเครื่องมือที่ตรงกัน
 	Tool	เครื่องมือ
 	Command	คำสั่ง

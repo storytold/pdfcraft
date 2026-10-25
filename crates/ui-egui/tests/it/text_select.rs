@@ -189,9 +189,10 @@ fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
     h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == want))
 }
 
+/// Check that both the Edit menu and the context menu copy the selected page text.
 #[test]
 fn selected_text_copy_edit_and_context_menus() {
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
     let (mut h, at) = harness(|_| {});
     click(&mut h, at);
     click(&mut h, at);
@@ -199,7 +200,7 @@ fn selected_text_copy_edit_and_context_menus() {
     h.run_steps(2); // Hide floating Copy so this test can only reach menu entries.
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover();
+    h.get_all_by_label("Edit").find(|n| n.accesskit_node().toggled().is_none()).expect("the Edit menu entry").hover();
     h.run_steps(3);
     h.get_by_label_contains("Copy").click();
     let mut did_copy = false;
@@ -336,6 +337,7 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![0]));
 }
 
+/// Check that a focused search input owns Copy and the selected page text does not also consume it.
 #[test]
 fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     let (mut h, at) = harness(|_| {});
@@ -344,7 +346,7 @@ fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     h.state_mut().views[0].open_find();
     h.state_mut().views[0].find.as_mut().unwrap().query = "widget café".into();
     h.run_steps(3);
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("find-input")));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("find-input")));
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
@@ -394,7 +396,13 @@ fn press_and_move(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
 
 /// One wheel event, with time to scroll (egui spreads a wheel line over a few frames).
 fn wheel(h: &mut Harness<'static, PdfCraftApp>, unit: MouseWheelUnit, dy: f32) {
-    h.event(Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+    h.event(Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, dy),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
     h.run_steps(10);
 }
 

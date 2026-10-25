@@ -162,6 +162,15 @@
 	Available	사용 가능
 	Ready	준비됨
 	Search tools and commands…	도구 및 명령 검색…
+
+# Accessible names for inputs that have no visible label.
+	Added text	추가한 텍스트
+	Link URL	링크 URL
+	Search tools and commands	도구 및 명령 검색
+	Text editing line	텍스트 편집 줄
+	Text to place	배치할 텍스트
+	Tooltip	도구 설명
+	Words or phrases to redact	민감 정보를 제거할 단어 또는 구문
 	No matching tools	일치하는 도구가 없습니다
 	Tool	도구
 	Command	명령

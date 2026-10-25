@@ -1839,6 +1839,15 @@
 	Tool	工具
 	Command	命令
 	Search tools and commands…	搜索工具和命令…
+
+# Accessible names for inputs that have no visible label.
+	Added text	已添加的文本
+	Link URL	链接 URL
+	Search tools and commands	搜索工具和命令
+	Text editing line	文本编辑行
+	Text to place	要放置的文本
+	Tooltip	提示
+	Words or phrases to redact	要密文的单词或短语
 	No matching tools	没有匹配的工具
 	All tools	所有工具
 	Read	阅读

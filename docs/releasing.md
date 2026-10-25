@@ -148,7 +148,18 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - The portable zip holds both executables, the README, the licences, the OFL licence of each
   embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
   settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of
-  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/portable.rs`).
+  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/portable.rs`). The MSI carries the same
+  OFL notices; `-SkipBuild` requires `CRAFT_FONTS_DIR` so they can be staged, or
+  `-BuiltWithoutCraftFonts` for binaries built without that input, and `test-msi.ps1` checks that
+  the compiled MSI has OFL notice rows when expected (and none for a no-font build).
+  Before either package is created, `font-notices.ps1` validates every declared OFL notice in
+  `fonts/manifest.txt` and the native `fonts/simplified-chinese-manifest.txt` when present
+  (required when `CRAFT_FONTS_REQUIRED` is set). Missing or empty family notices fail packaging;
+  one family's notice cannot cover another. The check conservatively includes declared faces
+  omitted by build-time size caps. `test-font-notices.ps1` exercises these failures in CI.
+  The supplied checkout must match the existing binaries when using `-SkipBuild`.
+  That presence check does not establish byte-for-byte payload or installation coverage;
+  final package qualification still checks all notices against the staged files.
 - **Signing:** `packaging/windows/sign.ps1` signs both executables and the MSI with `signtool`
   (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure Trusted Signing
   (`AZURE_*`), whichever is configured. It is the one place to change when signing changes.

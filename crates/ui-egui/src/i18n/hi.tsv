@@ -162,6 +162,15 @@
 	Available	उपलब्ध
 	Ready	तैयार
 	Search tools and commands…	टूल और कमांड खोजें…
+
+# Accessible names for inputs that have no visible label.
+	Added text	जोड़ा गया टेक्स्ट
+	Link URL	लिंक का URL
+	Search tools and commands	टूल और कमांड खोजें
+	Text editing line	टेक्स्ट संपादन पंक्ति
+	Text to place	रखने के लिए टेक्स्ट
+	Tooltip	टूलटिप
+	Words or phrases to redact	रेडैक्ट करने के लिए शब्द या वाक्यांश
 	No matching tools	कोई मेल खाता टूल नहीं
 	Tool	टूल
 	Command	कमांड

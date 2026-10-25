@@ -101,7 +101,7 @@ fn new_rename_reorder_indent_delete_and_undo() {
 
 /// The side panel's width as egui keeps it from one frame to the next.
 fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
-    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
+    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
 }
 
 #[test]
@@ -290,8 +290,8 @@ fn style_and_colour_from_the_bookmark_menu() {
     let submenu = |h: &mut Harness<'static, PdfCraftApp>, menu: &str, item: &str| {
         h.get_by_label("Intro").click_secondary();
         h.run_steps(2);
-        // A submenu's button carries its arrow.
-        h.get_by_label(&format!("{menu} ⏵")).click();
+        // The submenu arrow is painted as an atom; the accessible name is the menu title.
+        h.get_by_label(menu).click();
         h.run_steps(2);
         h.get_by_label(item).click();
         h.run_steps(3);

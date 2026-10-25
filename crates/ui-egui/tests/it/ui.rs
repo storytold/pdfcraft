@@ -49,14 +49,14 @@ fn tools_panel_side_preference_moves_and_persists() {
     h.get_by_label("Tools panel side");
     h.get_by_label("Right").click();
     h.run_steps(3);
-    assert!(h.state().docking.tools_on_right());
+    assert!(h.state().side_panels.tools_on_right());
     let saved = h.state().persist();
     let mut restored = PdfCraftApp::new();
     restored.restore(&saved);
-    assert!(restored.docking.tools_on_right());
+    assert!(restored.side_panels.tools_on_right());
     h.get_by_label("Left").click();
     h.run_steps(3);
-    assert!(!h.state().docking.tools_on_right());
+    assert!(!h.state().side_panels.tools_on_right());
 }
 
 /// Every piece of text painted on the last frame: its whole text, whether it was cut with "…",
@@ -596,6 +596,7 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
             delta: egui::vec2(-500.0, 0.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(8);
     }
@@ -718,6 +719,7 @@ fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
                 delta: egui::vec2(0.0, -500.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
             });
             h.run_steps(8);
         }
@@ -1717,6 +1719,7 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
             delta: egui::vec2(0.0, -200.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(4);
     }

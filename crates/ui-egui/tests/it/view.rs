@@ -70,7 +70,7 @@ fn mixed_harness(options: &'static [(&'static str, &'static str)]) -> Harness<'s
 
 /// A vertical wheel event; negative `dy` scrolls down.
 fn wheel(unit: MouseWheelUnit, dy: f32, phase: TouchPhase) -> egui::Event {
-    egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE }
+    egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE, source: egui::MouseWheelSource::Unknown }
 }
 
 #[cfg(target_os = "linux")]
@@ -710,7 +710,13 @@ fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: 
     h.run_steps(2);
     let before = rect(&h, 0).expect("page 1 on screen").min.y;
     let (delta, modifiers) = if zooming { (egui::vec2(0.0, 1.0), Modifiers::COMMAND) } else { (egui::vec2(0.0, -1.0), Modifiers::NONE) };
-    h.event(egui::Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers });
+    h.event(egui::Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta,
+        phase: TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Unknown,
+    });
     (0..40)
         .map(|_| {
             h.step();
@@ -1029,7 +1035,7 @@ fn view_menu_page_display_uses_the_same_commands() {
     h.run_steps(4);
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("View ⏵").hover();
+    h.get_by_label("View").hover();
     h.run_steps(3);
     h.get_by_label("Single page").click();
     h.run_steps(4);
@@ -2007,15 +2013,15 @@ fn long_view_menu_fits_a_short_window() {
     h.run_steps(8);
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("View ⏵").hover();
+    h.get_by_label("View").hover();
     h.run_steps(4);
-    let before = h.get_by_label("Side panels ⏵").rect().bottom();
+    let before = h.get_by_label("Side panels").rect().bottom();
     h.get_by_label("Fit to height ").hover();
     h.event(wheel(MouseWheelUnit::Point, -1000.0, TouchPhase::Move));
     h.run_steps(6);
-    let after = h.get_by_label("Side panels ⏵").rect().bottom();
+    let after = h.get_by_label("Side panels").rect().bottom();
     assert!(after < before && after <= 400.0, "menu did not scroll into view: {before} -> {after}");
-    h.get_by_label("Side panels ⏵").hover();
+    h.get_by_label("Side panels").hover();
     h.run_steps(4);
     h.get_all_by_label("Bookmarks").last().unwrap().click();
     h.run_steps(4);

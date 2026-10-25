@@ -1057,6 +1057,15 @@ theme	Appearance	Giao diện
 	Scroll tabs right	Cuộn các thẻ sang phải
 	Search comments	Tìm bình luận
 	Search tools and commands…	Tìm công cụ và lệnh…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Văn bản đã thêm
+	Link URL	URL của liên kết
+	Search tools and commands	Tìm công cụ và lệnh
+	Text editing line	Dòng chỉnh sửa văn bản
+	Text to place	Văn bản cần đặt
+	Tooltip	Chú giải công cụ
+	Words or phrases to redact	Từ hoặc cụm từ cần xóa
 	Searchable Image (Exact)	Ảnh có thể tìm kiếm (Chính xác)
 	Searching… {s} of {p} pages	Đang tìm… {s} trên {p} trang
 	Searching… {s}/{p}	Đang tìm… {s}/{p}

@@ -314,20 +314,21 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let (icon, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
             icons::paint(ui, icon, "folder", 20.0, t.icon);
-            ui.label(egui::RichText::new(crate::bidi::visual(&name)).font(theme::semibold(14.0))).on_hover_text(folder);
+            // Folder names and paths are file/path chrome: explicitly left to right, so an
+            // Arabic location keeps its `.pdf`/extension at the visual end.
+            widgets::label_ltr(ui, name.clone(), theme::semibold(14.0), t.text).on_hover_text(folder);
             ui.add_space(4.0);
             // Leave room for Unpin: a long location is cut short, never the button.
             let room = (ui.available_width() - 110.0).max(0.0);
             ui.scope(|ui| {
                 ui.set_max_width(room);
-                let place = egui::RichText::new(crate::bidi::visual(&location(folder))).font(theme::regular(12.0)).color(t.text_faint);
-                ui.add(egui::Label::new(place).truncate()).on_hover_text(folder);
+                widgets::label_ltr(ui, location(folder), theme::regular(12.0), t.text_faint).on_hover_text(folder);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let resp = widgets::ghost_button(ui, "x", tl!("Unpin"));
                 // Every folder has an Unpin button: say which one it is.
                 let label = crate::i18n::fmt(tl!("Unpin {folder}"), &[("folder", &name)]);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                 if resp.clicked() {
                     unpin = Some(folder.clone());
                 }
@@ -353,7 +354,7 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let shown = if expanded { listing.files.len() } else { listing.files.len().min(SHOWN) };
         for f in listing.files.iter().take(shown) {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &f.name));
             if resp.hovered() {
                 ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
             }
@@ -369,7 +370,7 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let detail = if when.is_empty() { size } else { format!("{when}  ·  {size}") };
             let detail = ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, detail, theme::regular(12.0), t.text_muted);
             let width = detail.left() - 16.0 - (rect.left() + 62.0);
-            widgets::row_text(ui, rect.min + vec2(62.0, 19.0), crate::bidi::visual(&f.name), theme::medium(13.0), t.text, width);
+            widgets::row_text(ui, rect.min + vec2(62.0, 19.0), f.name.as_str(), theme::medium(13.0), t.text, width);
             if resp.on_hover_text(&f.path).clicked() {
                 open = Some(f.path.clone());
             }

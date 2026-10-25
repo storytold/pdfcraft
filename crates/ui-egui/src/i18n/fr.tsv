@@ -157,6 +157,15 @@
 	Available	Disponible
 	Ready	Prêt
 	Search tools and commands…	Rechercher des outils et des commandes…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texte ajouté
+	Link URL	URL du lien
+	Search tools and commands	Rechercher des outils et des commandes
+	Text editing line	Ligne de modification du texte
+	Text to place	Texte à placer
+	Tooltip	Info-bulle
+	Words or phrases to redact	Mots ou expressions à biffer
 	No matching tools	Aucun outil correspondant
 	Tool	Outil
 	Command	Commande

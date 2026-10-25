@@ -1067,6 +1067,15 @@
 	Scroll tabs right	Slinkti korteles dešinėn
 	Search comments	Ieškoti komentaruose
 	Search tools and commands…	Ieškoti įrankių ir komandų…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Pridėtas tekstas
+	Link URL	Saito URL
+	Search tools and commands	Ieškoti įrankių ir komandų
+	Text editing line	Teksto redagavimo eilutė
+	Text to place	Tekstas, kurį reikia įdėti
+	Tooltip	Patarimas
+	Words or phrases to redact	Šalinami žodžiai ar frazės
 	Searchable Image (Exact)	Paveikslėlis su tiksliu atpažinimu
 	Searching… {s} of {p} pages	Ieškoma… {s} iš {p} puslapių
 	Searching… {s}/{p}	Ieškoma… {s}/{p}

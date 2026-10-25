@@ -182,6 +182,15 @@
 	Available	ພ້ອມໃຊ້ງານ
 	Ready	ພ້ອມແລ້ວ
 	Search tools and commands…	ຄົ້ນຫາເຄື່ອງມື ແລະ ຄຳສັ່ງ…
+
+# Accessible names for inputs that have no visible label.
+	Added text	ຂໍ້ຄວາມທີ່ເພີ່ມ
+	Link URL	URL ຂອງລິ້ງຄ໌
+	Search tools and commands	ຄົ້ນຫາເຄື່ອງມື ແລະ ຄຳສັ່ງ
+	Text editing line	ແຖວແກ້ໄຂຂໍ້ຄວາມ
+	Text to place	ຂໍ້ຄວາມທີ່ຈະວາງ
+	Tooltip	ຄຳແນະນຳເຄື່ອງມື
+	Words or phrases to redact	ຄຳ ຫຼື ວະລີທີ່ຈະປິດບັງ
 	No matching tools	ບໍ່ພົບເຄື່ອງມືທີ່ກົງກັນ
 	Tool	ເຄື່ອງມື
 	Command	ຄຳສັ່ງ

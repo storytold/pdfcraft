@@ -157,6 +157,15 @@
 	Available	Verfügbar
 	Ready	Bereit
 	Search tools and commands…	Tools und Befehle suchen…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Hinzugefügter Text
+	Link URL	URL des Links
+	Search tools and commands	Tools und Befehle suchen
+	Text editing line	Textbearbeitungszeile
+	Text to place	Einzufügender Text
+	Tooltip	Tooltip
+	Words or phrases to redact	Zu schwärzende Wörter oder Ausdrücke
 	No matching tools	Keine passenden Werkzeuge
 	Tool	Werkzeug
 	Command	Befehl

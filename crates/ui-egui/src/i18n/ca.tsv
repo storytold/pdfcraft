@@ -178,6 +178,15 @@
 	Available	Disponible
 	Ready	Llest
 	Search tools and commands…	Cerca eines i ordres…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text afegit
+	Link URL	URL de l'enllaç
+	Search tools and commands	Cerca eines i ordres
+	Text editing line	Línia d'edició de text
+	Text to place	Text que cal col·locar
+	Tooltip	Suggeriment
+	Words or phrases to redact	Paraules o frases per censurar
 	No matching tools	Cap eina coincident
 	Tool	Eina
 	Command	Ordre

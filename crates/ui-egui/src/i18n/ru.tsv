@@ -177,6 +177,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Поиск инструментов и команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Добавленный текст
+	Link URL	URL-адрес ссылки
+	Search tools and commands	Поиск инструментов и команд
+	Text editing line	Строка редактирования текста
+	Text to place	Текст для размещения
+	Tooltip	Подсказка
+	Words or phrases to redact	Слова или фразы для скрытия
 	No matching tools	Нет подходящих инструментов
 	Tool	Инструмент
 	Command	Команда

@@ -178,6 +178,15 @@
 	Available	Käytettävissä
 	Ready	Valmis
 	Search tools and commands…	Hae työkaluja ja komentoja…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Lisätty teksti
+	Link URL	Linkin URL-osoite
+	Search tools and commands	Hae työkaluja ja komentoja
+	Text editing line	Tekstin muokkausrivi
+	Text to place	Sijoitettava teksti
+	Tooltip	Työkaluvihje
+	Words or phrases to redact	Peitettävät sanat tai lauseet
 	No matching tools	Ei vastaavia työkaluja
 	Tool	Työkalu
 	Command	Komento
