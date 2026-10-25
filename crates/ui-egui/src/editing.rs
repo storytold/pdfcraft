@@ -43,6 +43,13 @@ fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
+/// A comment being typed into the app, not into the file yet: the floating composer, a reply, or
+/// the "Add a comment" box. Save posts them before writing (#3918). An edit card opened and left
+/// alone is not work: it still holds the comment's own text.
+fn comment_draft(v: &crate::DocView, info: &pdfcraft_render::DocInfo) -> bool {
+    crate::comments::composer_changed(v, info) || !v.comments.reply.trim().is_empty() || !v.comments.add_box.trim().is_empty()
+}
+
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
@@ -546,20 +553,100 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        let typing = self.views.get(i).is_some_and(|v| {
-            v.pending_edit.is_some()
-                || v.forms.focus.is_some()
-                || v.content.draft.is_some()
-                || v.line_editor.as_ref().is_some_and(|ed| ed.has_changes())
-                || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
-        });
+        let has_draft = match self.session.get(id) {
+            Some(doc) => self.views.get(i).is_some_and(|v| comment_draft(v, &doc.info)),
+            None => return true,
+        };
+        let typing = has_draft
+            || self.views.get(i).is_some_and(|v| {
+                v.pending_edit.is_some()
+                    || v.forms.focus.is_some()
+                    || v.content.draft.is_some()
+                    || v.line_editor.as_ref().is_some_and(|ed| ed.has_changes())
+                    || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+            });
         if self.active != Some(i) {
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id) && self.commit_comment_drafts(id)
+    }
+
+    /// A comment being typed is posted into the document before the file is written, so Close ▸
+    /// Save keeps it instead of dropping it (#3918). When the document refuses an edit, that draft
+    /// and every draft still queued behind it go back into the view: typed text is never lost
+    /// behind a failed save.
+    fn commit_comment_drafts(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        /// Which draft an edit was built from, so a refused one can be put back.
+        enum Draft {
+            Composer(crate::comments::Composer),
+            Reply(String),
+            AddBox(String),
+        }
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let has_draft = match self.session.get(id) {
+            Some(doc) => self.views.get(i).is_some_and(|v| comment_draft(v, &doc.info)),
+            None => return true,
+        };
+        if !has_draft {
+            return true;
+        }
+        // The edits are collected first: `apply_edit` needs the whole app, so no borrow of the
+        // document or the view may still be alive when it runs. Each snapshot is taken before
+        // its draft is taken out of the view.
+        let mut plan: Vec<(Draft, Edit)> = {
+            let Some(doc) = self.session.get(id) else { return true };
+            let Some(view) = self.views.get_mut(i) else { return true };
+            let prefs = &self.comment_prefs;
+            let mut plan = Vec::new();
+            if crate::comments::composer_changed(view, &doc.info)
+                && let Some(draft) = view.comments.composer.clone()
+                && let Some(edit) = crate::comments::submit_composer(view, &doc.info, prefs)
+            {
+                plan.push((Draft::Composer(draft), edit));
+            }
+            if !view.comments.reply.trim().is_empty() {
+                let draft = view.comments.reply.clone();
+                if let Some(edit) = crate::comments::submit_reply(view, prefs) {
+                    plan.push((Draft::Reply(draft), edit));
+                }
+            }
+            if !view.comments.add_box.trim().is_empty() {
+                let draft = view.comments.add_box.clone();
+                if let Some(edit) = crate::comments::submit_add_box(view, &doc.info, prefs) {
+                    plan.push((Draft::AddBox(draft), edit));
+                }
+            }
+            plan
+        };
+        if plan.is_empty() {
+            return true;
+        }
+        self.active = Some(i);
+        while !plan.is_empty() {
+            let (from, edit) = plan.remove(0);
+            if self.apply_edit(edit) {
+                continue;
+            }
+            // Everything left was taken out of the view when the plan was built and has not been
+            // posted, so all of it goes back -- not only the edit the document refused. Drafts
+            // already applied are not in `plan` any more, so they stay in the document.
+            if let Some(view) = self.views.get_mut(i) {
+                let unposted = std::iter::once(from).chain(plan.drain(..).map(|(left, _)| left));
+                for from in unposted {
+                    match from {
+                        Draft::Composer(c) if view.comments.composer.is_none() => view.comments.composer = Some(c),
+                        Draft::Reply(t) if view.comments.reply.is_empty() => view.comments.reply = t,
+                        Draft::AddBox(t) if view.comments.add_box.is_empty() => view.comments.add_box = t,
+                        _ => {}
+                    }
+                }
+            }
+            return false;
+        }
+        true
     }
 
     /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
@@ -642,6 +729,7 @@ impl PdfCraftApp {
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
             || new_text_typed(v)
+            || comment_draft(v, &doc.info)
             || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
     }
 
@@ -1565,6 +1653,111 @@ mod tests {
         let added = app.session.get(id).unwrap().added();
         assert_eq!(added.len(), 1, "the open text box was committed before the save");
         assert!(app.views[0].content.draft.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A comment being typed lives in the app, not the file: close, quit and reload have to ask
+    /// before dropping it, and whitespace has nothing to lose (#3918).
+    #[test]
+    fn comment_drafts_count_as_unsaved_work() {
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        assert!(!app.has_unsaved_work(0));
+        // A note being composed in the floating card.
+        app.views[0].comments.composer = Some(crate::comments::Composer {
+            page: 0,
+            at: [20.0, 260.0],
+            kind: crate::comments::ComposerKind::Note,
+            text: "Typed note".into(),
+            focus: false,
+        });
+        assert!(app.has_unsaved_work(0), "a note being composed is unsaved work");
+        if let Some(c) = app.views[0].comments.composer.as_mut() {
+            c.text = "  \n".into();
+        }
+        assert!(!app.has_unsaved_work(0), "a card with nothing in it is not unsaved work");
+        app.views[0].comments.composer = None;
+
+        // A reply being typed under the selected comment.
+        app.views[0].comments.selected = Some((0, 0));
+        app.views[0].comments.reply = "Typed reply".into();
+        assert!(app.has_unsaved_work(0), "a reply being typed is unsaved work");
+        app.views[0].comments.reply = "  \n".into();
+        assert!(!app.has_unsaved_work(0), "a reply with nothing in it is not unsaved work");
+        app.views[0].comments.reply.clear();
+
+        // The "Add a comment" box at the top of the panel.
+        app.views[0].comments.add_box = "Typed add".into();
+        assert!(app.has_unsaved_work(0), "a comment in the add box is unsaved work");
+        app.views[0].comments.add_box = "  \n".into();
+        assert!(!app.has_unsaved_work(0), "an add box with nothing in it is not unsaved work");
+    }
+
+    /// All three drafts are taken out of the view when the plan is built, so a refused edit must
+    /// give back not only itself but the drafts still waiting behind it (#3918).
+    #[test]
+    fn a_refused_comment_draft_keeps_the_drafts_behind_it() {
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        // Nothing is selected at that index, so the reply is the edit the document refuses.
+        app.views[0].comments.selected = Some((0, 999));
+        app.views[0].comments.reply = "Typed reply".into();
+        app.views[0].comments.add_box = "Typed add".into();
+        let id = app.views[0].id;
+        assert!(!app.commit_comment_drafts(id), "a reply to a comment that is not there is refused");
+        assert_eq!(app.views[0].comments.reply, "Typed reply", "the refused draft is put back");
+        assert_eq!(app.views[0].comments.add_box, "Typed add", "the draft queued behind it is put back too");
+    }
+
+    /// Close ▸ Save posts the comments being typed before the file is written: a composer, a
+    /// reply and the add-a-comment box all reach the saved document (#3918).
+    #[test]
+    fn saving_on_close_keeps_comment_drafts() {
+        let dir = staging_dir("comment-drafts");
+        let dest = dir.join("out.pdf");
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        let prefs = crate::comments::CommentPrefs::default();
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape: pdfcraft_engine::Shape::Note { at: [20.0, 260.0], icon: pdfcraft_engine::NoteIcon::Comment },
+            style: prefs.style(crate::comments::CommentTool::Note),
+            contents: "Existing comment".into(),
+            author: "Ada".into(),
+        })));
+        app.save_override = Some(dest.to_string_lossy().into_owned());
+        assert!(app.save_active(SaveTarget::InPlace));
+        assert!(!app.has_unsaved_work(0), "nothing is unsaved but the drafts below");
+
+        let v = &mut app.views[0].comments;
+        v.composer = Some(crate::comments::Composer {
+            page: 0,
+            at: [60.0, 260.0],
+            kind: crate::comments::ComposerKind::Note,
+            text: "Typed note".into(),
+            focus: false,
+        });
+        v.selected = Some((0, 0));
+        v.reply = "Typed reply".into();
+        v.add_box = "Typed add".into();
+
+        let ctx = egui::Context::default();
+        app.request_close_tab(0);
+        assert!(app.close_request.is_some(), "a comment being typed asks before the tab closes");
+        app.resolve_close(&ctx, Some(true));
+        assert!(app.views.is_empty(), "the tab closes once saved");
+
+        let bytes = std::fs::read(&dest).unwrap();
+        let mut reopened = crate::PdfCraftApp::new();
+        reopened.open_bytes("a.pdf", Some(dest.to_string_lossy().into_owned()), bytes).unwrap();
+        let doc = reopened.session.get(reopened.views[0].id).unwrap();
+        let texts: Vec<String> = doc.info.annotations.iter().filter_map(|a| a.contents.clone()).collect();
+        for want in ["Existing comment", "Typed note", "Typed reply", "Typed add"] {
+            assert!(texts.iter().any(|t| t == want), "missing {want:?} in {texts:?}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

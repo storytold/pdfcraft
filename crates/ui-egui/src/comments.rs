@@ -877,7 +877,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 } else if let Some(shape) = drawn_shape(tool, &points) {
                     let now = ui.input(|i| i.time);
                     cv.settle(now, page, tool, &points);
-                    view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+                    view.pending_edit = Some(new_comment(cx.page, cx.prefs, tool, shape, String::new()));
                 }
             }
             // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
@@ -892,7 +892,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 cv.selected = None;
                 let now = ui.input(|i| i.time);
                 cv.settle(now, cx.page, tool, &[cx.to_user(p)]);
-                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+                view.pending_edit = Some(new_comment(cx.page, cx.prefs, tool, shape, String::new()));
             }
             true
         }
@@ -929,7 +929,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                             let pts = std::mem::take(points);
                             cv.gesture = None;
                             if let Some(shape) = drawn_shape(tool, &pts) {
-                                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+                                view.pending_edit = Some(new_comment(cx.page, cx.prefs, tool, shape, String::new()));
                             }
                             return true;
                         }
@@ -950,7 +950,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             {
                 cv.gesture = None;
                 if let Some(shape) = drawn_shape(tool, &points) {
-                    view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+                    view.pending_edit = Some(new_comment(cx.page, cx.prefs, tool, shape, String::new()));
                 }
             }
             true
@@ -1313,7 +1313,7 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         && let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page)
     {
         view.clear_selection();
-        view.pending_edit = Some(new_comment(cx, tool, Shape::TextMarkup { kind, quads }, String::new()));
+        view.pending_edit = Some(new_comment(cx.page, cx.prefs, tool, Shape::TextMarkup { kind, quads }, String::new()));
         let _ = page;
     }
 }
@@ -1568,8 +1568,10 @@ fn edited_in_view(cx: &PageCx<'_>, index: usize, viewport: Rect) -> bool {
     cx.info.annotations.iter().any(|a| a.page == cx.page && a.index == index && viewport.intersects(cx.screen_rect(a)))
 }
 
-fn new_comment(cx: &PageCx<'_>, tool: CommentTool, shape: Shape, contents: String) -> Edit {
-    Edit::AddAnnotation(NewAnnotation { page: cx.page, shape, style: cx.prefs.style(tool), contents, author: cx.prefs.author.clone() })
+/// The edit a comment makes at `page`. Shared by every tool that creates one, and by Save, which
+/// posts a comment that was still being typed (#3918).
+fn new_comment(page: usize, prefs: &CommentPrefs, tool: CommentTool, shape: Shape, contents: String) -> Edit {
+    Edit::AddAnnotation(NewAnnotation { page, shape, style: prefs.style(tool), contents, author: prefs.author.clone() })
 }
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
@@ -1649,14 +1651,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let can_post = !c.text.trim().is_empty() || matches!(c.kind, ComposerKind::Edit(_));
+                    let post_ok = can_post(c);
                     if ui
                         .add_enabled(
-                            can_post,
+                            post_ok,
                             egui::Button::new(egui::RichText::new(tl!("Post")).color(Color32::WHITE)).fill(t.accent).corner_radius(14),
                         )
                         .clicked()
-                        || (enter && can_post)
+                        || (enter && post_ok)
                     {
                         post = true;
                     }
@@ -1674,13 +1676,49 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     if !post {
         return None;
     }
+    submit_composer(view, info, prefs)
+}
+
+/// The contents comment `index` on `page` has in the document, or empty when it has none.
+fn contents_at(info: &DocInfo, page: usize, index: usize) -> String {
+    info.annotations.iter().find(|a| a.page == page && a.index == index).and_then(|a| a.contents.clone()).unwrap_or_default()
+}
+
+/// Whether the floating card holds a comment Post would post: one being written, or an edit
+/// whose text is no longer the comment's own. `has_unsaved_work` and Save both ask this, so what
+/// counts as unsaved and what gets posted never disagree (#3918).
+pub(crate) fn composer_changed(view: &DocView, info: &DocInfo) -> bool {
+    let Some(c) = view.comments.composer.as_ref() else { return false };
+    match &c.kind {
+        ComposerKind::Edit(index) => contents_at(info, c.page, *index) != c.text,
+        _ => !c.text.trim().is_empty(),
+    }
+}
+
+/// What the card's Post button allows: a comment with text in it, or an edit being cleared.
+pub(crate) fn can_post(c: &Composer) -> bool {
+    !c.text.trim().is_empty() || matches!(c.kind, ComposerKind::Edit(_))
+}
+
+/// The edit the composer's text makes. The card's Post button and Save both use this, so a
+/// comment that was being typed is posted into the document instead of dropped (#3918). A card
+/// that cannot post keeps its text: nothing is taken out of the view until the edit exists.
+pub(crate) fn submit_composer(view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+    let ready = view.comments.composer.as_ref().is_some_and(|c| {
+        // A replacement's quads go with its text: without them there is nothing to post.
+        can_post(c) && (!matches!(c.kind, ComposerKind::Replace) || view.comments.replace.is_some())
+    });
+    if !ready {
+        return None;
+    }
     let c = view.comments.composer.take()?;
+    let page = c.page;
     let text = c.text.trim_end().to_string();
     match c.kind {
         ComposerKind::Edit(index) => Some(Edit::SetAnnotationContents { page, index, text }),
         ComposerKind::Note => {
             view.comments.tool_done = true;
-            Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
+            Some(new_comment(page, prefs, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
         }
         ComposerKind::TextBox { size } => {
             view.comments.tool_done = true;
@@ -1690,7 +1728,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
                 _ => text_box_rect(c.at, &text, 12.0, rotation),
             };
-            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
+            Some(new_comment(page, prefs, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
@@ -1704,7 +1742,13 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (rect[0] + rect[2]) / 2.0
             };
             let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
+            Some(new_comment(
+                page,
+                prefs,
+                CommentTool::Callout,
+                Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow },
+                text,
+            ))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
@@ -1722,9 +1766,41 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             let [x, y] = c.at;
             let half = size / 2.0;
-            Some(new_comment(&cx, CommentTool::Caret, Shape::Caret { rect: [x - half, y - size, x + half, y] }, text))
+            Some(new_comment(page, prefs, CommentTool::Caret, Shape::Caret { rect: [x - half, y - size, x + half, y] }, text))
         }
     }
+}
+
+/// The edit the reply box posts. The panel's Post button and Save both use this, so a reply that
+/// was being typed is posted instead of dropped (#3918).
+pub(crate) fn submit_reply(view: &mut DocView, prefs: &CommentPrefs) -> Option<Edit> {
+    let (page, index) = view.comments.selected?;
+    let text = view.comments.reply.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    view.comments.reply.clear();
+    Some(Edit::ReplyToAnnotation { page, index, text, author: prefs.author.clone() })
+}
+
+/// The edit the "Add a comment" box posts. The panel and Save both use this, so a comment typed
+/// into the box is posted instead of dropped (#3918).
+pub(crate) fn submit_add_box(view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+    let text = view.comments.add_box.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let page = view.current.min(info.pages.len().saturating_sub(1));
+    let p = info.pages.get(page)?;
+    let at = p.view_to_user(p.width - 44.0, 24.0);
+    view.comments.add_box.clear();
+    Some(Edit::AddAnnotation(NewAnnotation {
+        page,
+        shape: Shape::Note { at: [at[0] as f64, at[1] as f64], icon: NoteIcon::Comment },
+        style: prefs.style(CommentTool::Note),
+        contents: text,
+        author: prefs.author.clone(),
+    }))
 }
 
 /// Submit only from the focused comment editor. Match each key event's modifiers exactly,

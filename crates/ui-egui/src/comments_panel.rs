@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 
 use egui::{Align, Color32, CornerRadius, Layout, Sense, Stroke, vec2};
-use pdfcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
+use pdfcraft_engine::{Edit, ReviewState};
 use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::DocView;
-use crate::comments::{CommentPrefs, CommentTool, SortBy, color32, status_badge};
+use crate::comments::{CommentPrefs, SortBy, color32, status_badge};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{icons, widgets};
@@ -136,19 +136,11 @@ pub(crate) fn show(
         let r = ui.add(
             crate::widgets::line(&mut view.comments.add_box).hint_text(tl!("Add a comment")).desired_width(f32::INFINITY).id_salt("comment-add-box"),
         );
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
-            let page = view.current.min(info.pages.len().saturating_sub(1));
-            if let Some(p) = info.pages.get(page) {
-                let at = p.view_to_user(p.width - 44.0, 24.0);
-                let text = std::mem::take(&mut view.comments.add_box);
-                edit = Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
-                    page,
-                    shape: Shape::Note { at: [at[0] as f64, at[1] as f64], icon: NoteIcon::Comment },
-                    style: prefs.style(CommentTool::Note),
-                    contents: text.trim().to_string(),
-                    author: prefs.author.clone(),
-                }));
-            }
+        if r.lost_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && let Some(e) = crate::comments::submit_add_box(view, info, prefs)
+        {
+            edit = Some(e);
         }
         ui.add_space(8.0);
     }
@@ -436,9 +428,11 @@ fn card(
                     let ok = !view.comments.reply.trim().is_empty();
                     let post =
                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| ui.add_enabled(ok, egui::Button::new(tl!("Post")).corner_radius(12)));
-                    if (post.inner.clicked() || enter) && ok {
-                        let text = std::mem::take(&mut view.comments.reply).trim().to_string();
-                        edit = Some(Edit::ReplyToAnnotation { page: a.page, index: a.index, text, author: prefs.author.clone() });
+                    if (post.inner.clicked() || enter)
+                        && ok
+                        && let Some(e) = crate::comments::submit_reply(view, prefs)
+                    {
+                        edit = Some(e);
                     }
                 });
             }
