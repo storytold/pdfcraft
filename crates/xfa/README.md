@@ -65,7 +65,9 @@ that warning and keeps the existing layout and accepted widget values.
   without the zeros that end its fraction (`6.00000000` as `6`). Only the first instance of a
   repeating subform is read, and only for presence and access: each instance was saved with its
   own values, which would otherwise all go to every instance (a warning says so). The root
-  subform's `restoreState` is not consulted: the packet is applied whatever it says.
+  subform's `restoreState` decides whether any of it is: the packet is applied only when it is
+  `auto`; `manual`, the default (XFA 3.3, p. 849), restores nothing on opening, presence
+  included, and a warning says so.
 
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.

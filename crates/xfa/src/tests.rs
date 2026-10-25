@@ -2686,7 +2686,7 @@ fn the_form_packet_restores_the_presence_and_access_the_form_was_saved_with() {
         row(2, r#" presence="hidden""#),
         row(3, r#" presence="hidden""#)
     );
-    let template = one_area_form(r#"layout="tb""#, &body);
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, &body);
     let visible = |xdp: &str| -> Vec<String> { layout_xml(xdp).unwrap().pages.iter().flat_map(widgets).map(|w| w.som.clone()).collect() };
     assert_eq!(visible(&template), ["form[0].body[0].row0[0].who[0]", "form[0].body[0].rep[0].x[0]"]);
     let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/" checksum="x"><subform name="form">
@@ -2736,7 +2736,7 @@ fn a_flowed_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
 #[test]
 fn the_form_packet_restores_a_caption_a_script_changed() {
     let body = r#"<subform name="body" layout="tb" w="7.5in"><field name="bar" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Show Bar</text></value></caption></field></subform>"#;
-    let template = one_area_form(r#"layout="tb""#, body);
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, body);
     let caption = |xdp: &str| match &widgets(&layout_xml(xdp).unwrap().pages[0])[0].kind {
         WidgetKind::Button { caption } => caption.clone(),
         other => panic!("{other:?}"),
@@ -2754,7 +2754,7 @@ fn the_form_packet_restores_a_caption_a_script_changed() {
 #[test]
 fn the_form_packet_restores_the_caption_and_value_of_a_draw() {
     let body = r#"<subform name="body" layout="tb" w="7.5in"><draw name="heading" w="7.5in" h="0.3in"><ui><textEdit/></ui><font typeface="Arial" size="12pt"/><value><text/></value></draw><draw name="note" w="7.5in" h="0.3in"><value><text>Template note</text></value></draw></subform>"#;
-    let template = one_area_form(r#"layout="tb""#, body);
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, body);
     let text = |xdp: &str| texts(&layout_xml(xdp).unwrap().pages[0]).join(" ");
     assert_eq!(text(&template), "Template note");
     let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
@@ -2781,7 +2781,7 @@ fn an_unbound_field_opens_with_the_value_the_form_packet_saved() {
  <field name="note" w="3in" h="0.4in"><ui><textEdit/></ui><bind match="none"/></field>
  <field name="bound" w="3in" h="0.4in"><ui><textEdit/></ui></field>
 </subform>"#;
-    let template = one_area_form(r#"layout="tb""#, body);
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, body);
     let values = |xdp: &str| -> Vec<Option<String>> { widgets(&layout_xml(xdp).unwrap().pages[0]).iter().map(|w| w.value.clone()).collect() };
     assert_eq!(values(&template), [None, None, None]);
     let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
@@ -2801,7 +2801,7 @@ fn the_form_packet_restores_the_items_of_a_choice_list() {
  <field name="product" w="3in" h="0.4in"><ui><choiceList/></ui><bind match="none"/><items save="1"/></field>
  <field name="size" w="3in" h="0.4in"><ui><choiceList/></ui><items><text>Small</text></items><items save="1" presence="hidden"><text>S</text></items></field>
 </subform>"#;
-    let template = one_area_form(r#"layout="tb""#, body);
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, body);
     // Each list's (saved value, shown text) options and its value.
     type Choice = (Vec<(String, String)>, Option<String>);
     let options = |xdp: &str| -> Vec<Choice> {
@@ -2839,7 +2839,7 @@ fn the_values_saved_in_a_repeating_subforms_instances_are_not_copied_to_all_of_t
   <draw name="label" w="3in" h="0.3in"><value><text>Template label</text></value></draw>
  </subform>
 </subform>"#;
-    let template = one_area_form(r#"layout="tb""#, body);
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, body);
     let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
  <field name="title"><value><text>kept</text></value></field>
  <subform name="rec"><field name="pic" access="readOnly"><caption><value><text>First caption</text></value></caption><value><text>first</text></value></field>
@@ -2878,7 +2878,7 @@ fn a_saved_number_opens_without_the_zeros_ending_its_fraction() {
         .iter()
         .map(|n| format!(r#"<field name="{n}" w="3in" h="0.4in"><ui><numericEdit/></ui><bind match="none"/></field>"#))
         .collect();
-    let template = one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="tb" w="7.5in">{fields}</subform>"#));
+    let template = one_area_form(r#"layout="tb" restoreState="auto""#, &format!(r#"<subform name="body" layout="tb" w="7.5in">{fields}</subform>"#));
     let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
  <field name="f"><value><float>6.00000000</float></value></field>
  <field name="d"><value><decimal>12.50</decimal></value></field>
@@ -2893,6 +2893,62 @@ fn a_saved_number_opens_without_the_zeros_ending_its_fraction() {
     let values: Vec<Option<String>> = widgets(&form.pages[0]).iter().map(|w| w.value.clone()).collect();
     let want = ["6", "12.5", "100", "-0.25", "0", "1.50E3", "6.00"];
     assert_eq!(values, want.map(|s| Some(s.to_string())), "a number in another notation, and text, stay as they are");
+}
+
+/// The template and form packet of the `restoreState` tests: a hidden section a script showed,
+/// whose message it rewrote, a button it relabelled and locked, and an unbound note it filled.
+fn restore_state_form(root_attrs: &str) -> String {
+    let body = r#"<subform name="body" layout="tb" w="7.5in">
+ <subform name="secret" layout="tb" w="7.5in" presence="hidden"><draw name="msg" w="7.5in" h="0.3in"><value><text>TEMPLATE TEXT</text></value></draw></subform>
+ <field name="go" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Template label</text></value></caption></field>
+ <field name="note" w="3in" h="0.4in"><ui><textEdit/></ui><bind match="none"/></field>
+</subform>"#;
+    let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
+ <subform name="secret" presence="visible"><draw name="msg"><value><text>RESTORED</text></value></draw></subform>
+ <field name="go" access="readOnly"><caption><value><text>Saved label</text></value></caption></field>
+ <field name="note"><value><text>kept</text></value></field>
+</subform></subform></form>
+</xdp:xdp>"#;
+    one_area_form(root_attrs, body).replace("</xdp:xdp>", saved)
+}
+
+/// What a `restoreState` test sees: the page's text, the button's caption and lock, the note's
+/// value, and the warnings.
+fn restored(xdp: &str) -> (String, String, bool, Option<String>, Vec<String>) {
+    let form = layout_xml(xdp).unwrap();
+    let page = &form.pages[0];
+    let w = widgets(page);
+    let go = w.iter().find(|w| w.name == "go").unwrap();
+    let caption = match &go.kind {
+        WidgetKind::Button { caption } => caption.clone(),
+        other => panic!("{other:?}"),
+    };
+    let note = w.iter().find(|w| w.name == "note").unwrap().value.clone();
+    (texts(page).join(" "), caption, go.read_only, note, form.warnings.clone())
+}
+
+/// XFA 3.3, "The restoreState property" (p. 849): with `auto` the whole saved state is restored
+/// on opening; with `manual` "Script may restore specific properties but nothing happens
+/// automatically", so the form opens as its template has it, presence included, and a warning
+/// says why.
+#[test]
+fn the_form_packet_is_not_restored_when_the_root_subform_says_manual() {
+    let (text, caption, locked, note, _) = restored(&restore_state_form(r#"layout="tb" restoreState="auto""#));
+    assert_eq!((text.as_str(), caption.as_str(), locked, note.as_deref()), ("RESTORED", "Saved label", true, Some("kept")));
+
+    let (text, caption, locked, note, warnings) = restored(&restore_state_form(r#"layout="tb" restoreState="manual""#));
+    assert_eq!((text.as_str(), caption.as_str(), locked, note), ("", "Template label", false, None), "nothing is restored");
+    assert_eq!(warnings.iter().filter(|w| w.contains("restoreState is manual")).count(), 1, "{warnings:?}");
+}
+
+/// Without `restoreState` the root subform has its default, `manual` (XFA 3.3, p. 849, the first
+/// value of "manual | auto"): nothing is restored, not even the presence and access scripts gave
+/// objects, and the same warning says so.
+#[test]
+fn the_form_packet_is_not_restored_when_the_root_subform_has_no_restore_state() {
+    let (text, caption, locked, note, warnings) = restored(&restore_state_form(r#"layout="tb""#));
+    assert_eq!((text.as_str(), caption.as_str(), locked, note), ("", "Template label", false, None), "nothing is restored");
+    assert_eq!(warnings.iter().filter(|w| w.contains("restoreState is manual")).count(), 1, "{warnings:?}");
 }
 
 #[test]

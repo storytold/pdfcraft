@@ -754,19 +754,37 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         // A page set may sit beside the root subform.
         root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));
     }
-    // The form packet beside the template holds the state the form was saved in.
+    // The form packet beside the template holds the state the form was saved in. It is restored
+    // on opening only when the root subform the parser reads says so.
     let saved = root
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "form" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-form")));
     if let Some(saved_root) = saved.and_then(|f| children(f, "subform").next()) {
-        if let Some(p) = saved_root.attribute("presence") {
-            root_sf.common.presence = Presence::parse(Some(p));
+        if restores_saved_state(sf.attribute("restoreState")) {
+            if let Some(p) = saved_root.attribute("presence") {
+                root_sf.common.presence = Presence::parse(Some(p));
+            }
+            apply_saved_state(&mut root_sf.children, saved_root, 0, true, &mut warnings);
+        } else {
+            warnings.push(
+                "the form packet's saved state is not restored: the root subform's restoreState is manual (its default), under which nothing is restored automatically (XFA 3.3, p. 849)"
+                    .into(),
+            );
         }
-        apply_saved_state(&mut root_sf.children, saved_root, 0, true, &mut warnings);
     }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
     Ok((Template { root: root_sf, page_roles }, warnings))
+}
+
+/// Whether a form packet's saved state is restored on opening, from the root subform's
+/// `restoreState` (XFA 3.3, "The restoreState property", p. 849; only the root subform's is
+/// meaningful). `auto`: "the whole state of the document is ... restored automatically upon
+/// re-opening". `manual`, the default (the syntax lists it first), and so also a missing or
+/// unrecognised value: "Script may restore specific properties but nothing happens
+/// automatically" — presence included.
+fn restores_saved_state(restore_state: Option<&str>) -> bool {
+    restore_state.map(str::trim) == Some("auto")
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {
