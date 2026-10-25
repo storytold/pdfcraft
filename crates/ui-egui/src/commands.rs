@@ -97,6 +97,7 @@ impl PdfCraftApp {
             && match spec.id {
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
+                "form.field.properties" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.prepare.selected.is_some()),
                 _ => true,
             }
     }
@@ -119,6 +120,11 @@ impl PdfCraftApp {
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
         match spec.needs {
+            commands::Needs::HasFields
+                if spec.id == "form.field.properties" && commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id)) =>
+            {
+                tl!("Select a form field first").to_string()
+            }
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
             commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
