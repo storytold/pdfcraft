@@ -2146,19 +2146,29 @@ fn auto_check_reserve(f: &Field, placement: Placement, w: f64, h: Option<f64>) -
 }
 
 /// Box `inner` divided between a caption `reserve` deep on its `placement` side (an inline one
-/// on the left) and the rest: (the caption's box, the rest).
+/// on the left) and the rest: (the caption's box, the rest). The reserve is clamped to the side
+/// it is taken from, so a reserve deeper than the box leaves the rest empty and inside the box,
+/// never a negative width.
 fn split_caption(placement: Placement, reserve: f64, inner: Rect) -> (Rect, Rect) {
+    let (w, h) = (inner.w.max(0.0), inner.h.max(0.0));
+    // `max` maps a NaN reserve to 0.
     let r = reserve.max(0.0);
     match placement {
-        Placement::Top => (Rect::new(inner.x, inner.y, inner.w, r.min(inner.h)), Rect::new(inner.x, inner.y + r, inner.w, inner.h - r)),
+        Placement::Top => {
+            let r = r.min(h);
+            (Rect::new(inner.x, inner.y, w, r), Rect::new(inner.x, inner.y + r, w, h - r))
+        }
         Placement::Bottom => {
-            (Rect::new(inner.x, inner.bottom() - r.min(inner.h), inner.w, r.min(inner.h)), Rect::new(inner.x, inner.y, inner.w, inner.h - r))
+            let r = r.min(h);
+            (Rect::new(inner.x, inner.y + h - r, w, r), Rect::new(inner.x, inner.y, w, h - r))
         }
         Placement::Right => {
-            (Rect::new(inner.right() - r.min(inner.w), inner.y, r.min(inner.w), inner.h), Rect::new(inner.x, inner.y, inner.w - r, inner.h))
+            let r = r.min(w);
+            (Rect::new(inner.x + w - r, inner.y, r, h), Rect::new(inner.x, inner.y, w - r, h))
         }
         Placement::Left | Placement::Inline => {
-            (Rect::new(inner.x, inner.y, r.min(inner.w), inner.h), Rect::new(inner.x + r, inner.y, inner.w - r, inner.h))
+            let r = r.min(w);
+            (Rect::new(inner.x, inner.y, r, h), Rect::new(inner.x + r, inner.y, w - r, h))
         }
     }
 }

@@ -4059,3 +4059,24 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// A caption reserve deeper than its draw leaves the picture an empty box inside the draw, never
+/// a negative width (which the PDF writer would emit as a mirrored image) or a box past its edge.
+#[test]
+fn caption_reserve_wider_than_draw_leaves_no_negative_picture_box() {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(tiny_png());
+    for placement in ["left", "right", "top", "bottom", "inline"] {
+        let tpl = format!(
+            r#"<template><subform layout="tb"><draw w="1in" h="1in"><caption placement="{placement}" reserve="3in"><value><text>Logo</text></value></caption><value><image contentType="image/png">{b64}</image></value></draw></subform></template>"#
+        );
+        let form = layout_xml(&tpl).unwrap();
+        let rects: Vec<Rect> = form.pages[0].items.iter().filter_map(|i| if let Item::Image { rect, .. } = i { Some(*rect) } else { None }).collect();
+        assert_eq!(rects.len(), 1, "{placement}: {rects:?}");
+        let r = rects[0];
+        assert!(r.w >= 0.0 && r.h >= 0.0, "{placement}: a picture box of negative size: {r:?}");
+        // The draw is the 1in square at the page's 0.5in margin.
+        let inside = |a: f64| (36.0 - 1e-9..=108.0 + 1e-9).contains(&a);
+        assert!(inside(r.x) && inside(r.right()) && inside(r.y) && inside(r.bottom()), "{placement}: outside the draw: {r:?}");
+    }
+}
