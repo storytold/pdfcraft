@@ -1,0 +1,83 @@
+[package]
+edition = "2021"
+name = "winprint"
+version = "0.2.1"
+authors = ["ArcticLampyrid <ArcticLampyrid@outlook.com>"]
+keywords = ["printer", "printing", "xps", "pdf"]
+categories = ["api-bindings", "os::windows-apis"]
+description = "A crate for printing to a Windows printer device using Windows API"
+license = "BSD-3-Clause"
+readme = "README.md"
+documentation = "https://docs.rs/winprint"
+repository = "https://github.com/ArcticLampyrid/winprint.rs/"
+
+[dependencies]
+scopeguard = "1.2"
+sha2 = { version = "0.11", optional = true }
+bs58 = { version = "0.5", optional = true }
+uuid = { version = "1.23", features = ["v4"], optional = true }
+strum = { version = "0.28", features = ["derive"] }
+thiserror = "2.0"
+fmt-derive = "0.1"
+xml = "1.2"
+windows-core = "0.62"
+windows-implement = "0.60.2"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Data_Pdf",
+    "Storage",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Imaging_D2D",
+    "Win32_Graphics_Printing",
+    "Win32_Graphics_Printing_PrintTicket",
+    "Win32_Security",
+    "Win32_Storage_Xps_Printing",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_WinRT_Pdf",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+reqwest = { version = "0.13", features = ["blocking"] }
+flate2 = "1.1"
+tar = "0.4"
+sigstore-trust-root = { version = "0.6.5", default-features = false }
+sigstore-types = "0.6.5"
+sigstore-verify = { version = "0.6.5", default-features = false }
+
+[dev-dependencies]
+ctor = "0.10"
+env_logger = "0.11"
+winprint = { path = ".", features = ["test-utils"], default-features = false }
+anyhow = "1"
+futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+image-compare = "0.5"
+print_raster = "0.1"
+tiff = "0.11"
+
+[features]
+default = ["pdfium"]
+pdfium = []
+test-utils = ["dep:sha2", "dep:bs58", "dep:uuid"]
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-pc-windows-msvc"]
