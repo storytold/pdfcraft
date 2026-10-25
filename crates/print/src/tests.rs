@@ -813,6 +813,32 @@ mod cups_options {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// CUPS prints a custom option's template instead of its choices — `Custom`, `Custom.PASSCODE`,
+    /// `Custom.STRING`, `Custom.WIDTHxHEIGHT`: the dialog has no field to collect the value, so
+    /// offering the template would send that literal text to the driver.
+    #[test]
+    fn custom_value_templates_are_not_offered() {
+        let dir = folder();
+        let lpoptions_out = "Pin/Pin: *Custom.PASSCODE\nJobPassword/Job Password: 1234 *5678 Custom.PASSWORD\nScale/Scale: *Custom.REAL\nSolo/Solo: *Custom\nMediaType/Media Type: *Plain Custom.Glossy Matte\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        assert_eq!(keys, ["JobPassword", "MediaType"], "an option whose choices are all templates is dropped");
+
+        let password = options.iter().find(|o| o.key == "JobPassword").unwrap();
+        assert_eq!(password.choices, [("1234".into(), "1234".into()), ("5678".into(), "5678".into())]);
+        assert_eq!(password.default, "5678", "a template is never a choice");
+
+        let media_type = options.iter().find(|o| o.key == "MediaType").unwrap();
+        assert_eq!(media_type.choices, [("Plain".into(), "Plain".into()), ("Matte".into(), "Matte".into())]);
+        assert_eq!(media_type.default, "Plain");
+
+        // A starred template must not become the default either: the first real choice takes over.
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, "Pin/Pin: *Custom.PASSCODE 1234\n"), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].default, "1234");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn the_listing_is_capped_the_way_the_ppd_is() {
         let dir = folder();

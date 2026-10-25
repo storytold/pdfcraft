@@ -186,11 +186,24 @@ fn lpoptions_label(label: &str) -> String {
     label.chars().take(MAX_LPOPTIONS_LABEL).collect()
 }
 
+/// Whether `choice` is a custom-value template. For a choice the user has to type, `lpoptions -l`
+/// prints `Custom`, `Custom.<TYPE>` (`Custom.PASSCODE`, `Custom.STRING`, …) or `Custom.WIDTHxHEIGHT`
+/// in place of the choices, and the value is not something Craft can collect: it would be sent to
+/// the driver as the literal text. The prefix is reserved by CUPS, case-insensitively.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn is_lpoptions_custom_template(choice: &str) -> bool {
+    match choice.split_once('.') {
+        Some((name, _)) => name.eq_ignore_ascii_case("Custom"),
+        None => choice.eq_ignore_ascii_case("Custom"),
+    }
+}
+
 /// Build [`PrinterOption`]s from the `lpoptions -p NAME -l` listing (`Key/Label: a *b c`). This is
 /// the fallback when the PPD cannot be read, so there is no group information: every option lands in
 /// one unnamed group, and the listing cannot say which options sit under `InstallableOptions`, so an
 /// optional-hardware entry that [`parse_ppd`] drops may appear here. The starred choice is the
-/// driver's default. Options Craft handles itself ([`HANDLED_OPTIONS`]) are skipped.
+/// driver's default. Options Craft handles itself ([`HANDLED_OPTIONS`]) and custom-value templates
+/// ([`is_lpoptions_custom_template`]) are skipped.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
     let mut options = Vec::new();
@@ -208,13 +221,13 @@ fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
         for token in choices.split_whitespace() {
             let starred = token.strip_prefix('*').unwrap_or(token);
             let (choice_key, choice_label) = lpoptions_name_label(starred);
-            if !is_lpoptions_keyword(choice_key) {
+            if !is_lpoptions_keyword(choice_key) || is_lpoptions_custom_template(choice_key) {
                 continue;
             }
             if token.starts_with('*') {
                 default = choice_key.to_string();
             }
-            if choice_list.iter().all(|(c, _)| c != choice_key) && choice_list.len() < MAX_LPOPTIONS_CHOICES {
+            if choice_list.len() < MAX_LPOPTIONS_CHOICES && choice_list.iter().all(|(c, _)| c != choice_key) {
                 choice_list.push((choice_key.to_string(), lpoptions_label(choice_label)));
             }
         }
