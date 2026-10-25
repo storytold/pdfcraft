@@ -119,7 +119,7 @@ pub use pdfcraft_redact::patterns::{
 };
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
-pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
+pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore, VerificationTime};
 pub use pdfcraft_xfdf::Format as DataFormat;
 
 use bookmarks::outline_rows;
@@ -156,7 +156,7 @@ mod doc_state;
 
 use clock::{local_utc_offset, parse_ymd};
 pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};
-use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, signatures_of, writable};
+use doc_state::{LOW_RESOLUTION_PRINT_DPI, Trust, clock_now, render_threads, renderer_password, signatures_of, writable};
 
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
 /// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,

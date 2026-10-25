@@ -307,6 +307,10 @@ impl Automation {
     }
 
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
+        let verify_at = match a.opt_str("verify_at")? {
+            None => None,
+            Some(k) => Some(sign::VerificationTime::from_key(k).ok_or_else(|| bad("verify_at must be signing, secure or current"))?),
+        };
         let mut certs: Vec<Certificate> =
             if a.opt_bool("clear")?.unwrap_or(false) { Vec::new() } else { self.session.trusted_certificates().to_vec() };
         // #2613: stop trusting certificates by the SHA-256 the list reports, before any are added.
@@ -349,8 +353,15 @@ impl Automation {
                 }
             }
         }
+        if let Some(at) = verify_at {
+            self.session.set_verification_time(at);
+        }
         self.session.set_trusted_certificates(certs);
-        Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>(), "removed": removed }))
+        Ok(json!({
+            "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>(),
+            "removed": removed,
+            "verify_at": self.session.verification_time().key(),
+        }))
     }
 }
 

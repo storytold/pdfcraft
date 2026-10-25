@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, VerificationTime};
 
 use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -583,6 +583,14 @@ impl PdfCraftApp {
         }
     }
 
+    /// Check signers' certificates at `at`, revalidating and redrawing as a trust change does.
+    pub fn apply_verification_time(&mut self, at: VerificationTime) {
+        self.session.set_verification_time(at);
+        for view in &mut self.views {
+            view.invalidate_content();
+        }
+    }
+
     /// A file name without its PDF extension, for snapshot tab names.
     fn file_stem(name: &str) -> String {
         name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string()
@@ -715,6 +723,26 @@ pub(crate) fn trusted_certificates_section(ui: &mut egui::Ui, app: &mut PdfCraft
     });
     if let Some(c) = remove.and_then(|i| trusted.get(i)) {
         app.untrust_certificate(c);
+    }
+}
+
+/// Preferences ▸ Signature verification: when signers' certificates are checked (Acrobat:
+/// Verify signatures using).
+pub(crate) fn verification_time_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    ui.label(egui::RichText::new(tl!("Signature verification")).font(theme::semibold(13.0)));
+    ui.label(tl!("Verify signatures using"));
+    let current = app.session.verification_time();
+    let mut chosen = current;
+    widgets::radio_value(ui, &mut chosen, VerificationTime::Signing, tl!("The time the signature was created"));
+    widgets::radio_value(ui, &mut chosen, VerificationTime::Secure, tl!("The secure time of a trusted timestamp, else the current time"));
+    widgets::radio_value(ui, &mut chosen, VerificationTime::Current, tl!("The current time"));
+    ui.label(
+        egui::RichText::new(tl!("The time the signature was created comes from a trusted timestamp when there is one, else from the signer's own clock. The current time shows a certificate that has expired since signing."))
+            .small()
+            .color(t.text_muted),
+    );
+    if chosen != current {
+        app.apply_verification_time(chosen);
     }
 }
 
@@ -992,6 +1020,40 @@ mod tests {
         h.run();
         assert!(h.state().session.trusted_certificates().is_empty());
         assert!(h.query_by_label_contains("None yet").is_some());
+    }
+
+    /// Preferences ▸ Verify signatures using reaches the session and survives a restart; a saved
+    /// value this build doesn't know leaves the default.
+    #[test]
+    fn the_verification_time_choice_is_applied_and_kept() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(640.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                verification_time_section(ui, app, &t);
+            },
+            app,
+        );
+        h.run();
+        assert_eq!(h.state().session.verification_time(), VerificationTime::Signing);
+        h.get_by_label("The current time").click();
+        h.run();
+        assert_eq!(h.state().session.verification_time(), VerificationTime::Current);
+        let saved = h.state().persist();
+        let mut fresh = PdfCraftApp::new();
+        fresh.restore(&saved);
+        assert_eq!(fresh.session.verification_time(), VerificationTime::Current);
+        let mut odd = PdfCraftApp::new();
+        odd.restore(r#"{"verification_time": "tomorrow"}"#);
+        assert_eq!(odd.session.verification_time(), VerificationTime::Signing);
     }
 
     /// #2613: the Certificate Viewer's Trust tab offers Remove for a certificate in the trusted

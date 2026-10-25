@@ -8,7 +8,7 @@ use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 use crate::history::Editor;
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
-    SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
+    SignatureInfo, TabOrder, Trust, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
@@ -40,7 +40,7 @@ pub struct Document {
     pub(crate) links: OnceLock<Vec<pdfcraft_annot::links::LinkItem>>,
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
-    pub(crate) trust: Arc<TrustStore>,
+    pub(crate) trust: Arc<Trust>,
     pub(crate) sig_cache: Arc<pdfcraft_sign::DigestCache>,
     pub(crate) editor: Option<Editor>,
     pub(crate) config: RenderConfig,

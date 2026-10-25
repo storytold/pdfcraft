@@ -6372,6 +6372,37 @@ fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Pat
     assert_eq!(ok(a, "sign_trust", json!({ "remove": [sha] }))["removed"], 0);
 }
 
+/// sign_trust `verify_at`: a signature made in 2023 with a one-year ID is valid at its signing
+/// time and not at the current time, 2027.
+#[test]
+fn sign_trust_verify_at_checks_signers_at_the_current_time() {
+    let dir = workdir("verify-at");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12", "years": 1 }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": "signed.pdf" }));
+    let mut b = Automation::new().with_root(&dir).unwrap().with_clock(|| 1_800_000_000);
+    let doc = ok(&mut b, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let t = ok(&mut b, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12" }));
+    assert_eq!(t["verify_at"], "signing");
+    let signature = |b: &mut Automation| ok(b, "sign_list", json!({ "doc": doc }))["signatures"][0].clone();
+    assert_eq!(signature(&mut b)["status"], "valid");
+    assert_eq!(ok(&mut b, "sign_trust", json!({ "verify_at": "current" }))["verify_at"], "current");
+    let s = signature(&mut b);
+    let details = s["details"].as_array().unwrap();
+    assert_eq!(s["status"], "unknown", "{details:?}");
+    assert!(details.iter().any(|d| d.as_str().unwrap().contains("not valid at the current time")), "{details:?}");
+    // A wrong value changes nothing.
+    assert!(matches!(b.call("sign_trust", &json!({ "verify_at": "tomorrow" })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(ok(&mut b, "sign_trust", json!({}))["verify_at"], "current");
+    ok(&mut b, "sign_trust", json!({ "verify_at": "signing" }));
+    assert_eq!(signature(&mut b)["status"], "valid");
+    // A clock set after the document opened revalidates it too.
+    ok(&mut b, "sign_trust", json!({ "verify_at": "current" }));
+    let mut b = b.with_clock(|| 1_700_000_100);
+    assert_eq!(signature(&mut b)["status"], "valid");
+}
+
 /// The decoded text of every visible signature appearance (Helvetica forms) in a signed file.
 fn signature_appearances(path: &Path) -> String {
     use pdfcraft_cos::{Document, ObjRef, Object};

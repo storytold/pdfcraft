@@ -6405,11 +6405,11 @@ title = "Verification time (signing time, timestamp, now)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "partial"
+status = "shipped"
 commands = []
-tools = []
-evidence = ["crates/sign/tests/it/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/sign/tests/it/pdf.rs::an_untrusted_timestamp_does_not_set_the_validation_time"]
-notes = "Validation prefers the verified RFC 3161 timestamp time over /M when checking certificate validity and revocation, but only when the TSA chains to the trust store; an untrusted token is reported as an unverified timestamp and its time is not used. Missing: an explicit verification-time option (verify at a chosen date / now) in the validation API."
+tools = ["sign_trust"]
+evidence = ["crates/sign/tests/it/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/sign/tests/it/pdf.rs::an_untrusted_timestamp_does_not_set_the_validation_time", "crates/sign/tests/it/pdf.rs::the_verification_time_chooses_when_the_signers_certificate_is_checked", "crates/automation/tests/it/automation.rs::sign_trust_verify_at_checks_signers_at_the_current_time", "crates/ui-egui/src/tools/sign_ui.rs::the_verification_time_choice_is_applied_and_kept"]
+notes = "Preferences ▸ Signature verification ▸ Verify signatures using, kept across restarts (sign_trust verify_at headless): the time the signature was created (the default: a trusted RFC 3161 timestamp, else /M), the secure time of a trusted timestamp, else the current time, or the current time. The chosen time judges the chain, the signer's validity window and the DSS revocation evidence; the details say when the current time was used. An untrusted token's time is never used. Without a clock the signing time is used. Missing: Acrobat's Use expired timestamps switch, and checking at a chosen date. The current-time fallback of the secure time is PdfCraft's choice; Acrobat's was not checked."
 
 [[feature]]
 id = "sign.changes-after-signing"

@@ -1,6 +1,6 @@
-use super::types::{Modification, Status, TrustStore};
-use super::validate::{is_doc_timestamp, validate_doc_timestamp, validate_into};
-use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo};
+use super::types::{Modification, Status, TrustStore, VerificationTime};
+use super::validate::{Verify, is_doc_timestamp, validate_doc_timestamp, validate_into};
+use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo, Time};
 
 /// Digests of signed byte ranges (and parsed signed revisions), kept across revalidations of
 /// one document: incremental edits only append to the file, so the signed bytes and their
@@ -265,6 +265,14 @@ pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureIn
 /// [`list`], reusing digests and standalone-timestamp discovery from `cache`. Field/widget
 /// structure and validation against `bytes` and `trust` are read again on every call.
 pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &DigestCache) -> Vec<SignatureInfo> {
+    list_at(doc, bytes, trust, cache, VerificationTime::Signing, None)
+}
+
+/// [`list_cached`], checking signers' certificates at `at`. `now` is the current time for
+/// [`VerificationTime::Secure`] and [`VerificationTime::Current`]; without it (no clock) the
+/// signing time is used.
+pub fn list_at(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &DigestCache, at: VerificationTime, now: Option<Time>) -> Vec<SignatureInfo> {
+    let verify = Verify { at, now };
     let pages = annot_pages(doc);
     let mut out = Vec::new();
     let mut field_values: HashSet<ObjRef> = HashSet::new();
@@ -311,7 +319,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             details: Vec::new(),
         };
         if let Some(v) = v {
-            validate_into(doc, bytes, trust, &v, &mut info, cache);
+            validate_into(doc, bytes, trust, &v, &mut info, cache, verify);
         }
         out.push(info);
     }

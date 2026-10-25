@@ -12,6 +12,36 @@ impl TrustStore {
     }
 }
 
+/// When a signer's certificate is checked (Acrobat: Preferences ▸ Signatures ▸ Verification ▸
+/// Verify signatures using).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VerificationTime {
+    /// The trusted timestamp's time, else the time the signer claims.
+    #[default]
+    Signing,
+    /// The trusted timestamp's time, else the current time: the signer's own clock is not used.
+    Secure,
+    /// The current time, whatever the signature says.
+    Current,
+}
+
+impl VerificationTime {
+    pub const ALL: [VerificationTime; 3] = [VerificationTime::Signing, VerificationTime::Secure, VerificationTime::Current];
+
+    /// The name settings and automation use: `signing`, `secure` or `current`.
+    pub fn key(self) -> &'static str {
+        match self {
+            VerificationTime::Signing => "signing",
+            VerificationTime::Secure => "secure",
+            VerificationTime::Current => "current",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<VerificationTime> {
+        Self::ALL.into_iter().find(|v| v.key() == key)
+    }
+}
+
 /// Acrobat's three verdicts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -183,6 +213,7 @@ pub const WORDINGS: &[&str] = &[
     "The document has been altered since this signature was applied in ways it does not permit ({}).",
     // Who signed, and when.
     "The signer's certificate was not valid at the time of signing.",
+    "The signer's certificate is not valid at the current time.",
     "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).",
     "The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).",
     "The signer's certificate has critical extensions PdfCraft does not recognize ({}).",
@@ -191,6 +222,7 @@ pub const WORDINGS: &[&str] = &[
     "The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.",
     "The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.",
     "The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.",
+    "The certificate of {} is not valid at the current time, so it is not used to vouch for {}.",
     "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.",
     "The signer's identity is valid.",
     "The signature includes an embedded timestamp.",
@@ -200,6 +232,9 @@ pub const WORDINGS: &[&str] = &[
     "The signature's timestamp token could not be verified ({}).",
     "The embedded timestamp token is valid and its authority is trusted; trusted time is {}.",
     "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.",
+    "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so it is not used.",
+    "The signer's certificate was checked at the current time, {}.",
+    "There is no trusted timestamp, so the signer's certificate was checked at the current time, {}.",
     // What the document's own revocation evidence says about the signer.
     "The signer's certificate has been revoked ({}).",
     "The document's embedded revocation information shows that the signer's certificate has not been revoked.",
