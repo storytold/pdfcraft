@@ -5636,8 +5636,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.mark"]
 tools = ["redact_mark"]
-evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared"]
-notes = "drag a box anywhere else"
+evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared", "crates/automation/tests/it/automation.rs::redacting_clipping_titles_does_not_flood_the_page"]
+notes = "Drag a box anywhere else. Removing the last glyph of a clipping title preserves an empty clip, so later artwork cannot flood the page (#3123)."
 
 [[feature]]
 id = "protect.redact-pages"

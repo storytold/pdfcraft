@@ -16,7 +16,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   `/W`/`/DW` (composite fonts, embedded CMaps with codespace and CID ranges), Type 3 font
   matrices, and approximations for the standard 14. A glyph goes when it overlaps an area by
   more than a fifth of its size (or a point) both ways; zero-size text goes when its origin is
-  inside;
+  inside.
+  When all glyphs contributing to a text clipping path (render modes 4–7) are removed,
+  an explicit empty clip at `ET` keeps later artwork hidden until the original graphics
+  state is restored. Partial removal retains the surviving glyph clip;
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx). Codecs PdfCraft can't
   re-encode (DCT, JPX, JBIG2, CCITT) are removed whole (fail-closed); inline images under an

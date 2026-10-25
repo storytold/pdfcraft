@@ -804,6 +804,9 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let mut stack: Vec<Gs> = Vec::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let fonts_res = res_dict(doc, resources, b"Font");
+    // Text clipping accumulates over every show in a BT/ET object, even across stream
+    // pieces. Removing its last clipping glyph must not expose the artwork it masked.
+    let (mut clip_removed, mut clip_kept) = (false, false);
     let ext_gstates = res_dict(doc, resources, b"ExtGState");
     let mut xobjects = res_dict(doc, resources, b"XObject");
     // The current path: its operators, its bounding box in user space, and whether it clips.
@@ -936,8 +939,24 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                     }
                 }
                 b"BT" => {
+                    (clip_removed, clip_kept) = (false, false);
                     tm = Matrix::IDENTITY;
                     tlm = Matrix::IDENTITY;
+                }
+                b"ET" => {
+                    if scope.mode == Mode::Apply && clip_removed && !clip_kept {
+                        // An ET with no glyphs leaves the clip unchanged in other readers.
+                        // Explicitly intersect it with an empty path instead. Keep this outside
+                        // a new q/Q so it lasts for exactly the original graphics-state scope.
+                        ops.push(op);
+                        ops.push(Op::new("re", vec![num(0.0); 4]));
+                        ops.push(Op::new("W", vec![]));
+                        ops.push(Op::new("n", vec![]));
+                        changed = true;
+                        (clip_removed, clip_kept) = (false, false);
+                        continue;
+                    }
+                    (clip_removed, clip_kept) = (false, false);
                 }
                 b"Tf" => {
                     gs.size = op.num(1).unwrap_or(gs.size);
@@ -1013,6 +1032,10 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                         out.vertical = true;
                     }
                     let (new_items, removed) = show(scope, &gs, &mut tm, &items);
+                    if (4..=7).contains(&gs.render_mode) {
+                        clip_removed |= removed > 0;
+                        clip_kept |= new_items.iter().any(|item| matches!(item, Object::String(s) if !s.bytes.is_empty()));
+                    }
                     if removed == 0 {
                         ops.push(op);
                         continue;
