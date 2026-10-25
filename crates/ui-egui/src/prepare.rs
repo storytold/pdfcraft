@@ -1123,11 +1123,12 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                                     ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
                                     for entry in &thai_fonts {
                                         let selected = l.font == FieldFont::Thai && active_thai.as_ref().is_some_and(|e| e.name == entry.name);
-                                        if ui.selectable_label(selected, &entry.name).clicked() {
+                                        if ui.selectable_label(selected, &entry.name).clicked()
+                                            && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
+                                        {
                                             l.font = FieldFont::Thai;
-                                            if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
-                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
-                                            }
+                                            let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+                                            ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
                                         }
                                     }
                                 } else if pdfcraft_fonts::document_thai_font().is_some() {

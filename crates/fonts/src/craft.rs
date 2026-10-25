@@ -255,12 +255,20 @@ fn scan_dir_recursive(dir: &std::path::Path, depth: usize, entries: &mut Vec<Tha
         return;
     }
     let Ok(read_dir) = std::fs::read_dir(dir) else { return };
-    for entry in read_dir.flatten() {
+    for entry in read_dir {
+        let Ok(entry) = entry else { continue };
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if ft.is_dir() {
             if depth < 2 {
                 scan_dir_recursive(&path, depth + 1, entries);
             }
+            continue;
+        }
+        if !ft.is_file() {
             continue;
         }
         let is_font_ext =

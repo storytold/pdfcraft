@@ -965,7 +965,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "pages": pages("to mark (default: all)"),
                 "header_left": { "type": "string" }, "header_center": { "type": "string" }, "header_right": { "type": "string" },
                 "footer_left": { "type": "string" }, "footer_center": { "type": "string" }, "footer_right": { "type": "string" },
-                "font": { "type": "string", "description": "Font family name: Helvetica, Times, Courier, or an installed Thai font name." },
+                "font": { "type": "string", "minLength": 1, "description": "Font family name: Helvetica, Times, Courier, or an installed Thai font name." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
                 "color": { "type": "string", "description": "#RRGGBB or a colour name." },
                 "margins": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 4, "maxItems": 4, "description": "Top, bottom, left, right in points (default 36, 36, 72, 72)." },

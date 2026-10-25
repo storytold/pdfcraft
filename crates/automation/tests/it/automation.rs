@@ -2614,6 +2614,10 @@ fn headers_watermarks_and_backgrounds_through_tools() {
     assert_eq!(face.name(b"BaseFont"), Some(&b"Courier"[..]));
     let refused = a.call("doc_header_footer", &json!({ "doc": mono, "header_left": "X", "font": "Arial" }));
     assert!(matches!(refused, Err(ToolError::InvalidArgs(e)) if e.contains("Courier")));
+    let refused_empty = a.call("doc_header_footer", &json!({ "doc": mono, "header_left": "X", "font": "" }));
+    assert!(matches!(refused_empty, Err(ToolError::InvalidArgs(_))));
+    let refused_ws = a.call("doc_header_footer", &json!({ "doc": mono, "header_left": "X", "font": "   " }));
+    assert!(matches!(refused_ws, Err(ToolError::InvalidArgs(_))));
 }
 
 #[test]

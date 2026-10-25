@@ -1389,6 +1389,7 @@ impl Automation {
         let color =
             |key: &str, default: [f64; 3]| -> Result<[f64; 3]> { Ok(a.opt_str(key)?.map(comments::parse_color).transpose()?.unwrap_or(default)) };
         let replace = a.opt_bool("replace")?.unwrap_or(false);
+        let mut thai_entry: Option<pdfcraft_fonts::ThaiFontEntry> = None;
         let edit = match tool {
             "doc_header_footer" => {
                 let mut hf = HeaderFooter::default();
@@ -1396,6 +1397,9 @@ impl Automation {
                     hf.text[k] = a.opt_str(key)?.unwrap_or_default().to_string();
                 }
                 if let Some(font) = a.opt_str("font")? {
+                    if font.trim().is_empty() {
+                        return Err(ToolError::InvalidArgs("font cannot be empty".into()));
+                    }
                     if font.eq_ignore_ascii_case("times") || font.eq_ignore_ascii_case("times-roman") || font.eq_ignore_ascii_case("times roman") {
                         hf.font = pdfcraft_engine::FontFamily::Times;
                     } else if font.eq_ignore_ascii_case("courier") {
@@ -1422,8 +1426,8 @@ impl Automation {
                                 && self.root.as_ref().is_none_or(|r| e.path.starts_with(r))
                         });
                         if let Some(entry) = found {
-                            pdfcraft_fonts::set_active_thai_font_entry(entry)?;
                             hf.font_name = Some(entry.file_name.clone());
+                            thai_entry = Some(entry.clone());
                         } else {
                             return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\", \"Courier\", or an installed Thai font, not {font:?}")));
                         }
@@ -1488,7 +1492,19 @@ impl Automation {
                 Edit::RemoveMarks { kind }
             }
         };
-        self.apply(a, edit)
+        if let Some(entry) = thai_entry {
+            let prev_entry = pdfcraft_fonts::active_thai_font_entry();
+            pdfcraft_fonts::set_active_thai_font_entry(&entry)?;
+            let res = self.apply(a, edit);
+            if res.is_err()
+                && let Some(prev) = prev_entry
+            {
+                let _ = pdfcraft_fonts::set_active_thai_font_entry(&prev);
+            }
+            res
+        } else {
+            self.apply(a, edit)
+        }
     }
 
     fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
