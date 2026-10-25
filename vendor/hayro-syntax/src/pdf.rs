@@ -47,15 +47,16 @@ impl Pdf {
         let data = data.into();
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
-        let xref = match root_xref(data.clone(), password) {
-            Ok(x) => x,
-            Err(e) => match e {
-                XRefError::Unknown => {
-                    fallback(data.clone(), password).ok_or(LoadPdfError::Invalid)?
-                }
-                XRefError::Encryption(e) => return Err(LoadPdfError::Decryption(e)),
-            },
-        };
+        // PdfCraft patch: recovery must retain password and other encryption errors (#3904).
+        let xref = root_xref(data.clone(), password)
+            .or_else(|error| match error {
+                XRefError::Unknown => fallback(data.clone(), password),
+                error => Err(error),
+            })
+            .map_err(|error| match error {
+                XRefError::Unknown => LoadPdfError::Invalid,
+                XRefError::Encryption(error) => LoadPdfError::Decryption(error),
+            })?;
         let xref = Arc::new(xref);
 
         let pages = CachedPages::new(xref.clone()).ok_or(LoadPdfError::Invalid)?;

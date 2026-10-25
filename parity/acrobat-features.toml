@@ -178,8 +178,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "crates/crypt/src/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/open_worker_tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/open_worker_tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt", "crates/ui-egui/tests/it/pickers.rs::the_open_password_can_be_typed_through_an_input_method_however_the_file_is_opened"]
-notes = "the field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop"
+evidence = ["crates/render/tests/it/recovered_password.rs::recovered_encrypted_pdfs_request_password_and_accept_retry", "crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "crates/crypt/src/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/open_worker_tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/open_worker_tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt", "crates/ui-egui/tests/it/pickers.rs::the_open_password_can_be_typed_through_an_input_method_however_the_file_is_opened"]
+notes = "Cross-reference recovery preserves password-required and wrong-password errors for RC4 and AES (#3904); the original private PDF is still unverified. The field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop"
 
 [[feature]]
 id = "core.unicode-passwords"

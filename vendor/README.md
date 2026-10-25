@@ -102,3 +102,9 @@ ones, as ISO 32000-2 §9.6.5.4 prescribes for symbolic fonts; the
 order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's AMT fonts)
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
+
+In `hayro-syntax`, cross-reference reconstruction preserves encryption errors instead of
+discarding them (#3904). A recoverable password-protected PDF requests a password, and a
+wrong password can be retried; unsupported encryption remains an encryption error.
+`crates/render/tests/it/recovered_password.rs` covers intact, missing/wrong `startxref` and
+prefixed files for RC4-40/128 and AES-128/256 through `inspect` and `check_pages`.

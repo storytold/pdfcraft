@@ -54,18 +54,20 @@ pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefErro
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
-pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Option<XRef> {
+// PdfCraft patch: preserve encryption errors during xref recovery (#3904), so callers
+// can request a password or report unsupported encryption instead of an invalid PDF.
+pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Result<XRef, XRefError> {
     warn!("xref table was invalid, trying to manually build xref table");
     let (xref_map, xref_input) = fallback_xref_map(&data, password);
 
     if let Some(xref_input) = xref_input {
         warn!("rebuild xref table with {} entries", xref_map.len());
 
-        XRef::new(data.clone(), xref_map, xref_input, true, password).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, password)
     } else {
         warn!("couldn't find trailer dictionary, failed to rebuild xref table");
 
-        None
+        Err(XRefError::Unknown)
     }
 }
 

@@ -204,6 +204,9 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             h.run_steps(2);
             h.state_mut().views[0].find.as_mut().expect("Advanced Search opens a search").query = "sample".into();
             support::wait_until(&mut h, "both pages searched", |app| app.views[0].find.as_ref().is_some_and(|f| f.matches.len() == 2));
+            // Page-text workers can finish in either order, preserving the first match selected.
+            // Give the snapshot a known selection once both pages have arrived.
+            h.state_mut().views[0].go_to_match(0);
             h.run_steps(2);
             return (h, "search");
         }
