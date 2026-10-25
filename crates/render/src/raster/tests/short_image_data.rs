@@ -95,3 +95,31 @@ fn an_image_with_no_data_is_not_drawn() {
     let objects: [(&str, &[u8]); 1] = [(&image, &[])];
     assert_eq!(rows(&objects), ["white"; 4]);
 }
+
+/// An image's samples are capped as well as its pixels: at most 2^30, four a pixel at the pixel
+/// limit. Padding expands a few bytes to every sample an image says it has, each an `f32` on the
+/// way to RGB, so under the pixel limit alone a 32-ink image of one byte asked for over 4 GiB
+/// here, and for 32 GiB at the pixel limit. Such an image is left out and the rest of the page
+/// is drawn.
+#[test]
+fn an_image_with_more_samples_than_the_cap_is_left_out() {
+    use hayro::hayro_interpret::image_samples_ok;
+    assert!(image_samples_ok(16384, 16384, 4), "CMYK at the pixel limit");
+    assert!(!image_samples_ok(16384, 16384, 5));
+    assert!(!image_samples_ok(5793, 5793, 32), "32 inks just over 2^25 pixels");
+    assert!(!image_samples_ok(u32::MAX, u32::MAX, u8::MAX), "the product overflows u64");
+
+    // 32 inks drawn as the first ink's tint in gray: the padded image would be black.
+    let inks: Vec<String> = (1..=32).map(|i| format!("/Ink{i}")).collect();
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 5793 /Height 5793 /ColorSpace [/DeviceN [{}] /DeviceGray 6 0 R] /BitsPerComponent 8 /Length 1 >>",
+        inks.join(" ")
+    );
+    let program = format!("{{{}}}", "pop ".repeat(31));
+    let tint = format!("<< /FunctionType 4 /Domain [{}] /Range [0 1] /Length {} >>", "0 1 ".repeat(32), program.len());
+    let objects: [(&str, &[u8]); 2] = [(&image, &[0x00]), (&tint, program.as_bytes())];
+    let page =
+        render_first_page(image_cache_pdf("1 0 0 rg 80 10 40 40 re f q 20 0 0 20 10 10 cm /Im Do Q", "<< /XObject << /Im 5 0 R >> >>", &objects));
+    assert_eq!(rgb_at(&page.rgba, WIDTH, X, ROW_Y[0]), [255, 255, 255], "the image is left out");
+    assert_eq!(rgb_at(&page.rgba, WIDTH, 100, 40), [255, 0, 0], "the rest of the page is drawn");
+}
