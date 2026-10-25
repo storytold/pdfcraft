@@ -2749,6 +2749,83 @@ fn the_form_packet_restores_a_caption_a_script_changed() {
     assert_eq!(caption(&template.replace("</xdp:xdp>", saved)), "Hide Bar");
 }
 
+/// A section heading whose text a script writes into a caption it gives the draw: the form
+/// packet holds the caption (and a draw's value), and the heading opens showing them.
+#[test]
+fn the_form_packet_restores_the_caption_and_value_of_a_draw() {
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><draw name="heading" w="7.5in" h="0.3in"><ui><textEdit/></ui><font typeface="Arial" size="12pt"/><value><text/></value></draw><draw name="note" w="7.5in" h="0.3in"><value><text>Template note</text></value></draw></subform>"#;
+    let template = one_area_form(r#"layout="tb""#, body);
+    let text = |xdp: &str| texts(&layout_xml(xdp).unwrap().pages[0]).join(" ");
+    assert_eq!(text(&template), "Template note");
+    let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
+ <draw name="heading"><caption><value><text>Project data</text></value></caption></draw>
+ <draw name="note"><value><text>Saved note</text></value></draw>
+</subform></subform></form>
+</xdp:xdp>"#;
+    let xdp = template.replace("</xdp:xdp>", saved);
+    let form = layout_xml(&xdp).unwrap();
+    assert_eq!(texts(&form.pages[0]).join(" "), "Project data Saved note");
+    // The caption is drawn inside the heading's box, at its left, in the heading's font: it has none
+    // of its own.
+    let span = form.pages[0].items.iter().find_map(|i| if let Item::Text(s) = i { Some(s) } else { None }).unwrap();
+    assert!((span.x - 36.0).abs() < 1.0 && span.baseline > 36.0 && span.baseline < 36.0 + 21.6, "{span:?}");
+    assert_eq!((span.face.family, span.face.size), (crate::text::Family::Helvetica, 12.0));
+}
+
+/// A field bound to no data (`<bind match="none">`) opens with the value the form packet saved;
+/// a bound field's value comes from the data, so the packet's copy of it is not used.
+#[test]
+fn an_unbound_field_opens_with_the_value_the_form_packet_saved() {
+    let body = r#"<subform name="body" layout="tb" w="7.5in">
+ <field name="lang" w="3in" h="0.4in"><ui><choiceList/></ui><bind match="none"/><items save="1"><text>English</text><text>German</text></items></field>
+ <field name="note" w="3in" h="0.4in"><ui><textEdit/></ui><bind match="none"/></field>
+ <field name="bound" w="3in" h="0.4in"><ui><textEdit/></ui></field>
+</subform>"#;
+    let template = one_area_form(r#"layout="tb""#, body);
+    let values = |xdp: &str| -> Vec<Option<String>> { widgets(&layout_xml(xdp).unwrap().pages[0]).iter().map(|w| w.value.clone()).collect() };
+    assert_eq!(values(&template), [None, None, None]);
+    let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
+ <field name="lang"><value><text>German</text></value></field>
+ <field name="note"><value><text>kept</text></value></field>
+ <field name="bound"><value><text>stale</text></value></field>
+</subform></subform></form>
+</xdp:xdp>"#;
+    assert_eq!(values(&template.replace("</xdp:xdp>", saved)), [Some("German".to_string()), Some("kept".to_string()), None]);
+}
+
+/// A drop-down whose items a script fills has none in the template: the form packet holds the
+/// lists it was saved with, shown and saved values both, and the value is one of them.
+#[test]
+fn the_form_packet_restores_the_items_of_a_choice_list() {
+    let body = r#"<subform name="body" layout="tb" w="7.5in">
+ <field name="product" w="3in" h="0.4in"><ui><choiceList/></ui><bind match="none"/><items save="1"/></field>
+ <field name="size" w="3in" h="0.4in"><ui><choiceList/></ui><items><text>Small</text></items><items save="1" presence="hidden"><text>S</text></items></field>
+</subform>"#;
+    let template = one_area_form(r#"layout="tb""#, body);
+    // Each list's (saved value, shown text) options and its value.
+    type Choice = (Vec<(String, String)>, Option<String>);
+    let options = |xdp: &str| -> Vec<Choice> {
+        widgets(&layout_xml(xdp).unwrap().pages[0])
+            .iter()
+            .map(|w| match &w.kind {
+                WidgetKind::Choice { options, .. } => (options.clone(), w.value.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    assert_eq!(options(&template), [(vec![], None), (vec![pair("S", "Small")], None)]);
+    let saved = r#"<form xmlns="http://www.xfa.org/schema/xfa-form/2.8/"><subform name="form"><subform name="body">
+ <field name="product"><items save="1"><text>without</text><text>VV</text></items><value><text>VV</text></value></field>
+ <field name="size"><items><text>Small</text><text>Large</text></items><items save="1" presence="hidden"><text>S</text><text>L</text></items></field>
+</subform></subform></form>
+</xdp:xdp>"#;
+    assert_eq!(
+        options(&template.replace("</xdp:xdp>", saved)),
+        [(vec![pair("without", "without"), pair("VV", "VV")], Some("VV".to_string())), (vec![pair("S", "Small"), pair("L", "Large")], None)]
+    );
+}
+
 #[test]
 fn a_text_field_without_a_border_of_its_own_has_no_box() {
     let body = r#"<subform name="body" layout="tb" w="7.5in"><field name="plain" w="3in" h="0.4in"><ui><textEdit/></ui></field><field name="boxed" w="3in" h="0.4in"><ui><textEdit><border><edge/></border></textEdit></ui></field><field name="tick" w="3in" h="0.4in"><ui><checkButton/></ui></field></subform>"#;

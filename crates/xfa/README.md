@@ -54,6 +54,16 @@ that warning and keeps the existing layout and accepted widget values.
   goes the other way, so a form filled here shows its values in Adobe's viewers and a form
   filled there shows them here. The engine does both: values on open (recorded in the
   document's warnings), the packet after every form edit.
+- **Saved form state** (`form` packet; XFA 3.3 chapter 3, "The Form DOM", pp. 81–82): an
+  application may save the Form DOM beside the template, to keep the values of fields bound to
+  no data and what scripts changed. On parsing it is applied to the template, objects matched by
+  name and position among the same-named: presence and access; the caption text of fields and
+  draws (a draw a script gave a caption gets one, drawn in the draw's font unless it has its
+  own); a draw's value; a field's item lists (a
+  drop-down a script filled, whose template lists are empty); and the value of a field with
+  `<bind match="none">` (a bound field takes its value from the data). Only the first instance
+  of a repeating subform is read, and the root subform's `restoreState` is not consulted: the
+  packet is applied whatever it says.
 
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.

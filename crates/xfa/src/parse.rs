@@ -1,6 +1,8 @@
 //! Template XML → [`model`](crate::model). Only what the layout engine uses is read; everything
 //! else in the template is ignored, never rejected.
 
+use std::collections::HashMap;
+
 use base64::Engine;
 use roxmltree::Node as XmlNode;
 
@@ -549,6 +551,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         validate_message,
         numeric,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        unbound: child(n, "bind").and_then(|b| b.attribute("match")) == Some("none"),
     }
 }
 
@@ -667,7 +670,11 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
             children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1)).collect(),
         })),
         "field" => Node::Field(Box::new(parse_field(c, warnings))),
-        "draw" => Node::Draw(Box::new(Draw { common: parse_common(c), value: parse_value(child(c, "value"), warnings) })),
+        "draw" => Node::Draw(Box::new(Draw {
+            common: parse_common(c),
+            caption: parse_caption(child(c, "caption"), warnings),
+            value: parse_value(child(c, "value"), warnings),
+        })),
         "exclGroup" => Node::ExclGroup(Box::new(ExclGroup {
             common: parse_common(c),
             layout: Layout::parse(c.attribute("layout")),
@@ -755,7 +762,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         if let Some(p) = saved_root.attribute("presence") {
             root_sf.common.presence = Presence::parse(Some(p));
         }
-        apply_saved_state(&mut root_sf.children, saved_root, 0);
+        apply_saved_state(&mut root_sf.children, saved_root, 0, &mut warnings);
     }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
@@ -773,65 +780,141 @@ fn parse_access(a: Option<&str>) -> Option<Access> {
 }
 
 /// Apply the saved state of a form packet (`saved`: the element matching the container whose
-/// children `nodes` are) to the template: the `presence` and `access` a script gave an object
-/// before the form was saved, which is restored on opening. Objects are matched by
-/// name and position among the same-named; of the instances of a repeating subform only the
-/// first is read, as the template has it once.
-fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize) {
+/// children `nodes` are) to the template. XFA 3.3, "The Form DOM" (pp. 81–82): an application
+/// may save the Form DOM to keep the values of fields bound to no data and the changes scripts
+/// made to the form; the specification leaves the syntax open, and the packet uses the
+/// template's. What is restored:
+/// - the `presence` and `access` a script gave an object;
+/// - the caption text of a field or draw (a script's label, or the language it switched to);
+/// - a draw's value text;
+/// - a field's item lists (a choice list a script filled: the template's may be empty);
+/// - the value of an unbound field (`<bind match="none">`); a bound field takes its value from
+///   the data, which is saved on its own.
+///
+/// Objects are matched by name and position among the same-named; of the instances of a
+/// repeating subform only the first is read, as the template has it once.
+fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize, warnings: &mut Vec<String>) {
     if depth > MAX_DEPTH {
+        let msg = format!("the saved form state nests deeper than {MAX_DEPTH} levels; what lies deeper is not restored");
+        // Once, however many branches reach the limit.
+        if !warnings.contains(&msg) {
+            warnings.push(msg);
+        }
         return;
     }
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut matcher = Matcher::new(nodes.iter().map(|n| n.common().name.as_deref()));
     for c in saved.children().filter(|c| c.is_element()) {
         if !matches!(c.tag_name().name(), "subform" | "subformSet" | "area" | "field" | "draw" | "exclGroup") {
             continue;
         }
-        let Some(name) = c.attribute("name").filter(|n| !n.is_empty()) else { continue };
-        let nth = {
-            let k = seen.entry(name).or_insert(0);
-            *k += 1;
-            *k - 1
-        };
-        let same: Vec<usize> = nodes.iter().enumerate().filter(|(_, n)| n.common().name.as_deref() == Some(name)).map(|(i, _)| i).collect();
         // More saved objects of the name than the template has: further instances.
-        let Some(target) = same.get(nth).copied().and_then(|i| nodes.get_mut(i)) else { continue };
+        let Some(target) = matcher.index(c).and_then(|i| nodes.get_mut(i)) else { continue };
         let presence = c.attribute("presence").map(|p| Presence::parse(Some(p)));
         match target {
             Node::Subform(s) => {
                 if let Some(p) = presence {
                     s.common.presence = p;
                 }
-                apply_saved_state(&mut s.children, c, depth + 1);
+                apply_saved_state(&mut s.children, c, depth + 1, warnings);
             }
             Node::Area(a) => {
                 if let Some(p) = presence {
                     a.common.presence = p;
                 }
-                apply_saved_state(&mut a.children, c, depth + 1);
+                apply_saved_state(&mut a.children, c, depth + 1, warnings);
             }
-            Node::Field(f) => {
-                if let Some(p) = presence {
-                    f.common.presence = p;
-                }
-                if let Some(a) = parse_access(c.attribute("access")) {
-                    f.access = a;
-                }
-                // A caption a script changed (a button's label, say) is saved as plain text.
-                let text = child(c, "caption").and_then(|k| child(k, "value")).and_then(|v| child(v, "text")).and_then(|t| t.text());
-                if let (Some(caption), Some(text)) = (f.caption.as_mut(), text) {
-                    caption.value = Value::Text(text.to_string());
-                }
-            }
+            Node::Field(f) => apply_saved_field(f, c, presence, warnings),
             Node::Draw(d) => {
                 if let Some(p) = presence {
                     d.common.presence = p;
+                }
+                if let Some(text) = saved_caption(c, warnings) {
+                    d.caption.get_or_insert_with(Caption::default).value = text;
+                }
+                if let Some(v) = saved_value(c, warnings) {
+                    d.value = v;
                 }
             }
             Node::ExclGroup(g) => {
                 if let Some(p) = presence {
                     g.common.presence = p;
                 }
+                // The group's buttons, matched the same way.
+                let mut matcher = Matcher::new(g.fields.iter().map(|f| f.common.name.as_deref()));
+                for k in children(c, "field") {
+                    if let Some(f) = matcher.index(k).and_then(|i| g.fields.get_mut(i)) {
+                        let presence = k.attribute("presence").map(|p| Presence::parse(Some(p)));
+                        apply_saved_field(f, k, presence, warnings);
+                    }
+                }
             }
         }
     }
+}
+
+/// Matches saved objects to the template's: by name, and position among the same-named. The
+/// template's names are indexed once, so matching stays linear in the number of siblings.
+struct Matcher<'a> {
+    by_name: HashMap<String, Vec<usize>>,
+    seen: HashMap<&'a str, usize>,
+}
+
+impl<'a> Matcher<'a> {
+    fn new<'n>(names: impl Iterator<Item = Option<&'n str>>) -> Self {
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, name) in names.enumerate() {
+            if let Some(name) = name {
+                by_name.entry(name.to_string()).or_default().push(i);
+            }
+        }
+        Matcher { by_name, seen: HashMap::new() }
+    }
+
+    /// The index of the template object that saved object `c` stands for: `None` when it has
+    /// no name, or when more saved objects than template ones have its name.
+    fn index(&mut self, c: XmlNode<'a, '_>) -> Option<usize> {
+        let name = c.attribute("name").filter(|n| !n.is_empty())?;
+        let k = self.seen.entry(name).or_insert(0);
+        let nth = *k;
+        *k = k.saturating_add(1);
+        self.by_name.get(name)?.get(nth).copied()
+    }
+}
+
+/// The saved state of one field (see [`apply_saved_state`]).
+fn apply_saved_field(f: &mut Field, saved: XmlNode, presence: Option<Presence>, warnings: &mut Vec<String>) {
+    if let Some(p) = presence {
+        f.common.presence = p;
+    }
+    if let Some(a) = parse_access(saved.attribute("access")) {
+        f.access = a;
+    }
+    // A caption a script changed (a button's label, say). A saved caption the template lacks
+    // was added by a script, and is shown with the template's defaults otherwise.
+    if let Some(text) = saved_caption(saved, warnings) {
+        f.caption.get_or_insert_with(Caption::default).value = text;
+    }
+    // The lists a script filled. The value below is matched against them, so they come first.
+    if children(saved, "items").next().is_some() {
+        let (items, item_values) = parse_items(saved, warnings);
+        f.items = items;
+        f.item_values = item_values;
+    }
+    if f.unbound
+        && let Some(v) = saved_value(saved, warnings)
+    {
+        f.value = v;
+    }
+}
+
+/// The text of a saved object's `<caption><value>`, when it holds some.
+fn saved_caption(saved: XmlNode, warnings: &mut Vec<String>) -> Option<Value> {
+    saved_value(child(saved, "caption")?, warnings)
+}
+
+/// A saved object's `<value>` content, when it holds some: an empty one (a field whose
+/// calculation the user overrode, say, `<value override="1"/>`) says nothing about the value.
+fn saved_value(saved: XmlNode, warnings: &mut Vec<String>) -> Option<Value> {
+    let v = parse_value(Some(child(saved, "value")?), warnings);
+    (!v.is_empty()).then_some(v)
 }

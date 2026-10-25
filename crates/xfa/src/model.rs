@@ -539,6 +539,10 @@ pub struct Field {
     /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
     /// shows when not being edited, and what scripts read as `formattedValue`.
     pub display_picture: Option<String>,
+    /// `<bind match="none">`: the field is transient and binds to no data (XFA 3.3, the bind
+    /// element's match property, p. 623). Its value lives only in the form, so a value saved in
+    /// the form packet is the one it opens with.
+    pub unbound: bool,
 }
 
 impl Field {
@@ -586,6 +590,9 @@ impl Field {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Draw {
     pub common: Common,
+    /// A label beside the draw's value (XFA 3.3, the draw element, p. 680); a script can give a
+    /// text object one, which the saved form state then holds.
+    pub caption: Option<Caption>,
     pub value: Value,
 }
 

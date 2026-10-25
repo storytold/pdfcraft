@@ -15,8 +15,8 @@ use base64::Engine;
 use crate::XfaError;
 use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
-    Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
-    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+    Access, Area, Border, Caption, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement,
+    Presence, Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
 };
 use crate::text::{self, Block, Face, Span};
 
@@ -1203,7 +1203,25 @@ impl Layouter<'_> {
                     let inner = (avail_w - c.margin.horizontal()).max(1.0);
                     (self.content_width(node, inner, &ctx, depth) + c.margin.horizontal()).min(avail_w)
                 }
-                Node::Draw(d) => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                Node::Draw(d) => {
+                    let value = self.natural_width(&d.value, &ctx.font, &ctx.para);
+                    let inner = (avail_w - c.margin.horizontal()).max(1.0);
+                    // A caption beside the value adds its room; one above or below is as wide
+                    // as its text.
+                    let caption = d.caption.as_ref().and_then(|cap| {
+                        let (placement, r) = self.caption_room(cap, inner, &ctx)?;
+                        Some(match placement {
+                            Placement::Top | Placement::Bottom => {
+                                self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para)).unwrap_or(0.0)
+                            }
+                            _ => r + value.unwrap_or(0.0),
+                        })
+                    });
+                    match (value, caption) {
+                        (None, None) => avail_w,
+                        (v, cap) => (v.unwrap_or(0.0).max(cap.unwrap_or(0.0)) + c.margin.horizontal()).min(avail_w),
+                    }
+                }
                 Node::Field(f) if f.ui == Ui::Button => f
                     .caption
                     .as_ref()
@@ -1218,7 +1236,7 @@ impl Layouter<'_> {
             None => {
                 let inner_w = (w - c.margin.horizontal()).max(1.0);
                 let content = match node {
-                    Node::Draw(d) => self.value_height(&d.value, inner_w, &ctx),
+                    Node::Draw(d) => self.draw_height(d, inner_w, &ctx),
                     Node::Field(f) => self.field_height(f, inner_w, &ctx),
                     Node::ExclGroup(g) => self.group_height(g, inner_w, &ctx, depth),
                     Node::Area(a) => self.positioned_height(&a.children, inner_w, &ctx, depth),
@@ -1318,18 +1336,42 @@ impl Layouter<'_> {
         }
     }
 
+    /// How tall draw `d`'s content is `inner_w` wide: its value, with a caption above or below
+    /// it added, or the taller of the two for one beside it. `ctx` is the draw's own context: a
+    /// caption without a font or paragraph of its own takes the draw's (XFA 3.3, "Formatting
+    /// Text That Appears as Fixed or Variable Content", p. 43).
+    fn draw_height(&self, d: &Draw, inner_w: f64, ctx: &Ctx) -> f64 {
+        let Some(cap) = &d.caption else { return self.value_height(&d.value, inner_w, ctx) };
+        match self.caption_room(cap, inner_w, ctx) {
+            None => self.value_height(&d.value, inner_w, ctx),
+            Some((Placement::Top | Placement::Bottom, r)) => r + self.value_height(&d.value, inner_w, ctx),
+            Some((_, r)) => {
+                let cap_ctx = Ctx { font: ctx.font.apply(&cap.font), para: ctx.para.apply(&cap.para), som: String::new() };
+                let caption = self.value_height(&cap.value, r.max(1.0), &cap_ctx);
+                caption.max(self.value_height(&d.value, (inner_w - r).max(1.0), ctx))
+            }
+        }
+    }
+
     /// Where field `f`'s caption goes and how much room it takes from the field's box, or `None`
     /// when it has no caption that takes room (a button's is drawn inside its box).
     fn caption_reserve(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> Option<(Placement, f64)> {
         let cap = f.caption.as_ref()?;
-        if !cap.presence.occupies() || f.ui == Ui::Button {
-            return None;
-        }
-        if cap.value.is_empty() && cap.reserve.is_none() {
+        if f.ui == Ui::Button {
             return None;
         }
         // A check box has no text for an inline caption to run with: it is not shown.
         if f.ui == Ui::CheckButton && cap.placement == Placement::Inline {
+            return None;
+        }
+        self.caption_room(cap, inner_w, ctx)
+    }
+
+    /// Where caption `cap` goes and how much room it takes from a box `inner_w` wide, or `None`
+    /// when it takes none: its reserve, or without one its text's width beside the box (at most
+    /// 60% of it) or its height above or below.
+    fn caption_room(&self, cap: &Caption, inner_w: f64, ctx: &Ctx) -> Option<(Placement, f64)> {
+        if !cap.presence.occupies() || (cap.value.is_empty() && cap.reserve.is_none()) {
             return None;
         }
         let placement = if cap.placement == Placement::Inline { Placement::Left } else { cap.placement };
@@ -1555,8 +1597,9 @@ impl Layouter<'_> {
             Node::Draw(d) => {
                 let start = self.item_count();
                 self.draw_draw(d, rect, ctx)?;
-                // Text and pictures stay with their border; a bare line or rectangle is cut.
-                if matches!(d.value, Value::Text(_) | Value::Rich(_) | Value::Image { .. }) {
+                // Text, pictures and captions stay with their border; a bare line or rectangle is cut.
+                if matches!(d.value, Value::Text(_) | Value::Rich(_) | Value::Image { .. }) || d.caption.as_ref().is_some_and(|c| !c.value.is_empty())
+                {
                     self.keep_whole(start, rect);
                 }
                 Ok(())
@@ -1735,7 +1778,18 @@ impl Layouter<'_> {
             self.draw_border(b, rect)?;
         }
         let ctx = ctx.child(&d.common);
-        let inner = rect.inset(&d.common.margin);
+        let mut inner = rect.inset(&d.common.margin);
+        // A caption takes its room first, as a field's does, and the value has the rest. Without a
+        // font or paragraph of its own it takes the draw's (see `draw_height`).
+        if let Some(cap) = &d.caption
+            && let Some((placement, reserve)) = self.caption_room(cap, inner.w, &ctx)
+        {
+            let (cr, rest) = split_caption(placement, reserve, inner);
+            if cap.presence == Presence::Visible {
+                self.draw_value_text(&cap.value, cr, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para))?;
+            }
+            inner = rest;
+        }
         match &d.value {
             Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para),
             Value::Image { content_type, data } => self.draw_image(data, content_type, inner),
@@ -1851,25 +1905,9 @@ impl Layouter<'_> {
         let (mut ui, mut cap_rect) = (inner, None);
         if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, ctx) {
             let reserve = auto_check_reserve(f, placement, inner.w, Some(inner.h)).unwrap_or(reserve);
-            let r = reserve.max(0.0);
-            match placement {
-                Placement::Top => {
-                    cap_rect = Some(Rect::new(inner.x, inner.y, inner.w, r.min(inner.h)));
-                    ui = Rect::new(inner.x, inner.y + r, inner.w, inner.h - r);
-                }
-                Placement::Bottom => {
-                    cap_rect = Some(Rect::new(inner.x, inner.bottom() - r.min(inner.h), inner.w, r.min(inner.h)));
-                    ui = Rect::new(inner.x, inner.y, inner.w, inner.h - r);
-                }
-                Placement::Right => {
-                    cap_rect = Some(Rect::new(inner.right() - r.min(inner.w), inner.y, r.min(inner.w), inner.h));
-                    ui = Rect::new(inner.x, inner.y, inner.w - r, inner.h);
-                }
-                _ => {
-                    cap_rect = Some(Rect::new(inner.x, inner.y, r.min(inner.w), inner.h));
-                    ui = Rect::new(inner.x + r, inner.y, inner.w - r, inner.h);
-                }
-            }
+            let (cr, rest) = split_caption(placement, reserve, inner);
+            cap_rect = Some(cr);
+            ui = rest;
         }
         if let (Some(cr), Some(cap)) = (cap_rect, &f.caption)
             && cap.presence == Presence::Visible
@@ -2105,6 +2143,24 @@ fn auto_check_reserve(f: &Field, placement: Placement, w: f64, h: Option<f64>) -
         _ => w - s,
     };
     Some(rest.max(0.0))
+}
+
+/// Box `inner` divided between a caption `reserve` deep on its `placement` side (an inline one
+/// on the left) and the rest: (the caption's box, the rest).
+fn split_caption(placement: Placement, reserve: f64, inner: Rect) -> (Rect, Rect) {
+    let r = reserve.max(0.0);
+    match placement {
+        Placement::Top => (Rect::new(inner.x, inner.y, inner.w, r.min(inner.h)), Rect::new(inner.x, inner.y + r, inner.w, inner.h - r)),
+        Placement::Bottom => {
+            (Rect::new(inner.x, inner.bottom() - r.min(inner.h), inner.w, r.min(inner.h)), Rect::new(inner.x, inner.y, inner.w, inner.h - r))
+        }
+        Placement::Right => {
+            (Rect::new(inner.right() - r.min(inner.w), inner.y, r.min(inner.w), inner.h), Rect::new(inner.x, inner.y, inner.w - r, inner.h))
+        }
+        Placement::Left | Placement::Inline => {
+            (Rect::new(inner.x, inner.y, r.min(inner.w), inner.h), Rect::new(inner.x + r, inner.y, inner.w - r, inner.h))
+        }
+    }
 }
 
 /// The widget's own border from the `<ui>` border element. Without one, a check box gets a
