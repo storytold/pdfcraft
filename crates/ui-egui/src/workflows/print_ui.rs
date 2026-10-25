@@ -357,6 +357,10 @@ impl PdfCraftApp {
         }
         let printer = job.printer.as_str();
         let (label, fraction) = match job.sheets {
+            // Every sheet is with the spooler, which can take a while yet to close the job (#3159).
+            Some((sent, sheets)) if sheets > 0 && sent >= sheets => {
+                (crate::i18n::fmt(tl!("Waiting for {printer} to accept the job…"), &[("printer", printer)]), 1.0)
+            }
             Some((sent, sheets)) if sheets > 0 => {
                 // The sheet on its way: one past those sent, until the last is.
                 let sheet = sent.saturating_add(1).min(sheets).to_string();
@@ -720,7 +724,11 @@ mod tests {
         assert_eq!(shown.label, "Sending sheet 2 of 3 to Office…");
         assert!((shown.fraction - 1.0 / 3.0).abs() < 1e-4 && !shown.cancellable, "{shown:?}");
 
+        // #3159: with every sheet sent the card says what it is waiting for, not "sheet 3 of 3".
         tx.send(JobNews::Sent(3, 3)).unwrap();
+        app.poll_print();
+        let shown = app.progress_notice.clone().unwrap();
+        assert_eq!((shown.label.as_str(), shown.fraction), ("Waiting for Office to accept the job…", 1.0));
         tx.send(JobNews::Done(Ok(String::new()))).unwrap();
         app.poll_print();
         assert!(app.progress_notice.is_none() && app.print_tasks.jobs.is_empty());
