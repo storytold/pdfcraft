@@ -18,7 +18,7 @@ use crate::x_object::{
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
 use hayro_syntax::object::dict::keys::{
-    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
+    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, STRUCT_PARENTS, SUBTYPE,
 };
 use hayro_syntax::object::{Array, Dict, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{ContentReader, Page, Resources, Rotation};
@@ -174,6 +174,9 @@ pub fn interpret_page<'a>(
     // PdfCraft patch: the page's own contents count against its content budget too, where they
     // are decoded whole. Streamed content is only ever held a window at a time.
     crate::context::charge_content(content.materialized_len());
+    // PdfCraft patch (53): the page's own MCIDs index the parent tree under its /StructParents;
+    // its annotations' appearances take their own keys in `draw_form_xobject`.
+    let outer = context.enter_page_structure(page.raw().get::<i32>(STRUCT_PARENTS));
     interpret_content(&mut content, resources, context, device);
 
     if context.settings.render_annotations
@@ -300,6 +303,7 @@ pub fn interpret_page<'a>(
         }
         device.end_annotations();
     }
+    context.leave_structure(outer);
 }
 
 /// PdfCraft patch (56): whether `subtype` is one of the standard annotation types of
@@ -707,7 +711,13 @@ fn interpret_window<'a>(
                 // 1. A Name that references an entry in the Resources/Properties dictionary
                 // 2. An inline dictionary with an OC key
 
-                let mcid = dict_or_stream(bdc.1).and_then(|(props, _)| props.get::<i32>(MCID));
+                // PdfCraft patch (53): the property list, inline or named in the resources'
+                // `/Properties` (ISO 32000-2 §14.6.2), read once for its MCID and `/ActualText`.
+                let props = dict_or_stream(bdc.1).map(|(props, _)| props.clone()).or_else(|| {
+                    let name = bdc.1.clone().into_name()?;
+                    resources.properties.get::<Dict<'_>>(name)
+                });
+                let mcid = props.as_ref().and_then(|props| props.get::<i32>(MCID));
 
                 let oc = bdc
                     .1
@@ -736,15 +746,17 @@ fn interpret_window<'a>(
 
                 device.begin_marked_content(bdc.0, mcid);
 
+                // PdfCraft patch (53): MCIDs index the parent tree only in content with a key (the
+                // page's own, or that of a form XObject with its own /StructParents).
+                if let Some(mcid) = mcid
+                    && let Some(key) = context.structure_key()
+                {
+                    device.structure_marked_content(key, mcid);
+                }
+
                 // PdfCraft patch (25): hand the device the sequence's `/ActualText`, from an inline
                 // property list or one named in the resources' `/Properties`.
-                let actual = dict_or_stream(bdc.1)
-                    .map(|(props, _)| props.clone())
-                    .or_else(|| {
-                        let name = bdc.1.clone().into_name()?;
-                        resources.properties.get::<Dict<'_>>(name)
-                    })
-                    .and_then(|props| props.get::<hayro_syntax::object::String<'_>>(ACTUAL_TEXT));
+                let actual = props.and_then(|props| props.get::<hayro_syntax::object::String<'_>>(ACTUAL_TEXT));
                 if let Some(text) = actual {
                     device.actual_text(text.as_bytes());
                 }
