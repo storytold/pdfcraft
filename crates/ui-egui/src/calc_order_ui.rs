@@ -494,7 +494,7 @@ fn explained(issues: &[CalculationIssue]) -> String {
 
 /// The Calculation order page; Back returns to Prepare a form.
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let (back, close) = crate::panels::panel_header(ui, t, "Calculation order", Some(tl!("Back to Prepare a form")));
+    let (back, close) = crate::panels::panel_header(ui, t, "Calculation order", Some(("chevron-left", tl!("Back to Prepare a form"))));
     if back {
         app.left = LeftPanel::Tool("form");
     }
@@ -724,10 +724,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// The calculation order on page `page`: the links of the field in focus, with the fields it has
 /// nothing to do with faded, and the steps of the focus and its linked fields; with nothing in
 /// focus, the steps of the fields whose place is wrong. A form with many calculations stays
-/// readable either way. Returns the field under the pointer.
+/// readable either way. Returns the field under the pages' `pointer`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_page(
-    ui: &egui::Ui,
     painter: &egui::Painter,
     xf: &PageXform,
     page: usize,
@@ -736,6 +735,7 @@ pub(crate) fn paint_page(
     view: &CalcOrderView,
     generation: u64,
     selected: Option<&str>,
+    pointer: Option<Pos2>,
 ) -> Option<String> {
     let listed = view.current(generation)?;
     // Each field's first widget on this page.
@@ -749,7 +749,6 @@ pub(crate) fn paint_page(
     if on_page.is_empty() {
         return None;
     }
-    let pointer = ui.input(|i| i.pointer.hover_pos());
     let hovered = pointer.and_then(|p| on_page.iter().rev().find(|(_, r)| r.contains(p))).map(|(n, _)| (*n).to_owned());
     let at: HashMap<&str, Rect> = on_page.iter().copied().collect();
     let zoom = xf.zoom().clamp(0.5, 3.0);

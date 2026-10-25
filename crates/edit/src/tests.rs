@@ -76,12 +76,38 @@ fn an_image_turns_by_any_angle_about_its_centre_and_saves_the_matrix() {
 }
 
 #[test]
+fn an_added_image_crop_keeps_some_of_each_axis() {
+    use crate::added::AddedImage;
+    assert!(AddedImage::crop_valid([0.7, 0.0, 0.0, 0.95]));
+    assert!(AddedImage::crop_valid([0.5, 0.45, 0.45, 0.5]));
+    // 0.05 + 0.9 rounds to just above 0.95: still the 5 % kept, accepted and left as it is.
+    assert!(AddedImage::crop_valid([0.05, 0.0, 0.9, 0.0]));
+    assert_eq!(AddedImage::clamp_crop([0.05, 0.0, 0.9, 0.0]), [0.05, 0.0, 0.9, 0.0]);
+    assert!(!AddedImage::crop_valid([0.06, 0.0, 0.9, 0.0]), "more than 95 % across");
+    assert!(!AddedImage::crop_valid([0.6, 0.0, 0.4, 0.0]), "nothing left across");
+    assert!(!AddedImage::crop_valid([-0.1, 0.0, 0.0, 0.0]));
+    assert!(!AddedImage::crop_valid([f64::NAN, 0.0, 0.0, 0.0]));
+    assert_eq!(AddedImage::clamp_crop([0.7, 0.0, 0.0, 0.0]), [0.7, 0.0, 0.0, 0.0], "a valid crop stays as it is");
+    // From a file: too much across keeps the two sides' proportion; nonsense trims nothing.
+    let [l, b, r, t] = AddedImage::clamp_crop([0.6, f64::INFINITY, 0.6, -1.0]);
+    assert!((l - 0.475).abs() < 1e-12 && (r - 0.475).abs() < 1e-12 && b == 0.0 && t == 0.0);
+    // Sides beyond the whole image keep their proportion too, and huge ones don't overflow.
+    let [l, _, r, _] = AddedImage::clamp_crop([1.5, 0.0, 0.5, 0.0]);
+    assert!((l - 0.7125).abs() < 1e-12 && (r - 0.2375).abs() < 1e-12, "{l} {r}");
+    let [l, _, r, _] = AddedImage::clamp_crop([f64::MAX, 0.0, f64::MAX, 0.0]);
+    assert!((l - 0.475).abs() < 1e-12 && (r - 0.475).abs() < 1e-12, "{l} {r}");
+    let [l, _, r, _] = AddedImage::clamp_crop([1.5, 0.0, 0.0, 0.0]);
+    assert!((l - 0.95).abs() < 1e-12 && r == 0.0, "one side alone is capped at the limit");
+}
+
+#[test]
 fn tokens_expand() {
     let c = cx();
     assert_eq!(expand("Page <<1>> of <<n>>", 3, 10, 0, &c), "Page 3 of 10");
     assert_eq!(expand("<<1 of n>> · <<Page 1>> · <<1/n>>", 2, 5, 0, &c), "2 of 5 · Page 2 · 2/5");
     assert_eq!(expand("<<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>>", 1, 1, 0, &c), "10/1/2026 2026-10-01 October 1, 2026");
     assert_eq!(expand("<<yyyy/mm/dd>> <<yyyy/m/d>>", 1, 1, 0, &c), "2026/10/01 2026/10/1");
+    assert_eq!(expand("<<dd.mm.yyyy>> <<d.m.yyyy>> <<dd.mm.yy>> <<d.m.yy>>", 1, 1, 0, &c), "01.10.2026 1.10.2026 01.10.26 1.10.26");
     assert_eq!(expand("<<Bates Number#6#100#ABC#-X>>", 1, 1, 104, &c), "ABC000104-X");
     assert_eq!(expand("keep <<unknown>> and <<unclosed", 1, 1, 0, &c), "keep <<unknown>> and <<unclosed");
     assert_eq!(bates_start("x <<Bates Number#6#100#A#B>>"), Some(100));
@@ -981,6 +1007,28 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(add_content(&mut doc, 0, &Content::Text(AddedText { rect: [0.0, 0.0, 100.0, 10.0], ..AddedText::default() })).is_err(), "empty text");
     // Page marks ignore added items.
     assert!(marks_present(&doc).is_empty());
+}
+
+/// #4464: a page left with one added item draws that item and nothing else.
+#[test]
+fn an_isolated_item_is_all_that_is_left_on_its_page() {
+    let mut doc = fixture();
+    let first = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "First".into(), size: 14.0, ..AddedText::default() };
+    let second = AddedText { rect: [72.0, 400.0, 300.0, 500.0], text: "Second".into(), ..first.clone() };
+    add_content(&mut doc, 0, &Content::Text(first)).unwrap();
+    add_content(&mut doc, 0, &Content::Text(second)).unwrap();
+    let before = streams(&doc, 0).join("\n");
+    assert!(before.contains("(First) Tj") && before.contains("(Second) Tj"), "{before}");
+    assert!(isolate_content(&mut doc, 0, 2).is_err(), "no third item");
+    assert!(isolate_content(&mut doc, 9, 0).is_err(), "no such page");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    doc.update_dict(page.obj, |d| d.set(b"Annots".to_vec(), Object::Array(Vec::new()))).unwrap();
+    isolate_content(&mut doc, 0, 1).unwrap();
+    let after = streams(&doc, 0).join("\n");
+    assert!(after.contains("(Second) Tj") && !after.contains("(First) Tj"), "{after}");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    assert!(page.dict.get(b"Annots").is_none(), "no annotations are drawn over it");
+    assert_eq!(list_added(&doc).len(), 1);
 }
 
 /// Edit ▸ Paste (#2636): where a pasted item lands.
@@ -4976,6 +5024,40 @@ fn cropped_image_resizing_moves_private_clips_and_keeps_shared_ones() {
     );
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform([0.5, 0.0, 0.0, 0.5, 0.0, 0.0])).unwrap();
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 1);
+}
+
+/// Report generators draw each picture as `q re W n cm Do Q` inside a section's clip that the
+/// section's text shares. Resizing the picture scales its own clip with it (the enlarged picture
+/// used to show only through its old box) while the section's clip and text stay put.
+#[test]
+fn resizing_an_image_under_a_shared_clip_moves_its_own_clip() {
+    // The picture's own clip as wide as the picture, and wider (both seen in one report).
+    for clip_width in [61.2, 85.0] {
+        let mut doc = image_page_with(&format!(
+            "q 20 20 560 760 re W n q 162 79 {clip_width} 28.3 re W n 61.2 0 0 28.3 162 79 cm /Im0 Do Q BT /F1 12 Tf 30 50 Td (Section text) Tj ET Q"
+        ));
+        let before = images::page_images(&doc, 0).unwrap()[0].clone();
+        assert!(close(before.visible_rect.unwrap(), [162.0, 79.0, 223.2, 107.3]), "{:?}", before.visible_rect);
+        let caption = text::text_lines(&doc, 0).unwrap();
+        let target = [162.0, 79.0, 284.4, 135.6];
+        let transform = images::rect_to_rect(before.visible_rect.unwrap(), target);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(transform)).unwrap();
+        doc = reopen(&doc);
+        let after = images::page_images(&doc, 0).unwrap()[0].clone();
+        let near = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.05);
+        assert!(near(after.visible_rect.unwrap(), target), "clip {clip_width}: the whole enlarged picture shows, {:?}", after.visible_rect);
+        assert_eq!(after.object, before.object, "pixels are never resampled or replaced");
+        assert_eq!(
+            text::text_lines(&doc, 0).unwrap().iter().map(|l| (&l.text, l.rect, l.baseline())).collect::<Vec<_>>(),
+            caption.iter().map(|l| (&l.text, l.rect, l.baseline())).collect::<Vec<_>>(),
+            "the section's text stays where it was"
+        );
+        // The section's clip is shared, so it still bounds the picture: past it, nothing shows.
+        let past = images::rect_to_rect(after.visible_rect.unwrap(), [500.0, 79.0, 700.0, 135.6]);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(past)).unwrap();
+        let clipped = images::page_images(&reopen(&doc), 0).unwrap()[0].visible_rect.unwrap();
+        assert!(clipped[2] <= 580.05, "the section's clip stays in force: {clipped:?}");
+    }
 }
 
 #[test]

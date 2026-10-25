@@ -159,7 +159,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 34] = [
+pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -215,6 +215,10 @@ pub static LANGUAGES: [LangInfo; 34] = [
     LangInfo {
         code: "ckb", name: "کوردیی ناوەندی", source: include_str!("ckb.tsv"), plural: plural_one_other, rtl: true, catalog: OnceLock::new()
     },
+    // Persian (Farsi); every `fa-*` locale (`fa-IR`, `fa_IR.UTF-8`, `fa-AF` ...) resolves here. Right
+    // to left like Arabic: see `LangInfo::rtl`. CLDR `fa` counts have two forms (one: i = 0 or n = 1,
+    // other), which for whole counts is the French rule, so `@plural` entries list two forms.
+    LangInfo { code: "fa", name: "فارسی", source: include_str!("fa.tsv"), plural: plural_fr, rtl: true, catalog: OnceLock::new() },
     // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
     LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
@@ -1672,7 +1676,7 @@ mod tests {
         assert_eq!(ar.name(), "العربية");
         assert!(ar.rtl());
         let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-        assert_eq!(rtl, ["ar", "ckb"], "Arabic and Kurdish are the right-to-left languages");
+        assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
         assert_eq!(normalize_pref("AR"), Some("ar"));
         for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
             assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1721,6 +1725,39 @@ mod tests {
         assert_eq!([3, 10, 103, 110, 1003].map(form), [3; 5]);
         assert_eq!([11, 99, 111, 199, 1011].map(form), [4; 5]);
         assert_eq!([100, 101, 102, 200, 1000, u64::MAX - 13].map(form), [5; 6]);
+    }
+
+    fn persian() -> Lang {
+        Lang::from_code("fa").expect("fa registered")
+    }
+
+    #[test]
+    fn persian_is_registered_and_persists() {
+        let fa = persian();
+        assert_eq!(fa.name(), "فارسی");
+        assert!(fa.rtl());
+        // CLDR `fa` (one: i = 0 or n = 1): 0 and 1 are singular, every other count the plural.
+        assert_eq!(fa.0.plural_forms(), 2);
+        assert_eq!([0, 1, 2, 11].map(|n| (fa.0.plural)(n)), [0, 0, 1, 1]);
+        assert_eq!(normalize_pref("FA"), Some("fa"));
+        for tag in ["fa", "fa-IR", "fa_IR.UTF-8", "FA-af", "fa_IR@calendar=persian"] {
+            assert_eq!(lang_from_tag(tag), Some(fa), "{tag}");
+        }
+        assert_eq!(first_supported("fa-IR\r\nen-US"), Some(fa));
+        // Lookups return Persian (single words in display order).
+        assert_eq!(tr(fa, "Save"), "ذخیره");
+        assert_eq!(tr(fa, "Cancel"), "لغو");
+        assert_eq!(tr(fa, "File"), "فایل");
+        // Unknown strings and user text are never reordered by a lookup.
+        assert_eq!(tr(fa, "گزارش نهایی {n}.pdf"), "گزارش نهایی {n}.pdf");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "FA").unwrap();
+        assert_eq!(app.language, "fa");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "fa");
+        assert!(restored.set_option("language", "xx").is_err());
+        assert_eq!(restored.language, "fa");
     }
 
     /// With a craft-fonts Arabic face, every Arabic translation has glyphs: with all interface
@@ -1794,6 +1831,7 @@ mod tests {
                 section.items.iter().for_each(|item| add(item.label));
             }
         }
+        pdfcraft_engine::catalog::TOOL_CATEGORIES.iter().for_each(|category| add(category.label));
         let engine: [&[&str]; 9] = [
             pdfcraft_engine::a11y::WORDINGS,
             pdfcraft_engine::a11y::REPORT_WORDS,

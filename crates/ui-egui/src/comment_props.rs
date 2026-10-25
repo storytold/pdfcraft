@@ -98,7 +98,7 @@ impl PdfCraftApp {
     pub fn make_props_default(&mut self, page: usize, index: usize, p: &CommentProps) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        let Some(a) = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && a.in_reply_to.is_none()) else { return };
+        let Some(a) = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply()) else { return };
         let Some(tool) = crate::comments::tool_for_default(a, p.endings.as_deref()) else { return };
         let mut style = self.comment_prefs.style(tool);
         if let Some(c) = p.color {
@@ -167,12 +167,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         .and_then(|(_, id)| app.session.get(id))
         .zip(app.comment_props.as_ref())
         .map(|(doc, d)| {
-            let me = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && a.in_reply_to.is_none());
-            let nm = me.and_then(|a| a.name.clone());
+            let me = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply());
             doc.info
                 .annotations
                 .iter()
-                .filter(|r| r.state.is_some() && nm.is_some() && r.in_reply_to == nm)
+                .filter(|r| r.state.is_some() && me.is_some_and(|a| r.replies_to(a)))
                 .map(|r| (r.state.clone().unwrap_or_default(), r.author.clone().unwrap_or_default(), r.modified.clone().unwrap_or_default()))
                 .collect()
         })
@@ -180,7 +179,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let default_tool = app.comment_props.as_ref().and_then(|d| {
         let (_, id) = app.active_ids()?;
         let doc = app.session.get(id)?;
-        let a = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && a.in_reply_to.is_none())?;
+        let a = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply())?;
         crate::comments::tool_for_default(a, d.edited.endings.as_deref())
     });
     let Some(d) = app.comment_props.as_mut() else { return (false, true) };

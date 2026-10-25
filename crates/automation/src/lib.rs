@@ -174,6 +174,12 @@ impl Automation {
         self
     }
 
+    /// Multiply the time XFA form scripts may take (tests). See [`Session::with_xfa_time_scale`].
+    pub fn with_xfa_time_scale(mut self, factor: u32) -> Self {
+        self.session = std::mem::take(&mut self.session).with_xfa_time_scale(factor);
+        self
+    }
+
     /// The clock and time zone of a host without its own. See [`Session::with_wall_clock`].
     pub fn with_wall_clock(mut self, clock: fn() -> i64, utc_offset: fn() -> i64) -> Self {
         self.session = std::mem::take(&mut self.session).with_wall_clock(clock, utc_offset);

@@ -7,6 +7,8 @@ use crate::{PdfCraftApp, icons};
 
 /// Horizontal and vertical inset of a single-line field.
 const FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(10, 6);
+/// Where text starts inside a [`line`] or [`block`] field, so plain values beside fields can line up with it.
+pub(crate) const FIELD_TEXT_INSET: f32 = FIELD_MARGIN.left as f32;
 /// Outer height of a single-line field, including its inset.
 const FIELD_MIN_HEIGHT: f32 = 30.0;
 /// Padding inside every modal.
