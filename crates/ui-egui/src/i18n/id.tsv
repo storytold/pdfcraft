@@ -2778,3 +2778,11 @@ theme	Appearance	Tampilan
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
 @plural	{n} reply|{n} replies	{n} balasan
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Alat halaman
+	Insert pages from a file after the selection…	Sisipkan halaman dari file setelah pilihan…
+	Rotate the selected pages counterclockwise	Putar halaman yang dipilih berlawanan arah jarum jam
+	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
+	Extract the selected pages…	Ekstrak halaman yang dipilih…
+	Delete the selected pages	Hapus halaman yang dipilih

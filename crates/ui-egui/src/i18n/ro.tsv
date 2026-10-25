@@ -2801,3 +2801,11 @@ theme	Appearance	Aspect
 	Delete attachment	Ștergere atașament
 	Delete attachment {key}	Ștergere atașament {key}
 @plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Instrumente pentru pagini
+	Insert pages from a file after the selection…	Inserează pagini dintr-un fișier după selecție…
+	Rotate the selected pages counterclockwise	Rotește paginile selectate în sens antiorar
+	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
+	Extract the selected pages…	Extrage paginile selectate…
+	Delete the selected pages	Șterge paginile selectate

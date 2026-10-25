@@ -2732,3 +2732,11 @@ certificate	Version	وەشان
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ
 @plural	{n} reply|{n} replies	{n} وەڵام|{n} وەڵام
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	ئامرازەکانی پەڕە
+	Insert pages from a file after the selection…	پەڕەکان لە فایلێکەوە لە دوای هەڵبژاردەکە دابنێ…
+	Rotate the selected pages counterclockwise	پەڕە هەڵبژێردراوەکان پێچەوانەی میلی کاتژمێر بسوڕێنە
+	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
+	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
+	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە

@@ -2539,3 +2539,11 @@ animation effects	Off	Ki
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
 @plural	{n} reply|{n} replies	{n} válasz|{n} válasz
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Oldaleszközök
+	Insert pages from a file after the selection…	Oldalak beszúrása fájlból a kijelölés után…
+	Rotate the selected pages counterclockwise	A kijelölt oldalak forgatása az óramutató járásával ellentétesen
+	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
+	Extract the selected pages…	A kijelölt oldalak kibontása…
+	Delete the selected pages	A kijelölt oldalak törlése

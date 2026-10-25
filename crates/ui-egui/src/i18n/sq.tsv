@@ -2527,3 +2527,11 @@ animation effects	Off	Joaktiv
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
 @plural	{n} reply|{n} replies	{n} përgjigje|{n} përgjigje
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Mjetet e faqes
+	Insert pages from a file after the selection…	Fut faqe nga një skedar pas përzgjedhjes…
+	Rotate the selected pages counterclockwise	Rrotullo faqet e përzgjedhura në drejtim të kundërt me orën
+	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
+	Extract the selected pages…	Nxirr faqet e përzgjedhura…
+	Delete the selected pages	Fshi faqet e përzgjedhura

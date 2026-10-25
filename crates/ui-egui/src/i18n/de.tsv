@@ -2541,3 +2541,11 @@ animation effects	Off	Aus
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
 @plural	{n} reply|{n} replies	{n} Antwort|{n} Antworten
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Seitenwerkzeuge
+	Insert pages from a file after the selection…	Seiten aus einer Datei nach der Auswahl einfügen…
+	Rotate the selected pages counterclockwise	Ausgewählte Seiten gegen den Uhrzeigersinn drehen
+	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
+	Extract the selected pages…	Ausgewählte Seiten extrahieren…
+	Delete the selected pages	Ausgewählte Seiten löschen

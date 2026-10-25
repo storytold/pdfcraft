@@ -2703,3 +2703,11 @@ theme	Appearance	ลักษณะที่ปรากฏ
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
 @plural	{n} reply|{n} replies	การตอบกลับ {n} รายการ
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	เครื่องมือหน้า
+	Insert pages from a file after the selection…	แทรกหน้าจากไฟล์หลังส่วนที่เลือก…
+	Rotate the selected pages counterclockwise	หมุนหน้าที่เลือกทวนเข็มนาฬิกา
+	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
+	Extract the selected pages…	แยกหน้าที่เลือกออก…
+	Delete the selected pages	ลบหน้าที่เลือก

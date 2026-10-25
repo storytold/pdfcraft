@@ -2490,3 +2490,11 @@ animation effects	Off	關
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
 @plural	{n} reply|{n} replies	{n} 則回覆
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	頁面工具
+	Insert pages from a file after the selection…	在所選內容後插入檔案中的頁面…
+	Rotate the selected pages counterclockwise	逆時針旋轉所選頁面
+	Rotate the selected pages clockwise	順時針旋轉所選頁面
+	Extract the selected pages…	擷取所選頁面…
+	Delete the selected pages	刪除所選頁面

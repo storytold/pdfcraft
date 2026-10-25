@@ -2562,3 +2562,11 @@ animation effects	Off	Вимкнено
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
 @plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Інструменти сторінок
+	Insert pages from a file after the selection…	Вставити сторінки з файлу після виділення…
+	Rotate the selected pages counterclockwise	Повернути вибрані сторінки проти годинникової стрілки
+	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
+	Extract the selected pages…	Витягнути вибрані сторінки…
+	Delete the selected pages	Видалити вибрані сторінки

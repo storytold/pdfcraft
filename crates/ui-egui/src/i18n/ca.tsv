@@ -2801,3 +2801,11 @@ theme	Appearance	Aspecte
 	Delete attachment	Elimina l'adjunt
 	Delete attachment {key}	Elimina l'adjunt {key}
 @plural	{n} reply|{n} replies	{n} resposta|{n} respostes
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Eines de pàgina
+	Insert pages from a file after the selection…	Insereix pàgines d'un fitxer després de la selecció…
+	Rotate the selected pages counterclockwise	Gira les pàgines seleccionades en sentit antihorari
+	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
+	Extract the selected pages…	Extreu les pàgines seleccionades…
+	Delete the selected pages	Suprimeix les pàgines seleccionades
