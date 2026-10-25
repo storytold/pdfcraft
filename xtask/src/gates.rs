@@ -120,12 +120,18 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         ("deny", Box::new(|| deny(&[]))),
         ("parity", Box::new(|| crate::parity::run(&[]))),
     ];
-    for (i, (name, f)) in steps.iter().enumerate() {
+    // Independent steps keep running after a failure, so one run reports every failing step.
+    let mut failed = Vec::new();
+    for (name, f) in &steps {
         eprintln!("\n=== ci: {name} ===");
         if let Err(e) = f() {
-            println!("\nCI: {} passed, FAILED at `{name}`: {e:#}", i);
-            bail!("ci failed at `{name}`");
+            println!("\nCI: `{name}` FAILED: {e:#}");
+            failed.push(*name);
         }
+    }
+    if !failed.is_empty() {
+        println!("\nCI: {} of {} steps passed, FAILED: {}", steps.len() - failed.len(), steps.len(), failed.join(", "));
+        bail!("ci failed at {}", failed.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "));
     }
     println!("\nCI: all {} steps passed", steps.len());
     Ok(())
