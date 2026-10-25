@@ -201,6 +201,7 @@ impl Type0Font {
         // PdfCraft patch: a substitute that isn't CID-keyed numbers its glyphs its own way, so
         // the CID of an Adobe character collection taken as its glyph index draws an unrelated
         // glyph. Draw .notdef, as for a CID the font has no glyph for.
+        // The other half of that, codes no collection numbers at all, is the clause below (#3529).
         if self.fallback
             && self.adobe_collection
             && !matches!(&self.font_type, FontType::Cff(c) if c.is_cid())
@@ -208,8 +209,25 @@ impl Type0Font {
             return GlyphId::NOTDEF;
         }
 
+        // PdfCraft patch (#3529): the clause above refuses codes an Adobe character collection
+        // numbers; this one refuses the rest. When the file carries no readable program and the
+        // CIDFont names no collection at all — `/Ordering (Identity)`, or `CIDSystemInfo`
+        // absent — the codes number glyphs of the font named by `/BaseFont`. A substitute gives
+        // us a face, never the glyph numbering of that font, and any code `/ToUnicode` names has
+        // already returned above. What reaches here cannot be mapped, so take it as .notdef
+        // rather than as whichever outline of the stand-in happens to share that number. Measured
+        // on macOS before this patch: `<0030 0047 0050 0053>` over a Minion Pro stand-in inked
+        // 720 dark pixels, pixel-identical to the same codes under `/BaseFont /Helvetica` (a
+        // different face from the one named), and `<0041>` is not that Helvetica stand-in's `A`:
+        // 241 dark pixels against the 234 a WinAnsi page of `A` draws, images unequal.
+        if self.fallback && !self.adobe_collection {
+            return GlyphId::NOTDEF;
+        }
+
         // At this point, not much we can do anymore. Just hope that the
-        // selected font has the right glyph order, and map via that.
+        // selected font has the right glyph order, and map via that. Both guards above now
+        // mean this is reached only for a program the file really carries, or an Adobe
+        // collection drawn through a CID-keyed substitute that shares its numbering.
 
         match &self.font_type {
             FontType::OpenType(_) => self.cid_to_gid_map.map(cid as u16),
