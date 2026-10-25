@@ -185,6 +185,74 @@ fn annotation_appearances_do_not_replace_page_xobjects() {
     }
 }
 
+/// Existing field/comment artwork must survive vector printing when any Rect coordinate is indirect.
+#[test]
+fn indirect_annotation_rectangles_keep_their_printed_appearances() {
+    for (subtype, content) in [("Widget", Content::Document), ("Square", Content::DocumentAndMarkups)] {
+        for outer_indirect in [false, true] {
+            for reversed in [false, true] {
+                for mask in [0usize, 1, 0b1010, 0b1111] {
+                    let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+                    let values = if reversed { [50.0, 40.25, 10.0, 20.25] } else { [10.0, 20.25, 50.0, 40.25] };
+                    let coordinates = values.into_iter().enumerate().map(|(i, value)| {
+                        let value = if i % 2 == 0 { Object::Int(value as i64) } else { Object::Real(value) };
+                        if mask & (1 << i) != 0 { Object::Ref(doc.add(value)) } else { value }
+                    });
+                    let rect = Object::Array(coordinates.collect());
+                    let rect = if outer_indirect { Object::Ref(doc.add(rect)) } else { rect };
+                    doc.update_dict(annot, |d| {
+                        d.set(b"Subtype".to_vec(), Object::name(subtype));
+                        d.set(b"Rect".to_vec(), rect);
+                    })
+                    .unwrap();
+                    let before = saved(&doc);
+                    let source = render(before.clone());
+                    assert_eq!(pixel(&source, 30, 70), [0, 255, 0, 255], "source appearance");
+                    let printed = render(impose(&doc, &print_settings(content)).unwrap());
+                    assert_eq!(
+                        pixel(&printed, 30, 70),
+                        [0, 255, 0, 255],
+                        "{subtype}, outer_indirect={outer_indirect}, reversed={reversed}, mask={mask:04b}"
+                    );
+                    assert_eq!(printed.rgba, source.rgba, "reopened printed pixels match the source");
+                    assert_eq!(saved(&doc), before, "printing leaves the source objects unchanged");
+                }
+            }
+        }
+    }
+}
+
+/// Malformed Rect values must not become printable rectangles by dropping invalid entries.
+#[test]
+fn invalid_annotation_rectangles_are_skipped_when_printing() {
+    for invalid in [
+        Object::Null,
+        numbers(&[10.0, 20.0, 50.0]),
+        numbers(&[10.0, 20.0, 50.0, 40.0, 60.0]),
+        Object::Array(vec![10.into(), 20.into(), 50.into(), Object::Null]),
+        Object::Array(vec![10.into(), 20.into(), 50.into(), 40.into(), Object::Null]),
+        Object::Array(vec![10.into(), 20.into(), 50.into(), Object::Ref(ObjRef::new(999_999, 0))]),
+        numbers(&[f64::NAN, 20.0, 50.0, 40.0]),
+        numbers(&[10.0, f64::INFINITY, 50.0, 40.0]),
+        numbers(&[10.0, 20.0, f64::NEG_INFINITY, 40.0]),
+    ] {
+        for outer_indirect in [false, true] {
+            let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+            let rect = if outer_indirect { Object::Ref(doc.add(invalid.clone())) } else { invalid.clone() };
+            doc.update_dict(annot, |d| d.set(b"Rect".to_vec(), rect)).unwrap();
+            let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+            assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "invalid={invalid:?}, outer_indirect={outer_indirect}");
+            assert_eq!(pixel(&printed, 4, 96), [0, 0, 255, 255], "ordinary page content still prints");
+        }
+    }
+    let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+    let cycle = doc.add(Object::Null);
+    doc.set(cycle, Object::Ref(cycle));
+    doc.update_dict(annot, |d| d.set(b"Rect".to_vec(), Object::Array(vec![10.into(), 20.into(), 50.into(), Object::Ref(cycle)]))).unwrap();
+    let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+    assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "cyclic coordinate references are skipped");
+}
+
 #[test]
 fn missing_subtype_appearance_survives_vector_print() {
     let (control, _, _) = widget_fixture(Some(Object::name("Form")), None);

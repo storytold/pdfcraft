@@ -130,3 +130,6 @@ a matching page. On Windows craft-print sends the sheets as vectors with a Print
 for the sheet's exact paper and no scaling (#599's approach), validated by the driver:
 a job is refused, not shrunk, when the driver lacks the paper or would change it. Verify
 the driver's paper settings and physical calibration before relying on drawing scale.
+
+Vector printing resolves direct and indirect annotation rectangle coordinates before placing existing appearances.
+Rectangles must contain exactly four finite numbers; malformed rectangles are skipped.
