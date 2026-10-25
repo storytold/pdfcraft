@@ -8767,6 +8767,10 @@ mod isolated_cmyk_groups;
 // with an odd byte count (vendored hayro-interpret patches 67 and 68).
 mod short_image_data;
 
+// A colour-key `/Mask` keys raw samples under an inverted `/Decode` (vendored
+// hayro-interpret patch 69).
+mod colour_key_mask;
+
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
 /// second object: enumeration yielded it once per key, so a document recovered without a readable
 /// page tree reported the page twice (noted in review of #5580).

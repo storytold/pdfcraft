@@ -888,11 +888,15 @@ fn decode_raster(
             .color_space
             .inverted_default_decode_arr(ctx.bits_per_component as f32);
 
-    let image_data = if ctx.bits_per_component == 8
+    let fast_path = ctx.bits_per_component == 8
         && ctx.color_space.supports_u8()
         && obj.transfer_function.is_none()
-        && (is_default_decode || is_inverted_default_decode)
-    {
+        && (is_default_decode || is_inverted_default_decode);
+    // PdfCraft patch (69): whether the fast path inverts the data in place, so the colour key
+    // (`resolve_alpha`) can turn it back into the raw samples it is tested against.
+    let inverted_in_place = fast_path && is_inverted_default_decode;
+
+    let image_data = if fast_path {
         // This is actually the most common case, where the PDF is embedded
         // in such a way where we don't need to decode. In this case,
         // we can prevent the round-trip from f32 back to u8 and just return
@@ -1026,6 +1030,7 @@ fn decode_raster(
             Some(&image),
             &ctx.color_space,
             ctx.bits_per_component,
+            inverted_in_place,
             ctx.width,
             height,
             ctx.scale_factors,
@@ -1110,6 +1115,7 @@ fn resolve_alpha(
     image_data: Option<&ImageData>,
     color_space: &ColorSpace,
     bits_per_component: u8,
+    inverted_in_place: bool,
     width: u32,
     height: u32,
     scale_factors: (f32, f32),
@@ -1151,6 +1157,13 @@ fn resolve_alpha(
         };
 
         let mut components = get_components(raw_data, width, height, color_space, bits_per_component)?;
+        // PdfCraft patch (69): the key ranges are raw samples (ISO 32000-2 §8.9.6.4). An 8-bit
+        // image the fast path inverted in place is turned back before they are compared.
+        if inverted_in_place {
+            for component in &mut components {
+                *component = 255u16.saturating_sub(*component);
+            }
+        }
         // PdfCraft patch (67): the samples past the data are keyed as the zeros the image is
         // padded with, not masked out.
         fix_image_length(&mut components, width, height, 0, color_space)?;
