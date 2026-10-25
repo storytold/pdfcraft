@@ -535,11 +535,12 @@ pub struct BlockDrag {
     grip: Grip,
 }
 
-/// How far an edge grip reaches either side of a box's edge (screen pixels).
-const EDGE_REACH: f32 = 6.0;
+/// How far an edge grip reaches either side of a box's edge (screen pixels). Wide enough to
+/// catch without aiming for the hairline (#2203); a narrow box still keeps its middle for moving.
+const EDGE_REACH: f32 = 8.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
-pub(crate) const FRAME_REACH: f32 = 6.0;
+pub(crate) const FRAME_REACH: f32 = 8.0;
 
 /// The rewrap handles drawn on a paragraph box's left and right edges (screen).
 fn width_handles(b: Rect) -> [Rect; 2] {
