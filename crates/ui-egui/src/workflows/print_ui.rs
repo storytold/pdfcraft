@@ -634,6 +634,7 @@ pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[St
 
 #[cfg(test)]
 mod tests {
+    use super::draft::Margins;
     use super::*;
 
     #[test]
@@ -685,6 +686,18 @@ mod tests {
         assert!(cut.settings(4, &[]).is_ok(), "the printer's default doesn't block cut and stack");
         cut.duplex = Some(spool::Duplex::ShortEdge);
         assert!(cut.settings(4, &[]).is_err());
+    }
+
+    /// #4674: the Margins choice reaches the print settings in points; untouched it keeps the
+    /// 18 pt every print had before.
+    #[test]
+    fn the_margins_choice_reaches_the_print_settings() {
+        let margin = |margins, custom_margin| PrintDraft { margins, custom_margin, ..PrintDraft::default() }.settings(1, &[]).map(|s| s.margin);
+        assert_eq!(PrintDraft::default().settings(1, &[]).map(|s| s.margin), Ok(print::MARGIN));
+        assert_eq!(margin(Margins::Narrow, 50.0), Ok(9.0));
+        assert_eq!(margin(Margins::Zero, 50.0), Ok(0.0));
+        assert_eq!(margin(Margins::Custom, 50.0), Ok(50.0));
+        assert_eq!(margin(Margins::Default, 50.0), Ok(print::MARGIN), "a custom width is kept only for Custom");
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports

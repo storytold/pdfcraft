@@ -200,7 +200,9 @@ impl Automation {
         } else {
             None
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
+        // #4674: the space fit, shrink, multiple and booklet keep inside the paper's edges.
+        let margin = a.opt_num("margin")?.unwrap_or(print::MARGIN);
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), margin };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;

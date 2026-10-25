@@ -8108,8 +8108,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/print/src/tests.rs::us_number_10_envelope_is_offered_and_fed_by_name", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
-notes = "fit, actual size, shrink oversized, custom %; ARCH A/B/C/D/E1/E, ANSI C/D/E, ISO A0/A1/A2, A6 and US #10 envelope presets; Match page at 100% matches the current page to a standard sheet. PDF scale shows the previewed source-to-sheet transform, not calibrated physical output; driver substitution/scaling remains possible"
+evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/print/src/tests.rs::us_number_10_envelope_is_offered_and_fed_by_name", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent", "crates/print/src/tests.rs::the_chosen_margin_frames_fitted_pages_grids_and_booklets", "crates/automation/tests/it/automation.rs::doc_print_keeps_the_margin_asked_for", "crates/ui-egui/src/workflows/print_ui.rs::the_margins_choice_reaches_the_print_settings"]
+notes = "fit, actual size, shrink oversized, custom %; margins for fit, shrink, multiple and booklet (default 18 pt, narrow 9 pt, none or custom; #4674, a choice Acrobat's dialog does not have; kept for the session, not across restarts); ARCH A/B/C/D/E1/E, ANSI C/D/E, ISO A0/A1/A2, A6 and US #10 envelope presets; Match page at 100% matches the current page to a standard sheet. PDF scale shows the previewed source-to-sheet transform, not calibrated physical output; driver substitution/scaling remains possible"
 
 [[feature]]
 id = "print.paper-source-by-size"

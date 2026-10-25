@@ -142,6 +142,13 @@ pub struct Settings {
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Space kept clear inside each sheet's edges, in points, for Fit, Shrink oversized pages,
+    /// Multiple and Booklet ([`MARGIN`] unless chosen; #4674). Actual size and a custom scale
+    /// centre the page as it is; Poster keeps [`MARGIN`] for its cut marks, Label [`LABEL_MARGIN`].
+    ///
+    /// [`MARGIN`]: crate::MARGIN
+    /// [`LABEL_MARGIN`]: crate::LABEL_MARGIN
+    pub margin: f64,
 }
 
 /// How pages are rendered when printing as image.
@@ -175,6 +182,7 @@ impl Default for Settings {
             content: Content::default(),
             raster: None,
             crops: Vec::new(),
+            margin: super::sheets::MARGIN,
         }
     }
 }

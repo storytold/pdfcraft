@@ -12,6 +12,10 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
 
 - **Size**: fit (to the sheet minus an 18 pt margin), actual size, shrink oversized, custom %;
   centred; auto orientation turns the sheet for landscape pages.
+- **Margins** (`Settings::margin`, #4674): the space kept inside the sheet's edges for Fit,
+  Shrink, Multiple and Booklet, 18 pt unless chosen; 0 prints to whatever edge the printer
+  reaches. Actual size and custom % ignore it, Poster keeps 18 pt for its cut marks, and Label
+  keeps its own 8 pt. Headless: `doc_print` with `margin` in points.
 - **Multiple**: 2/4/6/9/16 (or any n) pages per sheet, horizontal/vertical (reversed) order,
   page borders, auto-rotation of pages that don't match the cell.
 - **Cut and stack** (Multiple's page order): consecutive pages in each cell's pile,

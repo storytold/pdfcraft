@@ -19,6 +19,32 @@ pub enum Handling {
     Label,
 }
 
+/// Page Sizing's margins (#4674): the space kept inside the paper's edges for Fit, Shrink
+/// oversized pages, Multiple and Booklet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Margins {
+    /// A quarter inch ([`print::MARGIN`]).
+    Default,
+    /// An eighth of an inch.
+    Narrow,
+    /// None: to whatever edge the printer reaches.
+    Zero,
+    /// [`PrintDraft::custom_margin`].
+    Custom,
+}
+
+impl Margins {
+    /// The margin in points, `custom` for [`Margins::Custom`].
+    pub fn points(self, custom: f64) -> f64 {
+        match self {
+            Margins::Default => print::MARGIN,
+            Margins::Narrow => 9.0,
+            Margins::Zero => 0.0,
+            Margins::Custom => custom,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
@@ -53,6 +79,9 @@ pub struct PrintDraft {
     pub poster_scale: f64,
     pub overlap: f64,
     pub cut_marks: bool,
+    pub margins: Margins,
+    /// The width [`Margins::Custom`] keeps, in points.
+    pub custom_margin: f64,
     pub orientation: Orientation,
     pub content: Content,
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
@@ -114,6 +143,8 @@ impl Default for PrintDraft {
             poster_scale: 200.0,
             overlap: 18.0,
             cut_marks: true,
+            margins: Margins::Default,
+            custom_margin: print::MARGIN,
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
             as_image: false,
@@ -198,6 +229,7 @@ impl PrintDraft {
             content: self.content,
             raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
             crops: self.crops.clone(),
+            margin: self.margins.points(self.custom_margin),
         })
     }
 

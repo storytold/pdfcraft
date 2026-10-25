@@ -217,6 +217,44 @@ fn booklets_pair_pages_for_folding() {
     assert_eq!(sheet_pages(&front), [vec![0], vec![2, 5]], "right binding mirrors the spread");
 }
 
+/// #4674: the chosen margin frames Fit, Shrink, Multiple and Booklet, and none prints to the
+/// paper's edge. Actual size and Poster keep theirs; a margin that is not a length, or leaves no
+/// room on the paper, is refused where it is used.
+#[test]
+fn the_chosen_margin_frames_fitted_pages_grids_and_booklets() {
+    let sizes = [(200.0, 300.0); 2];
+    let with = |layout: Layout, margin: f64| Settings { margin, ..settings(vec![0, 1], layout) };
+    let first = |s: &Settings| layout(&sizes, s).unwrap()[0].placed[0].matrix.0;
+    // Fit: min(612 / 200, 792 / 300) without one; min(594 / 200, 774 / 300), 9 pt up, with 9 pt.
+    let m = first(&with(Layout::Size(SizeMode::Fit), 0.0));
+    assert!(close(m[0], 2.64) && close(m[5], 0.0), "{m:?}");
+    let m = first(&with(Layout::Size(SizeMode::Fit), 9.0));
+    assert!(close(m[0], 2.58) && close(m[5], 9.0), "{m:?}");
+    // Shrink: a Letter page fits Letter paper at 100% only without a margin.
+    let letter = [(612.0, 792.0)];
+    let shrink =
+        |margin| layout(&letter, &Settings { margin, ..settings(vec![0], Layout::Size(SizeMode::Shrink)) }).unwrap()[0].placed[0].matrix.0[0];
+    assert_eq!(shrink(0.0), 1.0);
+    assert!(shrink(MARGIN) < 1.0);
+    // Four per sheet: cells of (612 - 6) / 2 × (792 - 6) / 2 without a margin, not 285 × 375.
+    assert!(close(first(&with(Layout::multiple(4), 0.0))[0], 1.31) && close(first(&with(Layout::multiple(4), MARGIN))[0], 1.25));
+    // Booklet: page 1 fills the right half of the landscape sheet, from its middle.
+    let booklet = Layout::Booklet { subset: BookletSubset::FrontOnly, binding: Binding::Left };
+    let m = first(&with(booklet, 0.0));
+    assert!(close(m[0], 1.98) && close(m[4], 396.0), "{m:?}");
+    // Actual size and Poster don't read it, so even an unusable one leaves them as they were.
+    for layout_ in [Layout::Size(SizeMode::Actual), Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: true }] {
+        assert_eq!(layout(&sizes, &with(layout_, f64::NAN)), layout(&sizes, &settings(vec![0, 1], layout_)), "{layout_:?}");
+    }
+    for margin in [f64::NAN, f64::INFINITY, -1.0, 306.0, 1e300] {
+        for layout_ in [Layout::Size(SizeMode::Fit), Layout::Size(SizeMode::Shrink), Layout::multiple(4), booklet] {
+            assert!(matches!(layout(&sizes, &with(layout_, margin)), Err(PrintError::Invalid(_))), "{margin} {layout_:?}");
+        }
+    }
+    // Just under half the paper's width still lays out.
+    assert!(layout(&sizes, &with(Layout::Size(SizeMode::Fit), 305.0)).is_ok());
+}
+
 #[test]
 fn posters_tile_with_overlap() {
     // A 200×300 page at 400% = 800×1200 on Letter with 18 pt margins (576×756 tiles), overlap 36.

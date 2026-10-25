@@ -9266,6 +9266,38 @@ fn doc_print_as_image() {
     }
 }
 
+/// #4674: `doc_print`'s margin is the space Fit keeps inside the paper's edges (18 pt unless
+/// given); one below 0, one that leaves no room on the paper, or a word, is refused.
+#[test]
+fn doc_print_keeps_the_margin_asked_for() {
+    let dir = workdir("print-margin");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The first sheet's content opens with the page's placement: `q a b c d e f cm`.
+    let placement = |path: &str| -> Vec<f64> {
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(path)).unwrap())).unwrap();
+        let page = pdfcraft_model::pages(&saved).remove(0);
+        let contents = pdfcraft_cos::DecodeBudget::page().decode_contents(&saved, page.dict.get(b"Contents").unwrap());
+        let data: Vec<u8> = contents.into_iter().flat_map(Result::unwrap).collect();
+        String::from_utf8_lossy(&data).split_whitespace().skip(1).take(6).map(|n| n.parse().unwrap()).collect()
+    };
+    // A 200 × 300 page on Letter: min(576 / 200, 756 / 300) by default, min(612 / 200, 792 / 300) with none.
+    for (margin, scale, bottom) in [(None, 2.52, 18.0), (Some(0.0), 2.64, 0.0), (Some(9.0), 2.58, 9.0)] {
+        let mut args = json!({ "doc": doc, "pages": "1", "path": "fit.pdf" });
+        if let Some(m) = margin {
+            args["margin"] = json!(m);
+        }
+        ok(&mut a, "doc_print", args);
+        let m = placement("fit.pdf");
+        assert!((m[0] - scale).abs() < 1e-6 && (m[5] - bottom).abs() < 1e-6, "{margin:?}: {m:?}");
+    }
+    for margin in [json!(-1), json!(306), json!("wide")] {
+        let refused = a.call("doc_print", &json!({ "doc": doc, "margin": margin, "path": "x.pdf" }));
+        assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "{margin}: {refused:?}");
+    }
+    assert!(!dir.join("x.pdf").exists());
+}
+
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is
 /// made, nothing is left beside the file, and a folder at the path is refused.
 #[test]
