@@ -892,6 +892,9 @@ fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &m
         let first = vals.first().cloned().unwrap_or_default();
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(first),
+            // A value that names one of the boxes' on states picks that box (same-named check
+            // boxes with different on states); anything else is just on or off.
+            FieldKind::CheckBox if f.state_for(&first).is_some() => FieldValue::Text(first),
             FieldKind::CheckBox => FieldValue::Check(!first.is_empty() && first != "Off"),
             FieldKind::Radio => FieldValue::Radio((!first.is_empty() && first != "Off").then_some(first)),
             // XML, CSV and text hold a multi-select list's values in one cell, joined by ", "

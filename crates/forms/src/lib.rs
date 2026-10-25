@@ -1068,13 +1068,18 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             redraw(doc, f, std::slice::from_ref(t), scripts)
         }
         (FieldKind::CheckBox, v) => {
-            let state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
+            let mut state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
             let on = match v {
                 FieldValue::Check(on) => *on,
                 // The on-state name or a yes/no word also work (agents, FDF-style data).
                 FieldValue::Text(t) | FieldValue::Radio(Some(t)) => {
                     let t = t.trim();
-                    if t == state || f.state_for(t).is_some() || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
+                    // Same-named check boxes with different on states (/A, /B) are one field: a
+                    // value naming another box's state turns that box on, not the first one.
+                    if let Some(named) = f.state_for(t) {
+                        state = named.to_string();
+                        true
+                    } else if t == state || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
                         true
                     } else if t.is_empty() || ["no", "false", "off", "0", "unchecked"].contains(&t.to_lowercase().as_str()) {
                         false
