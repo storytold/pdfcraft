@@ -222,6 +222,101 @@ fn indirect_annotation_rectangles_keep_their_printed_appearances() {
     }
 }
 
+/// State dictionaries select the same artwork for direct and indirect AS names, for both
+/// widgets and comments, without changing the document or the selected print content mode.
+#[test]
+fn indirect_annotation_states_keep_their_printed_appearances() {
+    for subtype in ["Widget", "Square"] {
+        for (state_name, color) in [("Yes", [0, 255, 0, 255]), ("Off", [255, 0, 0, 255])] {
+            for indirect_state in [false, true] {
+                for indirect_states in [false, true] {
+                    let (mut doc, on, annot) = widget_fixture(Some(Object::name("Form")), None);
+                    let off = doc.add(Object::Stream(Stream::flate(doc.get(on).as_dict().unwrap().clone(), b"/Ink cs 1 0 0 scn 0 0 20 10 re f")));
+                    let states = Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(on)), (b"Off".to_vec(), Object::Ref(off))]));
+                    let states = if indirect_states { Object::Ref(doc.add(states)) } else { states };
+                    let state = Object::name(state_name);
+                    let state = if indirect_state { Object::Ref(doc.add(state)) } else { state };
+                    doc.update_dict(annot, |d| {
+                        d.set(b"Subtype".to_vec(), Object::name(subtype));
+                        if subtype == "Widget" {
+                            d.set(b"FT".to_vec(), Object::name("Btn"));
+                            d.set(b"V".to_vec(), Object::name(state_name));
+                        } else {
+                            d.remove(b"FT");
+                        }
+                        d.set(b"AS".to_vec(), state);
+                        d.set(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), states)])));
+                    })
+                    .unwrap();
+                    let doc = Document::open(Arc::new(saved(&doc))).unwrap();
+                    let before = saved(&doc);
+                    let source = render(before.clone());
+                    assert_eq!(pixel(&source, 30, 70), color, "the source selects its stated appearance");
+                    for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+                        let shown = subtype == "Widget" || content == Content::DocumentAndMarkups;
+                        let printed = render(impose(&doc, &print_settings(content)).unwrap());
+                        assert_eq!(
+                            pixel(&printed, 30, 70),
+                            if shown { color } else { [255; 4] },
+                            "{subtype}, indirect_state={indirect_state}, indirect_states={indirect_states}, {content:?}"
+                        );
+                        assert_eq!(pixel(&printed, 4, 96), if content == Content::FormFieldsOnly { [255; 4] } else { [0, 0, 255, 255] });
+                        if shown && content != Content::FormFieldsOnly {
+                            assert_eq!(printed.rgba, source.rgba, "the saved/reopened print keeps all page and annotation pixels");
+                        }
+                    }
+                    assert_eq!(saved(&doc), before, "printing does not rewrite the source annotation or appearance state");
+                }
+            }
+        }
+    }
+}
+
+/// Malformed, missing and cyclic AS values do not select arbitrary appearance states, while
+/// a single normal appearance stream continues to work without a usable state name.
+#[test]
+fn invalid_annotation_states_do_not_select_an_appearance() {
+    for kind in ["absent", "null", "integer", "string", "missing-name", "unresolved", "cyclic"] {
+        let (mut doc, ap, annot) = widget_fixture(Some(Object::name("Form")), None);
+        let state = match kind {
+            "absent" => None,
+            "null" => Some(Object::Null),
+            "integer" => Some(Object::Int(1)),
+            "string" => Some(Object::String(pdfcraft_cos::PdfString::literal(b"Yes".to_vec()))),
+            "missing-name" => Some(Object::name("Missing")),
+            "unresolved" => Some(Object::Ref(ObjRef::new(999_999, 0))),
+            "cyclic" => {
+                let r = doc.add(Object::Null);
+                doc.set(r, Object::Ref(r));
+                Some(Object::Ref(r))
+            }
+            _ => panic!("unknown fixture kind {kind}"),
+        };
+        doc.update_dict(annot, |d| {
+            if let Some(state) = state {
+                d.set(b"AS".to_vec(), state);
+            }
+        })
+        .unwrap();
+        assert_eq!(appearance(&doc, doc.get(annot).as_dict().unwrap()), Some(ap), "a normal stream does not need AS: {kind}");
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [0, 255, 0, 255], "the normal stream still prints: {kind}");
+        doc.update_dict(annot, |d| {
+            d.set(
+                b"AP".to_vec(),
+                Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(ap))])))])),
+            );
+        })
+        .unwrap();
+        let before = saved(&doc);
+        assert!(appearance(&doc, doc.get(annot).as_dict().unwrap()).is_none(), "invalid state must not choose Yes: {kind}");
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [255; 4], "the invalid state is skipped: {kind}");
+        assert_eq!(pixel(&printed, 4, 96), [0, 0, 255, 255], "page artwork is retained: {kind}");
+        assert_eq!(saved(&doc), before, "invalid source data is not rewritten: {kind}");
+    }
+}
+
 /// Malformed Rect values must not become printable rectangles by dropping invalid entries.
 #[test]
 fn invalid_annotation_rectangles_are_skipped_when_printing() {

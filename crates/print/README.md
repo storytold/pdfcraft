@@ -133,3 +133,6 @@ the driver's paper settings and physical calibration before relying on drawing s
 
 Vector printing resolves direct and indirect annotation rectangle coordinates before placing existing appearances.
 Rectangles must contain exactly four finite numbers; malformed rectangles are skipped.
+For an appearance-state dictionary, direct or indirect `AS` names select the existing artwork.
+Missing, invalid, unresolved, cyclic, or unknown state names leave that annotation unprinted; a single normal appearance stream does not require `AS`.
+The print content mode still controls whether a field or comment prints, and printing preserves the source objects.

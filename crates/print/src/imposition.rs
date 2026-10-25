@@ -111,15 +111,15 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     }
 }
 
-/// The normal appearance stream to draw for an annotation (honouring `/AS`).
+/// The normal appearance stream to draw, resolving the annotation's `/AS` state name.
 pub(crate) fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     let ap = doc.resolve(d.get(b"AP")?);
     let normal = ap.as_dict()?.get(b"N")?.clone();
     match &*doc.resolve(&normal) {
         Object::Stream(_) => normal.as_ref(),
         Object::Dict(states) => {
-            let state = d.name(b"AS")?;
-            states.get(state)?.as_ref()
+            let state = doc.resolve(d.get(b"AS")?);
+            states.get(state.as_name()?)?.as_ref()
         }
         _ => None,
     }
