@@ -1282,6 +1282,7 @@ fn every_field_type_can_be_added_named_and_drawn() {
     assert!(add_field(&mut doc, 0, [0.0, 0.0, 2.0, 2.0], &NewField::CheckBox, None).is_err(), "too small");
 }
 
+/// Renaming, setting properties, and deleting fields in a form.
 #[test]
 fn properties_rename_and_delete() {
     let mut doc = fixture();
@@ -1323,6 +1324,165 @@ fn properties_rename_and_delete() {
     let p = &page_refs(&doc)[0];
     let annots = doc.resolve(doc.get(*p).as_dict().unwrap().get(b"Annots").unwrap());
     assert_eq!(annots.as_array().unwrap().len(), 13 - 3, "the deleted widgets left the page");
+}
+
+/// Deleting individual radio buttons removes only that widget, leaving the rest of the group
+/// intact until the last remaining widget is deleted (#4609).
+#[test]
+fn deleting_individual_radio_buttons_from_group() {
+    let mut doc = one_page();
+    // 1. Create a radio group with three buttons: Small, Medium, Large.
+    add_field(&mut doc, 0, [50.0, 480.0, 64.0, 494.0], &NewField::Radio { group: None, export: "Small".into() }, None).unwrap();
+    add_field(&mut doc, 0, [80.0, 480.0, 94.0, 494.0], &NewField::Radio { group: Some("Group1".into()), export: "Medium".into() }, None).unwrap();
+    add_field(&mut doc, 0, [110.0, 480.0, 124.0, 494.0], &NewField::Radio { group: Some("Group1".into()), export: "Large".into() }, None).unwrap();
+
+    let all = fields(&doc);
+    let group = field(&all, "Group1");
+    assert_eq!(group.widgets.len(), 3);
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Small", "Medium", "Large"]);
+
+    let page_ref = page_refs(&doc)[0];
+    let page_annots = |d: &Document| {
+        let p = d.get(page_ref);
+        let a = p.as_dict().and_then(|dict| dict.get(b"Annots")).cloned().unwrap();
+        d.resolve(&a).as_array().cloned().unwrap()
+    };
+    assert_eq!(page_annots(&doc).len(), 3);
+
+    // Set value to "Medium" (widget index 1).
+    set_value(&mut doc, "Group1", &FieldValue::Radio(Some("Medium".into()))).unwrap();
+    assert_eq!(field(&fields(&doc), "Group1").value, ["Medium"]);
+
+    // 2. Delete widget 0 ("Small") - the unselected button.
+    delete_widget(&mut doc, "Group1", 0).unwrap();
+
+    let all = fields(&doc);
+    let group = field(&all, "Group1");
+    assert_eq!(group.widgets.len(), 2, "two buttons remain in group");
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Medium", "Large"]);
+    assert_eq!(page_annots(&doc).len(), 2, "deleted widget removed from page Annots");
+    // "Medium" is still selected.
+    assert_eq!(group.value, ["Medium"]);
+
+    // 3. Delete widget 0 ("Medium") - the currently selected button.
+    delete_widget(&mut doc, "Group1", 0).unwrap();
+
+    let all = fields(&doc);
+    let group = field(&all, "Group1");
+    assert_eq!(group.widgets.len(), 1, "one button remains in group");
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Large"]);
+    assert_eq!(page_annots(&doc).len(), 1);
+    // Because the selected button was deleted, field value is reset to empty/Off.
+    assert!(group.value.is_empty() || group.value == ["Off"]);
+
+    // 4. Setting value on the remaining button works.
+    set_value(&mut doc, "Group1", &FieldValue::Radio(Some("Large".into()))).unwrap();
+    assert_eq!(field(&fields(&doc), "Group1").value, ["Large"]);
+
+    // 5. Delete the last remaining button (widget 0).
+    delete_widget(&mut doc, "Group1", 0).unwrap();
+
+    let all = fields(&doc);
+    assert!(!all.iter().any(|f| f.name == "Group1"), "field is completely deleted");
+    assert_eq!(page_annots(&doc).len(), 0, "page Annots has no widgets left");
+
+    // 6. Error handling checks.
+    assert!(matches!(delete_widget(&mut doc, "Group1", 0), Err(FormError::NoSuchField(_))));
+    assert!(matches!(delete_widget(&mut doc, "nonexistent", 0), Err(FormError::NoSuchField(_))));
+}
+
+/// Deleting a widget from a duplicated checked check box preserves /V and the remaining
+/// widget's appearance state (/AS) because another widget shares the on-state (#4609).
+#[test]
+fn deleting_widget_from_duplicated_checked_checkbox_preserves_value() {
+    let mut doc = one_page();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    for _ in 0..2 {
+        let mut p = pdfcraft_cos::Dict::new();
+        p.set(b"Type".to_vec(), Object::name("Page"));
+        p.set(b"Parent".to_vec(), Object::Ref(pages));
+        p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        let r = doc.add(p);
+        doc.update_dict(pages, |d| {
+            let mut kids = d.get(b"Kids").unwrap().as_array().unwrap().clone();
+            kids.push(Object::Ref(r));
+            d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+            d.set(b"Kids".to_vec(), Object::Array(kids));
+        })
+        .unwrap();
+    }
+
+    let name = add_field(&mut doc, 0, [50.0, 750.0, 70.0, 770.0], &NewField::CheckBox, Some("Agree")).unwrap();
+    assert_eq!(duplicate_field(&mut doc, &name, &[0, 1]).unwrap(), 1);
+
+    // Check the box so /V is "Yes".
+    set_value(&mut doc, &name, &FieldValue::Check(true)).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, &name);
+    assert_eq!(f.widgets.len(), 2);
+    assert_eq!(f.value, ["Yes"]);
+
+    // Delete widget 0 (page 0): widget 1 (page 1) shares the on-state, so /V and /AS stay "Yes".
+    delete_widget(&mut doc, &name, 0).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, &name);
+    assert_eq!(f.widgets.len(), 1, "only 1 widget remains");
+    assert_eq!(f.value, ["Yes"], "value stays Yes because remaining widget has the same on-state");
+    let obj = doc.get(f.widgets[0].obj);
+    let remaining_as = obj.as_dict().and_then(|d| d.get(b"AS")).and_then(|o| o.as_name());
+    assert_eq!(remaining_as, Some(b"Yes".as_slice()), "remaining widget AS stays Yes");
+
+    // Deleting the remaining widget deletes the field entirely.
+    delete_widget(&mut doc, &name, 0).unwrap();
+    assert!(!fields(&doc).iter().any(|field| field.name == name));
+}
+
+/// Deleting a selected radio button without unison resets /V when the matching remaining
+/// button has /AS /Off, but preserves /V when unison is enabled or a remaining button is on (#4609).
+#[test]
+fn deleting_radio_button_checks_unison_and_selection_state() {
+    // 1. Without RadiosInUnison: two buttons with same on-state "Choice1".
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 480.0, 64.0, 494.0], &NewField::Radio { group: None, export: "Choice1".into() }, None).unwrap();
+    add_field(&mut doc, 0, [80.0, 480.0, 94.0, 494.0], &NewField::Radio { group: Some("Group1".into()), export: "Choice1".into() }, None).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "Group1");
+    assert_eq!(f.widgets.len(), 2);
+    // Explicitly select widget 0, keeping widget 1 Off.
+    doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), Object::name("Choice1"))).unwrap();
+    doc.update_dict(f.widgets[0].obj, |d| d.set(b"AS".to_vec(), Object::name("Choice1"))).unwrap();
+    doc.update_dict(f.widgets[1].obj, |d| d.set(b"AS".to_vec(), Object::name("Off"))).unwrap();
+
+    // Deleting widget 0 resets /V to Off because widget 1 is not selected and not in unison.
+    delete_widget(&mut doc, "Group1", 0).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "Group1");
+    assert_eq!(f.widgets.len(), 1);
+    assert!(f.value.is_empty() || f.value == ["Off"]);
+    let obj = doc.get(f.widgets[0].obj);
+    let remaining_as = obj.as_dict().and_then(|d| d.get(b"AS")).and_then(|o| o.as_name());
+    assert_eq!(remaining_as, Some(b"Off".as_slice()));
+
+    // 2. With RadiosInUnison: /V is preserved when deleting one of the buttons.
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 480.0, 64.0, 494.0], &NewField::Radio { group: Some("Group2".into()), export: "Choice1".into() }, None).unwrap();
+    add_field(&mut doc, 0, [80.0, 480.0, 94.0, 494.0], &NewField::Radio { group: Some("Group2".into()), export: "Choice1".into() }, None).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "Group2");
+    // Enable RADIOS_IN_UNISON flag on the field.
+    doc.update_dict(f.obj, |d| {
+        d.set(b"Ff".to_vec(), Object::Int(flags::RADIOS_IN_UNISON as i64));
+        d.set(b"V".to_vec(), Object::name("Choice1"));
+    })
+    .unwrap();
+
+    delete_widget(&mut doc, "Group2", 0).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "Group2");
+    assert_eq!(f.widgets.len(), 1);
+    assert_eq!(f.value, ["Choice1"]);
 }
 
 /// A parent `MASTER` with kids `a` and `b` (each a field merged with its widget) and `e` (a field

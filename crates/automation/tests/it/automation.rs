@@ -4004,6 +4004,7 @@ fn preparing_a_form_through_tools() {
     assert!(matches!(a.call("form_set_image", &json!({ "doc": doc, "field": "size", "path": "pics/a_page_1.png" })), Err(ToolError::Failed(_))));
 }
 
+/// Rotating a form field through automation tools.
 #[test]
 fn rotating_a_field_through_tools() {
     let dir = workdir("rotate-field");
@@ -4030,6 +4031,34 @@ fn rotating_a_field_through_tools() {
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change field properties");
     let (rot, back) = rect_of(&mut a);
     assert_eq!((rot, back), (0, before));
+}
+
+/// Deleting a specific widget from a field through `form_delete_field` with `"widget"` (#4609).
+#[test]
+fn deleting_a_single_widget_from_a_form_field_through_tools() {
+    let dir = workdir("delete-widget");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "radio", "rect": [20, 100, 34, 114], "group": "rg", "export": "A" }));
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "radio", "rect": [40, 100, 54, 114], "group": "rg", "export": "B" }));
+
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let rg = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "rg").unwrap();
+    assert_eq!(rg["options"], json!(["A", "B"]));
+
+    // Out of bounds widget fails
+    assert!(matches!(a.call("form_delete_field", &json!({ "doc": doc, "field": "rg", "widget": 5 })), Err(ToolError::InvalidArgs(_))));
+
+    // Delete widget 0 ("A")
+    ok(&mut a, "form_delete_field", json!({ "doc": doc, "field": "rg", "widget": 0 }));
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let rg = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "rg").unwrap();
+    assert_eq!(rg["options"], json!(["B"]));
+
+    // Delete widget 0 ("B", the last remaining widget removes the field)
+    ok(&mut a, "form_delete_field", json!({ "doc": doc, "field": "rg", "widget": 0 }));
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(!fields["fields"].as_array().unwrap().iter().any(|f| f["name"] == "rg"));
 }
 
 /// A table of text fields through the tool: laid out from the top of the page as displayed, named

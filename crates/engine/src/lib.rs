@@ -1653,6 +1653,11 @@ pub enum Edit {
     DeleteField {
         name: String,
     },
+    /// Delete a single widget of a field by index. If it was the only widget, the field is deleted.
+    DeleteWidget {
+        name: String,
+        widget: usize,
+    },
     /// Page properties ▸ Tab order, for pages (0-based).
     SetTabOrder {
         pages: Vec<usize>,
@@ -2200,7 +2205,7 @@ impl Edit {
             Edit::ResetForm { .. } => Label::of("Clear form"),
             Edit::AddField { .. } => Label::of("Add field"),
             Edit::SetFieldProps { .. } => Label::of("Change field properties"),
-            Edit::DeleteField { .. } => Label::of("Delete field"),
+            Edit::DeleteField { .. } | Edit::DeleteWidget { .. } => Label::of("Delete field"),
             Edit::DuplicateField { .. } => Label::of("Duplicate field"),
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
@@ -2415,6 +2420,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::XfaToStatic
         | Edit::SetFieldProps { .. }
         | Edit::DeleteField { .. }
+        | Edit::DeleteWidget { .. }
         | Edit::DuplicateField { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
@@ -2737,6 +2743,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             }
         }
         Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
+        Edit::DeleteWidget { name, widget } => pdfcraft_forms::delete_widget(doc, name, *widget)?,
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.

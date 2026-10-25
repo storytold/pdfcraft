@@ -662,6 +662,7 @@ impl Automation {
         Ok(out)
     }
 
+    /// The tab sequence of fields across pages in the document.
     fn tab_sequence(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut seq: Vec<(usize, &str)> =
@@ -671,14 +672,29 @@ impl Automation {
         Ok(json!(seq.iter().map(|x| x.1).collect::<Vec<_>>()))
     }
 
+    /// Delete a form field and all its widgets, or a specific widget when `"widget"` is given.
     pub(crate) fn form_delete_field(&mut self, a: &Args) -> Result<Value> {
         let name = a.str("field")?.to_owned();
-        if !self.doc(a)?.form.iter().any(|f| f.name == name) {
+        let doc = self.doc(a)?;
+        let Some(f) = doc.form.iter().find(|f| f.name == name) else {
             return Err(failed(format!("there is no field named {name:?} (see form_fields)")));
+        };
+        let widget = match a.opt_int("widget")? {
+            Some(w) if w >= 0 => Some(w as usize),
+            Some(_) => return Err(bad("widget must be non-negative")),
+            None => None,
+        };
+        if let Some(w) = widget {
+            if w >= f.widgets.len() {
+                return Err(bad(format!("widget index {w} is out of bounds for field {name:?} (has {} widgets)", f.widgets.len())));
+            }
+            if f.widgets.len() <= 1 { self.apply(a, Edit::DeleteField { name }) } else { self.apply(a, Edit::DeleteWidget { name, widget: w }) }
+        } else {
+            self.apply(a, Edit::DeleteField { name })
         }
-        self.apply(a, Edit::DeleteField { name })
     }
 
+    /// Export form data and/or comments to a file.
     pub(crate) fn doc_export_data(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let path = self.resolve(a.str("path")?, true)?;

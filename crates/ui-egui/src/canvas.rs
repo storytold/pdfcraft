@@ -4222,7 +4222,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 ui.separator();
                 let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
                 if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
-                    view.pending_edit = crate::prepare::delete_selected(view);
+                    view.pending_edit = crate::prepare::delete_selected(view, &form);
                     ui.close();
                 }
                 return;
@@ -4493,7 +4493,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut tool = app.quick_tool;
     comments::keys(ui.ctx(), view, &mut tool, allowed);
     if preparing {
-        crate::prepare::keys(ui.ctx(), view);
+        crate::prepare::keys(ui.ctx(), view, &form);
     }
     if editing_content {
         crate::content_ui::keys(ui.ctx(), view);

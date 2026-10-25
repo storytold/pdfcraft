@@ -577,6 +577,7 @@ fn aligning_distributing_and_sizing_several_fields() {
     assert!(arrange(&form(&h), &a, &[("b".into(), 0)], Arrange::DistributeV).is_none(), "distributing needs three");
 }
 
+/// Deleting several selected fields and detecting form fields from the panel (#93, #95).
 #[test]
 fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
     let mut h = harness();
@@ -606,6 +607,108 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
     assert!(h.state().views[0].prepare.selected.is_none() && h.state().views[0].prepare.also.is_empty());
 }
 
+/// In Prepare Form mode, deleting a single selected radio button removes only that button,
+/// while the remaining button in the group stays visible and functional (#4609).
+/// Deleting the final remaining button removes the field entirely.
+#[test]
+fn deleting_individual_radio_button_leaves_remaining_buttons_intact() {
+    let mut h = harness();
+    for (export, x) in [("Opt1", 50.0), ("Opt2", 100.0)] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [x, 400.0, x + 16.0, 416.0],
+            kind: pdfcraft_engine::NewField::Radio { group: Some("RadioGroup".into()), export: export.into() },
+            name: None,
+        });
+    }
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(2);
+
+    // Verify RadioGroup exists and has 2 widgets.
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let rg = doc.form.iter().find(|f| f.name == "RadioGroup").expect("RadioGroup exists");
+    assert_eq!(rg.widgets.len(), 2);
+
+    // Select only widget 0 ("Opt1").
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("RadioGroup".into(), 0));
+        p.also.clear();
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+
+    // Only widget 0 was deleted: RadioGroup still exists with 1 widget ("Opt2").
+    {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let rg = doc.form.iter().find(|f| f.name == "RadioGroup").expect("RadioGroup still exists");
+        assert_eq!(rg.widgets.len(), 1, "only one radio button remains");
+        assert_eq!(rg.widgets[0].on_state.as_deref(), Some("Opt2"));
+        assert_eq!(doc.can_undo(), Some("Delete field"));
+        assert!(s.views[0].prepare.selected.is_none());
+    }
+
+    // Now select and delete the remaining button (index 0 of the now single-widget field).
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("RadioGroup".into(), 0));
+        p.also.clear();
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+
+    // The field is now completely gone.
+    {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        assert!(!doc.form.iter().any(|f| f.name == "RadioGroup"), "RadioGroup completely deleted");
+        assert_eq!(doc.can_undo(), Some("Delete field"));
+    }
+}
+
+/// Selecting an individual radio button along with another full field deletes both atomically
+/// in one batch undo step (#4609).
+#[test]
+fn deleting_selected_radio_button_alongside_other_fields() {
+    let mut h = harness();
+    for (export, x) in [("OptA", 50.0), ("OptB", 100.0)] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [x, 400.0, x + 16.0, 416.0],
+            kind: pdfcraft_engine::NewField::Radio { group: Some("GroupAB".into()), export: export.into() },
+            name: None,
+        });
+    }
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 0,
+        rect: [150.0, 400.0, 250.0, 420.0],
+        kind: pdfcraft_engine::NewField::Text { multiline: false },
+        name: Some("TextSingle".into()),
+    });
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(2);
+
+    // Select widget 0 of GroupAB and the single widget of TextSingle.
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("GroupAB".into(), 0));
+        p.also = vec![("TextSingle".into(), 0)];
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(!doc.form.iter().any(|f| f.name == "TextSingle"), "TextSingle completely deleted");
+    let group = doc.form.iter().find(|f| f.name == "GroupAB").expect("GroupAB still exists");
+    assert_eq!(group.widgets.len(), 1, "GroupAB has 1 remaining button");
+    assert_eq!(group.widgets[0].on_state.as_deref(), Some("OptB"));
+    assert_eq!(doc.can_undo(), Some("Delete 2 fields"));
+}
+
+/// In Prepare Form mode, previewing allows filling the form and locked fields cannot be edited.
 #[test]
 fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     let mut h = harness();

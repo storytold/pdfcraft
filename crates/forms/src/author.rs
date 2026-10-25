@@ -1579,6 +1579,137 @@ pub fn delete_field_object(doc: &mut Document, obj: ObjRef) -> Result<(), FormEr
     delete_found_field(doc, f)
 }
 
+/// Delete a specific widget from a field by index.
+///
+/// If the field contains only one widget (or this is the last remaining widget), the entire
+/// field is deleted from the document via [`delete_field`].
+///
+/// When the field has multiple widgets (such as a radio button group or duplicated field), only the
+/// specified widget is detached:
+/// - Removed from its page's `/Annots` array
+/// - Removed from the field's `/Kids` array
+/// - Corresponding `/Opt` entry removed if present and matching widgets count
+/// - `/V` and `/DV` reset to `/Off` if the deleted widget was the active selection
+/// - Removed from `/CO` calculation order
+/// - Remaining widgets redrawn
+pub fn delete_widget(doc: &mut Document, name: &str, widget_index: usize) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    delete_found_widget(doc, f, widget_index)
+}
+
+/// [`delete_widget`] for the field object `obj`, when separate fields share one name.
+pub fn delete_widget_object(doc: &mut Document, obj: ObjRef, widget_index: usize) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.obj == obj).ok_or_else(|| FormError::NoSuchField(format!("{obj:?}")))?;
+    delete_found_widget(doc, f, widget_index)
+}
+
+/// Detach a specific widget from `f` and clean up its references in the document.
+fn delete_found_widget(doc: &mut Document, f: Field, widget_index: usize) -> Result<(), FormError> {
+    if f.widgets.is_empty() {
+        return Err(FormError::Invalid(format!("field {:?} has no widgets", f.name)));
+    }
+    if widget_index >= f.widgets.len() {
+        return Err(FormError::Invalid(format!(
+            "widget index {widget_index} out of bounds for field {:?} (has {} widgets)",
+            f.name,
+            f.widgets.len()
+        )));
+    }
+    if f.widgets.len() <= 1 {
+        return delete_found_field(doc, f);
+    }
+
+    let target_widget =
+        f.widgets.get(widget_index).ok_or_else(|| FormError::Invalid(format!("widget index {widget_index} out of bounds for field {:?}", f.name)))?;
+    let target_obj = target_widget.obj;
+
+    // 1. Remove widget from all pages' /Annots arrays.
+    for p in page_refs(doc) {
+        let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
+        let list = doc.resolve(&a).as_array().cloned().unwrap_or_default();
+        let kept: Vec<Object> = list.iter().filter(|o| o.as_ref() != Some(target_obj)).cloned().collect();
+        if kept.len() != list.len() {
+            match a.as_ref() {
+                Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(kept)),
+                _ => doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(kept)))?,
+            }
+        }
+    }
+
+    // 2. Remove widget from the field's /Kids array.
+    if let Some(kids_obj) = doc.get(f.obj).as_dict().and_then(|d| d.get(b"Kids").cloned()) {
+        let kids = doc.resolve(&kids_obj).as_array().cloned().unwrap_or_default();
+        let kept: Vec<Object> = kids.into_iter().filter(|o| o.as_ref() != Some(target_obj)).collect();
+        match kids_obj.as_ref() {
+            Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(kept)),
+            _ => doc.update_dict(f.obj, |d| d.set(b"Kids".to_vec(), Object::Array(kept)))?,
+        }
+    }
+
+    // 3. Remove corresponding entry from /Opt if /Opt matches widgets length.
+    if let Some(opt_obj) = doc.get(f.obj).as_dict().and_then(|d| d.get(b"Opt").cloned())
+        && let Some(opts) = doc.resolve(&opt_obj).as_array().cloned()
+        && opts.len() == f.widgets.len()
+    {
+        let mut kept = opts;
+        if widget_index < kept.len() {
+            kept.remove(widget_index);
+        }
+        match opt_obj.as_ref() {
+            Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(kept)),
+            _ => doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(kept)))?,
+        }
+    }
+
+    // 4. Update /V and /DV if the deleted widget was currently selected.
+    let target_on = target_widget.on_state.as_deref();
+    let target_export = f.export_of(widget_index);
+    let target_matches = |val: &str| -> bool { Some(val) == target_on || Some(val) == target_export };
+
+    // Check boxes duplicated across pages share their on-state.
+    let shared_checkbox = f.kind == FieldKind::CheckBox
+        && target_on.is_some()
+        && f.widgets.iter().enumerate().any(|(i, w)| i != widget_index && w.on_state.as_deref() == target_on);
+
+    // Radio buttons preserve value only if a remaining button with the same on-state is
+    // actually selected, or if RadiosInUnison requires shared selection.
+    let shared_radio = f.kind == FieldKind::Radio
+        && target_on.is_some()
+        && f.widgets.iter().enumerate().any(|(i, w)| {
+            i != widget_index && w.on_state.as_deref() == target_on && (f.has(flags::RADIOS_IN_UNISON) || w.state.as_deref() == target_on)
+        });
+
+    let shared = shared_checkbox || shared_radio;
+
+    if matches!(f.kind, FieldKind::Radio | FieldKind::CheckBox) {
+        let cur_v = doc.get(f.obj).as_dict().and_then(|d| d.get(b"V")).and_then(|o| crate::text_of(&doc.resolve(o)));
+        let is_selected = !shared && (cur_v.as_deref().is_some_and(target_matches) || f.value.iter().any(|v| target_matches(v.as_str())));
+
+        if is_selected {
+            doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), Object::name("Off")))?;
+            for (i, w) in f.widgets.iter().enumerate() {
+                if i != widget_index {
+                    doc.update_dict(w.obj, |d| d.set(b"AS".to_vec(), Object::name("Off")))?;
+                }
+            }
+        }
+
+        let cur_dv = doc.get(f.obj).as_dict().and_then(|d| d.get(b"DV")).and_then(|o| crate::text_of(&doc.resolve(o)));
+        if !shared && cur_dv.as_deref().is_some_and(target_matches) {
+            doc.update_dict(f.obj, |d| d.set(b"DV".to_vec(), Object::name("Off")))?;
+        }
+    }
+
+    // 5. Remove from calculation order if present.
+    drop_from_calculation_order(doc, |r| r == target_obj)?;
+
+    // 6. Redraw remaining widgets so appearances match the updated field structure.
+    redraw_field(doc, &f.name)?;
+
+    Ok(())
+}
+
+/// Detach an entire field and all of its widgets from the document and AcroForm.
 fn delete_found_field(doc: &mut Document, f: Field) -> Result<(), FormError> {
     let widgets: std::collections::HashSet<ObjRef> = f.widgets.iter().map(|w| w.obj).collect();
     for p in page_refs(doc) {

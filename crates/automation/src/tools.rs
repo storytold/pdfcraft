@@ -86,23 +86,28 @@ struct T {
     command: Option<&'static str>,
 }
 
+/// Construct a tool definition builder.
 const fn t(name: &'static str, title: &'static str, description: &'static str) -> T {
     T { name, title, description, read_only: false, destructive: false, command: None }
 }
 
 impl T {
+    /// Mark tool as read-only.
     const fn ro(mut self) -> Self {
         self.read_only = true;
         self
     }
+    /// Mark tool as destructive.
     const fn destructive(mut self) -> Self {
         self.destructive = true;
         self
     }
+    /// Set command id for the tool.
     const fn cmd(mut self, id: &'static str) -> Self {
         self.command = Some(id);
         self
     }
+    /// Build ToolDef with given JSON schema.
     fn with(self, input_schema: Value) -> ToolDef {
         ToolDef {
             name: self.name,
@@ -480,9 +485,9 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
         t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
-        t("form_delete_field", "Delete a field", "Delete a form field and all its widgets. Undoable.")
+        t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or an individual widget by index. Undoable.")
             .destructive()
-            .with(schema(json!({ "doc": doc(), "field": { "type": "string" } }), &["doc", "field"])),
+            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "widget": { "type": "integer", "minimum": 0, "description": "0-based widget index (if omitted, the entire field is deleted)" } }), &["doc", "field"])),
         t(
             "redact_mark",
             "Mark for redaction",

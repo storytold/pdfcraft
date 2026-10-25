@@ -603,21 +603,54 @@ pub(crate) fn paint_page(
     }
 }
 
-/// Delete the selected field and every field selected with it (#95), as one undoable step, and
-/// clear the selection.
-pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
-    let (first, _) = view.prepare.selected.take()?;
-    let mut names = vec![first];
-    for (name, _) in std::mem::take(&mut view.prepare.also) {
-        if !names.contains(&name) {
-            names.push(name);
+/// Delete the selected field or individual widget and everything selected with it (#95, #4609),
+/// as one undoable step, and clear the selection.
+pub(crate) fn delete_selected(view: &mut DocView, form: &[FormField]) -> Option<Edit> {
+    let first = view.prepare.selected.take()?;
+    let mut items = vec![first];
+    for item in std::mem::take(&mut view.prepare.also) {
+        if !items.contains(&item) {
+            items.push(item);
         }
     }
-    if names.len() == 1 {
-        return names.pop().map(|name| Edit::DeleteField { name });
+
+    let mut field_names: Vec<String> = Vec::new();
+    let mut widgets_by_name: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (name, widget_index) in items {
+        if !widgets_by_name.contains_key(&name) {
+            field_names.push(name.clone());
+        }
+        let list = widgets_by_name.entry(name).or_default();
+        if !list.contains(&widget_index) {
+            list.push(widget_index);
+        }
     }
-    let label = format!("Delete {} fields", names.len());
-    Some(Edit::Batch { label, edits: names.into_iter().map(|name| Edit::DeleteField { name }).collect() })
+
+    let mut edits = Vec::new();
+    for name in field_names {
+        let field = form.iter().find(|f| f.name == name);
+        let selected_indices = widgets_by_name.remove(&name).unwrap_or_default();
+        let total_widgets = field.map_or(1, |f| f.widgets.len());
+
+        // If the field has at most 1 widget, or if all of its widgets are selected, delete the whole field.
+        if total_widgets <= 1 || selected_indices.len() >= total_widgets {
+            edits.push(Edit::DeleteField { name });
+        } else {
+            // Only a subset of widgets is selected: delete individual widgets in descending order of index
+            // so deleting earlier indices does not shift the index of subsequent deletions.
+            let mut sorted = selected_indices;
+            sorted.sort_unstable_by(|a, b| b.cmp(a));
+            for widget in sorted {
+                edits.push(Edit::DeleteWidget { name: name.clone(), widget });
+            }
+        }
+    }
+
+    if edits.len() == 1 {
+        return edits.pop();
+    }
+    let label = format!("Delete {} fields", edits.len());
+    Some(Edit::Batch { label, edits })
 }
 
 /// The arrow keys move the selected field a point, Shift and an arrow ten points, as in Acrobat,
@@ -675,6 +708,7 @@ pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
     view.prepare.also = selected.collect();
 }
 
+/// Cancel an active marquee selection and restore the previous field selection.
 fn cancel_marquee(prep: &mut PrepareView) {
     prep.grab = None;
     prep.ignore_release = true;
@@ -685,7 +719,8 @@ fn cancel_marquee(prep: &mut PrepareView) {
     }
 }
 
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
+/// Handle keyboard shortcuts in Prepare Form mode (Delete/Backspace to remove selected fields or widgets, Escape to clear selection or cancel marquee).
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, form: &[FormField]) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
@@ -698,7 +733,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
     if del {
-        view.pending_edit = delete_selected(view);
+        view.pending_edit = delete_selected(view, form);
     } else if esc {
         view.prepare.selected = None;
         view.prepare.also.clear();

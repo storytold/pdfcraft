@@ -2516,6 +2516,7 @@ fn multiselect_choice_indices_stay_sorted_through_engine_save_and_reopen() {
     assert_eq!(s.get(reopened).unwrap().form[0].value, chosen, "reopening keeps selection order");
 }
 
+/// Preparing a form adds, renames, and deletes fields with full undo support.
 #[test]
 fn preparing_a_form_adds_renames_and_deletes_fields() {
     let (mut s, id) = session_with(1);
@@ -2542,6 +2543,61 @@ fn preparing_a_form_adds_renames_and_deletes_fields() {
     s.undo(id).unwrap();
     s.undo(id).unwrap();
     assert_eq!(names(&s), ["Text1", "Check Box1", "email"]);
+}
+
+/// Deleting an individual widget from a multi-widget field removes only that widget,
+/// is fully undoable/redoable, and deletes the entire field when the final widget is deleted (#4609).
+#[test]
+fn deleting_individual_widget_from_form_field_is_undoable() {
+    let (mut s, id) = session_with(1);
+    assert!(s.get(id).unwrap().form.is_empty());
+    s.apply(id, Edit::AddField { page: 0, rect: [50.0, 480.0, 64.0, 494.0], kind: NewField::Radio { group: None, export: "A".into() }, name: None })
+        .unwrap();
+    s.apply(
+        id,
+        Edit::AddField {
+            page: 0,
+            rect: [80.0, 480.0, 94.0, 494.0],
+            kind: NewField::Radio { group: Some("Group1".into()), export: "B".into() },
+            name: None,
+        },
+    )
+    .unwrap();
+
+    let doc = s.get(id).unwrap();
+    let group = doc.form.iter().find(|f| f.name == "Group1").unwrap();
+    assert_eq!(group.widgets.len(), 2);
+
+    // Delete the first widget (index 0).
+    s.apply(id, Edit::DeleteWidget { name: "Group1".into(), widget: 0 }).unwrap();
+    let doc = s.get(id).unwrap();
+    let group = doc.form.iter().find(|f| f.name == "Group1").unwrap();
+    assert_eq!(group.widgets.len(), 1);
+    assert_eq!(group.widgets[0].on_state.as_deref(), Some("B"));
+    assert_eq!(doc.can_undo(), Some("Delete field"));
+
+    // Undo restores the first widget.
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    let group = doc.form.iter().find(|f| f.name == "Group1").unwrap();
+    assert_eq!(group.widgets.len(), 2);
+
+    // Redo deletes the widget again.
+    s.redo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    let group = doc.form.iter().find(|f| f.name == "Group1").unwrap();
+    assert_eq!(group.widgets.len(), 1);
+
+    // Deleting the remaining widget removes the field completely.
+    s.apply(id, Edit::DeleteWidget { name: "Group1".into(), widget: 0 }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!doc.form.iter().any(|f| f.name == "Group1"));
+
+    // Undo brings the field back with its 1 widget.
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    let group = doc.form.iter().find(|f| f.name == "Group1").unwrap();
+    assert_eq!(group.widgets.len(), 1);
 }
 
 /// Setting the calculation order is one undoable edit that recalculates: values that ran too
