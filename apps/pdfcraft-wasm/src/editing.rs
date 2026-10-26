@@ -276,7 +276,7 @@ impl Document {
                 let user = self.page_info(page)?.view_rect_to_user(to_f32(view));
                 let block = self.doc()?.text_blocks(page).into_iter().nth(target.index).ok_or("that paragraph no longer exists")?;
                 let style = BlockStyle { width: Some(f64::from(user[2] - user[0])), ..BlockStyle::default() };
-                self.apply(Edit::EditTextBlock { page, block: target.index, text: format!("{} ", block.editor_text.trim_end()), style })
+                self.apply(Edit::EditTextBlock { page, block: target.index, text: format!("{} ", block.text.trim_end()), style })
             }
         }
     }
@@ -341,9 +341,9 @@ impl Document {
             },
             Kind::Text => {
                 let block = self.doc()?.text_blocks(page).into_iter().nth(target.index).ok_or("that paragraph no longer exists")?;
-                // Words left as they are take the engine's row-keeping path, which cuts a restyled block into
-                // lines; a changed text lays the whole block out again, so a trailing space asks for that.
-                let words = text.map_or_else(|| format!("{} ", block.editor_text.trim_end()), str::to_string);
+                // The paragraph's own rows (with a break between them) take the engine's row-keeping path, which cuts
+                // a restyled block into lines; its words joined, and changed by a trailing space, lay the block out again.
+                let words = text.map_or_else(|| format!("{} ", block.text.trim_end()), str::to_string);
                 // A family, bold and italic go together in the engine's style; fill what is not said from the paragraph.
                 let wants_face = style.family.is_some() || style.bold.is_some() || style.italic.is_some();
                 let family = wants_face.then(|| {
