@@ -159,7 +159,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -219,6 +219,8 @@ pub static LANGUAGES: [LangInfo; 35] = [
     // to left like Arabic: see `LangInfo::rtl`. CLDR `fa` counts have two forms (one: i = 0 or n = 1,
     // other), which for whole counts is the French rule, so `@plural` entries list two forms.
     LangInfo { code: "fa", name: "فارسی", source: include_str!("fa.tsv"), plural: plural_fr, rtl: true, catalog: OnceLock::new() },
+    // Hebrew; all he-* locales resolve here. Uses the original RTL shaping/reordering.
+    LangInfo { code: "he", name: "עברית", source: include_str!("he.tsv"), plural: plural_one_other, rtl: true, catalog: OnceLock::new() },
     // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
     LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
@@ -382,6 +384,7 @@ impl Lang {
             "ro" => "Romanian",
             "lo" => "Lao",
             "hi" => "Hindi",
+            "he" => "Hebrew",
             "ko" => "Korean",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
@@ -1743,6 +1746,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hebrew_is_registered_and_persists() {
+        let he = Lang::from_code("he").expect("he registered");
+        assert_eq!(he.name(), "עברית");
+        assert!(he.rtl());
+        assert_eq!(normalize_pref("HE"), Some("he"));
+        for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "he-IL@calendar=hebrew"] {
+            assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        }
+        assert_eq!(first_supported("he-IL\r\nen-US"), Some(he));
+        assert_eq!(tr(he, "Save as…"), "שמירה בשם…");
+        assert_eq!(tr(he, "File"), "קובץ");
+        assert_eq!(tr(he, "Untranslated sentinel"), "Untranslated sentinel");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "HE").unwrap();
+        assert_eq!(app.language, "he");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "he");
+        assert!(restored.set_option("language", "xx").is_err());
+        assert_eq!(restored.language, "he");
+    }
+
     fn arabic() -> Lang {
         Lang::from_code("ar").expect("ar registered")
     }
@@ -1753,7 +1779,7 @@ mod tests {
         assert_eq!(ar.name(), "العربية");
         assert!(ar.rtl());
         let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-        assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+        assert_eq!(rtl, ["ar", "ckb", "fa", "he"], "Arabic, Kurdish, Persian and Hebrew are the right-to-left languages");
         assert_eq!(normalize_pref("AR"), Some("ar"));
         for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
             assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
