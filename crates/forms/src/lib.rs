@@ -159,6 +159,9 @@ pub struct Field {
     pub max_len: Option<usize>,
     /// Choice options: (export value, display text).
     pub options: Vec<(String, String)>,
+    /// Choice: 0-based indices in `options` of the selected items (`/I`, or the indices matching
+    /// `value`).
+    pub indices: Vec<usize>,
     /// Default appearance string (`/DA`, inherited from the form if absent).
     pub da: String,
     /// Quadding: 0 left, 1 centred, 2 right.
@@ -232,12 +235,20 @@ impl Field {
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
-            FieldKind::Combo | FieldKind::List => self
-                .value
-                .iter()
-                .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
-                .collect::<Vec<_>>()
-                .join(", "),
+            FieldKind::Combo | FieldKind::List => {
+                let by_idx: Option<Vec<&str>> = (self.indices.len() == self.value.len())
+                    .then(|| self.indices.iter().map(|&i| self.options.get(i).map(|(_, d)| d.as_str())).collect())
+                    .flatten();
+                if let Some(texts) = by_idx {
+                    texts.join(", ")
+                } else {
+                    self.value
+                        .iter()
+                        .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            }
             _ => self.value.join(", "),
         }
     }
