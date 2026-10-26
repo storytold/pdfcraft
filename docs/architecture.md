@@ -9,7 +9,7 @@ crate's `README.md` has the detail.
 ## Shape
 
 One Cargo workspace (`Cargo.toml`, edition 2024, Rust ≥ 1.95, `MIT OR Apache-2.0`), 31 library
-crates in `crates/`, three binaries in `apps/`, build tooling in `xtask/`, and patched third-party
+crates in `crates/`, four binaries in `apps/`, build tooling in `xtask/`, and patched third-party
 crates in `vendor/`. About 152k lines of Rust and 1,765 tests (2026-10-10). Rust only: no
 handwritten JS/TS, in the product or the build.
 
@@ -18,6 +18,7 @@ handwritten JS/TS, in the product or the build.
 | `apps/pdfcraft` | The desktop app (macOS, Windows, Linux, FreeBSD): eframe/egui on wgpu, single instance, Apple events, update check on request |
 | `apps/pdfcraft-cli` | `inspect`, `edit`, `combine`, `extract`, `split`, `run` (any automation tool or a JSON script), `tools`, `ui` (drive the running app), and the opt-in `mcp` server |
 | `apps/pdfcraft-web` | The same egui shell compiled to WebAssembly |
+| `apps/pdfcraft-wasm` | The engine alone as a WebAssembly module for a page with its own interface ([docs](wasm-module.md)) |
 
 ## Layers
 
