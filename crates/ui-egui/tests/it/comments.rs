@@ -2657,3 +2657,26 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+/// #4825: exterior resize handles of a comment extending beyond the page boundary remain selectable.
+#[test]
+fn off_page_text_box_resize_handles_are_selectable() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape};
+    let mut h = harness(|app| app.set_option("quick", "select").unwrap());
+    // A text box placed partially off the right edge of page 1 (MediaBox 300×200).
+    let shape = Shape::TextBox { rect: [100.0, 50.0, 315.0, 150.0], font_size: 12.0 };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "Off-page text".into(), author: "Tester".into() }));
+    h.run_steps(2);
+    // Select the comment so its resize handles are displayed.
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    let before = comments(&h)[0].rect;
+    assert_eq!(before[2], 315.0, "initial right edge is off-page");
+
+    // Drag the off-page right-edge handle (x = 315, y = 100) 10 pt further right to x = 325.
+    drag_pt(&mut h, (315.0, 100.0), (325.0, 100.0));
+    let after = comments(&h)[0].rect;
+    assert!((after[2] - 325.0).abs() < 3.0, "off-page handle resized the text box: before {before:?} -> after {after:?}");
+    assert!((after[0] - before[0]).abs() < 1.0, "the left edge stayed fixed: {after:?}");
+}
