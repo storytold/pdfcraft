@@ -414,13 +414,51 @@ fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
     source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
 }
 
+/// The egui family that stands in for a document font in previews: Times renders in the Tinos
+/// families (metric-compatible with Times New Roman, so the preview's line breaks and widths match
+/// the standard-14 Times the engine commits), Courier in the monospaced UI face, and Helvetica and
+/// anything else in the proportional UI face. There is no Inter oblique, so italic sans text
+/// previews upright.
+pub(crate) fn preview_family(family: pdfcraft_engine::FontFamily, bold: bool, italic: bool) -> FontFamily {
+    match (family, bold, italic) {
+        (pdfcraft_engine::FontFamily::Courier, _, _) => FontFamily::Monospace,
+        (pdfcraft_engine::FontFamily::Times, bold, italic) => FontFamily::Name(
+            match (bold, italic) {
+                (false, false) => "serif",
+                (true, false) => "serif-bold",
+                (false, true) => "serif-italic",
+                (true, true) => "serif-bold-italic",
+            }
+            .into(),
+        ),
+        (pdfcraft_engine::FontFamily::Helvetica, bold, _) => {
+            if bold {
+                FontFamily::Name("semibold".into())
+            } else {
+                FontFamily::Proportional
+            }
+        }
+    }
+}
+
 pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
-    let family = match (look.family, look.bold) {
-        (pdfcraft_engine::FontFamily::Courier, _) => FontFamily::Monospace,
-        (_, true) => FontFamily::Name("semibold".into()),
-        (_, false) => FontFamily::Proportional,
-    };
-    FontId::new(size, family)
+    FontId::new(size, preview_family(look.family, look.bold, look.italic))
+}
+
+/// Whether the optional craft-fonts input really ships this Tinos style. theme.rs falls back to
+/// Inter bytes under the same family names when it does not, so the name alone must never be
+/// taken as proof of a real oblique design.
+fn tinos_style_ships(style: &str) -> bool {
+    pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "Tinos" && f.style == style)
+}
+
+/// Whether the preview draws `look` with an already-slanted Tinos design. epaint leans
+/// `TextFormat.italics` text with a synthetic shear, and on a real italic that would slant the
+/// glyphs twice; the shear stays on whenever the slant shown is only synthetic — on Inter or
+/// JetBrains Mono, and on the Inter bytes that back the serif names without the craft-fonts
+/// input. Only Times asks for a real oblique, so only Times suppresses the shear.
+pub(crate) fn real_italic(look: &pdfcraft_engine::AddedText) -> bool {
+    look.italic && look.family == pdfcraft_engine::FontFamily::Times && tinos_style_ships(if look.bold { "BoldItalic" } else { "Italic" })
 }
 
 fn color32(color: [f64; 3]) -> Color32 {
@@ -1482,7 +1520,7 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
             egui::TextFormat {
                 font_id: editor_font(&ed.look, ed.size),
                 color: color32(ed.look.color),
-                italics: ed.look.italic,
+                italics: ed.look.italic && !real_italic(&ed.look),
                 ..Default::default()
             },
         );
@@ -1782,6 +1820,44 @@ pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The editor's font matrix is pinned without a GPU: Courier is monospaced whatever the
+    /// style, Times resolves to the four Tinos families, and Helvetica keeps the sans UI faces
+    /// (no Inter oblique exists, so its italic previews upright).
+    #[test]
+    fn the_editor_font_follows_family_weight_and_slant() {
+        let f = |family: pdfcraft_engine::FontFamily, bold: bool, italic: bool| {
+            editor_font(&pdfcraft_engine::AddedText { family, bold, italic, ..Default::default() }, 12.0).family
+        };
+        use pdfcraft_engine::FontFamily as F;
+        assert_eq!(f(F::Courier, false, false), FontFamily::Monospace);
+        assert_eq!(f(F::Courier, true, true), FontFamily::Monospace);
+        assert_eq!(f(F::Times, false, false), FontFamily::Name("serif".into()));
+        assert_eq!(f(F::Times, true, false), FontFamily::Name("serif-bold".into()));
+        assert_eq!(f(F::Times, false, true), FontFamily::Name("serif-italic".into()));
+        assert_eq!(f(F::Times, true, true), FontFamily::Name("serif-bold-italic".into()));
+        assert_eq!(f(F::Helvetica, false, false), FontFamily::Proportional);
+        assert_eq!(f(F::Helvetica, true, false), FontFamily::Name("semibold".into()));
+        assert_eq!(f(F::Helvetica, false, true), FontFamily::Proportional);
+        assert_eq!(f(F::Helvetica, true, true), FontFamily::Name("semibold".into()));
+    }
+
+    #[test]
+    fn the_synthetic_slant_stays_off_for_the_real_italic_faces() {
+        let look =
+            |family: pdfcraft_engine::FontFamily, bold: bool, italic: bool| pdfcraft_engine::AddedText { family, bold, italic, ..Default::default() };
+        use pdfcraft_engine::FontFamily as F;
+        // Times+slant suppresses the shear exactly when the build input ships the matching oblique:
+        // the assertion must hold in craft and no-craft builds alike.
+        for (bold, style) in [(false, "Italic"), (true, "BoldItalic")] {
+            let ships = pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "Tinos" && f.style == style);
+            assert_eq!(real_italic(&look(F::Times, bold, true)), ships, "Tinos {style}");
+        }
+        assert!(!real_italic(&look(F::Times, false, false)), "upright never suppresses the shear");
+        assert!(!real_italic(&look(F::Helvetica, false, true)), "Inter has no oblique: keep the synthetic lean");
+        assert!(!real_italic(&look(F::Helvetica, true, true)), "not even when bold");
+        assert!(!real_italic(&look(F::Courier, false, true)), "JetBrains Mono has no oblique: keep the synthetic lean");
+    }
 
     #[test]
     fn the_rotate_knob_moves_below_when_there_is_no_room_above() {

@@ -94,7 +94,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                 ui.separator();
             }
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
+                // Each option's label previews its own family, so Times and Helvetica no longer
+                // look identical in the list.
+                let mut font = egui::TextStyle::Body.resolve(ui.style());
+                font.family = crate::edit_text_ui::preview_family(f, false, false);
+                if ui.selectable_label(fonts.sources.is_none() && look.family == f, egui::RichText::new(f.label()).font(font)).clicked() {
                     out.font = Some(FontChoice::Family(f));
                 }
             }

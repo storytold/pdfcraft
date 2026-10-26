@@ -412,9 +412,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         1 => (r.center().x, egui::Align2::CENTER_CENTER),
                         _ => (r.right() - hf.margins[3] as f32 * s, egui::Align2::RIGHT_CENTER),
                     };
-                    // Courier previews in the monospaced UI face, the others proportional.
+                    // The same stand-in faces as the text editor: Courier monospaced, Times in
+                    // Tinos, the others proportional.
                     let size = (hf.font_size as f32 * s).max(5.0);
-                    let font = if hf.font == FontFamily::Courier { egui::FontId::monospace(size) } else { egui::FontId::proportional(size) };
+                    let font = egui::FontId::new(size, crate::edit_text_ui::preview_family(hf.font, false, false));
                     p.text(pos2(x, y), align, shown, font, rgb32(hf.color));
                 }
             }
