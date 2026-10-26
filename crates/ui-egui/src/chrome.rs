@@ -505,8 +505,13 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 } else {
                     // Narrow window: the modes fold into one menu named after the current one.
-                    let current = modes.iter().find(|(m, _)| *m == app.mode).map_or("All tools", |(_, l)| *l);
-                    let resp = widgets::ghost_button(ui, "chevron-down", tl!(current));
+                    // Read is not one of the four choices but can be active (View command): name it too.
+                    let current = if app.mode == Mode::Read {
+                        tl!("Read")
+                    } else {
+                        tl!(modes.iter().find(|(m, _)| *m == app.mode).map_or("All tools", |(_, l)| *l))
+                    };
+                    let resp = widgets::ghost_button(ui, "chevron-down", current);
                     egui::Popup::menu(&resp).show(|ui| {
                         ui.set_min_width(160.0);
                         for (mode, label) in modes {
