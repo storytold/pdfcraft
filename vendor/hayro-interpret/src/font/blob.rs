@@ -302,13 +302,19 @@ impl OpenTypeFontBlob {
                 let Some(name_indices) = post.glyph_name_index() else {
                     return glyph_names;
                 };
-                let Some(string_data) = post.string_data() else {
-                    return glyph_names;
-                };
-                let custom_names = string_data
-                    .iter()
-                    .map(|entry| entry.ok().map(|name| name.as_str()))
-                    .collect::<Vec<_>>();
+                // PdfCraft patch: a table whose glyphs all take standard Macintosh names has no
+                // string data, which read-fonts gives as `None`. Its names were all dropped, so
+                // a non-symbolic subset with no (3, 1) or (1, 0) `cmap`, as Chrome writes them,
+                // drew every glyph as `.notdef`.
+                let custom_names = post
+                    .string_data()
+                    .map(|string_data| {
+                        string_data
+                            .iter()
+                            .map(|entry| entry.ok().map(|name| name.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
 
                 for (gid, idx) in name_indices.iter().enumerate() {
                     let idx = idx.get() as usize;
