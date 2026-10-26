@@ -169,6 +169,14 @@ fn style_json(family: FontFamily, bold: bool, italic: bool, size: f64, color: [f
     })
 }
 
+/// The words to write back when only the look or the width of a paragraph changes. Wrapped lines of one
+/// paragraph are joined and told apart from the source by a trailing space, so the engine lays the whole
+/// paragraph out again; a contents list (dotted leaders between a title and its page) keeps its rows.
+fn reflowed(block: &pdfcraft_engine::TextBlock) -> String {
+    let leaders = block.text.contains("....") || block.text.contains(". . . .");
+    if leaders { block.editor_text.clone() } else { format!("{} ", block.text.trim_end()) }
+}
+
 fn family_of(base_font: &str) -> FontFamily {
     if base_font.contains("Times") {
         FontFamily::Times
@@ -276,13 +284,13 @@ impl Document {
                 let user = self.page_info(page)?.view_rect_to_user(to_f32(view));
                 let block = self.doc()?.text_blocks(page).into_iter().nth(target.index).ok_or("that paragraph no longer exists")?;
                 let style = BlockStyle { width: Some(f64::from(user[2] - user[0])), ..BlockStyle::default() };
-                self.apply(Edit::EditTextBlock { page, block: target.index, text: format!("{} ", block.text.trim_end()), style })
+                self.apply(Edit::EditTextBlock { page, block: target.index, text: reflowed(&block), style })
             }
         }
     }
 
     /// How a paragraph's lines sit against each other, read from where its words start and end: flush
-    /// left, flush right or centred. A single line, or lines that fit none of those, say nothing.
+    /// left, justified, flush right or centred. A single line, or lines that fit none of those, say nothing.
     fn align_of(&self, page: usize, block: &pdfcraft_engine::TextBlock) -> Option<TextAlign> {
         let lines = self.doc().map(|d| d.text_lines(page)).ok()?;
         let mut ends: Vec<(f64, f64)> = Vec::new();
@@ -304,7 +312,9 @@ impl Document {
         let (min_left, max_right) = ends.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, r), (a, b)| (l.min(*a), r.max(*b)));
         let mid = ends.iter().map(|(a, b)| (a + b) / 2.0).sum::<f64>() / ends.len() as f64;
         if ends.iter().all(|(a, _)| (a - min_left).abs() <= TOLERANCE) {
-            Some(TextAlign::Left)
+            // lines that also end together (all but the last) are justified
+            let justified = ends.iter().all(|(_, b)| (b - max_right).abs() <= TOLERANCE);
+            Some(if justified { TextAlign::Justify } else { TextAlign::Left })
         } else if ends.iter().all(|(_, b)| (b - max_right).abs() <= TOLERANCE) {
             Some(TextAlign::Right)
         } else if ends.iter().all(|(a, b)| ((a + b) / 2.0 - mid).abs() <= TOLERANCE) {
@@ -389,7 +399,7 @@ impl Document {
                 let block = self.doc()?.text_blocks(page).into_iter().nth(target.index).ok_or("that paragraph no longer exists")?;
                 // The paragraph's own rows (with a break between them) take the engine's row-keeping path, which cuts
                 // a restyled block into lines; its words joined, and changed by a trailing space, lay the block out again.
-                let words = text.map_or_else(|| format!("{} ", block.text.trim_end()), str::to_string);
+                let words = text.map_or_else(|| reflowed(&block), str::to_string);
                 // A family, bold and italic go together in the engine's style; fill what is not said from the paragraph.
                 let wants_face = style.family.is_some() || style.bold.is_some() || style.italic.is_some();
                 let family = wants_face.then(|| {
