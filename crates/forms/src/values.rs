@@ -274,9 +274,23 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             }
             // Accept export values or display texts; free text only in editable combo boxes.
             let mut exports = Vec::new();
+            let mut picked_indices = Vec::new();
             for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
-                    Some((e, _)) => exports.push(e.clone()),
+                let matched = f
+                    .indices
+                    .iter()
+                    .copied()
+                    .filter(|i| !picked_indices.contains(i))
+                    .find_map(|i| f.options.get(i).filter(|(e, _)| e == v).map(|o| (i, o)))
+                    .or_else(|| f.options.iter().enumerate().find(|(i, (e, d))| !picked_indices.contains(i) && (e == v || d == v)))
+                    .or_else(|| f.options.iter().enumerate().find(|(_, (e, d))| e == v || d == v));
+                match matched {
+                    Some((i, (e, _))) => {
+                        exports.push(e.clone());
+                        if !picked_indices.contains(&i) {
+                            picked_indices.push(i);
+                        }
+                    }
                     None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
                     None if f.options.is_empty() => exports.push(v.clone()),
                     None => {
@@ -285,8 +299,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                     }
                 }
             }
-            let mut indices: Vec<Object> =
-                exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
+            let mut indices: Vec<Object> = picked_indices.iter().map(|&i| Object::Int(i as i64)).collect();
             // /I lists option indices in ascending order; /V keeps the caller's value order.
             // Every entry above is an integer, so this sorts by its numeric option index.
             indices.sort_unstable_by_key(Object::as_int);
