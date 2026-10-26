@@ -281,12 +281,38 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let mut doc = one_page(src, "", vec![]);
     mark(&mut doc, 0, &[[5.0, 5.0, 35.0, 35.0], [45.0, 45.0, 65.0, 65.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!((r.paths_removed, r.paths_clipped, r.images_removed), (1, 1, 1), "{r:?}");
+    assert_eq!((r.paths_removed, r.paths_clipped, r.images_removed), (2, 0, 1), "{r:?}");
     let c = content(&doc, 0);
     assert!(!c.contains("10 10 20 20 re"), "{c}");
-    assert!(c.contains("W*\nn\n0 0 300 300 re\nf\nQ"), "the page-size rect is clipped: {c}");
+    assert!(!c.contains("300 300 re"), "the intersecting rect is removed: {c}");
     assert!(!c.contains("BI"), "{c}");
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
+}
+
+#[test]
+fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
+    // A vector path with detailed drawing commands (e.g. outlined text or confidential geometry)
+    // that is only partially covered by a redaction mark must be completely removed, not retained
+    // behind a clipping path (F-008).
+    let src = b"0 g 100 100 m 150 150 l 200 100 l h f 10 10 m 20 20 l W b 300 300 m 350 350 l S";
+    let mut doc = one_page(src, "", vec![]);
+    // Redaction mark covers only part of the triangle (100..200, 100..150):
+    // mark is [120, 120, 160, 160], partially intersecting the triangle.
+    // Also partially intersect the clip-and-stroke path [10..20, 10..20] with [15, 15, 25, 25].
+    mark(&mut doc, 0, &[[120.0, 120.0, 160.0, 160.0], [15.0, 15.0, 25.0, 25.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 2, "both partially intersected paths removed");
+    assert_eq!(r.paths_clipped, 0, "no paths retained via clipping");
+
+    let c = content(&doc, 0);
+    // Neither the drawing operators nor the coordinates should leak in the content stream.
+    assert!(!c.contains("100 100 m"), "underlying geometry must not leak: {c}");
+    assert!(!c.contains("150 150 l"), "underlying geometry must not leak: {c}");
+    assert!(!c.contains("200 100 l"), "underlying geometry must not leak: {c}");
+    assert!(!c.contains("10 10 m"), "partial clip geometry must not leak: {c}");
+    assert!(!c.contains("20 20 l"), "partial clip geometry must not leak: {c}");
+    // Unrelated non-intersecting path remains untouched.
+    assert!(c.contains("300 300 m\n350 350 l\nS"), "unaffected vector path must be kept: {c}");
 }
 
 /// A chain of nested forms deeper than the pass can walk was removed from the page, taking

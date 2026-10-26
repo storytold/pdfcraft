@@ -63,6 +63,7 @@ mod js_ui;
 mod macos_association;
 mod marks_ui;
 mod measure_ui;
+mod menus;
 mod ocr_ui;
 mod optimize_ui;
 mod search_ui;
@@ -700,7 +701,6 @@ pub struct PdfCraftApp {
     pub fill_text_size: f64,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
-    pub update_source: Option<updates::UpdateSource>,
     pub(crate) updates: updates::Updates,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
@@ -928,6 +928,10 @@ pub struct PdfCraftApp {
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
+    /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
+    pub(crate) native_menu: Option<craft_menu::NativeMenu>,
+    /// Input a menu click stands for (⌘C, Delete…), added to the next frame's input in `logic`.
+    pub(crate) menu_input: Vec<egui::Event>,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see
     /// [`Self::dialog_epoch`]).
     dialog_seen: Option<Dialog>,
@@ -1137,7 +1141,6 @@ impl PdfCraftApp {
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             dialog: None,
-            update_source: None,
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
@@ -1263,6 +1266,8 @@ impl PdfCraftApp {
             last_autosave: None,
             allow_quit: false,
             deferred_commands: Vec::new(),
+            native_menu: None,
+            menu_input: Vec::new(),
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
@@ -3293,7 +3298,12 @@ impl PdfCraftApp {
         {
             return;
         }
-        self.registry_shortcuts(ctx);
+        // The in-window menu bar holds the keys while one of its menus is open or it has the
+        // keyboard (Alt, F10); a command shortcut leaves it and runs.
+        craft_menu::bar::leave_for_shortcut(ctx);
+        if !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx) {
+            self.registry_shortcuts(ctx);
+        }
         // (Esc closes a Combine file shown large first.)
         if self.full_screen && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
@@ -3501,6 +3511,10 @@ impl PdfCraftApp {
         }
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);
+        // The native menu's key equivalents.
+        if let Some(native) = self.native_menu.as_mut() {
+            native.raw_input(raw);
+        }
     }
 }
 
@@ -3672,6 +3686,12 @@ impl eframe::App for PdfCraftApp {
         self.poll_print();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
+        self.native_menu_clicks(ctx);
+        // The keys a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
+        if !self.menu_input.is_empty() {
+            let events = std::mem::take(&mut self.menu_input);
+            ctx.input_mut(|i| i.events.extend(events));
+        }
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
@@ -3702,6 +3722,7 @@ impl eframe::App for PdfCraftApp {
         self.process_picked();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
+        self.sync_native_menu(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

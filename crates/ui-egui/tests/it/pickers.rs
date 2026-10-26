@@ -963,6 +963,9 @@ impl Drop for AttachmentDir {
 
 #[test]
 fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
+    if crate::support::skip_without_glyphs("attachment_save_preserves_bytes_metadata_and_selected_destination", "en", "user chosen 資料.bin") {
+        return;
+    }
     let dir = AttachmentDir::new();
     let chosen = dir.0.join("user chosen 資料.bin");
     let original = attachment_fixture();

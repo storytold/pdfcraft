@@ -1,5 +1,6 @@
 //! Use a certificate in the real shell: draw a signature, create a digital ID, sign, validate.
 
+use crate::support;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -128,14 +129,14 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     field(&h, "Digital ID password").click();
     h.run_steps(1);
     field(&h, "Digital ID password").type_text("nope");
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(3);
     h.get_by_label("The password is incorrect.");
     h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
     field(&h, "Reason").click();
     h.run_steps(1);
     field(&h, "Reason").type_text("I approve");
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
 
     let s = h.state();
@@ -275,7 +276,7 @@ fn certifying_without_a_visible_signature() {
     h.get_by_label("Certify as \"Test Signer EC\"");
     h.get_by_label("Permitted actions after certifying");
     h.state_mut().sign_draft.as_mut().unwrap().password = "test".into();
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
     let s = h.state();
     assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
@@ -361,7 +362,7 @@ fn clicking_an_empty_signature_field_signs_it() {
         d.password = "test".into();
     }
     h.run_steps(2);
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
     let s = h.state();
     let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
@@ -398,7 +399,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     h.get_by_label("Fill & Sign signature").click();
     h.run_steps(2);
     assert_eq!(h.state().sign_draft.as_ref().unwrap().graphic, SignGraphic::FillSign);
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
     let s = h.state();
     assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
@@ -418,7 +419,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     h.state_mut().sign_draft.as_mut().unwrap().graphic = SignGraphic::Image(image.clone());
     h.run_steps(2);
     h.get_by_label("Choose image…");
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
     let s = h.state();
     assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
@@ -534,7 +535,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     h.get_by_label("Sign as \"Store signer\"");
     assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
     h.get_by_label("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.");
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::Sign));
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
@@ -679,7 +680,7 @@ fn signing_preserves_destination_opening_attributes() {
     let d = h.state_mut().sign_draft.as_mut().unwrap();
     (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
     h.run_steps(2);
-    h.get_by_label("Sign").click();
+    support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
     assert!(h.state().session.get(h.state().views[0].id).unwrap().signatures.iter().any(|s| s.signed));
     assert_eq!(xattr::get(&dest, "com.apple.LaunchServices.OpenWith").unwrap(), Some(b"existing binding".to_vec()));

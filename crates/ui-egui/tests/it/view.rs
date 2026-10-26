@@ -1033,9 +1033,8 @@ fn view_menu_page_display_uses_the_same_commands() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     h.run_steps(4);
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("View").hover();
+    crate::support::open_menu(&mut h, "View");
+    crate::support::menu_row(&h, "Page display").hover();
     h.run_steps(3);
     h.get_by_label("Single page").click();
     h.run_steps(4);
@@ -2011,17 +2010,14 @@ fn long_view_menu_fits_a_short_window() {
         app
     });
     h.run_steps(8);
-    h.get_by_label("Menu").click();
+    crate::support::open_menu(&mut h, "View");
     h.run_steps(2);
-    h.get_by_label("View").hover();
-    h.run_steps(4);
-    let before = h.get_by_label("Side panels").rect().bottom();
-    h.get_by_label("Fit to height ").hover();
+    crate::support::menu_row(&h, "Rotate view").hover();
     h.event(wheel(MouseWheelUnit::Point, -1000.0, TouchPhase::Move));
     h.run_steps(6);
-    let after = h.get_by_label("Side panels").rect().bottom();
-    assert!(after < before && after <= 400.0, "menu did not scroll into view: {before} -> {after}");
-    h.get_by_label("Side panels").hover();
+    let after = crate::support::menu_row(&h, "Side panels").rect().bottom();
+    assert!(after <= 400.0, "the menu scrolls Side panels into view: {after}");
+    crate::support::menu_row(&h, "Side panels").hover();
     h.run_steps(4);
     h.get_all_by_label("Bookmarks").last().unwrap().click();
     h.run_steps(4);

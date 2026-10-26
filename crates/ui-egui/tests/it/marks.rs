@@ -1,5 +1,6 @@
 //! Header & footer, watermark and background dialogs in the real shell (egui_kittest).
 
+use crate::support;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::MarkKind;
@@ -127,7 +128,7 @@ fn backgrounds_and_watermarks_from_a_file() {
     let mut h = harness();
     h.state_mut().execute("edit.background");
     h.run_steps(2);
-    h.get_by_label("File").click();
+    support::outside_menus(&h, "File").click();
     h.run_steps(2);
     h.get_by_label("No file chosen");
     assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_some(), "OK waits for a file");

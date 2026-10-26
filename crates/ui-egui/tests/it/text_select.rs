@@ -192,17 +192,14 @@ fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
 /// Check that both the Edit menu and the context menu copy the selected page text.
 #[test]
 fn selected_text_copy_edit_and_context_menus() {
-    use egui_kittest::kittest::{NodeT, Queryable};
+    use egui_kittest::kittest::Queryable;
     let (mut h, at) = harness(|_| {});
     click(&mut h, at);
     click(&mut h, at);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2); // Hide floating Copy so this test can only reach menu entries.
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_all_by_label("Edit").find(|n| n.accesskit_node().toggled().is_none()).expect("the Edit menu entry").hover();
-    h.run_steps(3);
-    h.get_by_label_contains("Copy").click();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Copy").click();
     let mut did_copy = false;
     for _ in 0..4 {
         h.step();
@@ -229,15 +226,13 @@ fn selected_text_copy_edit_and_context_menus() {
 
 #[test]
 fn escape_closes_an_open_menu_before_it_clears_the_selection() {
-    // #3535: one Escape closed the main menu and dropped the selection with it.
-    use egui_kittest::kittest::Queryable;
+    // #3535: one Escape closed the menu and dropped the selection with it.
     let (mut h, at) = harness(|_| {});
     click(&mut h, at);
     click(&mut h, at);
     h.run_steps(2);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
+    crate::support::open_menu(&mut h, "View");
     assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
