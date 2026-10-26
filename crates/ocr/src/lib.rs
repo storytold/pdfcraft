@@ -857,7 +857,7 @@ mod tests {
     fn reads_rendered_text() {
         let Some(models) = Models::find() else {
             let required = std::env::var_os("PDFCRAFT_REQUIRE_OCR_MODELS")
-                .map_or(false, |value| !value.is_empty());
+                .is_some_and(|value| !value.is_empty());
             if required {
                 panic!("OCR models are required for this test but were not found");
             }
