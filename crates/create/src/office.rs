@@ -132,12 +132,18 @@ mod native {
         .collect()
     }
 
-    /// The fresh profile's settings: no macros at all, and no links to untrusted locations.
-    const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+    /// The fresh profile's settings: no macros at all, no links to untrusted locations, and
+    /// linked content in Writer and Calc documents (sections, files, external data) never
+    /// updated on load, so a document can't make LibreOffice fetch from the network or a share.
+    /// The two `Link` settings number "Never" differently (Writer.xcs: 0 Always, 1 On request,
+    /// 2 Never; Calc.xcs: 0 Always, 1 Never, 2 On request). Impress has no such setting.
+    pub(super) const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>2</value></prop></item>
+<item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>1</value></prop></item>
 </oor:items>
 "#;
 
@@ -396,6 +402,32 @@ mod tests {
         fn default_locations_read_only_the_given_environment() {
             let found = default_locations(&|_| None);
             assert!(found.iter().all(|p| p.is_absolute()), "{found:?}");
+        }
+
+        /// Each setting the fresh profile makes, as (path, property, value).
+        fn profile_settings() -> Vec<(&'static str, &'static str, &'static str)> {
+            let between = |s: &'static str, start: &str, end: &str| s.split_once(start).and_then(|(_, rest)| rest.split_once(end)).map(|(v, _)| v);
+            PROFILE_SETTINGS
+                .split("<item ")
+                .skip(1)
+                .filter_map(|item| {
+                    Some((between(item, "oor:path=\"", "\"")?, between(item, "oor:name=\"", "\"")?, between(item, "<value>", "</value>")?))
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_profile_turns_off_macros_and_never_updates_links() {
+            let settings = profile_settings();
+            let scripting = "/org.openoffice.Office.Common/Security/Scripting";
+            assert!(settings.contains(&(scripting, "DisableMacrosExecution", "true")), "{settings:?}");
+            assert!(settings.contains(&(scripting, "MacroSecurityLevel", "3")), "{settings:?}");
+            assert!(settings.contains(&(scripting, "BlockUntrustedRefererLinks", "true")), "{settings:?}");
+            // "Never" is 2 for Writer but 1 for Calc (Writer.xcs and Calc.xcs); Writer's 1 is
+            // its default, "On request".
+            assert!(settings.contains(&("/org.openoffice.Office.Writer/Content/Update", "Link", "2")), "{settings:?}");
+            assert!(settings.contains(&("/org.openoffice.Office.Calc/Content/Update", "Link", "1")), "{settings:?}");
+            assert_eq!(settings.len(), 5, "{settings:?}");
         }
 
         #[test]
