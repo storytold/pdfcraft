@@ -2790,3 +2790,12 @@ key	Space	Mellomrom
 	Export this PDF	Eksporter denne PDF-en
 	Find text or tools	Finn tekst eller verktøy
 	Crop image	Beskjær bilde
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Vindu
+	Move tab to new window	Flytt fanen til nytt vindu
+	Merge all windows	Slå sammen alle vinduer
+	Close window	Lukk vinduet
+	Move to new window	Flytt til nytt vindu
+	Move to window	Flytt til vindu
+	Too many windows are open	For mange vinduer er åpne
