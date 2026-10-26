@@ -1320,6 +1320,43 @@ fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f32, sc: &mu
     dense
 }
 
+/// Removes blank glyphs that are mostly covered by the ink of other glyphs on the line. A run of blanks drawn over
+/// the digits of an earlier run (a cover headline that overprints a number with spaces) would otherwise sort between
+/// the digits and show as spaces inside the number (#3172). A blank that stands in a gap is kept.
+fn drop_covered_blanks(glyphs: &[&TextGlyph], placed: &mut Vec<usize>, ink: &mut Vec<[f32; 2]>) {
+    let blank = |i: usize| glyphs[i].text.trim().is_empty();
+    if !placed.iter().any(|&i| blank(i)) {
+        return;
+    }
+    ink.clear();
+    ink.extend(placed.iter().filter(|&&i| !blank(i)).map(|&i| [glyphs[i].rect[0], glyphs[i].rect[2]]));
+    ink.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    // Merge into disjoint intervals.
+    ink.dedup_by(|cur, prev| {
+        let overlaps = cur[0] <= prev[1];
+        if overlaps {
+            prev[1] = prev[1].max(cur[1]);
+        }
+        overlaps
+    });
+    placed.retain(|&i| {
+        if !blank(i) {
+            return true;
+        }
+        let (l, r) = (glyphs[i].rect[0], glyphs[i].rect[2]);
+        if r - l <= 0.0 {
+            return true;
+        }
+        let mut covered = 0.0;
+        let mut k = ink.partition_point(|iv| iv[1] <= l);
+        while let Some(iv) = ink.get(k).filter(|iv| iv[0] < r) {
+            covered += iv[1].min(r) - iv[0].max(l);
+            k += 1;
+        }
+        covered <= 0.5 * (r - l)
+    });
+}
+
 /// Simplified bidi class of a glyph or word gap (UAX #9: strong L/R, numbers, neutrals).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Bidi {
@@ -1713,9 +1750,14 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // `spaces[w]`: a word gap left of the w-th glyph of the segment, by position on the line, not by drawing order
     // (#1062). Reused by every segment.
     let mut spaces: Vec<bool> = Vec::new();
+    let mut ink: Vec<[f32; 2]> = Vec::new();
     for b in block_order {
         for &si in &blocks[b].0 {
             place_glyphs(&glyphs, &height, &segs[si], &mut sc);
+            // Only another run can draw over a run's blanks: a single run is left as it is.
+            if sc.text.len() > 1 {
+                drop_covered_blanks(&glyphs, &mut sc.placed, &mut ink);
+            }
             let h = segs[si].h;
             // Word gaps relative to this line's typical letter gap (handles tracking).
             // Long runs of repeated punctuation belong to leaders, not letter tracking: a TOC leader
@@ -1745,12 +1787,15 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             for (w, pair) in sc.placed.windows(2).enumerate() {
                 let &[p, c] = pair else { continue };
                 let gap = glyphs[c].rect[0] - glyphs[p].rect[2];
+                // The word gap follows the two glyphs it lies between, not the tallest glyph of the line (#3172).
+                let hp = height(p).min(height(c));
+                let pair_threshold = (typical + hp * WORD_GAP).max(hp * WORD_GAP).min(threshold);
                 let (pt, ct) = (&glyphs[p].text, &glyphs[c].text);
                 let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < h * 0.5;
                 let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
-                    *space = (gap > threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
+                    *space = (gap > pair_threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
                 }
             }
             // Right-to-left spans are reversed (visual → logical) with their gaps, and only then is a second copy made.
@@ -2561,6 +2606,24 @@ mod tests {
         let text = layout(glyphs);
         assert_eq!(text.find_opts_limited("o", false, false, 2), vec![0..1, 1..2]);
         assert_eq!(text.find_opts_limited("o", false, false, 10), vec![0..1, 1..2, 2..3, 3..4]);
+    }
+
+    fn tall(t: &str, x0: f32, y0: f32, x1: f32, h: f32) -> TextGlyph {
+        let rect = [x0, y0, x1, y0 + h];
+        TextGlyph { text: t.into(), rect, quad: [[x0, y0], [x1, y0], [x1, rect[3]], [x0, rect[3]]], direction: [1.0, 0.0] }
+    }
+
+    #[test]
+    fn blanks_under_a_number_and_a_word_gap_next_to_big_digits() {
+        // Big dark digits, then a smaller sentence drawn over them with blanks where the digits sit.
+        let mut v = Vec::new();
+        for (t, x) in [("5", 0.0), ("0", 6.0), ("1", 100.0), ("4", 106.0)] {
+            v.push(tall(t, x, 3.0, x + 6.0, 34.0));
+        }
+        for (t, x) in [("F", 16.5), ("R", 22.5), (" ", 100.0), (" ", 106.0), ("C", 130.0), ("D", 136.0)] {
+            v.push(tall(t, x, 6.0, x + 6.0, 28.0));
+        }
+        assert_eq!(layout(v).plain_text(), "50 FR 14 CD");
     }
 
     fn word(v: &mut Vec<TextGlyph>, s: &str, x: f32, y: f32, advance: f32) {
