@@ -2221,6 +2221,8 @@ signature pad	Type	Vtipkaj
 	Slash	Poševnica
 	Smaller pages	Manjše strani
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Prepoznavanje besedila ni nameščeno: manjkajo datoteke njegovih modelov. Ponovno namestite PdfCraft ali nastavite PDFCRAFT_MODELS na mapo, v kateri so.
+	Checking Hungarian OCR installation…	Preverjanje namestitve madžarskega OCR…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	Madžarski OCR zahteva namizno aplikacijo s Tesseract 5 in jezikovnim modelom hun. Po namestitvi znova zaženite PdfCraft.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Besedilo, oznake in podpisi postanejo del strani. Drugi komentarji ostanejo urejljivi.
 	The document changed while you were editing field properties.	Dokument se je spremenil med urejanjem lastnosti polja.
 	The document is no longer open.	Dokument ni več odprt.

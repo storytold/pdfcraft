@@ -6,11 +6,14 @@
 //! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
-//! The models read the Latin alphabet (English and other languages written without accents).
+//! English uses ocrs; Hungarian uses an optional, locally installed Tesseract 5 with `hun` data.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod tesseract;
 
 pub use pdfcraft_fonts::helvetica_width;
 
@@ -23,8 +26,8 @@ pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// Supported document languages (ISO 639-1). Hungarian requires native Tesseract.
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("hu", "Magyar")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -105,7 +108,13 @@ impl Line {
 
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
-    engine: ocrs::OcrEngine,
+    engine: Backend,
+}
+
+enum Backend {
+    English(Box<ocrs::OcrEngine>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Hungarian(tesseract::Tesseract),
 }
 
 impl Ocr {
@@ -118,7 +127,7 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine: Backend::English(Box::new(engine)) })
     }
 
     /// Load the models found by [`Models::find`].
@@ -126,23 +135,50 @@ impl Ocr {
         Self::load(&Models::find().ok_or(OcrError::NoModels)?)
     }
 
+    /// Select a recogniser without silently falling back to a different language.
+    pub fn for_language(language: &str) -> Result<Self, OcrError> {
+        match language {
+            "en" => Self::find(),
+            #[cfg(not(target_arch = "wasm32"))]
+            "hu" => Ok(Self { engine: Backend::Hungarian(tesseract::Tesseract::find()?) }),
+            #[cfg(target_arch = "wasm32")]
+            "hu" => Err(OcrError::Recognize("Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model".into())),
+            _ => Err(OcrError::Recognize(format!("unsupported OCR language {language:?}"))),
+        }
+    }
+
+    /// ISO 639-1 language selected by this recogniser, independent of the interface locale.
+    pub fn language(&self) -> &'static str {
+        match &self.engine {
+            Backend::English(_) => "en",
+            #[cfg(not(target_arch = "wasm32"))]
+            Backend::Hungarian(_) => "hu",
+        }
+    }
+
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         if width == 0 || height == 0 || pixels.is_empty() {
             return Err(OcrError::EmptyImage);
         }
+        let engine = match &self.engine {
+            Backend::English(e) => e,
+            #[cfg(not(target_arch = "wasm32"))]
+            Backend::Hungarian(t) => return t.recognize(pixels, width, height),
+        };
+        let count = image_pixels(pixels, width, height)?;
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == count * 4 {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
         } else {
             pixels.into()
         };
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
-        let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
-        let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
-        let lines = self.engine.find_text_lines(&input, &found);
-        let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
+        let input = engine.prepare_input(source).map_err(|e| err(&e))?;
+        let found = engine.detect_words(&input).map_err(|e| err(&e))?;
+        let lines = engine.find_text_lines(&input, &found);
+        let read = engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
         Ok(read
             .into_iter()
@@ -160,6 +196,19 @@ impl Ocr {
             .filter(|l| !l.words.is_empty())
             .collect())
     }
+}
+
+/// Validate image dimensions and channel count before allocating or passing to a recogniser.
+fn image_pixels(pixels: &[u8], width: u32, height: u32) -> Result<usize, OcrError> {
+    let count = u64::from(width) * u64::from(height);
+    if count == 0 || count > 100_000_000 {
+        return Err(OcrError::Recognize("OCR image must contain 1 to 100 million pixels".into()));
+    }
+    let count = count as usize;
+    if ![count, count * 3, count * 4].contains(&pixels.len()) {
+        return Err(OcrError::Recognize("OCR image byte count does not match its dimensions".into()));
+    }
+    Ok(count)
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the
@@ -211,6 +260,19 @@ fn num(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
+/// Text matrix fitting a word to its recognised box, independent of its font encoding.
+pub fn word_matrix(w: &PlacedWord, width: f64) -> Option<[f64; 6]> {
+    if !width.is_finite() || width <= 0.0 || w.up[0].hypot(w.up[1]) <= 0.0 {
+        return None;
+    }
+    let (top, bottom) = ink_extent(&w.text);
+    let em = [w.up[0] / (top - bottom), w.up[1] / (top - bottom)];
+    let ax = [w.across[0] / width, w.across[1] / width];
+    let o = [w.origin[0] - em[0] * bottom, w.origin[1] - em[1] * bottom];
+    let matrix = [ax[0], ax[1], em[0], em[1], o[0], o[1]];
+    matrix.iter().all(|n| n.is_finite()).then_some(matrix)
+}
+
 /// Page content that writes `words` as invisible text in `/PCHelv` (standard Helvetica,
 /// WinAnsiEncoding), each word stretched to its box so selection and search highlight the
 /// right place. Marked content `/OCR` so it can be told apart from the page's own text.
@@ -221,17 +283,7 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
     let mut out = b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
     for w in words {
         let width = helvetica_width(&w.text, 1.0);
-        let height = w.up[0].hypot(w.up[1]);
-        if width <= 0.0 || height <= 0.0 {
-            continue;
-        }
-        // The em square: the word's own ink (cap height or x-height, descenders or not) spans the
-        // box, so the text is as tall as the scanned word; its width is stretched to fit the word.
-        let (top, bottom) = ink_extent(&w.text);
-        let em = [w.up[0] / (top - bottom), w.up[1] / (top - bottom)];
-        let ax = [w.across[0] / width, w.across[1] / width];
-        let o = [w.origin[0] - em[0] * bottom, w.origin[1] - em[1] * bottom];
-        let m = [ax[0], ax[1], em[0], em[1], o[0], o[1]];
+        let Some(m) = word_matrix(w, width) else { continue };
         let nums: Vec<String> = m.iter().map(|v| num(*v)).collect();
         out.extend_from_slice(nums.join(" ").as_bytes());
         out.extend_from_slice(b" Tm ");

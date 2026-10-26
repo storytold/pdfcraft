@@ -828,6 +828,8 @@
 	Also recognize pages that already have text	Αναγνώριση και σελίδων που έχουν ήδη κείμενο
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Αναγνωρίζονται και οι εικόνες αυτών των σελίδων· οι λέξεις που υπάρχουν ήδη στο κείμενο της σελίδας δεν προστίθενται ξανά
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Η αναγνώριση κειμένου δεν είναι εγκατεστημένη: λείπουν τα αρχεία μοντέλων. Εγκαταστήστε ξανά το PdfCraft ή ορίστε το PDFCRAFT_MODELS στον φάκελο που τα περιέχει.
+	Checking Hungarian OCR installation…	Έλεγχος εγκατάστασης ουγγρικού OCR…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	Το ουγγρικό OCR απαιτεί την εφαρμογή υπολογιστή με Tesseract 5 και το γλωσσικό μοντέλο hun. Επανεκκινήστε το PdfCraft μετά την εγκατάσταση.
 	Planned · {m}	Προγραμματισμένο · {m}
 	Planned for milestone {m} — open to see what it will include	Προγραμματισμένο για το ορόσημο {m} — ανοίξτε για να δείτε τι θα περιλαμβάνει
 	Coming in milestone {m}. Items marked Ready work today.	Αναμένεται στο ορόσημο {m}. Τα στοιχεία με ένδειξη «Έτοιμο» λειτουργούν ήδη.

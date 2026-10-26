@@ -1375,6 +1375,8 @@ key	Space	Mezerník
 	Also recognize pages that already have text	Rozpoznat i stránky, které už obsahují text
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Rozpoznají se i obrázky na těchto stránkách; slova, která už jsou v textu stránky, se znovu nepřidají
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Rozpoznávání textu není nainstalováno: chybí soubory jeho modelů. Přeinstalujte PdfCraft nebo nastavte PDFCRAFT_MODELS na složku, ve které jsou.
+	Checking Hungarian OCR installation…	Kontrola instalace maďarského OCR…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	Maďarské OCR vyžaduje desktopovou aplikaci s Tesseract 5 a jazykovým modelem hun. Po instalaci restartujte PdfCraft.
 	Settings	Nastavení
 	Optional	Volitelné
 	Planned · {m}	Plánováno · {m}

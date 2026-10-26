@@ -2248,6 +2248,8 @@ calendar date	December	Желтоқсан
 	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Кейбір бетбелгілер осында көрсетілмеген: панель шектеулі санды, шектеулі тереңдікке дейін ғана тізеді.
 	Switch to List view to change the pages it takes.	Қамтитын беттерін өзгерту үшін Тізім көрінісіне ауысыңыз.
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Мәтінді тану орнатылмаған: модель файлдары жоқ. PdfCraft қайта орнатыңыз немесе PDFCRAFT_MODELS айнымалысына олар жатқан қалтаны көрсетіңіз.
+	Checking Hungarian OCR installation…	Венгр тіліндегі OCR орнатылуын тексеру…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	Венгр тіліндегі OCR үшін Tesseract 5 және hun тілдік моделі бар жұмыс үстелі қолданбасы қажет. Орнатқаннан кейін PdfCraft қолданбасын қайта іске қосыңыз.
 	Text used as a clipping path cannot be moved with this selection.	Қиып алу жолы ретінде қолданылатын мәтін бұл таңдаумен жылжытылмайды.
 	The document changed while you were editing field properties.	Өріс сипаттарын түзетіп жүргенде құжат өзгерді.
 	The document is no longer open.	Құжат енді ашық емес.

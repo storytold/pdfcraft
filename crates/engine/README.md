@@ -93,3 +93,39 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 `doc.text_edit_preview(page, block)` prepares a read-only page background with the selected
 paragraph’s glyphs removed, preserving text positioning, images and colours. It shares the
 working document’s render configuration and never enters the undo history.
+
+## Hungarian OCR (desktop)
+
+In Scan & OCR → Recognize Text, choose **Magyar** as the document language. English keeps
+using the bundled ocrs models; Hungarian uses a local Tesseract installation with the `hun`
+model. It does not upload pages, use an API key, or download anything at runtime.
+
+On Ubuntu/Debian install `tesseract-ocr` and `tesseract-ocr-hun`, then restart PdfCraft.
+On other desktop systems install Tesseract 5 and put `hun.traineddata` in its tessdata
+folder. `tesseract --list-langs` must list `hun`. Custom installations may set
+`PDFCRAFT_TESSERACT` to the executable and `TESSDATA_PREFIX` to the tessdata directory.
+The native packages currently do not bundle Tesseract. Hungarian OCR is unavailable in WASM.
+
+The [Tesseract engine](https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE) and
+[tessdata_fast language models](https://github.com/tesseract-ocr/tessdata_fast/blob/main/LICENSE)
+use Apache-2.0, which permits commercial integration. If a future installer bundles them,
+include their licence and applicable notices, and audit the bundled native dependencies too.
+
+The existing `ocr_recognize` and `ocr_recognize_files` tools accept `"language":"hu"`;
+so does the OCR step of `doc_batch`. `ocr_status.languages` reports `available` and an
+optional `error` separately for each language; its top-level `available` still describes
+the default English models. Missing dependencies fail with setup instructions, without
+falling back to English. Restart after changing the installation to refresh cached readiness.
+A failed recognition page refuses the edit/file output instead of reporting a successful scan.
+
+Accented OCR text outside WinAnsi embeds the project's existing OFL Inter font with a
+ToUnicode map. This preserves ő/ű and their uppercase forms through save, search, selection,
+and copy. The page image stays unchanged, and recognition remains a single undoable edit.
+Each native Tesseract call is limited to two threads, 120 seconds per page, 100 million input
+pixels and 16 MiB output. Cancellation is observed between pages.
+
+Validate the external integration explicitly (it fails if Tesseract/hun is missing):
+
+```sh
+cargo test -p pdfcraft-automation --test automation hungarian_ocr_recognizes_and_saves_accented_scan -- --ignored
+```

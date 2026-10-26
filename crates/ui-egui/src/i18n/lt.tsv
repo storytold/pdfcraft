@@ -1183,6 +1183,8 @@
 	Text in images isn't found; recognise text (OCR) first.	Paveikslėliuose esantis tekstas nerandamas; pirmiausia atpažinkite tekstą (OCR).
 	Text is compared word by word; the differences are shown on the new file.	Tekstas lyginamas žodis po žodžio; skirtumai rodomi naujame faile.
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Teksto atpažinimas neįdiegtas: trūksta modelio failų. Iš naujo įdiekite „PdfCraft“ arba nustatykite PDFCRAFT_MODELS aplanką, kuriame jie laikomi.
+	Checking Hungarian OCR installation…	Tikrinamas vengrų kalbos OCR diegimas…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	Vengrų kalbos OCR reikia darbalaukio programos su Tesseract 5 ir hun kalbos modeliu. Įdiegę paleiskite PdfCraft iš naujo.
 	Text to find	Ieškomas tekstas
 	Text to insert	Įterpiamas tekstas
 	Text used as a clipping path cannot be moved with this selection.	Teksto, naudojamo kaip iškarpymo kelias, negalima perkelti pasirinkus šį objektą.

@@ -938,6 +938,8 @@
 	Also recognize pages that already have text	同時辨識已有文字的頁面
 	Pictures on those pages are recognized too; words already in the page's text are not added again	這些頁面上的圖片也會被辨識；頁面文字中已有的字詞不會重複加入
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	未安裝文字辨識：缺少模型檔案。請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些檔案的資料夾。
+	Checking Hungarian OCR installation…	正在檢查匈牙利語 OCR 的安裝…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	匈牙利語 OCR 需要桌面應用程式、Tesseract 5 和 hun 語言模型。安裝後請重新啟動 PdfCraft。
 	Settings	設定
 	Protect	保護
 	Advanced options	進階選項

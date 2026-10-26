@@ -559,9 +559,9 @@ pub struct DocView {
     shown: bool,
     /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
     pub(crate) auto_ocr_tried: std::collections::HashSet<usize>,
-    /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
-    /// they are looked at again only after the document changes (an image added, say).
-    pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
+    /// Pages that were not scans or whose OCR backend was unavailable, with the document's edit
+    /// generation and selected language. Retry after the document or the language changes.
+    pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, (u64, String)>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// Until this time, apply precise (touchpad) wheel input 1:1 and suppress egui's eased copy.

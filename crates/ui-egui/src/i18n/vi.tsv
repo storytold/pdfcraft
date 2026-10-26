@@ -1172,6 +1172,8 @@ theme	Appearance	Giao diện
 	Text in images isn't found; recognise text (OCR) first.	Văn bản trong hình ảnh không được tìm thấy; hãy nhận dạng văn bản (OCR) trước.
 	Text is compared word by word; the differences are shown on the new file.	Văn bản được so sánh từng từ; các khác biệt được hiển thị trên tệp mới.
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Tính năng nhận dạng văn bản chưa được cài đặt: thiếu các tệp mô hình. Hãy cài đặt lại PdfCraft, hoặc đặt PDFCRAFT_MODELS thành thư mục chứa chúng.
+	Checking Hungarian OCR installation…	Đang kiểm tra cài đặt OCR tiếng Hungary…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	OCR tiếng Hungary yêu cầu ứng dụng máy tính với Tesseract 5 và mô hình ngôn ngữ hun. Khởi động lại PdfCraft sau khi cài đặt.
 	Text to find	Văn bản cần tìm
 	Text to insert	Văn bản cần chèn
 	Text used as a clipping path cannot be moved with this selection.	Văn bản dùng làm đường cắt xén không thể di chuyển cùng vùng chọn này.

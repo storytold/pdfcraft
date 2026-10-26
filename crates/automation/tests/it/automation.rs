@@ -9175,3 +9175,51 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// Real Hungarian OCR through the same API used by CLI and MCP; opt in so CI cannot mistake
+/// an absent external recogniser for a passing end-to-end check.
+#[test]
+#[ignore = "requires Tesseract 5 with hun.traineddata"]
+fn hungarian_ocr_recognizes_and_saves_accented_scan() {
+    let dir = workdir("hungarian-ocr");
+    let mut a = auto(&dir);
+    let status = ok(&mut a, "ocr_status", json!({}));
+    assert!(status["languages"].as_array().unwrap().iter().any(|l| l["code"] == "hu" && l["available"] == true), "{status}");
+    std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let id = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let font = ok(&mut a, "text_font_import", json!({"doc":id,"page":1,"path":"inter.ttf"}));
+    ok(
+        &mut a,
+        "text_edit",
+        json!({"doc":id,"page":1,"paragraph":1,"text":"Árvíztűrő\ntükörfúrógép","font_resource":font["resource"],"size":18,"width":170}),
+    );
+    ok(&mut a, "doc_export_images", json!({"doc":id,"folder":"scan","dpi":300,"pages":[1]}));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({"from":"images","paths":[png.to_string_lossy()]}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({"doc":scan,"path":"input.pdf"}));
+    let result = ok(&mut a, "ocr_recognize", json!({"doc":scan,"language":"hu"}));
+    let text = result["pages"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Árvíztűrő") && text.contains("tükörfúrógép"), "{result}");
+    ok(&mut a, "doc_save", json!({"doc":scan,"path":"hungarian.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"hungarian.pdf"}))["doc"].as_u64().unwrap();
+    let extracted = page_text(&mut a, reopened).join(" ");
+    assert!(extracted.contains("Árvíztűrő") && extracted.contains("tükörfúrógép"), "{extracted}");
+    let found = ok(&mut a, "text_find", json!({"doc":reopened,"query":"tükörfúrógép"}));
+    assert_eq!(found["count"], 1);
+    let files = ok(&mut a, "ocr_recognize_files", json!({"paths":["input.pdf"],"folder":"out","language":"hu"}));
+    assert!(files["files"][0]["words"].as_u64().unwrap() >= 2, "{files}");
+    assert!(a.call("ocr_recognize", &json!({"doc":scan,"language":"xx"})).is_err());
+}
+
+#[test]
+fn hungarian_ocr_language_is_advertised_with_readiness() {
+    let dir = workdir("hungarian-status");
+    let mut a = auto(&dir);
+    let status = ok(&mut a, "ocr_status", json!({}));
+    let hu = status["languages"].as_array().unwrap().iter().find(|l| l["code"] == "hu").unwrap();
+    assert!(hu["available"].is_boolean());
+    assert!(hu["available"] == true || hu["error"].is_string());
+    for tool in tools().iter().filter(|t| matches!(t.name, "ocr_recognize" | "ocr_recognize_files")) {
+        assert!(tool.input_schema["properties"]["language"]["enum"].as_array().unwrap().contains(&json!("hu")));
+    }
+}

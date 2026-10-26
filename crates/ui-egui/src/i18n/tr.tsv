@@ -1261,6 +1261,8 @@
 	Also recognize pages that already have text	Zaten metin içeren sayfaları da tanı
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Bu sayfalardaki resimler de tanınır; sayfanın metninde zaten bulunan sözcükler yeniden eklenmez
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Metin tanıma yüklü değil: model dosyaları eksik. PdfCraft'ı yeniden yükleyin veya PDFCRAFT_MODELS ortam değişkenini bunları içeren klasöre ayarlayın.
+	Checking Hungarian OCR installation…	Macarca OCR kurulumu denetleniyor…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	Macarca OCR için Tesseract 5 ve hun dil modeli içeren masaüstü uygulaması gerekir. Kurulumdan sonra PdfCraft uygulamasını yeniden başlatın.
 	Settings	Ayarlar
 	Optional	İsteğe bağlı
 	Planned · {m}	Planlandı · {m}

@@ -2235,6 +2235,8 @@ action wizard	Start	Iniciar
 	Squiggly	Ondulado
 	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	As linhas de tabela devem ficar diretamente em uma tabela ou em seu cabeçalho, corpo ou rodapé. Corrija as tags da tabela.
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	O reconhecimento de texto não está instalado: faltam os arquivos dos modelos. Reinstale o PdfCraft ou defina PDFCRAFT_MODELS como a pasta que os contém.
+	Checking Hungarian OCR installation…	Verificando a instalação do OCR húngaro…
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.	O OCR húngaro requer o aplicativo de desktop com Tesseract 5 e o modelo de idioma hun. Reinicie o PdfCraft após a instalação.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Texto, marcas e assinaturas passam a fazer parte da página. Os demais comentários continuam editáveis.
 	That didn't work: an internal error stopped it ({m}).	Não funcionou: um erro interno interrompeu a ação ({m}).
 	The Windows store's digital IDs couldn't be listed: {e}	Não foi possível listar os IDs digitais do repositório do Windows: {e}

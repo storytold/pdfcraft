@@ -6580,8 +6580,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "Language choice exists, but the models read only the Latin alphabet without accents (English)."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::hungarian_is_selectable_in_the_ocr_dialog", "crates/automation/tests/it/automation.rs::hungarian_ocr_recognizes_and_saves_accented_scan"]
+notes = "English uses ocrs; Hungarian uses optional desktop Tesseract with hun data and a Unicode OCR layer. Other languages and browser Hungarian OCR remain unsupported. See crates/engine/README.md."
 
 [[feature]]
 id = "ocr.searchable-image"
@@ -6793,11 +6793,11 @@ title = "Pluggable OCR engines (ocrs default; tesseract optional)"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize", "ocr_recognize_files", "ocr_status"]
+evidence = ["crates/automation/tests/it/automation.rs::hungarian_ocr_recognizes_and_saves_accented_scan"]
+notes = "English uses ocrs; Hungarian selects optional local Tesseract/hun on desktop. Arbitrary engine selection and browser Tesseract remain unsupported. Installation is documented in crates/engine/README.md."
 
 [[feature]]
 id = "ocr.ocr-web"

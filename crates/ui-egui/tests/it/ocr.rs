@@ -348,3 +348,49 @@ fn only_the_edit_tool_recognizes_a_scanned_page() {
     h.run_steps(6);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
+
+#[test]
+fn hungarian_is_selectable_in_the_ocr_dialog() {
+    let _gpu = crate::gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "hu").unwrap();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("ocr.recognize");
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("Magyar").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.settings().language, "hu");
+    if let Ok(path) = std::env::var("PDFCRAFT_OCR_SCREENSHOT") {
+        // Let the asynchronous installation probe and page renderer settle for visual checks.
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            h.run_steps(1);
+        }
+        h.render().unwrap().save(path).unwrap();
+    }
+}
+
+/// Run with PDFCRAFT_MODELS pointing to an empty directory to also exercise a Hungarian-only
+/// installation. The automatically recognized scan must use the language chosen in the dialog.
+#[test]
+#[ignore = "requires Tesseract 5 with hun.traineddata"]
+fn hungarian_auto_ocr_uses_the_selected_language_backend() {
+    pdfcraft_engine::ocr::availability("hu").unwrap();
+    let mut h = edit_harness(scan());
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().ocr_draft.language = "hu".into();
+    assert!(h.state_mut().execute("edit.edit_text"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().session.get(id).unwrap().can_undo().is_none() && std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Recognize text"));
+    assert!(h.state().ocr_run.is_none());
+}

@@ -90,9 +90,35 @@ pub struct AutoOcr {
     pub generation: u64,
 }
 
+/// The native installation probe may take seconds; never run it on the GUI thread.
+fn readiness(ctx: &egui::Context, language: &str) -> Option<Result<(), String>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if language == "hu" {
+        type Probe = Arc<Mutex<Option<Result<(), String>>>>;
+        static PROBE: std::sync::OnceLock<Probe> = std::sync::OnceLock::new();
+        let probe = PROBE.get_or_init(|| {
+            let result: Probe = Arc::new(Mutex::new(None));
+            let worker = result.clone();
+            if let Err(e) = std::thread::Builder::new().name("pdfcraft-ocr-probe".into()).spawn(move || {
+                let found = pdfcraft_engine::ocr::availability("hu");
+                *worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+            }) {
+                *result.lock().unwrap_or_else(|e| e.into_inner()) = Some(Err(e.to_string()));
+            }
+            result
+        });
+        let result = probe.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if result.is_none() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        return result;
+    }
+    let _ = ctx;
+    Some(pdfcraft_engine::ocr::availability(language))
+}
+
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
@@ -146,12 +172,24 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
     });
-    if !available {
-        ui.label(
-            egui::RichText::new(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."))
-                .small()
-                .color(t.text_muted),
-        );
+    let readiness = readiness(ui.ctx(), &d.language);
+    let available = matches!(readiness, Some(Ok(())));
+    let detail = readiness.as_ref().and_then(|r| r.as_ref().err()).cloned();
+    let message = match readiness {
+        None => Some(tl!("Checking Hungarian OCR installation…").to_string()),
+        Some(Err(_)) if d.language == "en" => Some(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.").to_string()),
+        Some(Err(_)) => Some(tl!("Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.").to_string()),
+        Some(Ok(())) => None,
+    };
+    if let Some(message) = message {
+        ui.label(egui::RichText::new(message).small().color(t.text_muted));
+        if d.language != "en"
+            && let Some(detail) = detail
+        {
+            ui.collapsing(tl!("Details"), |ui| {
+                ui.label(egui::RichText::new(detail).small().color(t.text_muted));
+            });
+        }
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
@@ -201,9 +239,15 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available() {
-            self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
-            return;
+        let Some(ctx) = self.ctx.as_ref() else { return };
+        match readiness(ctx, &self.ocr_draft.language) {
+            // A pending native probe must not mark the page as skipped: try again after repaint.
+            None => return,
+            Some(Err(_)) => {
+                self.views[scan.view].auto_ocr_skipped.insert(scan.page, (scan.generation, self.ocr_draft.language.clone()));
+                return;
+            }
+            Some(Ok(())) => {}
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
         // Only a page with no text of its own is read. Comments and text boxes over the picture do
@@ -217,7 +261,7 @@ impl PdfCraftApp {
 
     /// The page Edit should read now, if there is one: Edit is on outside Read mode with no dialog
     /// open, nothing else is being recognized, the document may be changed, the page in view has
-    /// not been read before (nor been found no scan since the document last changed), and an image
+    /// not been read before (nor been skipped since the document or language last changed), and an image
     /// covers at least half of it. Needs no OCR models, so the rules can be tested without them;
     /// the page's own text is judged by the run itself.
     fn scan_to_read(&mut self) -> Option<ScanToRead> {
@@ -240,10 +284,10 @@ impl PdfCraftApp {
         if document.read_only_reason.is_some() || !document.allows_modification() {
             return None;
         }
-        // A page found not to be a scan is judged again only once the document has changed, not
-        // every frame (listing its images parses the page).
+        // Recheck a skipped page after a document or language change, not every frame (listing
+        // its images parses the page). A missing backend for one language must not block another.
         let generation = document.edit_generation();
-        if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation) {
+        if self.views[view].auto_ocr_skipped.get(&page).is_some_and(|(seen, language)| *seen == generation && language == &self.ocr_draft.language) {
             return None;
         }
         let info = document.info.pages.get(page)?;
@@ -253,7 +297,7 @@ impl PdfCraftApp {
             page_area > 0.0 && ((x1 - x0) * (y1 - y0)).abs() >= 0.5 * page_area
         });
         if !covered {
-            self.views[view].auto_ocr_skipped.insert(page, generation);
+            self.views[view].auto_ocr_skipped.insert(page, (generation, self.ocr_draft.language.clone()));
             return None;
         }
         Some(ScanToRead { view, doc, page, generation })
@@ -275,7 +319,7 @@ impl PdfCraftApp {
         let work = move || {
             crate::i18n::set_current(lang);
             let result = recognize_guarded(|| {
-                pdfcraft_engine::ocr::engine().map(|ocr| {
+                pdfcraft_engine::ocr::engine_for_language(&job.settings.language).map(|ocr| {
                     job.run(&ocr, |done, total| {
                         let Ok(mut s) = p.lock() else { return false };
                         s.done = done;
@@ -366,7 +410,7 @@ fn recognize_files(
     #[cfg(not(target_arch = "wasm32"))] dir: &std::path::Path,
 ) -> String {
     let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
-    match pdfcraft_engine::ocr::engine() {
+    match pdfcraft_engine::ocr::engine_for_language(&settings.language) {
         Err(e) => failed.push(e),
         Ok(ocr) => {
             for (i, (name, bytes)) in files.into_iter().enumerate() {
@@ -624,6 +668,21 @@ mod tests {
         let add = Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: Arc::new(png.into_inner()) };
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
+    }
+
+    #[test]
+    fn a_scan_skipped_for_an_unavailable_language_is_retried_after_switching_languages() {
+        let mut app = app_with(scan());
+        app.ctx = Some(egui::Context::default());
+        // An unsupported language produces the same readiness error as missing models,
+        // without depending on which recognition models the test machine has installed.
+        app.ocr_draft.language = "unsupported".into();
+        app.auto_ocr_scanned_page();
+        assert!(app.ocr_run.is_none());
+        assert!(!app.views[0].auto_ocr_tried.contains(&0));
+        assert_eq!(found(&mut app), None, "do not retry the same unavailable backend every frame");
+        app.ocr_draft.language = "hu".into();
+        assert_eq!(found(&mut app), Some(0), "changing language retries the unchanged scan");
     }
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
