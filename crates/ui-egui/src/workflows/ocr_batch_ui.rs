@@ -289,24 +289,36 @@ fn run(inputs: &[PathBuf], out: &Path, recursive: bool, settings: OcrSettings, p
     if let Err(e) = pdfcraft_engine::ocr::engine() {
         return failed(&e);
     }
-    let (mut ok, mut words, mut errors) = (0usize, 0usize, Vec::new());
+    let (mut ok, mut words, mut errors, mut cancelled) = (0usize, 0usize, Vec::new(), false);
     for (i, (path, relative)) in files.into_iter().enumerate() {
-        if let Ok(mut s) = p.lock() {
-            s.done = i;
+        match p.lock() {
+            Ok(s) if s.cancel => {
+                cancelled = true;
+                break;
+            }
+            Ok(mut s) => s.done = i,
+            Err(_) => {}
         }
-        let result = recipe.process(&path, |_, _| true).and_then(|(bytes, log)| {
+        let result = recipe.process(&path, |page, pages| BatchProgress::page(p, page, pages)).and_then(|(bytes, log)| {
             batch::publish(&batch::output_path(&out, &relative), &bytes)?;
             Ok(log.iter().map(|l| if let StepLog::Ocr { words, .. } = l { *words } else { 0 }).sum::<usize>())
         });
         match result {
+            // Stopped partway: nothing of this file was written.
+            Err(e) if e == batch::CANCELLED => {
+                cancelled = true;
+                break;
+            }
             Ok(n) => {
                 ok += 1;
                 words = words.saturating_add(n);
             }
             Err(e) => errors.push(format!("{}: {e}", relative.display())),
         }
+        BatchProgress::file_done(p);
     }
-    summary(ok, words, skipped, &errors)
+    let summary = summary(ok, words, skipped, &errors);
+    if cancelled { crate::i18n::fmt(tl!("Text recognition cancelled. {summary}"), &[("summary", &summary)]) } else { summary }
 }
 
 /// "Recognized 120 words in 3 files; skipped: 2; failed: a.pdf: …", in the current language.
@@ -380,5 +392,25 @@ mod tests {
         let s = summary(1, 3, 2, &errors);
         assert!(s.starts_with("Recognized 3 words in 1 file; skipped: 2; failed: 1.pdf: broken"), "{s}");
         assert!(s.ends_with("5.pdf: broken; … (+2)"), "{s}");
+    }
+
+    /// Cancelled before a file is read: nothing is written, and the summary says it was cancelled.
+    #[test]
+    fn a_cancelled_batch_writes_nothing_more() {
+        if pdfcraft_engine::ocr::engine().is_err() {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        let scans = dir.path().join("scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        let pdf = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 1).unwrap();
+        std::fs::write(scans.join("a.pdf"), &*pdf).unwrap();
+        let out = dir.path().join("out");
+        let p = Mutex::new(BatchProgress { cancel: true, ..Default::default() });
+        let summary = run(&[scans], &out, false, OcrSettings::default(), &p);
+        assert!(summary.starts_with("Text recognition cancelled. Recognized 0 words in 0 files"), "{summary}");
+        assert!(!out.join("a.pdf").exists());
     }
 }

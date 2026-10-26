@@ -19,6 +19,8 @@ pub const MAX_ENTRIES: usize = 10_000;
 pub const MAX_DEPTH: usize = 64;
 /// The largest input file read.
 pub const MAX_INPUT: u64 = 512 * 1024 * 1024;
+/// The error of a file whose recognition `progress` stopped: nothing of it is published.
+pub const CANCELLED: &str = "cancelled";
 
 /// One thing done to each file, in the order given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,8 +76,8 @@ impl Recipe {
         extension == "pdf" || (self.steps.contains(&Step::Convert) && crate::CONVERTIBLE.contains(&extension.as_str()))
     }
 
-    /// Run the steps on the file at `path`. `progress(page, pages)` is called while text is
-    /// recognized; returning `false` stops the file with an error.
+    /// Run the steps on the file at `path`. `progress(page, pages)` is called before each page
+    /// text is recognized on; returning `false` stops the file with the [`CANCELLED`] error.
     pub fn process(&self, path: &Path, mut progress: impl FnMut(usize, usize) -> bool) -> Result<(Arc<Vec<u8>>, Vec<StepLog>), String> {
         // A fresh session per file bounds retained document state and never touches open tabs.
         let mut session = Session::new();
@@ -93,7 +95,17 @@ impl Recipe {
                 Step::Convert => bytes = session.convert_to_pdf(name, &bytes).map_err(|e| e.to_string())?.1,
                 Step::Ocr => {
                     let engine = ocr::engine()?;
-                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, &mut progress)?;
+                    // recognize_file keeps the pages read before a stop; a folder job must not
+                    // publish such a file as if it were done.
+                    let mut stopped = false;
+                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |done, total| {
+                        let go = progress(done, total);
+                        stopped |= !go;
+                        go
+                    })?;
+                    if stopped {
+                        return Err(CANCELLED.into());
+                    }
                     log.push(StepLog::Ocr { words: result.words(), skipped_pages: result.pages.iter().filter(|p| p.skipped.is_some()).count() });
                     bytes = result.bytes;
                     continue;
@@ -293,6 +305,30 @@ mod tests {
         std::fs::write(scans.join("a.pdf"), b"%PDF").unwrap();
         let found = Discovery::find(std::slice::from_ref(&scans), &inside, true).unwrap();
         assert_eq!(found.files.into_values().collect::<Vec<_>>(), vec![PathBuf::from("a.pdf")]);
+    }
+
+    /// A stop during recognition fails the file instead of handing back the pages read so far
+    /// as a finished copy. Needs the OCR models (`cargo xtask models`).
+    #[test]
+    fn a_stopped_recognition_is_an_error_not_a_partial_file() {
+        if !ocr::available() {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        }
+        let s = Session::new();
+        let text = s.create_from_text("t", "Recognize these scanned words").unwrap();
+        let mut viewer = Session::new();
+        let id = viewer.open("text.pdf", None, text, None).unwrap();
+        let png = crate::export::Exporter::new(viewer.get(id).unwrap()).png(0, 150.0).unwrap();
+        let scan = s.create_from_images(&[("1.png".into(), png.clone()), ("2.png".into(), png)]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.pdf");
+        std::fs::write(&path, &*scan).unwrap();
+        let recipe = Recipe::ocr(ocr::OcrSettings::default());
+        // Stop before the second page.
+        assert_eq!(recipe.process(&path, |done, _| done == 0).unwrap_err(), CANCELLED);
+        let (bytes, log) = recipe.process(&path, |_, _| true).unwrap();
+        assert!(bytes.len() > scan.len() && matches!(log.first(), Some(StepLog::Ocr { words, .. }) if *words > 0));
     }
 
     #[test]
