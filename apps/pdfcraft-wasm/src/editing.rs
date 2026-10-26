@@ -207,9 +207,9 @@ impl Document {
             .map(|o| {
                 let [a, b] = [info.user_to_view(o.rect[0] as f32, o.rect[1] as f32), info.user_to_view(o.rect[2] as f32, o.rect[3] as f32)];
                 let style = match o.target.kind {
-                    ObjectKind::Text => {
-                        blocks.get(o.target.index).map(|b| style_json(family_of(&b.base_font), b.bold, b.italic, b.size, b.color, None))
-                    }
+                    ObjectKind::Text => blocks
+                        .get(o.target.index)
+                        .map(|b| style_json(family_of(&b.base_font), b.bold, b.italic, b.size, b.color, self.align_of(page, b))),
                     ObjectKind::Added => match self.added_content(page, o.target.index) {
                         Ok(AddedContent::Text(t)) => Some(style_json(t.family, t.bold, t.italic, t.size, t.color, Some(t.align))),
                         _ => None,
@@ -279,6 +279,52 @@ impl Document {
                 self.apply(Edit::EditTextBlock { page, block: target.index, text: format!("{} ", block.text.trim_end()), style })
             }
         }
+    }
+
+    /// How a paragraph's lines sit against each other, read from where its words start and end: flush
+    /// left, flush right or centred. A single line, or lines that fit none of those, say nothing.
+    fn align_of(&self, page: usize, block: &pdfcraft_engine::TextBlock) -> Option<TextAlign> {
+        let lines = self.doc().map(|d| d.text_lines(page)).ok()?;
+        let mut ends: Vec<(f64, f64)> = Vec::new();
+        for line in block.lines.iter().filter_map(|i| lines.get(*i)) {
+            let left = line.ink.iter().map(|r| r[0]).fold(f64::INFINITY, f64::min);
+            let right = line.ink.iter().map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max);
+            if left.is_finite() && right.is_finite() {
+                ends.push((left, right));
+            }
+        }
+        // the last line of a paragraph is short whatever the alignment
+        if ends.len() >= 3 {
+            ends.pop();
+        }
+        if ends.len() < 2 {
+            return None;
+        }
+        const TOLERANCE: f64 = 1.5;
+        let (min_left, max_right) = ends.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, r), (a, b)| (l.min(*a), r.max(*b)));
+        let mid = ends.iter().map(|(a, b)| (a + b) / 2.0).sum::<f64>() / ends.len() as f64;
+        if ends.iter().all(|(a, _)| (a - min_left).abs() <= TOLERANCE) {
+            Some(TextAlign::Left)
+        } else if ends.iter().all(|(_, b)| (b - max_right).abs() <= TOLERANCE) {
+            Some(TextAlign::Right)
+        } else if ends.iter().all(|(a, b)| ((a + b) / 2.0 - mid).abs() <= TOLERANCE) {
+            Some(TextAlign::Center)
+        } else {
+            None
+        }
+    }
+
+    /// How wide a paragraph's words run, in user space. Its box also spans the trailing space a rewrite
+    /// leaves, which would make the box a space wider with every restyle.
+    fn ink_width(&self, page: usize, block: &pdfcraft_engine::TextBlock) -> f64 {
+        let lines = self.doc().map(|d| d.text_lines(page)).unwrap_or_default();
+        let mut span: Option<(f64, f64)> = None;
+        for line in block.lines.iter().filter_map(|i| lines.get(*i)) {
+            for ink in &line.ink {
+                span = Some(span.map_or((ink[0], ink[2]), |(a, b)| (a.min(ink[0]), b.max(ink[2]))));
+            }
+        }
+        span.map_or(block.rect[2] - block.rect[0], |(a, b)| b - a)
     }
 
     /// Turns a picture by quarter turns clockwise (negative for anticlockwise) about its centre.
@@ -353,7 +399,14 @@ impl Document {
                         style.italic.unwrap_or(block.italic),
                     )
                 });
-                let edit = BlockStyle { family, size: style.size, color: style.color, align: style.align, ..BlockStyle::default() };
+                let edit = BlockStyle {
+                    family,
+                    size: style.size,
+                    color: style.color,
+                    align: style.align,
+                    width: Some(self.ink_width(page, &block)),
+                    ..BlockStyle::default()
+                };
                 self.apply(Edit::EditTextBlock { page, block: target.index, text: words, style: edit })
             }
             Kind::Image => Err("a picture has no text".into()),
