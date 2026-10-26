@@ -1754,8 +1754,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::the_pages_menu_comes_from_the_registry"]
-notes = ""
+evidence = ["crates/ui-egui/src/menus.rs::pages_is_a_top_level_menu_in_the_native_macos_bar", "crates/ui-egui/tests/it/commands.rs::the_pages_menu_comes_from_the_registry"]
+notes = "Pages is a top-level menu between Edit and View, including in the native macOS layout; command gates and shortcuts remain registry-driven. "
 
 [[feature]]
 id = "view.about-dialog"

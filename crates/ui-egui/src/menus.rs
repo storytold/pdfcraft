@@ -304,15 +304,8 @@ impl PdfCraftApp {
             }
             nodes
         };
-        // Edit ▸ Pages follows Select All.
-        let mut edit = Vec::new();
-        for node in list(EDIT, &mut used) {
-            let select_all = matches!(&node, Node::Item(it) if it.command.id == SELECT_ALL);
-            edit.push(node);
-            if select_all {
-                edit.push(Node::submenu(tl!("Pages"), list(PAGES, &mut used)));
-            }
-        }
+        let edit = list(EDIT, &mut used);
+        let pages = list(PAGES, &mut used);
         let mut sign = vec![Node::submenu(
             tl!("Fill & Sign"),
             FILL.iter()
@@ -353,6 +346,7 @@ impl PdfCraftApp {
             menus: vec![
                 Menu::new(tl!("File"), craft_menu::tidy(file)).role(MenuRole::File),
                 Menu::new(tl!("Edit"), craft_menu::tidy(edit)).role(MenuRole::Edit),
+                Menu::new(tl!("Pages"), craft_menu::tidy(pages)),
                 Menu::new(tl!("View"), craft_menu::tidy(view)).role(MenuRole::View),
                 Menu::new(tl!("Sign"), craft_menu::tidy(sign)),
                 Menu::new(tl!("Window"), window).role(MenuRole::Window),
@@ -652,6 +646,20 @@ mod tests {
 
     fn item<'b>(bar: &'b MenuBar, command: &CommandRef) -> &'b Item {
         bar.find(command).unwrap_or_else(|| panic!("{} is in the menus", command.key()))
+    }
+
+    #[test]
+    fn pages_is_a_top_level_menu_in_the_native_macos_bar() {
+        let (app, ctx) = app(&["a.pdf"]);
+        let bar = craft_menu::mac_layout(&app.menu_bar(&ctx), &layout_options()).bar;
+        let pages = bar.menus.iter().position(|m| m.title == "Pages").expect("top-level Pages menu");
+        let edit = bar.menus.iter().position(|m| m.role == MenuRole::Edit).unwrap();
+        let view = bar.menus.iter().position(|m| m.role == MenuRole::View).unwrap();
+        assert!(edit < pages && pages < view);
+        let only_pages = MenuBar { menus: vec![bar.menus[pages].clone()], documents: Vec::new() };
+        for id in PAGES.iter().filter(|id| **id != SEP) {
+            assert!(only_pages.find(&CommandRef::new(*id)).is_some(), "{id} belongs in Pages");
+        }
     }
 
     #[test]
