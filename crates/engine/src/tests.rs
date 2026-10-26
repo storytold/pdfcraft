@@ -1735,6 +1735,23 @@ fn autosave_snapshots_only_changed_documents() {
 }
 
 #[test]
+fn autosave_failed_offers_the_same_generation_again() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let snap = s.autosave_snapshots().remove(0);
+    s.autosave_failed(snap.doc, snap.generation);
+    let again = s.autosave_snapshots();
+    assert_eq!(again.len(), 1, "the unstored snapshot is retried without a new edit");
+    assert_eq!(again[0].generation, snap.generation);
+    assert!(s.autosave_snapshots().is_empty(), "a stored snapshot is not repeated");
+    let stale = again[0].generation;
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s.autosave_failed(id, stale);
+    assert_eq!(s.autosave_snapshots().len(), 1, "the newer edit is still snapshotted once");
+    assert!(s.autosave_snapshots().is_empty());
+}
+
+#[test]
 fn autosave_snapshots_a_new_unsaved_document_once() {
     let (mut s, clean) = session_with(1);
     let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();

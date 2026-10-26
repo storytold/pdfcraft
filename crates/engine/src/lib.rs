@@ -1231,6 +1231,8 @@ pub struct RecoverySnapshot {
     pub bytes: Arc<Vec<u8>>,
     /// The snapshot is encrypted (recovering it asks for the password again).
     pub encrypted: bool,
+    /// The document generation this snapshot captured; pass it to [`Session::autosave_failed`] if writing it fails.
+    pub generation: u64,
 }
 
 /// Document Properties ▸ Security.
@@ -5196,10 +5198,19 @@ impl Session {
                     path: d.path.clone(),
                     bytes,
                     encrypted: d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
+                    generation: d.generation,
                 });
             }
         }
         out
+    }
+
+    /// A snapshot from [`Self::autosave_snapshots`] could not be stored: offer that generation again on the next call.
+    /// Does nothing if the document changed or was snapshotted since, as a newer generation is already pending or stored.
+    pub fn autosave_failed(&mut self, id: DocId, generation: u64) {
+        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id && d.snapshot_generation == generation) {
+            d.snapshot_generation = generation.wrapping_sub(1);
+        }
     }
 
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
