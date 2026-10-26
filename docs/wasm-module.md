@@ -36,6 +36,10 @@ pdf.edit_text_block(0, 0, "New text");
 const saved = pdf.save(); // incremental: the original bytes stay as a prefix
 ```
 
+`pdf.text_blocks(page)` returns JSON. Each block has `rect` in PDF user space and `view`, the same box as
+displayed (points from the top-left, y down, after the page's rotation), which is what a page drawn at
+`scale` needs for hit testing and an overlay: multiply by `scale`.
+
 An encrypted file throws an error that starts with `needs-password:` or `wrong-password:`, so the
 page can ask and try again. Page and block indices are 0-based.
 

@@ -33,6 +33,14 @@ impl OpenFailure {
     }
 }
 
+/// A user-space box as displayed: the page's `/Rotate` and crop box applied, `[x0, y0, x1, y1]`
+/// with `x0 <= x1` and `y0 <= y1`.
+fn view_rect(page: &pdfcraft_render::PageInfo, r: [f64; 4]) -> [f32; 4] {
+    let a = page.user_to_view(r[0] as f32, r[1] as f32);
+    let b = page.user_to_view(r[2] as f32, r[3] as f32);
+    [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+}
+
 /// A rendered page or tile: premultiplied RGBA8, row-major.
 pub struct Raster {
     pub width: u32,
@@ -100,15 +108,17 @@ impl Document {
         }
     }
 
-    /// The text blocks of a page as a JSON array, in reading order. Each has its `index`, the page
-    /// `rect` as [x0, y0, x1, y1] in user space, the `text` the person edits, the font and style,
-    /// and whether it is an invisible OCR layer.
+    /// The text blocks of a page as a JSON array, in reading order. Each has its `index`, its `rect`
+    /// as [x0, y0, x1, y1] in PDF user space, the same box as `view` (points from the top-left of the
+    /// page as displayed, y down, after the page's rotation, which is where it is drawn), the `text`
+    /// the person edits, the font and style, and whether it is an invisible OCR layer.
     pub fn text_blocks_json(&self, page: usize) -> Result<String, String> {
         if page >= self.page_count() {
             return Err(format!("page {} does not exist", page.saturating_add(1)));
         }
-        let blocks: Vec<serde_json::Value> = self
-            .doc()?
+        let doc = self.doc()?;
+        let info = doc.info.pages.get(page);
+        let blocks: Vec<serde_json::Value> = doc
             .text_blocks(page)
             .iter()
             .enumerate()
@@ -116,6 +126,7 @@ impl Document {
                 serde_json::json!({
                     "index": index,
                     "rect": b.rect,
+                    "view": info.map(|p| view_rect(p, b.rect)),
                     "text": b.editor_text,
                     "font": b.base_font,
                     "size": b.size,
@@ -271,6 +282,27 @@ mod tests {
         assert_eq!(first_text(&doc, 0), "Edited");
         assert!(doc.edit_text_block(0, 9, "x").is_err(), "no such block");
         assert!(doc.text_blocks_json(5).is_err(), "no such page");
+    }
+
+    #[test]
+    fn reports_where_each_block_is_drawn() {
+        fn view(doc: &Document) -> Vec<f64> {
+            let blocks: Vec<serde_json::Value> = serde_json::from_str(&doc.text_blocks_json(0).expect("blocks")).expect("json");
+            blocks[0]["view"].as_array().expect("view").iter().map(|v| v.as_f64().expect("number")).collect()
+        }
+        let mut doc = open(1);
+        let v = view(&doc);
+        let (w, h) = doc.page_size(0).expect("size");
+        assert!(v[0] >= 0.0 && v[1] >= 0.0 && v[2] <= f64::from(w) && v[3] <= f64::from(h), "inside the page: {v:?}");
+        assert!(v[0] < v[2] && v[1] < v[3], "a real box: {v:?}");
+        // the text's baseline is 150 up from the bottom of a 300 point page: about the middle
+        assert!((v[1] + v[3]) / 2.0 > 100.0 && (v[1] + v[3]) / 2.0 < 200.0, "about the middle of the page: {v:?}");
+        doc.rotate_pages(&[0], 90).expect("rotates");
+        let r = view(&doc);
+        let (w, h) = doc.page_size(0).expect("size");
+        assert_eq!((w, h), (300.0, 200.0));
+        assert!(r[2] <= f64::from(w) && r[3] <= f64::from(h), "inside the turned page: {r:?}");
+        assert_ne!(v, r, "turning the page moves the box");
     }
 
     #[test]
