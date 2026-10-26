@@ -8751,6 +8751,94 @@ fn text_box_and_callout_fill_and_border_through_tools() {
     }
 }
 
+/// #3273: images became pages as large as their pixels, so a set of photos gave pages of several
+/// sizes and none of them paper. `page_size` puts them all on one sheet, scaled to fit.
+#[test]
+fn image_pages_go_on_a_chosen_paper_size_through_every_create_tool() {
+    let dir = workdir("image-page-size");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Two pictures of different shapes, from the fixture's own pages.
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1, 2] }));
+    let shots = ["src/a_page_1.png", "src/a_page_2.png"];
+    let size = |a: &mut Automation, d: u64, page: usize| -> (f64, f64) {
+        let p = &ok(a, "doc_info", json!({ "doc": d }))["pages"][page];
+        (p["width"].as_f64().unwrap(), p["height"].as_f64().unwrap())
+    };
+    const A4: (f64, f64) = (595.28, 841.89);
+    let close = |got: (f64, f64), want: (f64, f64)| (got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01;
+
+    // Without it, pages follow the pixels, as they always have.
+    let plain = ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots }))["doc"].as_u64().unwrap();
+    assert!(!close(size(&mut a, plain, 0), A4), "the default is unchanged: {:?}", size(&mut a, plain, 0));
+
+    // doc_create: a paper name, with the sheet turned to each image by default.
+    let named = ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": "A4" }))["doc"].as_u64().unwrap();
+    for page in 0..2 {
+        let got = size(&mut a, named, page);
+        assert!(close(got, A4) || close(got, (A4.1, A4.0)), "page {page} is an A4 sheet either way up: {got:?}");
+    }
+    // page_turn: false pins the orientation, so every page is portrait A4.
+    let pinned =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": "A4", "page_turn": false }))["doc"].as_u64().unwrap();
+    for page in 0..2 {
+        assert!(close(size(&mut a, pinned, page), A4), "page {page}: {:?}", size(&mut a, pinned, page));
+    }
+    // An explicit size in points works too, and the names Print accepts are accepted here.
+    let explicit =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": [300, 300], "page_turn": false }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, explicit, 0), (300.0, 300.0)));
+    let letter =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": "Letter", "page_turn": false }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, letter, 0), (612.0, 792.0)));
+
+    // doc_create_multiple takes it as well.
+    ok(&mut a, "doc_create_multiple", json!({ "paths": shots, "page_size": "A4", "page_turn": false, "out": "multiple.pdf" }));
+    let multiple = ok(&mut a, "doc_open", json!({ "path": "multiple.pdf" }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, multiple, 0), A4) && close(size(&mut a, multiple, 1), A4));
+
+    // mode "separate" writes one PDF per image, each on the sheet.
+    ok(&mut a, "doc_create_multiple", json!({ "paths": shots, "mode": "separate", "out_dir": "out", "page_size": "A4", "page_turn": false }));
+    let one = ok(&mut a, "doc_open", json!({ "path": "out/a_page_1.pdf" }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, one, 0), A4));
+
+    // A size no page can be is refused the same way: not a paper name, not a pair of points, or
+    // a pair outside the 3 to 14400 points a PDF page may be (ISO 32000-2 Annex C). Checked for
+    // every tool that takes one and in both of doc_create_multiple's modes, because "separate"
+    // makes out_dir before it converts anything and a size reported only by the conversion would
+    // leave the folder behind.
+    for bad in [json!("A9"), json!([300]), json!(["a", "b"]), json!(5), json!({}), json!([14401, 792]), json!([612, 2]), json!([-612, 792])] {
+        for (tool, args) in [
+            ("doc_create", json!({ "from": "images", "paths": shots, "page_size": bad.clone() })),
+            ("doc_create_multiple", json!({ "paths": shots, "page_size": bad.clone(), "out": "refused.pdf" })),
+            ("doc_create_multiple", json!({ "paths": shots, "mode": "separate", "out_dir": "refused", "page_size": bad.clone() })),
+        ] {
+            assert!(matches!(a.call(tool, &args), Err(ToolError::InvalidArgs(_))), "{tool}: {bad} should be refused");
+        }
+    }
+    assert!(!dir.join("refused.pdf").exists(), "a refused page_size leaves no file behind");
+    assert!(!dir.join("refused").exists(), "nor a folder");
+
+    // page_size lays out images and nothing else. A PDF source is returned as it is and a .txt
+    // goes through create_from_text, so neither takes the sheet: #3273 asked for photos to stop
+    // dictating the page, not for every source to be re-sized. Covering it because the engine
+    // passes `page` only to the image arm of `convert_to_pdf_with`, which is easy to widen by
+    // accident later (@FredApps named this as the part he read but did not run).
+    std::fs::write(dir.join("notes.txt"), "Some notes").unwrap();
+    let mixed = ok(&mut a, "doc_create_multiple", json!({ "paths": ["a.pdf", "notes.txt", shots[0]], "page_size": "A4", "out": "mixed.pdf" }));
+    assert!(mixed["bytes"].as_u64().unwrap_or(0) > 0, "the mixed run produced a file: {mixed}");
+    let doc_mixed = ok(&mut a, "doc_open", json!({ "path": "mixed.pdf" }))["doc"].as_u64().unwrap();
+    let pages = ok(&mut a, "doc_info", json!({ "doc": doc_mixed }))["pages"].as_array().cloned().unwrap_or_default();
+    let a_pdf = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let kept = size(&mut a, a_pdf, 0);
+    assert!(!close(kept, A4) && !close(kept, (A4.1, A4.0)), "the fixture is not A4 already, or this test proves nothing: {kept:?}");
+    assert!(close(size(&mut a, doc_mixed, 0), kept), "the PDF's first page keeps its own size: {:?}", size(&mut a, doc_mixed, 0));
+    let last = pages.len() - 1;
+    let image_page = size(&mut a, doc_mixed, last);
+    assert!(close(image_page, A4) || close(image_page, (A4.1, A4.0)), "the image page did go on the sheet: {image_page:?}");
+    assert!(pages.len() > 2, "all three sources contributed pages: {}", pages.len());
+}
+
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
 /// of #2516. A third Alpha row brings its last baseline within 2.5 × size of Bravo's, so the next
 /// read groups the two as one paragraph.

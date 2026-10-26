@@ -1318,3 +1318,106 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }
+
+/// A4 in points, as `pdfcraft-print`'s paper table has it (the tools resolve the name there).
+const A4: (f64, f64) = (595.28, 841.89);
+
+#[test]
+fn a_fixed_page_scales_the_image_to_fit_and_centres_it() {
+    // 4 x 2 points at 72 dpi: wider than A4's proportions, so the width is the limit.
+    let fit = ImagePage::fixed(A4, false);
+    let ((pw, ph), (dw, dh, x, y)) = fit.place(4.0, 2.0);
+    assert_eq!((pw, ph), A4, "the sheet keeps the size it was given");
+    assert!((dw - A4.0).abs() < 1e-9, "the wide side fills the page: {dw}");
+    assert!((dh - A4.0 / 2.0).abs() < 1e-9, "and the aspect ratio is kept: {dh}");
+    assert!(x.abs() < 1e-9 && (y - (A4.1 - dh) / 2.0).abs() < 1e-9, "centred: {x}, {y}");
+    // Nothing is ever cropped or stretched.
+    assert!(dw <= pw + 1e-9 && dh <= ph + 1e-9);
+    assert!((dw / dh - 2.0).abs() < 1e-9, "aspect ratio kept");
+
+    // A tall image on the same sheet is limited by the height instead.
+    let (_, (dw, dh, x, y)) = fit.place(2.0, 4.0);
+    assert!((dh - A4.1).abs() < 1e-9 && (dw - A4.1 / 2.0).abs() < 1e-9, "{dw} x {dh}");
+    assert!(y.abs() < 1e-9 && (x - (A4.0 - dw) / 2.0).abs() < 1e-9);
+
+    // An image smaller than the sheet is enlarged to fit it, not left in a corner.
+    let (_, (dw, dh, ..)) = fit.place(10.0, 10.0);
+    assert!((dw - A4.0).abs() < 1e-9 && (dh - A4.0).abs() < 1e-9, "a square fills the narrow side");
+}
+
+#[test]
+fn turning_the_sheet_follows_the_image_but_leaves_a_square_alone() {
+    let turn = ImagePage::fixed(A4, true);
+    // A landscape image turns a portrait sheet; a portrait one leaves it.
+    assert_eq!(turn.place(4.0, 2.0).0, (A4.1, A4.0), "landscape photo, landscape sheet");
+    assert_eq!(turn.place(2.0, 4.0).0, A4, "portrait photo, portrait sheet");
+    // A landscape sheet turns the other way for a portrait image.
+    let landscape = ImagePage::fixed((A4.1, A4.0), true);
+    assert_eq!(landscape.place(2.0, 4.0).0, A4);
+    // A square image is neither, so the sheet is left as asked for.
+    assert_eq!(turn.place(5.0, 5.0).0, A4, "a square never turns the sheet");
+    // Without turning, the sheet is whatever it was given.
+    assert_eq!(ImagePage::fixed(A4, false).place(4.0, 2.0).0, A4);
+}
+
+#[test]
+fn image_pages_sized_by_the_image_are_unchanged() {
+    // The default must still put the page exactly on the image, at the origin.
+    assert_eq!(ImagePage::Image.place(4.0, 2.0), ((4.0, 2.0), (4.0, 2.0, 0.0, 0.0)));
+    assert_eq!(ImagePage::default(), ImagePage::Image);
+    let images = [("photo.png".into(), png_bytes(true)), ("scan.jpg".into(), jpeg_bytes())];
+    let by_image = from_images_with(&images, ImageResolution::Embedded, ImagePage::Image).unwrap();
+    assert_eq!(reopen(&by_image).bytes(), reopen(&from_images(&images).unwrap()).bytes(), "the same file as before");
+}
+
+#[test]
+fn a_set_of_differently_shaped_images_lands_on_one_paper_size() {
+    // #3273: a 4 x 2 and a 3 x 2 image gave pages of two different sizes, neither of them paper.
+    let images = [("photo.png".into(), png_bytes(true)), ("scan.jpg".into(), jpeg_bytes())];
+    let doc = reopen(&from_images_with(&images, ImageResolution::Embedded, ImagePage::fixed(A4, false)).unwrap());
+    let p = pages(&doc);
+    assert_eq!(p.len(), 2);
+    for d in &p {
+        let m = media(d);
+        assert!((m[2] - A4.0).abs() < 0.001 && (m[3] - A4.1).abs() < 0.001, "every page is A4: {m:?}");
+    }
+    // The image is drawn scaled and centred, not at the page's origin.
+    let c = doc.resolve(p[0].get(b"Contents").unwrap());
+    let Object::Stream(s) = &*c else { panic!("expected a content stream") };
+    let text = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(text.contains("595.280 0 0 297.640 0.000 272.125 cm"), "scaled to the width and centred: {text}");
+
+    // Turning gives the landscape images landscape sheets instead.
+    let doc = reopen(&from_images_with(&images, ImageResolution::Embedded, ImagePage::fixed(A4, true)).unwrap());
+    for d in pages(&doc).iter() {
+        let m = media(d);
+        assert!((m[2] - A4.1).abs() < 0.001 && (m[3] - A4.0).abs() < 0.001, "turned for a wide image: {m:?}");
+    }
+}
+
+#[test]
+fn an_unusable_page_size_is_refused_and_nothing_is_written() {
+    let images = [("photo.png".into(), png_bytes(true))];
+    for size in [(0.0, 100.0), (100.0, 0.0), (2.9, 100.0), (f64::NAN, 100.0), (100.0, f64::INFINITY), (20_000.0, 100.0), (-5.0, 100.0)] {
+        let page = ImagePage::fixed(size, true);
+        assert!(matches!(from_images_with(&images, ImageResolution::Embedded, page), Err(CreateError::Invalid(_))), "{size:?}");
+    }
+    // The largest page PDF allows is fine.
+    assert!(from_images_with(&images, ImageResolution::Embedded, ImagePage::fixed((14_400.0, 14_400.0), true)).is_ok());
+}
+
+/// A fixed page is filled by the image whatever its resolution: a tiny image at a high dpi is
+/// enlarged to the sheet, not left small on it. `MAX_SIDE` bounds a page side, which
+/// `ImagePage::check` has already applied, so it must not also cap the fit scale.
+#[test]
+fn a_tiny_high_dpi_image_still_fills_its_fixed_page() {
+    let images = [("photo.png".into(), png_bytes(true))];
+    // 4 x 2 px at 1200 dpi is 0.24 x 0.12 pt: the fit scale is 60000, far past MAX_SIDE.
+    let page = ImagePage::fixed((MAX_SIDE, MAX_SIDE), false);
+    let doc = reopen(&from_images_with(&images, ImageResolution::Dpi(1200.0), page).unwrap());
+    let p = pages(&doc);
+    let c = doc.resolve(p[0].get(b"Contents").unwrap());
+    let Object::Stream(s) = &*c else { panic!("expected a content stream") };
+    let text = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(text.contains("14400.000 0 0 7200.000 0.000 3600.000 cm"), "the image should span the full 14400 pt page: {text}");
+}

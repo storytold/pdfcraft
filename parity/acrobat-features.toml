@@ -6871,9 +6871,9 @@ tier = "P0"
 milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
-tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
+tools = ["doc_create", "doc_create_multiple"]
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space", "crates/create/src/tests.rs::a_set_of_differently_shaped_images_lands_on_one_paper_size", "crates/automation/tests/it/automation.rs::image_pages_go_on_a_chosen_paper_size_through_every_create_tool"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet. Pages follow the image at its resolution, or sit on a chosen sheet (page_size: a paper name or points, scaled to fit, centred, turned to the image unless page_turn is false) in doc_create and doc_create_multiple; doc_combine does not take it yet, and there is no dialog for it"
 
 [[feature]]
 id = "create.from-multipage-tiff"

@@ -39,7 +39,10 @@ fn bad(m: impl Into<String>) -> ToolError {
 
 /// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
 /// index and size; US Letter when none is given.
-fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
+///
+/// `pub(crate)` so Create answers the same names as Print: `doc_create` takes a `page_size` that
+/// may be a paper name, and a second copy of this table would drift from this one.
+pub(crate) fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
     let mut papers = PAPERS.iter().enumerate();
     let found = match name {
         None => papers.next(),
