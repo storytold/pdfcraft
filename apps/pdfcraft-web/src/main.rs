@@ -53,7 +53,10 @@ fn main() {
                     }
                     // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
                     // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
-                    warn_before_unload(app.unsaved_flag.clone());
+                    // A host page (`?host=parent`) guards leaving the page itself.
+                    if query_param("host").as_deref() != Some("parent") {
+                        warn_before_unload(app.unsaved_flag.clone());
+                    }
                     // `?host=parent`: a same-origin page embedding PdfCraft in an iframe (such
                     // as the Nextcloud app) passes files in and takes saves back (`host` below).
                     if query_param("host").as_deref() == Some("parent")
@@ -69,6 +72,7 @@ fn main() {
                         bridge.listen(app.startup_inbox.clone(), cc.egui_ctx.clone());
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
+                        pdfcraft_ui_egui::set_host_download(bridge.export_fn());
                         bridge.post_ready();
                     } else if query_param("host").as_deref() == Some("parent") {
                         eframe::web_sys::console::warn_1(
@@ -123,7 +127,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
-/// The `postMessage` bridge to a same-origin parent page. Messages are plain objects with a
+/// The `postMessage` bridge to a same-origin parent page (docs/web-host-bridge.md). Messages are plain objects with a
 /// `type`:
 ///
 /// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
@@ -131,8 +135,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
+///   Every other file that would download (exports, reports, printed PDFs) comes the same way
+///   with `export: true` (and `saveAs: true`); it doesn't mark the document clean.
+///
+/// In host mode the parent guards leaving the page (no `beforeunload` prompt here).
 /// - `pdfcraft:dirty` (to the parent): `{ dirty }` whenever unsaved work appears or goes away.
-/// - `pdfcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+/// - `pdfcraft:open-refused` (to the parent): `{ name, reason, size, limit, error }` when a
+///   `pdfcraft:open` document is not opened. Not fatal: the session keeps running. The only
+///   `reason` today is `"too-large"` (`size` > `limit` = [`MAX_OPEN_BYTES`]).
+/// - `pdfcraft:failed` (to the parent): `{ error }` only when the app couldn't start.
 ///
 /// Only the parent window on the app's own origin is heard or answered. With a parent on
 /// another origin there is no bridge: the app runs as if unframed and saves download.
@@ -200,13 +211,29 @@ mod host {
                 }
                 let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string());
                 let Ok(bytes) = js_sys::Reflect::get(&data, &JsValue::from_str("bytes")) else { return };
-                let bytes = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-                    array.to_vec()
+                let array = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+                    array.clone()
                 } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-                    js_sys::Uint8Array::new(&bytes).to_vec()
+                    js_sys::Uint8Array::new(&bytes)
                 } else {
                     return;
                 };
+                // Refuse an oversize document before copying it into the inbox.
+                let size = u64::from(array.byte_length());
+                if let Some(error) = crate::open_refusal(size) {
+                    if let Some(m) = message(&[
+                        ("type", "pdfcraft:open-refused".into()),
+                        ("name", name.into()),
+                        ("reason", "too-large".into()),
+                        ("size", (size as f64).into()),
+                        ("limit", (crate::MAX_OPEN_BYTES as f64).into()),
+                        ("error", error.into()),
+                    ]) {
+                        let _ = parent.post_message(&m, &origin);
+                    }
+                    return;
+                }
+                let bytes = array.to_vec();
                 if let Ok(mut q) = inbox.lock() {
                     q.push((name, bytes));
                 }
@@ -225,6 +252,23 @@ mod host {
                 let m =
                     message(&[("type", "pdfcraft:save".into()), ("name", name.into()), ("saveAs", save_as.into()), ("bytes", buffer.clone().into())])
                         .ok_or_else(|| "couldn't build the message".to_string())?;
+                bridge.post(&m, Some(&buffer))
+            })
+        }
+
+        /// Exports and other files that would download: `pdfcraft:save` with `export: true`.
+        pub fn export_fn(&self) -> pdfcraft_ui_egui::HostDownloadFn {
+            let bridge = self.clone();
+            Box::new(move |name: &str, bytes: &[u8]| {
+                let buffer = js_sys::Uint8Array::from(bytes).buffer();
+                let m = message(&[
+                    ("type", "pdfcraft:save".into()),
+                    ("name", name.into()),
+                    ("saveAs", true.into()),
+                    ("export", true.into()),
+                    ("bytes", buffer.clone().into()),
+                ])
+                .ok_or_else(|| "couldn't build the message".to_string())?;
                 bridge.post(&m, Some(&buffer))
             })
         }
@@ -259,4 +303,29 @@ mod host {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     eprintln!("pdfcraft-web targets wasm32: run `trunk serve` or `trunk build --release` in apps/pdfcraft-web");
+}
+
+/// Largest document `pdfcraft:open` takes from the parent page: 256 MiB. wasm32 has a 4 GiB
+/// linear memory at most (browsers often grant less), and an open document is held twice at
+/// once (the host's `ArrayBuffer` plus the copy in wasm memory), then parsed, rendered and
+/// re-serialised on save inside the same heap. Desktop's 1 GiB cap
+/// (`pdfcraft_engine::MAX_REMOTE_DOCUMENT_BYTES`) leaves no headroom there.
+const MAX_OPEN_BYTES: u64 = 256 << 20;
+
+/// Why a `pdfcraft:open` document of `len` bytes is refused, if it is.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+fn open_refusal(len: u64) -> Option<String> {
+    (len > MAX_OPEN_BYTES).then(|| format!("the document is {len} bytes; the largest PDFCraft opens from the host page is {MAX_OPEN_BYTES} bytes (256 MiB)"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn open_cap() {
+        assert_eq!(super::MAX_OPEN_BYTES, 256 * 1024 * 1024);
+        assert!(super::open_refusal(0).is_none());
+        assert!(super::open_refusal(super::MAX_OPEN_BYTES).is_none());
+        let reason = super::open_refusal(super::MAX_OPEN_BYTES + 1).unwrap();
+        assert!(reason.contains("268435457 bytes") && reason.contains("256 MiB"), "{reason}");
+    }
 }

@@ -554,6 +554,16 @@ pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
 /// Told every frame whether any tab has unsaved work, so a host page can warn before leaving.
 pub type HostDirtyFn = Box<dyn FnMut(bool)>;
 
+/// Hands every other file PdfCraft would download (exports, reports, OCR and action results,
+/// printed PDFs) to the embedding page instead (web): `(name, bytes)`. See [`set_host_download`].
+pub type HostDownloadFn = Box<dyn Fn(&str, &[u8]) -> Result<(), String>>;
+
+/// Route the browser downloads that aren't a document's Save to a host page (`?host=parent`).
+#[cfg(target_arch = "wasm32")]
+pub fn set_host_download(f: HostDownloadFn) {
+    editing::HOST_DOWNLOAD.with(|h| *h.borrow_mut() = Some(f));
+}
+
 pub struct PasswordPrompt {
     pub name: String,
     pub path: Option<String>,
