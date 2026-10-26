@@ -477,6 +477,11 @@
 	Rotation	Rotação
 	Appear behind page	Exibir atrás da página
 	Appear on top of page	Exibir sobre a página
+	Blend with page content	Mesclar com o conteúdo da página
+	Multiplies the background with the page: white areas show it and text stays dark.	Multiplica o plano de fundo pela página: as áreas brancas o mostram e o texto continua escuro.
+	This page has an opaque background of its own, so the background is blended with its content.	Esta página tem um fundo opaco próprio, por isso o plano de fundo é mesclado com o conteúdo.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Esta página tem um fundo opaco próprio, que esconde tudo o que está atrás. Escolha “Mesclar com o conteúdo da página”.
+	This page has an opaque background of its own, which hides the image behind it.	Esta página tem um fundo opaco próprio, que esconde a imagem que está atrás.
 	Offset from centre	Deslocamento a partir do centro
 	From colour	A partir da cor
 	Page Range Options	Opções de intervalo de páginas
@@ -2842,3 +2847,5 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+
+	Behind text and images	Atrás do texto e das imagens

@@ -815,6 +815,11 @@
 	Rotation	Döndürme
 	Appear behind page	Sayfanın arkasında göster
 	Appear on top of page	Sayfanın üstünde göster
+	Blend with page content	Sayfa içeriğiyle karıştır
+	Multiplies the background with the page: white areas show it and text stays dark.	Arka planı sayfayla çarpar: beyaz alanlarda görünür, metin koyu kalır.
+	This page has an opaque background of its own, so the background is blended with its content.	Bu sayfanın kendine ait opak bir arka planı var; bu yüzden arka plan sayfa içeriğiyle karıştırılır.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Bu sayfanın kendine ait opak bir arka planı var ve arkasındaki her şeyi gizler. "Sayfa içeriğiyle karıştır" seçeneğini seçin.
+	This page has an opaque background of its own, which hides the image behind it.	Bu sayfanın kendine ait opak bir arka planı var ve arkasındaki görüntüyü gizler.
 	From colour	Renginden
 	Page Range Options	Sayfa Aralığı Seçenekleri
 	Preview: page {p} of {n}	Önizleme: Sayfa {p} / {n}
@@ -2553,3 +2558,5 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+
+	Behind text and images	Metin ve görsellerin arkasında

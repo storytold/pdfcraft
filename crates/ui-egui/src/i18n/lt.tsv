@@ -283,6 +283,11 @@
 	Anyone opening the document will need this password. It's applied when you save.	Dokumentą atveriant reikės šio slaptažodžio. Jis pritaikomas įrašant dokumentą.
 	Appear behind page	Rodyti už puslapio
 	Appear on top of page	Rodyti virš puslapio
+	Blend with page content	Sulieti su puslapio turiniu
+	Multiplies the background with the page: white areas show it and text stays dark.	Padaugina foną su puslapiu: baltose vietose jis matomas, o tekstas lieka tamsus.
+	This page has an opaque background of its own, so the background is blended with its content.	Šis puslapis turi savo nepermatomą foną, todėl fonas suliejamas su jo turiniu.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Šis puslapis turi savo nepermatomą foną, kuris paslepia viską, kas už jo. Pasirinkite „Sulieti su puslapio turiniu“.
+	This page has an opaque background of its own, which hides the image behind it.	Šis puslapis turi savo nepermatomą foną, kuris paslepia už jo esantį paveikslėlį.
 	Appearance mode	Išvaizdos veiksena
 	Appearance settings…	Išvaizdos nuostatos…
 	Applies to 1 page	Taikoma 1 puslapiui
@@ -2818,3 +2823,5 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+
+	Behind text and images	Už teksto ir vaizdų

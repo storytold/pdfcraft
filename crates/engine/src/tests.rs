@@ -3460,7 +3460,7 @@ fn added_text_and_images_render_and_stay_editable() {
         let mut w = enc.write_header().unwrap();
         w.write_image_data(&[0u8; 600]).unwrap();
     }
-    s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png), behind: false }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.added().len(), 2);
     assert_eq!(d.added()[1].content.rect(), [90.0, 145.0, 110.0, 155.0], "20×10 px at 72 dpi, centred on 200×300");
@@ -3506,7 +3506,8 @@ fn pasted_added_content_keeps_its_style_and_picture() {
         let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
         enc.write_header().unwrap().write_image_data(&px).unwrap();
     }
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     let AddedContent::Image(mut img) = s.get(id).unwrap().added()[1].content.clone() else { panic!("the image is the page's second item") };
     (img.rotation, img.flip_h, img.crop) = (1, true, [0.1, 0.0, 0.2, 0.05]);
     s.apply(id, Edit::UpdateContent { page: 0, index: 1, content: AddedContent::Image(img.clone()) }).unwrap();
@@ -3567,8 +3568,11 @@ fn an_added_jpeg_2000_image_is_copied_as_its_file() {
     let file = [signature.as_slice(), &bx(b"ftyp", b"jp2 \0\0\0\0jp2 "), &bx(b"jp2h", &bx(b"ihdr", &ihdr)), &bx(b"jp2c", &[0xFF, 0x4F, 0xFF, 0x51])]
         .concat();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 110.0, 140.0]), name: "photo.jp2".into(), bytes: Arc::new(file.clone()) })
-        .unwrap();
+    s.apply(
+        id,
+        Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 110.0, 140.0]), name: "photo.jp2".into(), bytes: Arc::new(file.clone()), behind: false },
+    )
+    .unwrap();
     let (ext, copied) = s.get(id).unwrap().added_image_file(0, 0).unwrap();
     assert_eq!((ext, &copied), ("jp2", &file), "the file as it was added");
     let AddedContent::Image(img) = s.get(id).unwrap().added()[0].content.clone() else { panic!("an image was added") };
@@ -3627,7 +3631,8 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
     }
     let (mut s, id) = session_with(1);
     // A 100×100 box at (50, 100) on the 200×300 page.
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     let colour_at = |s: &Session, x: u32, y_from_top: u32| -> [u8; 3] {
         let doc = s.get(id).unwrap();
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
@@ -7002,7 +7007,11 @@ fn mixed_object_moves_are_one_undo_step_and_survive_save_reopen() {
     let image = image::RgbImage::from_pixel(12, 8, image::Rgb([240, 20, 20]));
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()) }).unwrap();
+    s.apply(
+        id,
+        Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()), behind: false },
+    )
+    .unwrap();
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved.clone(), None).unwrap();
     let before = s.get(id).unwrap().editable_objects(0).unwrap();
@@ -7093,8 +7102,17 @@ fn group_moves_preserve_rotated_added_content_raster_geometry() {
     let image = image::RgbImage::from_fn(20, 10, |x, _| image::Rgb(if x < 10 { [240, 20, 20] } else { [20, 20, 240] }));
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "quadrants.png".into(), bytes: Arc::new(png.into_inner()) })
-        .unwrap();
+    s.apply(
+        id,
+        Edit::AddImage {
+            page: 0,
+            rect: Some([40.0, 40.0, 80.0, 70.0]),
+            name: "quadrants.png".into(),
+            bytes: Arc::new(png.into_inner()),
+            behind: false,
+        },
+    )
+    .unwrap();
     let AddedContent::Image(mut image) = s.get(id).unwrap().added()[1].content.clone() else { panic!() };
     image.flip_h = true;
     image.crop = [0.1, 0.0, 0.2, 0.0];
@@ -8718,4 +8736,152 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     for x in [20, 100, 180] {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
+}
+/// A 200 × 300 page as accounting software writes it: an opaque white rectangle over the whole
+/// page first, then the content (a black square standing in for the text, at 40,140–60,160).
+fn white_backed_page() -> Vec<u8> {
+    let content = "q\n1 g\n0 0 200 300 re f\nQ\n0 g 40 140 20 20 re f";
+    let objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A leading white fill is handled by normal placement. Explicit Multiply remains available
+/// for colour and picture backgrounds, including after saving and reopening.
+#[test]
+fn blended_backgrounds_show_on_pages_that_paint_themselves_white() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("white.pdf", None, Arc::new(white_backed_page()), None).unwrap();
+    assert!(s.get(id).unwrap().page_hides_background(0));
+    let blue = Background { color: [0.0, 0.0, 1.0], ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: blue.clone(), replace: false, file: None }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255], "normal placement goes above the white fill");
+    let blended = Background { multiply: true, ..blue };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: blended, replace: true, file: None }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255], "blended, it shows on the white");
+    assert_eq!(pixel(&s, id, 0, 50, 150), [0, 0, 0, 255], "and the text stays black");
+    assert!(s.get(id).unwrap().page_hides_background(0), "the page itself still paints white first");
+    // A picture (red) blends the same way.
+    let red = MarkFile { name: "cover.bmp".into(), bytes: Arc::new(bmp(4, 4, [0, 0, 255])), page: 0 };
+    let picture = Background { multiply: true, ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: picture.clone(), replace: true, file: Some(red) }).unwrap();
+    // Square, fitted to the page: 200 × 200 from y = 50.
+    let inside = pixel(&s, id, 0, 100, 60);
+    assert!(inside[0] > 200 && inside[1] < 40 && inside[2] < 40, "the picture shows: {inside:?}");
+    assert_eq!(pixel(&s, id, 0, 50, 150), [0, 0, 0, 255]);
+    // A PDF page as the picture, whose own content resets the blend mode (`/BM /Normal`): drawn
+    // as one group, the page's red still multiplies with the content under it.
+    let red_page = {
+        let content = "/Plain gs 1 0 0 rg 0 0 200 300 re f";
+        let objs = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /Plain << /BM /Normal /ca 1 >> >> >> >>".to_vec(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, obj) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(obj);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    };
+    let file = MarkFile { name: "red.pdf".into(), bytes: Arc::new(red_page), page: 0 };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: picture, replace: true, file: Some(file) }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [255, 0, 0, 255], "the PDF page shows on the white");
+    assert_eq!(pixel(&s, id, 0, 50, 150), [0, 0, 0, 255], "and the content under it stays black");
+    // Saved and reopened, it still draws blended.
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(pixel(&s, again, 0, 5, 5), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, again, 0, 50, 150), [0, 0, 0, 255]);
+    assert_eq!(s.get(again).unwrap().marks(), [MarkKind::Background]);
+}
+
+/// A real underlay keeps red and white foreground unchanged; Multiply cannot do that.
+#[test]
+fn background_under_content_preserves_coloured_and_white_foreground() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(white_backed_page())).unwrap();
+    let page = pdfcraft_model::pages(&cos).remove(0);
+    let stream = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"q 1 g 0 0 200 300 re f Q 1 0 0 rg 40 140 20 20 re f 1 g 80 140 20 20 re f",
+    )));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(stream))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("colours.pdf", None, bytes.clone(), None).unwrap();
+    let blue = Background { color: [0.0, 0.0, 1.0], ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: blue, replace: false, file: None }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255]);
+    assert_eq!(pixel(&s, id, 0, 50, 150), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, id, 0, 90, 150), [255, 255, 255, 255]);
+    s.undo(id).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [255, 255, 255, 255]);
+    s.redo(id).unwrap();
+    let image = MarkFile { name: "blue.bmp".into(), bytes: Arc::new(bmp(2, 3, [255, 0, 0])), page: 0 };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(image) }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255]);
+    assert_eq!(pixel(&s, id, 0, 50, 150), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, id, 0, 90, 150), [255, 255, 255, 255]);
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(pixel(&s, again, 0, 50, 150), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, again, 0, 90, 150), [255, 255, 255, 255]);
+    s.apply(again, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
+    assert_eq!(pixel(&s, again, 0, 5, 5), [255, 255, 255, 255]);
+    assert_eq!(pixel(&s, again, 0, 50, 150), [255, 0, 0, 255]);
+}
+
+/// An image behind the text shows on a page that paints itself white and stays under its text,
+/// through a change of layer, undo, saving and reopening.
+#[test]
+fn images_behind_text_show_under_the_text_of_a_white_page() {
+    let (blue, black, white) = ([0, 0, 255, 255], [0, 0, 0, 255], [255, 255, 255, 255]);
+    let mut s = Session::new();
+    let id = s.open("white.pdf", None, Arc::new(white_backed_page()), None).unwrap();
+    let bytes = Arc::new(bmp(2, 2, [255, 0, 0]));
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 100.0, 200.0, 200.0]), name: "blue.bmp".into(), bytes, behind: true }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 150), blue, "the image shows over the white fill");
+    assert_eq!(pixel(&s, id, 0, 50, 150), black, "and the text stays on top of it");
+    assert_eq!(pixel(&s, id, 0, 5, 5), white);
+    let AddedContent::Image(img) = s.get(id).unwrap().added()[0].content.clone() else { panic!("an image") };
+    assert!(img.behind);
+    let front = AddedContent::Image(AddedImage { behind: false, ..img });
+    s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: front }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 50, 150), blue, "on top, it covers the text");
+    s.undo(id).unwrap();
+    assert_eq!(pixel(&s, id, 0, 50, 150), black);
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(pixel(&s, again, 0, 5, 150), blue);
+    assert_eq!(pixel(&s, again, 0, 50, 150), black);
+    assert!(matches!(&s.get(again).unwrap().added()[0].content, AddedContent::Image(i) if i.behind));
 }

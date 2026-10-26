@@ -2818,3 +2818,9 @@ theme	Appearance	Aspect
 	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
+	Blend with page content	Amestecă cu conținutul paginii
+	Multiplies the background with the page: white areas show it and text stays dark.	Înmulțește fundalul cu pagina: zonele albe îl arată, iar textul rămâne închis.
+	This page has an opaque background of its own, so the background is blended with its content.	Această pagină are propriul fundal opac, așa că fundalul este amestecat cu conținutul ei.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Această pagină are propriul fundal opac, care ascunde tot ce se află în spatele lui. Alegeți „Amestecă cu conținutul paginii”.
+	Behind text and images	În spatele textului și imaginilor
+	This page has an opaque background of its own, which hides the image behind it.	Această pagină are propriul fundal opac, care ascunde imaginea din spatele lui.

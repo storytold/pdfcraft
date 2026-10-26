@@ -2749,3 +2749,9 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+	Blend with page content	تێکەڵکردن لەگەڵ ناوەڕۆکی پەڕە
+	Multiplies the background with the page: white areas show it and text stays dark.	پاشبنەما لەگەڵ پەڕەکە لێکدەدرێت: ناوچە سپییەکان پیشانی دەدەن و دەق تاریک دەمێنێتەوە.
+	This page has an opaque background of its own, so the background is blended with its content.	ئەم پەڕەیە پاشبنەمایەکی ناڕوونی خۆی هەیە، بۆیە پاشبنەماکە لەگەڵ ناوەڕۆکەکەی تێکەڵ دەکرێت.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	ئەم پەڕەیە پاشبنەمایەکی ناڕوونی خۆی هەیە کە هەموو شتێکی پشتی دەشارێتەوە. «تێکەڵکردن لەگەڵ ناوەڕۆکی پەڕە» هەڵبژێرە.
+	Behind text and images	لە پشت دەق و وێنەکان
+	This page has an opaque background of its own, which hides the image behind it.	ئەم پەڕەیە پاشبنەمایەکی ناڕوونی خۆی هەیە کە وێنەکەی پشتی دەشارێتەوە.

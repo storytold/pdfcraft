@@ -853,6 +853,11 @@
 	Rotation	Rotación
 	Appear behind page	Mostrar detrás de la página
 	Appear on top of page	Mostrar encima de la página
+	Blend with page content	Mezclar con el contenido de la página
+	Multiplies the background with the page: white areas show it and text stays dark.	Multiplica el fondo con la página: las zonas blancas lo muestran y el texto sigue oscuro.
+	This page has an opaque background of its own, so the background is blended with its content.	Esta página tiene un fondo opaco propio, así que el fondo se mezcla con su contenido.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Esta página tiene un fondo opaco propio que oculta todo lo que hay detrás. Elija «Mezclar con el contenido de la página».
+	This page has an opaque background of its own, which hides the image behind it.	Esta página tiene un fondo opaco propio que oculta la imagen que hay detrás.
 	Offset from centre	Desplazamiento desde el centro
 	From colour	A partir de un color
 	Page Range Options	Opciones de intervalo de páginas
@@ -2658,6 +2663,7 @@ animation effects	Off	Desactivados
 	Paragraph spacing	Espaciado entre párrafos
 	Less	Menos
 	Other options	Otras opciones
+	Behind text and images	Detrás del texto y las imágenes
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.

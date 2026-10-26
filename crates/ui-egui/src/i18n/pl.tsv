@@ -852,6 +852,11 @@
 	Rotation	Obrót
 	Appear behind page	Umieść za zawartością strony
 	Appear on top of page	Umieść przed zawartością strony
+	Blend with page content	Wymieszaj z zawartością strony
+	Multiplies the background with the page: white areas show it and text stays dark.	Mnoży tło przez stronę: białe obszary pokazują tło, a tekst pozostaje ciemny.
+	This page has an opaque background of its own, so the background is blended with its content.	Ta strona ma własne nieprzezroczyste tło, więc tło zostanie wymieszane z jej zawartością.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Ta strona ma własne nieprzezroczyste tło, które zasłania wszystko pod nim. Wybierz „Wymieszaj z zawartością strony”.
+	This page has an opaque background of its own, which hides the image behind it.	Ta strona ma własne nieprzezroczyste tło, które zasłania obraz pod nim.
 	From colour	Z koloru
 	Page Range Options	Opcje zakresu stron
 	Preview: page {p} of {n}	Podgląd: strona {p} z {n}
@@ -2653,3 +2658,5 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+
+	Behind text and images	Pod tekstem i obrazami

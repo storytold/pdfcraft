@@ -2804,3 +2804,9 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+	Blend with page content	ترکیب با محتوای صفحه
+	Multiplies the background with the page: white areas show it and text stays dark.	پس‌زمینه را در صفحه ضرب می‌کند: نواحی سفید آن را نشان می‌دهند و متن تیره می‌ماند.
+	This page has an opaque background of its own, so the background is blended with its content.	این صفحه پس‌زمینهٔ مات خودش را دارد، بنابراین پس‌زمینه با محتوای آن ترکیب می‌شود.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	این صفحه پس‌زمینهٔ مات خودش را دارد که هر چیزی را پشت آن پنهان می‌کند. «ترکیب با محتوای صفحه» را انتخاب کنید.
+	Behind text and images	پشت متن و تصاویر
+	This page has an opaque background of its own, which hides the image behind it.	این صفحه پس‌زمینهٔ مات خودش را دارد که تصویر پشت آن را پنهان می‌کند.

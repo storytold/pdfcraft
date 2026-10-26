@@ -392,6 +392,15 @@ impl PdfCraftApp {
                 };
                 self.marks_draft.replace = id.ends_with(".update");
                 self.marks_draft.preview = None;
+                if kind == K::Background {
+                    // Normal placement handles recognised white fills per page. Warn only
+                    // about opaque fills we cannot safely put the background above.
+                    let hides = self
+                        .active_ids()
+                        .and_then(|(i, doc)| Some((self.views.get(i)?.current, self.session.get(doc)?)))
+                        .is_some_and(|(page, doc)| doc.page_hides_background(page) && !doc.page_has_white_background(page));
+                    self.marks_draft.hides_background = hides;
+                }
                 self.dialog = Some(Dialog::Marks(kind));
             }
             "edit.bates" => {

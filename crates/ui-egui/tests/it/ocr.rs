@@ -296,7 +296,10 @@ fn a_page_that_becomes_a_scan_while_edit_is_on_is_recognized() {
     // The same page, now with a picture of text over all of it.
     h.state_mut()
         .session
-        .apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: std::sync::Arc::new(png) })
+        .apply(
+            id,
+            Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: std::sync::Arc::new(png), behind: false },
+        )
         .unwrap();
     h.run_steps(6);
     assert!(h.state().ocr_run.is_none(), "finished");

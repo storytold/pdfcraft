@@ -7,6 +7,11 @@
 //! content. Boxes are in display space (points, origin at the bottom-left of the page as shown,
 //! after `/UserUnit` and `/Rotate`), so items stay upright on rotated pages; an item records the
 //! `/UserUnit` it was written for.
+//!
+//! An item normally goes on top of the page. An image can go under the page's text and images
+//! instead ([`AddedImage::behind`]): above a recognised leading white page fill (the same place a
+//! normal background goes, see `background.rs`) and otherwise behind the whole page, in both
+//! cases over the backgrounds already there.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +21,7 @@ use pdfcraft_fonts::{
 };
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
-use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
+use crate::{EditError, Layer, MarkKind, check, contents, matrix_number, n, page_list, place_object, stream_tag};
 
 const TAG: &str = "Added";
 
@@ -152,11 +157,13 @@ pub struct AddedImage {
     /// The fraction trimmed from each side of the image: left, bottom, right, top (see
     /// [`AddedImage::crop_valid`]).
     pub crop: [f64; 4],
+    /// Under the page's own text and images (and over its backgrounds) instead of on top.
+    pub behind: bool,
 }
 
 impl AddedImage {
     pub fn new(rect: [f64; 4], image: ObjRef) -> Self {
-        AddedImage { rect, image, rotation: 0, flip_h: false, flip_v: false, crop: [0.0; 4] }
+        AddedImage { rect, image, rotation: 0, flip_h: false, flip_v: false, crop: [0.0; 4], behind: false }
     }
 
     /// The least of the image's width and of its height that a crop keeps.
@@ -989,6 +996,9 @@ fn params(c: &Content) -> Dict {
             if i.crop != [0.0; 4] {
                 d.set(b"Crop".to_vec(), arr(&i.crop));
             }
+            if i.behind {
+                d.set(b"Behind".to_vec(), Object::Bool(true));
+            }
         }
     }
     d
@@ -1028,6 +1038,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 flip_h: matches!(d.get(b"FlipH"), Some(Object::Bool(true))),
                 flip_v: matches!(d.get(b"FlipV"), Some(Object::Bool(true))),
                 crop: crop.try_into().unwrap_or([0.0; 4]),
+                behind: matches!(d.get(b"Behind"), Some(Object::Bool(true))),
             }))
         }
         _ => None,
@@ -1168,7 +1179,10 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     }
     let taken = pres.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let (content, res) = draw(doc, c, view, &taken, obj.is_some())?;
-    if obj.is_none() {
+    // Behind the page, an item doesn't sit over its marked content; on top (new, or moving up
+    // from behind) it must be able to.
+    let behind = matches!(c, Content::Image(i) if i.behind);
+    if !behind && obj.is_none_or(|r| is_behind(doc, &Object::Ref(r))) {
         crate::check_on_top(doc, p)?;
     }
     for (k, v) in res.iter() {
@@ -1186,22 +1200,56 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
     }
     sd.set(b"PCAdded".to_vec(), Object::Dict(added));
-    let stream = Stream::flate(sd, &content);
-    match obj {
+    let stream = Object::Stream(Stream::flate(sd, &content));
+    let r = match obj {
         Some(r) => {
-            doc.set(r, Object::Stream(stream));
-            Ok(r)
-        }
-        None => {
-            // place_tagged appends a new stream; recover its reference.
+            let was = is_behind(doc, &Object::Ref(r));
+            doc.set(r, stream);
+            if was == behind {
+                return Ok(r);
+            }
+            // Changing layer: take the item out of the list and put it where it now belongs.
             let p = page_list(doc).swap_remove(page);
-            place_tagged(doc, &p, TAG, content.clone(), false)?;
-            let p = page_list(doc).swap_remove(page);
-            let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
-            doc.set(r, Object::Stream(stream));
-            Ok(r)
+            let list: Vec<Object> = contents(doc, &p)?.into_iter().filter(|o| o.as_ref() != Some(r)).collect();
+            doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
+            r
         }
+        None => doc.add(stream),
+    };
+    let p = page_list(doc).swap_remove(page);
+    if behind {
+        place_behind(doc, &p, r)?;
+    } else {
+        place_object(doc, &p, Layer::OnTop, |_| r)?;
     }
+    Ok(r)
+}
+
+/// Is `o` an added item drawn under the page's own content?
+fn is_behind(doc: &Document, o: &Object) -> bool {
+    let item = doc.resolve(o);
+    let Some(d) = item.as_dict().filter(|d| d.name(b"PCMark") == Some(TAG.as_bytes())) else { return false };
+    d.get(b"PCAdded").map(|p| doc.resolve(p)).is_some_and(|p| p.as_dict().is_some_and(|p| matches!(p.get(b"Behind"), Some(Object::Bool(true)))))
+}
+
+/// Put the added item `r` under the page's own content: right above a recognised white page fill,
+/// otherwise behind the whole page. Either way it goes over the backgrounds there and over the
+/// items put there before it, so repeated additions keep their order.
+fn place_behind(doc: &mut Document, p: &pdfcraft_model::Page, r: ObjRef) -> Result<(), EditError> {
+    let background = |doc: &Document, o: &Object| stream_tag(doc, o).as_deref() == Some(MarkKind::Background.tag());
+    let under = |doc: &Document, o: &Object| background(doc, o) || is_behind(doc, o);
+    let (mut list, at) = match crate::white_fill::slot(doc, p, under)? {
+        Some(slot) => slot,
+        None => {
+            let list = contents(doc, p)?;
+            // Watermarks lead the list only when they were put behind the page.
+            let at = list.iter().take_while(|o| under(doc, o) || stream_tag(doc, o).as_deref() == Some(MarkKind::Watermark.tag())).count();
+            (list, at)
+        }
+    };
+    list.insert(at, Object::Ref(r));
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
+    Ok(())
 }
 
 /// Every added item, page by page, in drawing order.
@@ -1211,8 +1259,9 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
 
 /// Add an item to a page (0-based). Returns its index among the page's added items.
 pub fn add_content(doc: &mut Document, page: usize, c: &Content) -> Result<usize, EditError> {
-    write(doc, page, c, None)?;
-    Ok(list_added(doc).iter().filter(|a| a.page == page).count() - 1)
+    let r = write(doc, page, c, None)?;
+    // Not always the last: an image behind the page content comes before the items on top.
+    list_added(doc).iter().filter(|a| a.page == page).position(|a| a.obj == r).ok_or_else(|| EditError::Invalid("could not add the content".into()))
 }
 
 fn find(doc: &Document, page: usize, index: usize) -> Result<Added, EditError> {

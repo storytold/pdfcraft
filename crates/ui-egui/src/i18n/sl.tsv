@@ -218,6 +218,11 @@
 	Anyone opening the document will need this password. It's applied when you save.	Vsak, ki odpre dokument, bo potreboval to geslo. Vključi se ob shranjevanju.
 	Appear behind page	Prikaži za stranjo
 	Appear on top of page	Prikaži nad stranjo
+	Blend with page content	Zmešaj z vsebino strani
+	Multiplies the background with the page: white areas show it and text stays dark.	Pomnoži ozadje s stranjo: bela območja ga pokažejo, besedilo ostane temno.
+	This page has an opaque background of its own, so the background is blended with its content.	Ta stran ima lastno neprosojno ozadje, zato se ozadje zmeša z njeno vsebino.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Ta stran ima lastno neprosojno ozadje, ki skrije vse za njim. Izberite »Zmešaj z vsebino strani«.
+	This page has an opaque background of its own, which hides the image behind it.	Ta stran ima lastno neprosojno ozadje, ki skrije sliko za njim.
 	Appearance	Videz
 	Application	Program
 	Applied 1 redaction mark. Save to remove the content from the file.	Uveljavljena je 1 oznaka za počrnitev. Shranite, da se vsebina odstrani iz datoteke.
@@ -2562,3 +2567,5 @@ animation effects	Off	Izklopljeni
 	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
+
+	Behind text and images	Za besedilom in slikami

@@ -853,6 +853,11 @@
 	Rotation	Поворот
 	Appear behind page	Позади страницы
 	Appear on top of page	Поверх страницы
+	Blend with page content	Смешать с содержимым страницы
+	Multiplies the background with the page: white areas show it and text stays dark.	Умножает фон на страницу: белые области показывают фон, а текст остаётся тёмным.
+	This page has an opaque background of its own, so the background is blended with its content.	У этой страницы есть собственный непрозрачный фон, поэтому фон смешивается с её содержимым.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	У этой страницы есть собственный непрозрачный фон, который скрывает всё, что находится позади. Выберите «Смешать с содержимым страницы».
+	This page has an opaque background of its own, which hides the image behind it.	У этой страницы есть собственный непрозрачный фон, который скрывает изображение позади.
 	Offset from centre	Смещение от центра
 	From colour	Из цвета
 	Page Range Options	Параметры диапазона страниц
@@ -2470,3 +2475,5 @@ animation effects	Off	Выкл
 	Rotate the selected pages clockwise	Повернуть выбранные страницы по часовой стрелке
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
+
+	Behind text and images	Под текстом и изображениями

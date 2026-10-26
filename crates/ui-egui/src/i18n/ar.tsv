@@ -859,6 +859,11 @@
 	Rotation	التدوير
 	Appear behind page	الظهور خلف الصفحة
 	Appear on top of page	الظهور فوق الصفحة
+	Blend with page content	دمج مع محتوى الصفحة
+	Multiplies the background with the page: white areas show it and text stays dark.	تُضرَب الخلفية في الصفحة: تظهر في المناطق البيضاء ويبقى النص داكنًا.
+	This page has an opaque background of its own, so the background is blended with its content.	لهذه الصفحة خلفية معتمة خاصة بها، لذلك تُدمج الخلفية مع محتواها.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	لهذه الصفحة خلفية معتمة خاصة بها تُخفي كل ما خلفها. اختر «دمج مع محتوى الصفحة».
+	This page has an opaque background of its own, which hides the image behind it.	لهذه الصفحة خلفية معتمة خاصة بها تُخفي الصورة الموضوعة خلفها.
 	Offset from centre	الإزاحة عن المركز
 	From colour	من لون
 	Page Range Options	خيارات نطاق الصفحات
@@ -2833,3 +2838,5 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+
+	Behind text and images	خلف النص والصور

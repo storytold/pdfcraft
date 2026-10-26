@@ -528,6 +528,11 @@
 	Rotation	旋转
 	Appear behind page	显示在页面后面
 	Appear on top of page	显示在页面上层
+	Blend with page content	与页面内容混合
+	Multiplies the background with the page: white areas show it and text stays dark.	将背景与页面正片叠底：白色区域显示背景，文字保持深色。
+	This page has an opaque background of its own, so the background is blended with its content.	此页面有自己的不透明背景，因此背景会与其内容混合。
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	此页面有自己的不透明背景，会遮住其后的所有内容。请选择“与页面内容混合”。
+	This page has an opaque background of its own, which hides the image behind it.	此页面有自己的不透明背景，会遮住其后的图像。
 	Offset from centre	与中心的偏移
 	From colour	使用颜色
 	Page Range Options	页面范围选项
@@ -2521,3 +2526,5 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+
+	Behind text and images	在文本和图像后方

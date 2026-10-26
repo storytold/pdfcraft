@@ -86,6 +86,9 @@ pub struct ContentView {
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
+    /// Whether an image behind the page content would be hidden there, for (document, edit
+    /// generation, page): the check decodes up to 1 MiB of the page's content.
+    pub(crate) hidden_behind: Option<(pdfcraft_engine::DocId, u64, usize, bool)>,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -881,7 +884,7 @@ impl crate::PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
         let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
-        if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
+        if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes), behind: false }) {
             self.views[i].content.select_added = Some((page, before));
             self.left = crate::LeftPanel::Tool("edit");
             self.left_open = true;
@@ -939,8 +942,9 @@ pub(crate) enum ImageAction {
 const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
 const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
-/// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
+/// Edit image: rotate, flip, crop, replace, behind text (shown while an added image is selected).
+/// `hidden`: the page paints an opaque fill of its own that an image behind it can't go over.
+pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage, hidden: bool) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, tl!("Edit image"));
     ui.horizontal(|ui| {
@@ -999,6 +1003,15 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
             out = Some(ImageAction::Update(AddedContent::Image(i)));
         }
     }
+    let mut behind = img.behind;
+    if ui.add(widgets::checkbox(&mut behind, tl!("Behind text and images"))).changed() {
+        out = Some(ImageAction::Update(AddedContent::Image(pdfcraft_engine::AddedImage { behind, ..img.clone() })));
+    }
+    if img.behind && hidden {
+        ui.label(
+            egui::RichText::new(tl!("This page has an opaque background of its own, which hides the image behind it.")).small().color(t.text_faint),
+        );
+    }
     out
 }
 
@@ -1032,7 +1045,7 @@ mod tests {
                     return;
                 }
                 let t = Tokens::get(ui.ctx());
-                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img) {
+                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img, false) {
                     *out = Some(i);
                 }
             },
@@ -1042,6 +1055,45 @@ mod tests {
         h.get_by_label(tooltip).click();
         h.run();
         h.state().clone().expect("the button updates the image")
+    }
+
+    /// The image panel for `img`, with the result of the last frame's action.
+    fn panel_harness(img: pdfcraft_engine::AddedImage, hidden: bool) -> egui_kittest::Harness<'static, Option<pdfcraft_engine::AddedImage>> {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, out: &mut Option<pdfcraft_engine::AddedImage>| {
+                // The app's fonts (the semibold section title) take effect from the next frame.
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img, hidden) {
+                    *out = Some(i);
+                }
+            },
+            None,
+        );
+        h.run();
+        h
+    }
+
+    #[test]
+    fn behind_text_checkbox_changes_the_layer_and_warns_on_pages_that_hide_it() {
+        let img = pdfcraft_engine::AddedImage::new([0.0, 0.0, 100.0, 50.0], pdfcraft_cos::ObjRef::new(7, 0));
+        let mut h = panel_harness(img.clone(), true);
+        assert!(h.query_by_label_contains("hides the image behind it").is_none(), "no note while on top");
+        h.get_by_label("Behind text and images").click();
+        h.run();
+        assert!(h.state().as_ref().is_some_and(|i| i.behind), "checking it puts the image behind");
+        let behind = pdfcraft_engine::AddedImage { behind: true, ..img };
+        let mut h = panel_harness(behind.clone(), true);
+        assert!(h.query_by_label_contains("hides the image behind it").is_some());
+        h.get_by_label("Behind text and images").click();
+        h.run();
+        assert!(h.state().as_ref().is_some_and(|i| !i.behind), "unchecking it brings the image to the top");
+        assert!(panel_harness(behind, false).query_by_label_contains("hides the image behind it").is_none(), "a page that shows it");
     }
 
     #[test]

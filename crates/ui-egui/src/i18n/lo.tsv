@@ -2465,3 +2465,9 @@ animation effects	Off	ປິດ
 	Rotate the selected pages clockwise	ໝູນໜ້າທີ່ເລືອກຕາມເຂັມໂມງ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
+	Blend with page content	ປະສົມກັບເນື້ອຫາໜ້າ
+	Multiplies the background with the page: white areas show it and text stays dark.	ຄູນພື້ນຫຼັງກັບໜ້າ: ພື້ນທີ່ສີຂາວຈະສະແດງພື້ນຫຼັງ ແລະ ຂໍ້ຄວາມຍັງຄົງເຂັ້ມ.
+	This page has an opaque background of its own, so the background is blended with its content.	ໜ້ານີ້ມີພື້ນຫຼັງທຶບຂອງມັນເອງ, ສະນັ້ນພື້ນຫຼັງຈະຖືກປະສົມກັບເນື້ອຫາຂອງມັນ.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	ໜ້ານີ້ມີພື້ນຫຼັງທຶບຂອງມັນເອງ ເຊິ່ງບັງທຸກສິ່ງທີ່ຢູ່ຫຼັງມັນ. ເລືອກ ປະສົມກັບເນື້ອຫາໜ້າ.
+	Behind text and images	ຢູ່ຫຼັງຂໍ້ຄວາມ ແລະ ຮູບພາບ
+	This page has an opaque background of its own, which hides the image behind it.	ໜ້ານີ້ມີພື້ນຫຼັງທຶບຂອງມັນເອງ ເຊິ່ງບັງຮູບພາບທີ່ຢູ່ຫຼັງມັນ.

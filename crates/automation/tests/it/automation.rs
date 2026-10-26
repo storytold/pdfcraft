@@ -2666,6 +2666,54 @@ fn a_shrinking_header_and_footer_moves_the_page_content_out_of_their_way_through
     assert!(restored.iter().zip(before).all(|(r, b)| (r - b).abs() < 0.01), "{before:?} → {restored:?}");
 }
 
+/// A page that paints itself white before its content hides a background behind it: the tool
+/// says so in `hidden_behind`, and `multiply` blends the background over the page instead, so
+/// it shows on the white while the content stays black.
+#[test]
+fn blended_backgrounds_through_tools() {
+    let dir = workdir("blended-bg");
+    let content = "q 1 g 0 0 200 300 re f Q 0 g 40 140 20 20 re f";
+    let page = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+        page.as_str(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("white.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let pixel = |a: &mut Automation, doc: u64, x: usize, y: usize| -> [u8; 4] {
+        let (width, _, pixels) = a.render_pixels(doc, 1, 1.0).unwrap();
+        let i = (y * width as usize + x) * 4;
+        pixels.as_ref()[i..i + 4].try_into().unwrap()
+    };
+    let doc = ok(&mut a, "doc_open", json!({ "path": "white.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_background", json!({ "doc": doc, "color": "#0000FF" }));
+    assert!(r.get("hidden_behind").is_none(), "{r}");
+    assert_eq!(pixel(&mut a, doc, 5, 5), [0, 0, 255, 255], "normal placement goes above the white fill");
+    let r = ok(&mut a, "doc_background", json!({ "doc": doc, "color": "#0000FF", "multiply": true, "replace": true }));
+    assert!(r.get("hidden_behind").is_none(), "{r}");
+    assert_eq!(pixel(&mut a, doc, 5, 5), [0, 0, 255, 255], "blended, it shows");
+    assert_eq!(pixel(&mut a, doc, 50, 150), [0, 0, 0, 255], "the content stays black");
+    assert!(matches!(a.call("doc_background", &json!({ "doc": doc, "multiply": "yes" })), Err(ToolError::InvalidArgs(_))));
+    // Pages that don't paint over themselves get no note.
+    let other = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_background", json!({ "doc": other, "color": "yellow" }));
+    assert!(r.get("hidden_behind").is_none(), "{r}");
+}
+
 #[test]
 fn watermarks_move_from_the_page_centre_through_tools() {
     let dir = workdir("wm-offset");
@@ -9174,4 +9222,71 @@ fn page_render_draws_stamps_without_an_appearance() {
     let custom = ink(170, 290);
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
+}
+
+/// A one-page 200 × 300 PDF whose page draws `content`.
+fn one_page_pdf(content: &str) -> Vec<u8> {
+    let page = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+        page.as_str(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// An image placed behind the text shows above a white page fill and under the text, keeps the
+/// index it was given, and moves back on top with content_update.
+#[test]
+fn images_behind_text_through_tools() {
+    let dir = workdir("image-behind");
+    std::fs::write(dir.join("white.pdf"), one_page_pdf("q 1 g 0 0 200 300 re f Q 0 g 40 140 20 20 re f")).unwrap();
+    std::fs::write(dir.join("gray.pdf"), one_page_pdf("q 0.8 g 0 0 200 300 re f Q 0 g 40 140 20 20 re f")).unwrap();
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[0, 0, 255].repeat(4)).unwrap();
+    }
+    std::fs::write(dir.join("blue.png"), png).unwrap();
+    let mut a = auto(&dir);
+    let pixel = |a: &mut Automation, doc: u64, x: usize, y: usize| -> [u8; 4] {
+        let (width, _, pixels) = a.render_pixels(doc, 1, 1.0).unwrap();
+        let i = (y * width as usize + x) * 4;
+        pixels.as_ref()[i..i + 4].try_into().unwrap()
+    };
+    let (blue, black) = ([0, 0, 255, 255], [0, 0, 0, 255]);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "white.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "blue.png", "rect": [150, 10, 190, 30] }));
+    let r = ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "blue.png", "rect": [0, 100, 200, 200], "behind": true }));
+    assert_eq!((r["index"].as_u64(), r["hidden_behind"].as_bool()), (Some(1), Some(false)), "{r}");
+    assert_eq!(r["rect"], json!([0.0, 100.0, 200.0, 200.0]));
+    assert_eq!(pixel(&mut a, doc, 5, 150), blue, "the image shows on the white");
+    assert_eq!(pixel(&mut a, doc, 50, 150), black, "under the text");
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!((list["items"][0]["behind"].as_bool(), list["items"][1]["behind"].as_bool()), (Some(true), Some(false)), "{list}");
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "behind": false }));
+    assert_eq!(pixel(&mut a, doc, 50, 150), blue, "back on top, it covers the text");
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!(list["items"][1]["rect"], json!([0.0, 100.0, 200.0, 200.0]), "now the last item: {list}");
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Note", "at": [20, 20] }));
+    assert!(matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 3, "behind": true })), Err(ToolError::InvalidArgs(_))));
+    // A page whose own opaque fill isn't recognised hides it, and says so.
+    let gray = ok(&mut a, "doc_open", json!({ "path": "gray.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "page_add_image", json!({ "doc": gray, "page": 1, "path": "blue.png", "behind": true }));
+    assert_eq!(r["hidden_behind"].as_bool(), Some(true), "{r}");
 }

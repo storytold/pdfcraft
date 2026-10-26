@@ -860,6 +860,11 @@
 	Rotation	回転
 	Appear behind page	ページの背面に表示
 	Appear on top of page	ページの前面に表示
+	Blend with page content	ページの内容と合成
+	Multiplies the background with the page: white areas show it and text stays dark.	背景をページと乗算します。白い部分に背景が表示され、文字は濃いままです。
+	This page has an opaque background of its own, so the background is blended with its content.	このページには独自の不透明な背景があるため、背景をページの内容と合成します。
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	このページには独自の不透明な背景があり、その後ろにあるものはすべて隠れます。「ページの内容と合成」を選択してください。
+	This page has an opaque background of its own, which hides the image behind it.	このページには独自の不透明な背景があり、その後ろにある画像は隠れます。
 	Offset from centre	中心からのオフセット
 	From colour	色を指定
 	Page Range Options	ページ範囲のオプション
@@ -2557,3 +2562,5 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+
+	Behind text and images	テキストと画像の背面

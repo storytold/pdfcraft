@@ -298,7 +298,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
             let page = page_list(doc)[i].clone();
-            place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
+            place_tagged(doc, &page, "Flattened", content.into_bytes(), crate::Layer::OnTop)?;
         }
         let page_now = page_list(doc)[i].clone();
         match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {

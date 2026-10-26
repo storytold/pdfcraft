@@ -2,9 +2,12 @@
 //! Watermark, Background and Bates numbering (execution plan M7.6).
 //!
 //! **How marks are stored.** Each mark is one content stream appended to (or, for content behind
-//! the page, inserted after the backgrounds at the start of) the page's `/Contents`, drawn in
-//! display space (after `/Rotate`) and wrapped in a marked-content artifact (§14.8.2.2) so
-//! readers and screen readers skip it:
+//! the page, inserted after the backgrounds at the start of; a blended background goes right
+//! after the page's own content) the page's `/Contents`. A normal background on a page that
+//! starts with a recognised white page fill goes between that fill and the rest of the page: the
+//! stream holding the fill is split there into two new streams with the same bytes (see
+//! `white_fill.rs`). Marks are drawn in display space (after `/Rotate`) and wrapped in a
+//! marked-content artifact (§14.8.2.2) so readers and screen readers skip it:
 //! `/Artifact <</Type /Pagination /Subtype /Header /PCMark /HeaderFooter>> BDC … EMC`. The
 //! `/PCMark` entry (also in the stream dictionary) names the kind of mark, which is how Update and
 //! Remove find them again without decompressing page content. When
@@ -198,7 +201,7 @@ impl Default for Watermark {
     }
 }
 
-/// A background behind the page content: a solid colour, or a picture from a file.
+/// A background below the page foreground: a solid colour, or a picture from a file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Background {
     pub color: Rgb,
@@ -206,11 +209,16 @@ pub struct Background {
     pub source: Option<MarkSource>,
     /// Pictures: size relative to the page (1.0 fits the page).
     pub scale: f64,
+    /// Blend the background with the page content (the Multiply blend mode, ISO 32000-2
+    /// §11.3.5) instead of placing it below the foreground. This can change foreground colours.
+    /// The default normal placement already handles recognised leading white page fills;
+    /// blending remains an explicit option for other pages.
+    pub multiply: bool,
 }
 
 impl Default for Background {
     fn default() -> Self {
-        Self { color: [1.0, 1.0, 0.85], opacity: 1.0, source: None, scale: 1.0 }
+        Self { color: [1.0, 1.0, 0.85], opacity: 1.0, source: None, scale: 1.0, multiply: false }
     }
 }
 
@@ -241,6 +249,33 @@ fn add_picture_resource(doc: &mut Document, page: &pdfcraft_model::Page, src: &M
     res.set(b"XObject".to_vec(), Object::Dict(xo));
     doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
     Ok(())
+}
+
+/// A PDF page picture as one isolated transparency group (ISO 32000-2 §11.4.7, §11.6.6): a
+/// form whose content draws `src`. A blend mode set where it is drawn then applies to the
+/// picture as a whole, composited once, and not to each of its elements, whose own `gs` (a
+/// `/BM /Normal`, say) would otherwise replace it. Images are one element already.
+fn as_group(doc: &mut Document, src: MarkSource) -> MarkSource {
+    if src.image {
+        return src;
+    }
+    let mut group = Dict::new();
+    group.set(b"Type".to_vec(), Object::name("Group"));
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    group.set(b"I".to_vec(), Object::Bool(true));
+    let mut xo = Dict::new();
+    xo.set(b"PCSrc".to_vec(), Object::Ref(src.xobject));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Form"));
+    // The source form's /Matrix maps it to (0, 0)–size, so that is all the group covers.
+    d.set(b"BBox".to_vec(), Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(src.size.0), Object::Real(src.size.1)]));
+    d.set(b"Group".to_vec(), Object::Dict(group));
+    d.set(b"Resources".to_vec(), Object::Dict(res));
+    let xobject = doc.add(Object::Stream(Stream::flate(d, b"/PCSrc Do\n")));
+    MarkSource { xobject, ..src }
 }
 
 /// Values tokens need that come from outside the document.
@@ -356,8 +391,32 @@ fn contents(doc: &mut Document, page: &pdfcraft_model::Page) -> Result<Vec<Objec
     })
 }
 
-/// Add the font (and an opacity state) to the page's own resources.
-fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, content: Option<&[u8]>) -> Result<(), EditError> {
+/// The extended graphics state a mark is drawn with: its opacity, and whether it multiplies
+/// with what is already on the page. Each combination has its own resource name.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Gs {
+    opacity: f64,
+    multiply: bool,
+}
+
+impl Gs {
+    fn normal(opacity: f64) -> Self {
+        Gs { opacity, multiply: false }
+    }
+
+    /// The resource name (`PCGS50`, `PCGSM100`).
+    fn name(self) -> String {
+        format!("PCGS{}{}", if self.multiply { "M" } else { "" }, (self.opacity * 100.0).round() as i64)
+    }
+
+    /// The operator selecting this state.
+    fn op(self) -> String {
+        format!("/{} gs\n", self.name())
+    }
+}
+
+/// Add the font (and a graphics state) to the page's own resources.
+fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, gs: Option<Gs>, content: Option<&[u8]>) -> Result<(), EditError> {
     let mut faces: Vec<(Vec<u8>, &str)> = Vec::new();
     for (name, base) in [(&b"PCHelv"[..], "Helvetica"), (b"PCTimes", "Times-Roman"), (b"PCCour", "Courier")] {
         // Helvetica always (marks use it); the others only when the content names them.
@@ -366,7 +425,7 @@ fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Optio
         }
         faces.push((name.to_vec(), base));
     }
-    add_page_resources(doc, page, opacity, &faces)
+    add_page_resources(doc, page, gs, &faces)
 }
 
 /// The fonts a page draws with: its own resources' or the ones it inherits.
@@ -397,9 +456,9 @@ fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base: &str) -> 
     (1..=fonts.len().saturating_add(1)).map(|k| format!("{preferred}_{k}")).find(|name| usable(name)).unwrap_or_else(|| preferred.to_string())
 }
 
-/// Add the standard `faces` (resource name, base font) and an opacity state to the page's own
+/// Add the standard `faces` (resource name, base font) and a graphics state to the page's own
 /// resources.
-fn add_page_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, faces: &[(Vec<u8>, &str)]) -> Result<(), EditError> {
+fn add_page_resources(doc: &mut Document, page: &pdfcraft_model::Page, gs: Option<Gs>, faces: &[(Vec<u8>, &str)]) -> Result<(), EditError> {
     let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, base) in faces {
@@ -411,15 +470,17 @@ fn add_page_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: 
         fonts.set(name.clone(), Object::Dict(font));
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
-    if let Some(o) = opacity {
-        let mut gs = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+    if let Some(state) = gs {
+        let mut all = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
         let mut s = Dict::new();
         s.set(b"Type".to_vec(), Object::name("ExtGState"));
-        s.set(b"CA".to_vec(), Object::Real(o));
-        s.set(b"ca".to_vec(), Object::Real(o));
-        let name = format!("PCGS{}", (o * 100.0).round() as i64);
-        gs.set(name.into_bytes(), Object::Dict(s));
-        res.set(b"ExtGState".to_vec(), Object::Dict(gs));
+        s.set(b"CA".to_vec(), Object::Real(state.opacity));
+        s.set(b"ca".to_vec(), Object::Real(state.opacity));
+        if state.multiply {
+            s.set(b"BM".to_vec(), Object::name("Multiply"));
+        }
+        all.set(state.name().into_bytes(), Object::Dict(s));
+        res.set(b"ExtGState".to_vec(), Object::Dict(all));
     }
     // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
     doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
@@ -610,10 +671,23 @@ fn isolation(doc: &Document, list: &[Object]) -> Isolation {
     Isolation::Clean { suffix: (dirty || comment_open || marked != 0).then_some(split), wrappers, marked }
 }
 
-/// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
-/// (appended, after wrapping the original content in q/Q).
-fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind).map(drop)
+/// Where content goes in a page's `/Contents`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layer {
+    /// Behind the page (with the behind-marks at the start).
+    Behind,
+    /// Right after the page's own content, under whatever was put on top of it before: a
+    /// blended background stays under headers, watermarks and added content. On a page with no
+    /// content of its own it goes after the backgrounds that lead the list.
+    OverContent,
+    /// After everything (appended).
+    OnTop,
+}
+
+/// Put a mark's content on a page at `layer`. Anything above the page's own content first wraps
+/// the content that leaves graphics state set in q/Q.
+fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, layer: Layer) -> Result<(), EditError> {
+    place_tagged(doc, page, kind.tag(), content, layer).map(drop)
 }
 
 /// Put content on a page, tagged `tag` (see [`place`]). On top, whatever graphics state the
@@ -622,7 +696,19 @@ fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, conten
 /// content that leaves state set is wrapped in q/Q, once. Any known unfinished marked-content
 /// sequences are closed at the end too, so hidden optional content cannot hide the new mark; when
 /// their number is unknown, nothing is placed on top. Returns the new content stream.
-fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<ObjRef, EditError> {
+fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, layer: Layer) -> Result<ObjRef, EditError> {
+    place_object(doc, page, layer, |doc| doc.add(Object::Stream(Stream::flate(tagged(tag), &content))))
+}
+
+/// Put a content stream on a page at `layer` (see [`place_tagged`]): `mark` makes it, or hands
+/// over one that already exists, once the page is known to take it.
+fn place_object(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    layer: Layer,
+    mark: impl FnOnce(&mut Document) -> ObjRef,
+) -> Result<ObjRef, EditError> {
+    let behind = layer == Layer::Behind;
     let mut list = contents(doc, page)?;
     // The behind-marks at the start: backgrounds in the order added, then watermarks.
     let behind_kinds = [MarkKind::Background.tag(), MarkKind::Watermark.tag()];
@@ -640,7 +726,7 @@ fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, cont
             Isolation::TooDeep => return Err(too_deep_on_top()),
         }
     };
-    let mark_ref = doc.add(Object::Stream(Stream::flate(tagged(tag), &content)));
+    let mark_ref = mark(doc);
     let mark = Object::Ref(mark_ref);
     if behind {
         // Right after the backgrounds already there, so a new background is painted over the
@@ -659,7 +745,19 @@ fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, cont
             list.insert(split.min(list.len()), open);
             list.push(close);
         }
-        list.push(mark);
+        if layer == Layer::OverContent {
+            // Over the page's own content: right after its last stream (or the wrapper's
+            // closing piece). A page with none goes over the backgrounds that lead the list
+            // and under everything else added.
+            let own = list.iter().rposition(|o| stream_tag(doc, o).is_none_or(|t| t == "Wrap"));
+            let at = match own {
+                Some(i) => i.saturating_add(1),
+                None => list.iter().take_while(|o| stream_tag(doc, o).as_deref() == Some(MarkKind::Background.tag())).count(),
+            };
+            list.insert(at.min(list.len()), mark);
+        } else {
+            list.push(mark);
+        }
     }
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
     Ok(mark_ref)
@@ -707,7 +805,7 @@ pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Re
     check_on_top(doc, &all[page])?;
     add_resources(doc, &all[page], None, Some(&content))?;
     let p = page_list(doc).swap_remove(page);
-    place_tagged(doc, &p, tag, content, false)
+    place_tagged(doc, &p, tag, content, Layer::OnTop)
 }
 
 fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {
@@ -846,7 +944,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        place(doc, page, MarkKind::HeaderFooter, content, Layer::OnTop)?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
             let page = &page_list(doc)[i];
@@ -883,20 +981,21 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     if replace {
         remove_marks(doc, pages, MarkKind::Watermark)?;
     }
-    let opacity = wm.opacity.clamp(0.0, 1.0);
+    let gs = Gs::normal(wm.opacity.clamp(0.0, 1.0));
+    let layer = if wm.behind { Layer::Behind } else { Layer::OnTop };
     let lines: Vec<&str> = text.lines().collect();
     for &i in pages {
         let page = page_list(doc)[i].clone();
         let (w, h) = page.display_size(doc);
         if let Some(src) = &wm.source {
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc));
-            content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
+            content.push_str(&gs.op());
             content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, wm.offset));
             content.push_str(END);
-            add_resources(doc, &page, Some(opacity), None)?;
+            add_resources(doc, &page, Some(gs), None)?;
             add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
             let page = &page_list(doc)[i];
-            place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
+            place(doc, page, MarkKind::Watermark, content.into_bytes(), layer)?;
             continue;
         }
         let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
@@ -905,19 +1004,8 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
         let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc)).into_bytes();
         content.extend(
-            format!(
-                "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n",
-                (opacity * 100.0).round() as i64,
-                n(c),
-                n(s),
-                n(-s),
-                n(c),
-                n(cx),
-                n(cy),
-                n(size),
-                rgb(wm.color)
-            )
-            .bytes(),
+            format!("{}{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n", gs.op(), n(c), n(s), n(-s), n(c), n(cx), n(cy), n(size), rgb(wm.color))
+                .bytes(),
         );
         let line_h = size * 1.15;
         let total = line_h * (lines.len() as f64 - 1.0);
@@ -927,46 +1015,174 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
-        add_resources(doc, &page, Some(opacity), None)?;
+        add_resources(doc, &page, Some(gs), None)?;
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::Watermark, content, wm.behind)?;
+        place(doc, page, MarkKind::Watermark, content, layer)?;
     }
     Ok(())
 }
 
-/// Add a solid-colour background behind the content of `pages`.
+/// Add a background to `pages`: below the foreground, above a recognised leading white fill
+/// (otherwise behind the page), or explicitly blended over it with [`Background::multiply`].
 pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
+    // Blended, it goes above the page content, which must allow anything on top of it.
+    if bg.multiply {
+        for &i in pages {
+            check_on_top(doc, &all[i])?;
+        }
+    }
     if replace {
         remove_marks(doc, pages, MarkKind::Background)?;
     }
-    let opacity = if bg.opacity.is_finite() { bg.opacity.clamp(0.0, 1.0) } else { 1.0 };
+    let gs = Gs { opacity: if bg.opacity.is_finite() { bg.opacity.clamp(0.0, 1.0) } else { 1.0 }, multiply: bg.multiply };
+    let layer = if bg.multiply { Layer::OverContent } else { Layer::Behind };
+    // Blended, a PDF page is drawn as one group, so its own graphics states can't undo the blend.
+    let source = match bg.source {
+        Some(src) if bg.multiply => Some(as_group(doc, src)),
+        other => other,
+    };
     for &i in pages {
         let page = page_list(doc)[i].clone();
         let (w, h) = page.display_size(doc);
         let mut content = begin(MarkKind::Background, "Background", page.view_matrix(doc));
-        match &bg.source {
-            Some(src) => {
-                content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
-                content.push_str(&picture(src, (w, h), bg.scale, 0.0, [0.0; 2]));
-            }
-            None => content.push_str(&format!("/PCGS{} gs\n{}\n0 0 {} {} re f\n", (opacity * 100.0).round() as i64, rgb(bg.color), n(w), n(h))),
+        content.push_str(&gs.op());
+        match &source {
+            Some(src) => content.push_str(&picture(src, (w, h), bg.scale, 0.0, [0.0; 2])),
+            None => content.push_str(&format!("{}\n0 0 {} {} re f\n", rgb(bg.color), n(w), n(h))),
         }
         content.push_str(END);
-        add_resources(doc, &page, Some(opacity), None)?;
-        if let Some(src) = &bg.source {
+        add_resources(doc, &page, Some(gs), None)?;
+        if let Some(src) = &source {
             add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
         }
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::Background, content.into_bytes(), true)?;
+        if bg.multiply || !white_fill::place(doc, page, content.as_bytes())? {
+            place(doc, page, MarkKind::Background, content.into_bytes(), layer)?;
+        }
     }
     Ok(())
 }
 
+/// How much of a page's decoded content [`page_hides_background`] reads (decoding stops there):
+/// the fill it looks for comes first, so a page that has not painted within this much doesn't
+/// have one.
+const COVER_SCAN_BYTES: usize = 1024 * 1024;
+
+mod white_fill;
+
+/// Whether a normal background can be inserted above a balanced leading white fill.
+pub fn page_has_white_background(doc: &Document, page: usize) -> bool {
+    white_fill::supported(doc, page)
+}
+
+/// Does page `page` (0-based) start by painting an opaque fill over its whole visible area, so
+/// that a background behind its content stays hidden? Files from accounting and office software
+/// often do: an opaque white rectangle the size of the page is the first thing drawn. Normal
+/// placement handles the subset recognised by [`page_has_white_background`].
+///
+/// Conservative: only a fill of a path that is one rectangle, unclipped and with no `gs` before it
+/// (which could make it translucent or blend it), counts; anything else painted first answers
+/// `false` (several rectangles can cancel out under either fill rule), and so does optional
+/// content (`/OC … BDC`), which may be hidden. The
+/// streams PdfCraft added (marks, added content) are skipped, a malformed page answers `false`, and at most
+/// [`COVER_SCAN_BYTES`] of content are decoded: a stream that would decode to more ends the
+/// reading there.
+pub fn page_hides_background(doc: &Document, page: usize) -> bool {
+    use pdfcraft_content::{Matrix, Pieces, contains};
+    let Some(page) = page_list(doc).into_iter().nth(page) else { return false };
+    let list = match page.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
+        Some(Object::Array(a)) => a.clone(),
+        Some(Object::Stream(_)) => page.dict.get(b"Contents").cloned().into_iter().collect(),
+        _ => return false,
+    };
+    let mut pieces = Vec::new();
+    let mut read = 0usize;
+    for o in &list {
+        if read >= COVER_SCAN_BYTES {
+            break;
+        }
+        // Only the page's own content: marks and added items are PdfCraft's (tagged).
+        if stream_tag(doc, o).is_some() {
+            continue;
+        }
+        let Object::Stream(stream) = &*doc.resolve(o) else { return false };
+        // Bounded while decoding: a stream that would decode to more than what is left of the
+        // budget ends the reading (its start is not separately decodable).
+        let Ok(data) = stream.decoded_within(COVER_SCAN_BYTES.saturating_sub(read)) else { break };
+        read = read.saturating_add(data.len());
+        pieces.push(data);
+    }
+    let crop = page.crop(doc);
+    // A Pattern colour space (named directly or through the page's /ColorSpace resources) can
+    // tile with transparent gaps, so a fill in one doesn't prove anything is covered.
+    let spaces = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict()?.get(b"ColorSpace").map(|c| doc.resolve(c)));
+    let is_pattern = |name: &[u8]| -> bool {
+        if name == b"Pattern" {
+            return true;
+        }
+        let space = spaces.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)).map(|s| doc.resolve(s));
+        match space.as_deref() {
+            Some(Object::Name(n)) => n.as_slice() == b"Pattern",
+            Some(Object::Array(a)) => a.first().map(|f| doc.resolve(f)).is_some_and(|f| matches!(&*f, Object::Name(n) if n.as_slice() == b"Pattern")),
+            _ => false,
+        }
+    };
+    let (mut ctm, mut saved) = (Matrix::IDENTITY, Vec::new());
+    let mut rects: Vec<[f64; 4]> = Vec::new();
+    let mut other_path = false;
+    for op in Pieces::join(&pieces).parse().ops {
+        match op.op.as_slice() {
+            b"q" => saved.push(ctm),
+            b"Q" => ctm = saved.pop().unwrap_or(Matrix::IDENTITY),
+            b"cm" => match Matrix::from_operands(&op.operands) {
+                Some(m) => ctm = m.then(&ctm),
+                None => return false,
+            },
+            b"re" => {
+                let Some([x, y, w, h]) = op.nums::<4>() else { return false };
+                // Only a turn by a multiple of 90° keeps a rectangle's bounding box exact.
+                let [a, b, c, d, _, _] = ctm.0;
+                if !(b.abs() < 1e-9 && c.abs() < 1e-9 || a.abs() < 1e-9 && d.abs() < 1e-9) {
+                    return false;
+                }
+                rects.push(ctm.bbox([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]));
+            }
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"h" => other_path = true,
+            b"n" => {
+                rects.clear();
+                other_path = false;
+            }
+            b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                return match rects.as_slice() {
+                    [r] => !other_path && r.iter().all(|v| v.is_finite()) && contains(*r, crop, 0.5),
+                    _ => false,
+                };
+            }
+            // The fill colour space: a pattern (or `scn` naming one) may not cover.
+            b"cs" => match op.operands.last() {
+                Some(Object::Name(n)) if !is_pattern(n) => {}
+                _ => return false,
+            },
+            b"scn" if matches!(op.operands.last(), Some(Object::Name(_))) => return false,
+            // Optional content (a layer) may be hidden, and the fill with it.
+            b"BDC" if matches!(op.operands.first(), Some(Object::Name(n)) if n.as_slice() == b"OC") => return false,
+            // Colour, line style and marked content change nothing that is painted.
+            b"g" | b"G" | b"rg" | b"RG" | b"k" | b"K" | b"CS" | b"sc" | b"SC" | b"scn" | b"SCN" | b"w" | b"J" | b"j" | b"M" | b"d" | b"ri" | b"i"
+            | b"BDC" | b"BMC" | b"EMC" | b"MP" | b"DP" | b"BX" | b"EX" => {}
+            // Clipping, a `gs`, or anything painted before a fill: not a plain covering fill.
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Remove marks of `kind` from `pages`; returns how many were removed. Wrappers left with
 /// nothing after them go too, restoring the original content list; a wrapper that content
-/// after it still relies on (another tool's appended stream) stays.
+/// after it still relies on (another tool's appended stream) stays. A background placed above a
+/// white page fill is the exception: the two streams its insertion split the original into
+/// stay (same bytes, same rendering), so the list keeps one more piece.
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;

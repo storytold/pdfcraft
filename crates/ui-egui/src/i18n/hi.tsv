@@ -2794,3 +2794,9 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+	Blend with page content	पृष्ठ सामग्री के साथ मिलाएँ
+	Multiplies the background with the page: white areas show it and text stays dark.	पृष्ठभूमि को पृष्ठ से गुणा करता है: सफ़ेद हिस्सों में यह दिखती है और टेक्स्ट गहरा रहता है।
+	This page has an opaque background of its own, so the background is blended with its content.	इस पृष्ठ की अपनी अपारदर्शी पृष्ठभूमि है, इसलिए पृष्ठभूमि को इसकी सामग्री के साथ मिलाया जाता है।
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	इस पृष्ठ की अपनी अपारदर्शी पृष्ठभूमि है, जो इसके पीछे की हर चीज़ छिपा देती है। “पृष्ठ सामग्री के साथ मिलाएँ” चुनें।
+	Behind text and images	टेक्स्ट और चित्रों के पीछे
+	This page has an opaque background of its own, which hides the image behind it.	इस पृष्ठ की अपनी अपारदर्शी पृष्ठभूमि है, जो इसके पीछे की छवि को छिपा देती है।

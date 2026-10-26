@@ -328,3 +328,57 @@ fn page_range_from_one_to_one_selects_only_the_first_page() {
     assert_eq!(corner(&mut r, 0), vec![255, 255, 217, 255], "page 1 has the background");
     assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }
+
+/// A leading white page fill does not require blending: the normal background stays below
+/// original content and the dialog leaves Multiply as an explicit choice.
+#[test]
+fn background_dialog_places_below_content_on_pages_that_paint_themselves_white() {
+    let content = "q 1 g 0 0 300 400 re f Q 0 g 40 140 20 20 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    let mut h = harness_with(pdf.into_bytes());
+    h.state_mut().execute("edit.background");
+    h.run_steps(2);
+    assert!(!h.state().marks_draft.bg.multiply, "normal placement preserves foreground colours");
+    h.get_by_label("Behind text and images");
+    assert!(h.query_by_label_contains("opaque background of its own").is_none());
+    h.get_by_label("Blend with page content").click();
+    h.run_steps(2);
+    assert!(h.state().marks_draft.bg.multiply);
+    h.get_by_label("Behind text and images").click();
+    h.run_steps(2);
+    assert!(!h.state().marks_draft.bg.multiply);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), vec![MarkKind::Background]);
+    let s = h.state();
+    let bytes = s.session.get(s.views[0].id).unwrap().bytes.clone();
+    // Rendered: the default cream background on the page's white, the black square still black.
+    let mut r = pdfcraft_render::PageRenderer::new(bytes, pdfcraft_render::RenderConfig::default());
+    let p = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+    assert_eq!(px(5, 5), vec![255, 255, 217, 255], "the background shows on the white");
+    assert_eq!(px(50, 400 - 150), vec![0, 0, 0, 255], "the content stays black");
+}
+
+/// On an ordinary page the dialog says nothing and keeps a background behind the content.
+#[test]
+fn background_dialog_stays_behind_on_ordinary_pages() {
+    let mut h = harness();
+    h.state_mut().execute("edit.background");
+    h.run_steps(2);
+    assert!(!h.state().marks_draft.bg.multiply && !h.state().marks_draft.hides_background);
+    h.get_by_label("Blend with page content");
+    assert!(h.query_by_label_contains("opaque background of its own").is_none());
+}

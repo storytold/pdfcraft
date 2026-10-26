@@ -834,6 +834,11 @@ comment menu	Edit	సవరించు
 	Rotation	భ్రమణం
 	Appear behind page	పేజీ వెనుక కనిపించేలా
 	Appear on top of page	పేజీ పైన కనిపించేలా
+	Blend with page content	పేజీ విషయంతో మిళితం చేయి
+	Multiplies the background with the page: white areas show it and text stays dark.	నేపథ్యాన్ని పేజీతో గుణిస్తుంది: తెల్లని ప్రాంతాల్లో అది కనిపిస్తుంది, వచనం ముదురుగానే ఉంటుంది.
+	This page has an opaque background of its own, so the background is blended with its content.	ఈ పేజీకి సొంత అపారదర్శక నేపథ్యం ఉంది, కాబట్టి నేపథ్యం దాని విషయంతో మిళితం అవుతుంది.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	ఈ పేజీకి సొంత అపారదర్శక నేపథ్యం ఉంది, అది దాని వెనుక ఉన్నదంతా దాచేస్తుంది. "పేజీ విషయంతో మిళితం చేయి" ఎంచుకోండి.
+	This page has an opaque background of its own, which hides the image behind it.	ఈ పేజీకి సొంత అపారదర్శక నేపథ్యం ఉంది, అది దాని వెనుక ఉన్న చిత్రాన్ని దాచేస్తుంది.
 	From colour	రంగు నుండి
 	Page Range Options	పేజీ పరిధి ఎంపికలు
 	Preview: page {p} of {n}	ప్రివ్యూ: {n}లో {p}వ పేజీ
@@ -2466,3 +2471,5 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+
+	Behind text and images	వచనం మరియు చిత్రాల వెనుక

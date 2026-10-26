@@ -1446,6 +1446,7 @@ impl Automation {
                     color: color("color", [1.0; 3])?,
                     opacity: a.opt_num("opacity")?.unwrap_or(1.0),
                     scale: a.opt_num("scale")?.unwrap_or(1.0).clamp(0.01, 1.0),
+                    multiply: a.opt_bool("multiply")?.unwrap_or(false),
                     ..Background::default()
                 },
                 replace,
@@ -1461,7 +1462,19 @@ impl Automation {
                 Edit::RemoveMarks { kind }
             }
         };
-        self.apply(a, edit)
+        let behind = match &edit {
+            Edit::AddBackground { pages, settings, .. } if !settings.multiply => pages.clone(),
+            _ => Vec::new(),
+        };
+        let mut out = self.apply(a, edit)?;
+        // A background behind a page that paints itself over first stays hidden: say which.
+        let doc = self.doc(a)?;
+        let hidden: Vec<usize> =
+            behind.into_iter().filter(|&p| doc.page_hides_background(p) && !doc.page_has_white_background(p)).map(|p| p.saturating_add(1)).collect();
+        if let (false, Some(o)) = (hidden.is_empty(), out.as_object_mut()) {
+            o.insert("hidden_behind".into(), json!(hidden));
+        }
+        Ok(out)
     }
 
     fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {

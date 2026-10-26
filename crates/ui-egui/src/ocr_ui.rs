@@ -621,7 +621,13 @@ mod tests {
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(8, 8, image::Rgba([250, 250, 250, 255])))
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
-        let add = Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: Arc::new(png.into_inner()) };
+        let add = Edit::AddImage {
+            page: 0,
+            rect: Some([0.0, 0.0, 595.0, 842.0]),
+            name: "scan.png".into(),
+            bytes: Arc::new(png.into_inner()),
+            behind: false,
+        };
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
     }
@@ -682,7 +688,16 @@ mod tests {
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
         app.session
-            .apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "p.png".into(), bytes: Arc::new(png.into_inner()) })
+            .apply(
+                id,
+                Edit::AddImage {
+                    page: 0,
+                    rect: Some([10.0, 10.0, 50.0, 50.0]),
+                    name: "p.png".into(),
+                    bytes: Arc::new(png.into_inner()),
+                    behind: false,
+                },
+            )
             .unwrap();
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");

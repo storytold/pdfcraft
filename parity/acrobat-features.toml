@@ -2082,8 +2082,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.image"]
 tools = ["page_add_image"]
-evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable"]
-notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only)"
+evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable", "crates/edit/src/tests.rs::images_behind_text_go_above_a_white_fill_and_over_backgrounds", "crates/engine/src/tests.rs::images_behind_text_show_under_the_text_of_a_white_page", "crates/automation/tests/it/automation.rs::images_behind_text_through_tools"]
+notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only). An added image can go behind the page's text and images (Edit image ▸ Behind text and images; page_add_image/content_update behind): above a recognised leading white page fill, the same conservative recognition as normal backgrounds, and over backgrounds; otherwise behind the whole page, where an opaque page fill of its own hides it (the panel and hidden_behind say so). Not yet: placing an image between arbitrary existing objects, or behind content on pages whose fill is not recognised."
 
 [[feature]]
 id = "edit.cut-copy-paste-objects"
@@ -2186,11 +2186,11 @@ title = "Arrange objects (bring forward, send backward)"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["content_update"]
+evidence = ["crates/edit/src/tests.rs::images_behind_text_fall_back_behind_the_page_and_change_layers", "crates/ui-egui/tests/it/content.rs::putting_an_image_behind_the_text_keeps_it_selected"]
+notes = "Only added images, and only two layers: behind the page's own text and images or on top of them (Edit image ▸ Behind text and images, content_update behind). Still missing: Bring to Front, Bring Forward, Send Backward and Send to Back among individual objects, for existing page content and for added text."
 
 [[feature]]
 id = "edit.align-distribute-objects"
@@ -2531,8 +2531,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.background"]
 tools = ["doc_background"]
-evidence = ["crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/it/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks"]
-notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page; the dialog previews a colour as a tint of the page's own thumbnail (opaque pictures on the page are tinted there too, not in the result), a file as its frame and name"
+evidence = ["crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/it/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks", "crates/engine/src/tests.rs::blended_backgrounds_show_on_pages_that_paint_themselves_white", "crates/edit/src/tests.rs::page_hides_background_finds_a_page_sized_fill_first", "crates/engine/src/tests.rs::background_under_content_preserves_coloured_and_white_foreground", "crates/automation/tests/it/automation.rs::blended_backgrounds_through_tools", "crates/ui-egui/tests/it/marks.rs::background_dialog_places_below_content_on_pages_that_paint_themselves_white"]
+notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page; the dialog previews a colour as a tint of the page's own thumbnail (opaque pictures on the page are tinted there too, not in the result), a file as its frame and name. Normal placement is above a recognised leading white rectangle and below original foreground, preserving its colours; otherwise behind the page. Detection is per selected page, bounded to 1 MiB, and accepts only balanced device-colour prefixes without clipping, graphics states, marked content or strokes. Other opaque fills may still hide the background and are reported by doc_background. Explicit Multiply remains available and can alter foreground colours. Not general background segmentation or scan background removal."
 
 [[feature]]
 id = "edit.background-update-remove"
