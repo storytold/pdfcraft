@@ -784,8 +784,10 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // A callout: the leader line (arrowhead at its first point), and the text box inside
             // `/Rect` by `/RD`.
             // Text added to a turned page is drawn upright in its displayed box, which the form
-            // `/Matrix` then maps into `/Rect` (as for stamps). Callouts keep user-space axes.
-            let turn = if d.contains(b"CL") { 0 } else { text_turn(d) };
+            // `/Matrix` then maps into `/Rect` (as for stamps). A callout's leader and box are
+            // stored in user space and mapped back into that displayed frame.
+            let turn = text_turn(d);
+            let user = rect;
             let (rect, matrix) = if turn == 0 {
                 (rect, None)
             } else {
@@ -801,7 +803,18 @@ pub fn build(d: &Dict) -> Option<Stream> {
             if d.contains(b"CL") {
                 let cl = nums(d, b"CL").filter(|l| l.len() == 4 || l.len() == 6)?;
                 let rd = nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| *x >= 0.0))?;
-                rect = [full[0] + rd[0], full[1] + rd[1], full[2] - rd[2], full[3] - rd[3]];
+                // User space to the form's displayed frame (the inverse of `/Matrix`).
+                let to_form = |p: (f64, f64)| match &matrix {
+                    None => p,
+                    Some([a, b, c, dd, e, f]) => (dd * (p.0 - e) - c * (p.1 - f), a * (p.1 - f) - b * (p.0 - e)),
+                };
+                let tb = [user[0] + rd[0], user[1] + rd[1], user[2] - rd[2], user[3] - rd[3]];
+                rect = if matrix.is_some() {
+                    let (p, q) = (to_form((tb[0], tb[1])), to_form((tb[2], tb[3])));
+                    [p.0.min(q.0), p.1.min(q.1), p.0.max(q.0), p.1.max(q.1)]
+                } else {
+                    [full[0] + rd[0], full[1] + rd[1], full[2] - rd[2], full[3] - rd[3]]
+                };
                 if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
                     return None;
                 }
@@ -817,6 +830,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 if pts.len() < 2 || pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
                     return None;
                 }
+                let pts: Vec<(f64, f64)> = pts.into_iter().map(to_form).collect();
                 c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
                 for (i, p) in pts.iter().enumerate() {
                     c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
