@@ -886,6 +886,7 @@
 	Keychain  ·  	Keychain  ·  
 	Windows store  ·  	מאגר האישורים של Windows  ·  
 	Issued by: 	הונפק על ידי: 
+	, Expires: 	, תוקף עד: 
 	Digitally signed by	נחתם דיגיטלית על ידי
 	DN: 	DN: 
 	Reason: 	סיבה: 
@@ -1688,19 +1689,234 @@
 	No PDFs, images or text files found in {folder}	לא נמצאו קובצי PDF, תמונות או קובצי טקסט ב־{folder}
 	Added the first {n} files in {folder}	נוספו {n} הקבצים הראשונים מתוך {folder}
 	Click to sort, drag to move the column. Drag its edge to resize it.	לחץ למיון, גרור להזזת העמודה. גרור את הקצה שלה לשינוי הגודל.
+	Reset columns	איפוס עמודות
+	Remove {n} files	הסרת {n} קבצים
+	{n} selected	נבחרו {n}
+	sorted ascending	ממוינים בסדר עולה
+	sorted descending	ממוינים בסדר יורד
+	Protected: the combined file won't keep its security settings	מוגן: הקובץ המשולב לא ישמור על הגדרות האבטחה שלו
+	Add open documents	הוספת מסמכים פתוחים
+	All open documents	כל המסמכים הפתוחים
+	No documents are open	אין מסמכים פתוחים
+	Select a file first	בחר תחילה קובץ
+	1 file	קובץ אחד
 	{n} files	{n} קבצים
+	1 file needs attention	קובץ אחד דורש טיפול
+	{n} files need attention	{n} קבצים דורשים טיפול
+	{name} can't be combined: {why}	לא ניתן לשלב את {name}: {why}
+	Check the pages of {name}: {why}	בדוק את העמודים של {name}: {why}
+	Add the files to combine	הוסף את הקבצים לשילוב
 	File name	שם הקובץ
+	Warnings	אזהרות
+	Drag to reorder	גרור כדי לשנות את הסדר
+	{k} of {n}	{k} מתוך {n}
+	? of {n}	? מתוך {n}
+	Added more than once	נוסף יותר מפעם אחת
+	yesterday	אתמול
+	{n} days ago	לפני {n} ימים
+	No pages selected	לא נבחרו עמודים
+	Password-protected	מוגן בסיסמה
+	Its security settings don't allow copying pages	הגדרות האבטחה שלו אינן מאפשרות העתקת עמודים
+	Can't be read: {e}	לא ניתן לקרוא: {e}
+	Leave out files that can't be read?	להשמיט קבצים שאי אפשר לקרוא?
+	These files can't be read, so they won't be in the combined PDF:	לא ניתן לקרוא את הקבצים האלה, ולכן הם לא ייכללו ב־PDF המשולב:
+	Combine the rest	שילוב יתר הקבצים
+	and {n} more	ועוד {n}
+	Includes unsaved changes	כולל שינויים שלא נשמרו
+	Pages of {name} to combine, e.g. 1-3, 6	העמודים מתוך {name} לשילוב, לדוגמה 1-3, 6
+	Remove {name}	הסרת {name}
+	Add files…	הוספת קבצים…
+	Add at least two files	הוסף לפחות שני קבצים
+	Couldn't add {name}: {e}	לא ניתן להוסיף את {name}: {e}
+	Couldn't combine files: {e}	לא ניתן לשלב את הקבצים: {e}
+	Export comments	ייצוא הערות
+	Export form data	ייצוא נתוני טופס
+	Comment and form data	נתוני הערות וטופס
 	Export	ייצוא
+	Select data files to merge	בחירת קובצי נתונים למיזוג
+	Form data and PDF forms	נתוני טופס וטופסי PDF
+	Save the spreadsheet	שמירת הגיליון האלקטרוני
+	Save the accessibility report	שמירת דוח הנגישות
+	Save image	שמירת תמונה
+	Export certificate	ייצוא אישור
+	Choose a folder for the extracted pages	בחירת תיקייה לעמודים שחולצו
+	Choose a folder for the split files	בחירת תיקייה לקבצים שפוצלו
+	Couldn't use {name}: {e}	לא ניתן להשתמש ב־{name}: {e}
+	Couldn't extract pages: {e}	לא ניתן לחלץ את העמודים: {e}
+	Couldn't write {name}: {e}	לא ניתן לכתוב את {name}: {e}
+	the name is not a plain file name	השם אינו שם קובץ פשוט
+	Wrote 1 file to {dir}	נכתב קובץ אחד אל {dir}
+	Wrote {n} files to {dir}	נכתבו {n} קבצים אל {dir}
+	No pages match those choices	אין עמודים שתואמים לבחירות האלה
+	Couldn't split: {e}	לא ניתן לפצל: {e}
+	Couldn't summarize comments: {e}	לא ניתן לסכם את ההערות: {e}
+	Couldn't open the result: {e}	לא ניתן לפתוח את התוצאה: {e}
+	Importing data arrives on the web with file pickers for data files	ייבוא נתונים יגיע לגרסת האינטרנט עם בוררי קבצים לקובצי נתונים
+	Exported to {path}	יוצא אל {path}
+	Merging data files needs the desktop app	מיזוג קובצי נתונים דורש את יישום שולחן העבודה
+	Merged 1 file into {path}	מוזג קובץ אחד אל {path}
+	Merged {n} files into {path}	מוזגו {n} קבצים אל {path}
+	Combined {n} files	שולבו {n} קבצים
+	Extracted 1 page	חולץ עמוד אחד
+	Extracted {n} pages	חולצו {n} עמודים
+	Created a comment summary	נוצר סיכום הערות
 	Couldn't open {name}: {e}	לא ניתן לפתוח את {name}: {e}
+	Couldn't read {name}: {e}	לא ניתן לקרוא את {name}: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	מצב נייד כבוי: לא ניתן לכתוב אל {folder} ({error}). ההגדרות יישמרו בתיקיית המשתמש שלך במקום זאת.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft פועל ללא מעבד גרפי ולכן ייתכן שיהיה איטי. עדכון מנהל ההתקן הגרפי עשוי לעזור.
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	הורדת קבצים מצורפים בגרסת האינטרנט תגיע ב־M3.10 ({n} בתים מוכנים)
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	ייכלל באבן דרך {m}
+	needs an AI provider (off by default)	דורש ספק AI (כבוי כברירת מחדל)
+	is available	זמין
+	is not available yet	עדיין אינו זמין
+	{label} failed: {e}	{label} נכשל: {e}
+	Undid {label}	בוטלה הפעולה {label}
+	Redid {label}	בוצעה מחדש הפעולה {label}
+	A document needs at least one page: copy instead	מסמך חייב לכלול לפחות עמוד אחד; יש ליצור עותק במקום זאת
+	Cut {what}	נגזרו {what}
+	Copied {what}	הועתקו {what}
+	1 page	עמוד אחד
 	{n} pages	{n} עמודים
+	Copy or cut pages first	העתק או גזור תחילה עמודים
 	Couldn't save {name}: {e}	לא ניתן לשמור את {name}: {e}
+	Saved {name}	{name} נשמר
+	Saved, but reopening failed: {e}	הקובץ נשמר, אך פתיחתו מחדש נכשלה: {e}
+	Downloaded {name}	הורד {name}
+	Couldn't download {name}: {e}	לא ניתן להוריד את {name}: {e}
+	Reverted to the last saved version	הוחזרה הגרסה האחרונה שנשמרה
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	הפעולה נכשלה עקב שגיאה פנימית ({m}). המסמכים שלך לא השתנו.
+	Nothing to undo	אין פעולות לביטול
+	Nothing to redo	אין פעולות לביצוע מחדש
+	This document has no form fields you can fill in	אין במסמך שדות טופס שניתן למלא
+	This document has no comments to flatten	אין במסמך הערות להשטחה
+	This document has no form fields to flatten	אין במסמך שדות טופס להשטחה
+	There are no redaction marks (mark text, areas or pages first)	אין סימוני השחרה (תחילה סמן טקסט, אזורים או עמודים)
+	This document has no {kind} to change	אין במסמך {kind} לשינוי
+	header or footer	כותרת עליונה או תחתונה
+	watermark	סימן מים
+	background	רקע
+	This document isn't password-protected	המסמך אינו מוגן בסיסמה
+	Enter permissions password…	הזנת סיסמת הרשאות…
+	Permissions password	סיסמת הרשאות
+	“{name}” has security restrictions. Enter its permissions password to lift them.	על “{name}” חלות הגבלות אבטחה. הזן את סיסמת ההרשאות כדי להסירן.
+	Restrictions lifted	ההגבלות הוסרו
+	Couldn't unlock {name}: {e}	לא ניתן לבטל את הנעילה של {name}: {e}
+	This document has no restrictions to lift	אין במסמך הגבלות להסרה
+	The document's security settings don't allow this change	הגדרות האבטחה של המסמך אינן מאפשרות שינוי זה
+	The document's security settings don't allow copying text and images	הגדרות האבטחה של המסמך אינן מאפשרות להעתיק טקסט ותמונות
+	The document's security settings don't allow printing	הגדרות האבטחה של המסמך אינן מאפשרות הדפסה
+	Open a document first	פתח תחילה מסמך
+	Security will be removed when you save	הגנת האבטחה תוסר בעת השמירה
+	Click text or an image to edit it	לחץ על טקסט או תמונה כדי לערוך אותם
+	Drag a rectangle to create a link; double-click a link to edit it	גרור מלבן כדי ליצור קישור; לחץ פעמיים על קישור כדי לערוך אותו
+	There are no redaction marks to apply	אין סימוני השחרה להחלה
+	Drag to draw the area where the signature should appear.	גרור כדי לצייר את האזור שבו תופיע החתימה.
+	Couldn't fit the visible content: {e}	לא ניתן להתאים את התוכן הגלוי: {e}
+	Drag a rectangle around the area to copy	גרור מלבן סביב האזור להעתקה
+	Click on the page to add a {tool}, or drag to set its size	לחץ בעמוד כדי להוסיף {tool}, או גרור כדי להגדיר את גודלו
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	גרור מלבן בעמוד כדי לחתוך אותו; לחץ פעמיים על עמוד כדי לפתוח את הגדרת תיבות העמוד
+	Keep tool selected: on	השארת הכלי נבחרת: מופעל
+	Keep tool selected	השארת הכלי נבחר
+	Opacity	אטימות
+	Line thickness	עובי הקו
+	What word or phrase would you like to search for?	איזו מילה או איזה ביטוי ברצונך לחפש?
+	Searching… {s} of {p} pages	מחפש… {s} מתוך {p} עמודים
+	 (searching… {s} of {p} pages)	 (בחיפוש… {s} מתוך {p} עמודים)
+	1 instance	מופע אחד
+	{n} instances	{n} מופעים
+	Go to this result	מעבר לתוצאה זו
+	Highlight	הדגשה
+	Draw	ציור
+	Polygon	מצולע
+	Connected lines	קווים מחוברים
+	Eraser	מחק
 	Sign	חתימה
+	Certified by {by}	אושר בחתימה של {by}
+	At least one signature is invalid.	לפחות חתימה אחת אינה תקפה.
+	Signed and all signatures are valid.	המסמך חתום וכל החתימות תקפות.
+	At least one signature has problems.	יש בעיות בלפחות אחת מהחתימות.
+	This document is secured. Some changes are restricted by its security settings.	המסמך מאובטח. הגדרות האבטחה שלו מגבילות חלק מהשינויים.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	זהו טופס XFA דינמי ש־PdfCraft עדיין אינו יכול להציג. מה שמוצג הוא עמוד מציין מקום של הקובץ.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	הסקריפטים של טופס זה כובו משום שאחד מהם רץ זמן רב מדי. פתח מחדש את המסמך כדי להריץ אותם שוב.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	טופס זה מכיל גם נתוני XFA ש־PdfCraft עדיין אינו קורא. אפשר למלא את השדות, אך Acrobat עשוי להציג במקום זאת את ערכי XFA.
+	This document contains {n} interactive form fields.	המסמך מכיל {n} שדות טופס אינטראקטיביים.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	הקובץ היה פגום ותוקן. שמירה תשאיר את הגרסה המתוקנת.
+	Dismiss	סגירה
+	Hide field highlights	הסתרת הדגשת השדות
+	Highlight fields	הדגשת שדות
+	Security settings	הגדרות אבטחה
+	Details	פרטים
+	Select (V)	בחירה (V)
+	Hand (H)	יד (H)
+	Delete pages (Delete)	מחיקת עמודים (Delete)
+	Insert a blank page after the selection	הוספת עמוד ריק אחרי הבחירה
+	Insert pages from a file…	הוספת עמודים מקובץ…
+	Extract pages to a new document	חילוץ עמודים למסמך חדש
+	Split into files…	פיצול לקבצים…
+	Select pages	בחירת עמודים
 	Cut	גזירה
 	Copy	העתקה
+	Paste after	הדבקה לאחר
 	Rename	שינוי שם
+	Set to current page ({n})	הגדרה לעמוד הנוכחי ({n})
+	Move up	העברה למעלה
+	Move down	העברה למטה
+	Indent	הזחה פנימה
+	Outdent	ביטול הזחה
+	This document has no form fields.	אין במסמך הזה שדות טופס.
+	Tab order: move a field with its arrows.	סדר מעבר בין שדות: הזז שדה באמצעות החצים שלו.
+	Unplaced	לא ממוקם
+	Has JavaScript actions (run in M6)	כולל פעולות JavaScript (יפעלו ב־M6)
 	Page	עמוד
 	None	ללא
+	Delete selected fields	מחיקת השדות שנבחרו
+	Diagnostic details	פרטי אבחון
+	The operation failed.	הפעולה נכשלה.
+	no such document	אין מסמך כזה
+	nothing to undo	אין פעולות לביטול
+	nothing to redo	אין פעולות לביצוע מחדש
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	המסמך חתום: כתיבה מחדש תבטל את החתימות שלו (שמור באופן מצטבר במקום זאת)
+	the document is protected by a password	המסמך מוגן בסיסמה
+	the password is incorrect	הסיסמה שגויה
+	the document has no page tree	למסמך אין עץ עמודים
+	a document must keep at least one page	מסמך חייב להכיל לפחות עמוד אחד
+	a bookmark cannot be moved inside itself	אי אפשר להעביר סימנייה לתוך עצמה
+	the title must not be empty	הכותרת אינה יכולה להיות ריקה
+	the document has no form fields	אין במסמך שדות טופס
+	there are no redaction marks to apply	אין סימוני השחרה להחלה
+	there are no pages to print	אין עמודים להדפסה
+	the document has no tags	אין למסמך תגיות
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	מודלי זיהוי הטקסט אינם מותקנים (התקן מחדש את PdfCraft או הגדר את PDFCRAFT_MODELS לתיקייה שבה הם נמצאים)
+	the image is empty	התמונה ריקה
+	this file isn't XFDF, FDF, XML or text form data	הקובץ אינו נתוני טופס מסוג XFDF, FDF, XML או טקסט
+	nothing in the file matches this document	שום דבר בקובץ אינו תואם למסמך זה
+	This page couldn't be displayed.\n{e}	לא ניתן להציג את העמוד הזה.\n{e}
+	Go to page {p}	מעבר לעמוד {p}
+	{s} action	פעולת {s}
 	Page {p} of {n}	עמוד {p} מתוך {n}
+	1 page selected	נבחר עמוד אחד
+	{n} pages selected	נבחרו {n} עמודים
+	{name} — unsaved changes	{name} — שינויים שלא נשמרו
+	{kind} field	שדה {kind}
+	Select a file for the stamp	בחירת קובץ לחותמת
+	JavaScript, e.g. getField("total").value	JavaScript, לדוגמה getField("total").value
+	Font: Helvetica	גופן: Helvetica
+	e.g. en-US	לדוגמה en-US
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	רינדור: hayro (bootstrap) · ממשק: egui · סמלים: Lucide (ISC) · גופנים: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	תיבת סימון
+	Radio	בחירה
+	PushButton	לחצן
+	Combo	משולב
+	List	רשימה
+	Unknown	לא ידוע
+	The document has no XMP metadata	אין במסמך מטא־נתוני XMP
+	The title in the metadata and the document information differ	הכותרת במטא־נתונים שונה מהכותרת בפרטי המסמך
+	The document is encrypted	המסמך מוצפן
+	Device colour is used, but there is no PDF/A output intent	נעשה שימוש בצבע Device אך אין הגדרת פלט PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	נעשה שימוש ב־DeviceCMYK: נדרשת הגדרת פלט CMYK (לא מתווספת אוטומטית)
+	The document has additional actions (/AA)	למסמך יש פעולות נוספות (/AA)
 	Add bookmark	הוספת סימנייה
 	Edit text	עריכת טקסט
 	Scale	קנה מידה
