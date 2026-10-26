@@ -272,7 +272,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
                 // The rewrite sets every row in the first one's horizontal scale.
-                && (prev.origin.state.scale - first.origin.state.scale).abs() < 1e-6
+                && (prev.origin.state.scale - first.origin.state.scale).abs() < 0.1
                 && aligned
                 && first.size.min(prev.size) >= first.size.max(prev.size) * 0.4
                 && gap > first.size.min(prev.size) * 0.8

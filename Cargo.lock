@@ -4534,6 +4534,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-wasm"
+version = "0.14.0"
+dependencies = [
+ "image",
+ "js-sys",
+ "pdfcraft-engine",
+ "pdfcraft-render",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "pdfcraft-web"
 version = "0.14.0"
 dependencies = [
