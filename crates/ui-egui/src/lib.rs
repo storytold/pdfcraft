@@ -89,6 +89,7 @@ pub mod bulk_fields;
 mod dialogs;
 mod edit_text_ui;
 pub mod field_table_ui;
+pub mod pan_zoom_ui;
 pub use edit_text_ui::CropMode;
 mod editing;
 #[cfg(not(target_arch = "wasm32"))]
@@ -916,6 +917,8 @@ pub struct PdfCraftApp {
     pub duplicate_draft: Option<DuplicateDraft>,
     /// Text field table: the table being set up, and the page it goes on.
     pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
+    /// Pan & zoom overview window state (`pan_zoom_ui`).
+    pub pan_zoom: Option<pan_zoom_ui::PanZoomState>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
@@ -1258,6 +1261,7 @@ impl PdfCraftApp {
             attach_override: None,
             duplicate_draft: None,
             field_table_draft: None,
+            pan_zoom: None,
             form_preview: false,
             window_title: String::new(),
             recovery: None,

@@ -152,7 +152,7 @@ const EDIT: &[&str] = &[
     SEP,
     "app.preferences",
 ];
-const ZOOM: &[&str] = &[ACTUAL_SIZE, PAGE_LEVEL, FIT_WIDTH, FIT_HEIGHT, "view.fit_visible", SEP, ZOOM_IN, ZOOM_OUT, SEP, "view.marquee_zoom"];
+const ZOOM: &[&str] = &[ACTUAL_SIZE, PAGE_LEVEL, FIT_WIDTH, FIT_HEIGHT, "view.fit_visible", SEP, ZOOM_IN, ZOOM_OUT, SEP, "view.marquee_zoom", "view.pan_zoom"];
 const NAVIGATION: &[&str] = &["view.focus_page_input", SEP, "view.previous_view", "view.next_view"];
 const DISPLAY: &[&str] = &[
     "view.layout.single",
@@ -492,6 +492,7 @@ impl PdfCraftApp {
             "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
             "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
             "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),
+            "view.pan_zoom" => Some(self.pan_zoom.as_ref().is_some_and(|p| p.open)),
             PANEL => Some(panel(command).is_some_and(|p| self.right == Some(p))),
             _ => None,
         };
