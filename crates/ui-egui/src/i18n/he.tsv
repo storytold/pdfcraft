@@ -1433,15 +1433,261 @@
 	Anyone opening the document will need this password. It's applied when you save.	כל מי שיפתח את המסמך יזדקק לסיסמה זו. היא תחול בעת השמירה.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	אפשר לפתוח את המסמך ללא סיסמה; סיסמה זו נדרשת לשינוי ההגבלות. היא תחול בעת השמירה.
 	Recover unsaved documents?	לשחזר מסמכים שלא נשמרו?
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft לא נסגר באופן תקין. השינויים במסמכים הבאים נשמרו אוטומטית:
+	just now	ממש עכשיו
+	{n} min ago	לפני {n} דקות
+	{n} h ago	לפני {n} שעות
+	Recover	שחזור
+	Discard	השלכה
+	Version {v}	גרסה {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	יישום PDF בקוד פתוח שנכתב ב־Rust ללא שימוש בקוד של תוכנה קניינית. MIT OR Apache-2.0.
+	Part of	חלק מ־
+	Summarize Options	אפשרויות סיכום
+	Choose a layout:	בחירת פריסה:
+	Comments only	הערות בלבד
+	Sort comments by:	מיון הערות לפי:
+	Create PDF Comment Summary	יצירת סיכום הערות ב־PDF
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	לחזור לגרסה השמורה הקודמת של “{name}”? לא ניתן יהיה לבטל את השינויים שבוצעו מאז.
+	Save over the changed file?	לשמור במקום הקובץ שהשתנה?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” השתנה בדיסק מאז שנפתח או נשמר לאחרונה. שמירה כעת תחליף את הגרסה החדשה יותר בגרסה זו.
+	Save anyway	שמירה בכל זאת
+	Number pages	מספור עמודים
+	Style	סגנון
+	None (prefix only)	ללא (קידומת בלבד)
+	Prefix	קידומת
+	Start	התחלה
+	Labels: {preview}. Later pages keep their labels.	תוויות: {preview}. העמודים הבאים ישמרו על התוויות שלהם.
+	Even and Odd Pages	עמודים זוגיים ואי־זוגיים
+	Even Pages Only	עמודים זוגיים בלבד
+	Odd Pages Only	עמודים אי־זוגיים בלבד
+	Landscape and Portrait Pages	עמודים לרוחב ולאורך
+	Landscape Pages	עמודים לרוחב
+	Portrait Pages	עמודים לאורך
+	Duplicate Field	שכפול שדה
+	Duplicate "{name}" onto:	שכפול "{name}" אל:
+	1 page selected.	נבחר עמוד אחד.
+	{n} pages selected.	נבחרו {n} עמודים.
+	Delete pages after extracting	מחיקת העמודים לאחר חילוצם
+	Extract pages as separate files	חילוץ העמודים לקבצים נפרדים
+	Rotate Pages	סיבוב עמודים
+	Direction:	כיוון:
+	Clockwise 90 degrees	90 מעלות עם כיוון השעון
+	Counterclockwise 90 degrees	90 מעלות נגד כיוון השעון
+	180 degrees	180 מעלות
+	Pages:	עמודים:
 	All	הכול
+	Selection	בחירה
+	From	מאת
+	Rotate:	סיבוב:
+	Repairs	תיקונים
+	Repair log	יומן תיקונים
+	Split document	פיצול מסמך
+	Number of pages	מספר עמודים
+	Pages per file	עמודים בכל קובץ
+	File size	גודל הקובץ
+	At most	לכל היותר
+	Top-level bookmarks ({n})	סימניות ברמה העליונה ({n})
+	Before each selected page (select pages in Organize)	לפני כל עמוד שנבחר (בחר עמודים בכלי ארגון)
+	Creates 1 file from {n} pages.	יוצר קובץ אחד מתוך {n} עמודים.
+	Creates {f} files from {n} pages.	יוצר {f} קבצים מתוך {n} עמודים.
+	Each file holds as many of the {n} pages as fit.	כל קובץ יכיל כמה שיותר מתוך {n} העמודים שנבחרו.
+	Replace Pages	החלפת עמודים
+	Original: replace pages	מקור: החלפת עמודים
+	to	עד
+	to {n}	עד {n}
+	Replacement: pages of {name}	החלפה: עמודים מתוך {name}
+	of {name}	מתוך {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	רק תוכן העמודים משתנה: הקישורים, ההערות, שדות הטופס והסימניות בעמודים המקוריים נשארים.
+	The replacement file doesn't have that many pages.	בקובץ החלופי אין מספר כזה של עמודים.
+	Tagged PDF	PDF מתויג
+	Document Properties	מאפייני המסמך
+	Description	תיאור
+	Initial View	תצוגה ראשונית
 	Security	אבטחה
+	Fonts	גופנים
 	Advanced	מתקדם
+	Title	כותרת
 	Subject	נושא
+	Keywords	מילות מפתח
+	Application	יישום
+	PDF producer	יוצר PDF
+	Layout and Magnification	פריסה והגדלה
+	Navigation tab	לשונית ניווט
+	Page Only	עמוד בלבד
+	Bookmarks Panel and Page	חלונית סימניות ועמוד
+	Pages Panel and Page	חלונית עמודים ועמוד
+	Attachments Panel and Page	חלונית קבצים מצורפים ועמוד
+	Layers Panel and Page	חלונית שכבות ועמוד
+	Page layout	פריסת עמוד
 	Default	ברירת מחדל
+	Single Page	עמוד יחיד
+	Single Page Continuous	עמוד יחיד, גלילה רציפה
+	Two-Up (Facing)	שני עמודים זה לצד זה
+	Two-Up Continuous (Facing)	שני עמודים זה לצד זה, גלילה רציפה
+	Two-Up (Cover Page)	שני עמודים (עמוד שער נפרד)
+	Two-Up Continuous (Cover Page)	שני עמודים ברצף (עמוד שער נפרד)
+	Magnification	הגדלה
+	Actual Size	גודל ממשי
+	Fit Page	התאמה לעמוד
+	Fit Width	התאמה לרוחב
+	Fit Height	התאמה לגובה
+	Fit Visible	התאמה לתוכן הגלוי
+	Open to page	פתיחה בעמוד
+	of {pages}	מתוך {pages}
+	Window Options	אפשרויות חלון
+	Resize window to initial page	התאמת גודל החלון לעמוד הראשוני
+	Center window on screen	מרכוז החלון במסך
+	Open in Full Screen mode	פתיחה במצב מסך מלא
+	Show:	הצגה:
+	File Name	שם הקובץ
+	Document Title	כותרת המסמך
+	User Interface Options	אפשרויות ממשק המשתמש
+	Hide menu bar	הסתרת שורת התפריטים
+	Hide toolbars	הסתרת סרגלי הכלים
+	Hide window controls	הסתרת פקדי החלון
+	Security method	שיטת אבטחה
+	No security	ללא אבטחה
+	Restrictions	הגבלות
+	None — everything is allowed	ללא — הכול מותר
+	Password security	אבטחה באמצעות סיסמה
+	Encryption	הצפנה
+	Opened with	נפתח באמצעות
+	— (protection is applied when you save)	— (ההגנה חלה בעת השמירה)
+	Owner password (no restrictions apply)	סיסמת בעלים (ללא הגבלות)
+	User password	סיסמת משתמש
+	Change settings…	שינוי הגדרות…
+	Printing	הדפסה
+	Not allowed	אסור
+	Allowed	מותר
+	High resolution	רזולוציה גבוהה
+	Low resolution	רזולוציה נמוכה
+	Changing the document	שינוי המסמך
+	Document assembly	הרכבת המסמך
+	Content copying	העתקת תוכן
+	Content copying for accessibility	העתקת תוכן לצורכי נגישות
+	Commenting	הוספת הערות
+	Filling of form fields	מילוי שדות טופס
+	No fonts are referenced by the pages.	העמודים אינם מפנים לגופנים כלשהם.
+	PDF version	גרסת PDF
+	Location	מיקום
+	Page size	גודל העמוד
 	Yes	כן
 	No	לא
+	Revisions	גרסאות
+	View revision {n}	הצגת גרסה {n}
+	Open the file as it was saved then	פתיחת הקובץ כפי שנשמר באותו זמן
+	Binding	כריכה
+	Left Edge	קצה שמאלי
+	Right Edge	קצה ימני
 	Language	שפה
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	נשמר {place}: {before} → {after} (קטן ב־{pct}%){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	הקובץ כבר קטן ככל האפשר ({size}). לא נשמר עותק.
+	Saved {place}: {before} → {after} (not smaller){detail}	נשמר {place}: {before} → {after} (לא קטן יותר){detail}
+	Couldn't save the image: {e}	לא ניתן לשמור את התמונה: {e}
+	Adding images arrives on the web with file pickers for images	הוספת תמונות בגרסת האינטרנט תגיע עם בורר קבצים לתמונות
+	Replacing images on page {p} arrives on the web with image pickers ({i})	החלפת תמונות בעמוד {p} תגיע לגרסת האינטרנט עם בורר תמונות ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: בחירת תמונות תגיע לגרסת האינטרנט עם בורר קבצים לתמונות
+	Replacing images arrives on the web with image file pickers	החלפת תמונות תגיע לגרסת האינטרנט עם בורר קבצי תמונה
+	Couldn't create a PDF: {e}	לא ניתן ליצור PDF: {e}
+	The clipboard has no image or text	הלוח אינו מכיל תמונה או טקסט
+	On the web, open or drop an image to convert it	בגרסת האינטרנט, פתח תמונה או גרור אותה לחלון כדי להמיר אותה
+	Couldn't optimize the file: {e}	לא ניתן למטב את הקובץ: {e}
+	Couldn't write {path}: {e}	לא ניתן לכתוב את {path}: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	הטופס מבקש להישלח אל {u}; PdfCraft אינו שולח נתוני טופס. שמור את המסמך כדי לשמור את הערכים שהזנת.
+	This PDF uses the unsupported {s} action.	קובץ PDF זה משתמש בפעולה {s} שאינה נתמכת.
+	{name}: the {other} action isn't supported yet	{name}: הפעולה {other} עדיין אינה נתמכת
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} שולח את הטופס אל {url}; PdfCraft אינו שולח נתוני טופס. שמור את המסמך כדי לשמור את הערכים שהזנת.
+	Export stopped: {e}	הייצוא נעצר: {e}
+	Exported 1 image	יוצאה תמונה אחת
+	Exported {n} images	יוצאו {n} תמונות
+	 ({s} not exported: {first})	 ({s} לא יוצאו: {first})
+	Exported the text of 1 page	יוצא הטקסט של עמוד אחד
+	Exported the text of {n} pages	יוצא הטקסט של {n} עמודים
+	{msg} to {dir}	{msg} אל {dir}
+	Exporting… {d} of {t}	מייצא… {d} מתוך {t}
+	Choose a folder for the exported files	בחירת תיקייה לקבצים שיוצאו
+	New {tool} comments will look like this one	הערות חדשות מסוג {tool} ייראו כך
+	This document can't be checked: it couldn't be read for editing	לא ניתן לבדוק את המסמך: לא ניתן לקרוא אותו לעריכה
+	The checker found no problems in this document.	הבודק לא מצא בעיות במסמך.
+	The checker found 1 problem which may prevent the document from being fully accessible.	הבודק מצא בעיה אחת שעלולה למנוע מהמסמך להיות נגיש במלואו.
+	The checker found {n} problems which may prevent the document from being fully accessible.	הבודק מצא {n} בעיות שעלולות למנוע מהמסמך להיות נגיש במלואו.
+	The text is the same	הטקסט זהה
+	1 difference found	נמצא הבדל אחד
+	{n} differences found	נמצאו {n} הבדלים
+	Added 1 comment	נוספה הערה אחת
+	Added {n} comments	נוספו {n} הערות
+	Choose a folder for the results	בחירת תיקייה לתוצאות
+	Files for {name}	קבצים עבור {name}
+	An action is already running	פעולה כבר מתבצעת
+	Running action… file {d} of {t}	מפעיל פעולה… קובץ {d} מתוך {t}
+	No unlinked web addresses were found in the text	לא נמצאו בטקסט כתובות אינטרנט שאינן מקושרות
+	Created 1 link	נוצר קישור אחד
+	Created {n} links	נוצרו {n} קישורים
+	Text recognition is already running	זיהוי טקסט כבר מתבצע
+	Optimizing… removing user data	ממטב… מסיר נתוני משתמש
+	Optimizing… image {d} of {t}	ממטב… תמונה {d} מתוך {t}
+	Optimizing… cleaning up	ממטב… מנקה
+	Optimizing… merging identical objects	ממטב… ממזג אובייקטים זהים
+	Optimizing… writing the copy	ממטב… כותב את העותק
+	Cancelling…	מבטל…
+	Optimization is already running	מיטוב כבר מתבצע
+	Optimization cancelled	המיטוב בוטל
+	Couldn't optimize the file	לא ניתן למטב את הקובץ
+	Recognizing text… file {d} of {t}	מזהה טקסט… קובץ {d} מתוך {t}
+	Recognizing text… page {d} of {t}	מזהה טקסט… עמוד {d} מתוך {t}
+	Recognized 1 word	זוהתה מילה אחת
+	Recognized {n} words	זוהו {n} מילים
+	{words} on {pages}	{words} ב־{pages}
+	; 1 page already had text	; בעמוד אחד כבר היה טקסט
+	; {n} pages already had text	; ב־{n} עמודים כבר היה טקסט
+	Recognized {w} words in 1 file	זוהו {w} מילים בקובץ אחד
+	Recognized {w} words in {n} files	זוהו {w} מילים ב־{n} קבצים
+	; failed: {list}	; נכשלו: {list}
+	1 file done	קובץ אחד הושלם
+	{n} files done	הושלמו {n} קבצים
+	The selected area has been copied ({w} × {h} pixels)	האזור שנבחר הועתק ({w} × {h} פיקסלים)
+	Couldn't take the snapshot: {e}	לא ניתן לצלם תמונת מצב: {e}
+	Couldn't recover {name}: {e}	לא ניתן לשחזר את {name}: {e}
+	The document now conforms to {level}; save it to keep the changes	המסמך עומד כעת בדרישות {level}; שמור כדי לשמור את השינויים
+	Fixed what could be fixed; 1 problem remains	תוקנו כל הבעיות שהיה אפשר לתקן; נותרה בעיה אחת
+	Fixed what could be fixed; {n} problems remain	תוקנו כל הבעיות שהיה אפשר לתקן; נותרו {n} בעיות
+	Custom stamps arrive on the web with file pickers for images	חותמות מותאמות אישית יגיעו לגרסת האינטרנט עם בורר קבצים לתמונות
+	{file} is too large for a stamp (at most {n} MB)	{file} גדול מדי לחותמת (עד {n} MB)
+	Sent to {printer}	נשלח אל {printer}
+	Sent to {printer}: {msg}	נשלח אל {printer}: {msg}
+	Looking for printers…	מחפש מדפסות…
+	Sending sheet {s} of {n} to {printer}…	שולח גיליון {s} מתוך {n} אל {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	לא נמצאו מדפסות. בדוק שהמדפסת מותקנת וששירות ההדפסה פועל, ואז פתח שוב את ההדפסה.
+	Reading the printer's settings…	קורא את הגדרות המדפסת…
+	Sending to {printer}…	שולח אל {printer}…
+	Choose a folder for the searchable files	בחירת תיקייה לקבצים הניתנים לחיפוש
+	Files are combined from top to bottom. Leave Pages empty to take every page.	הקבצים משולבים מלמעלה למטה. השאר את שדה העמודים ריק כדי לכלול את כל העמודים.
+	Unlock…	ביטול נעילה…
+	Select a password-protected file first	בחר תחילה קובץ המוגן בסיסמה
+	Enter the permissions password to allow combining	הזן את סיסמת ההרשאות כדי לאפשר שילוב
+	Enter the password that opens it	הזן את הסיסמה לפתיחת הקובץ
+	Unlock {name}	ביטול הנעילה של {name}
+	Unlock {n} files	ביטול הנעילה של {n} קבצים
+	The same password is tried on each file.	אותה סיסמה תיבדק עבור כל קובץ.
+	Hide password	הסתרת הסיסמה
+	Show password	הצגת הסיסמה
+	Wrong password	סיסמה שגויה
+	The password is only used to read the file; it isn't saved.	הסיסמה משמשת רק לקריאת הקובץ; היא אינה נשמרת.
 	Unlock	ביטול נעילה
+	Opened, but its security settings don't allow combining. Enter the permissions password.	הקובץ נפתח, אך הגדרות האבטחה שלו אינן מאפשרות שילוב. הזן את סיסמת ההרשאות.
+	Unlocked: the combined file won't be password-protected	הנעילה בוטלה: הקובץ המשולב לא יהיה מוגן בסיסמה
+	Unlocked {n} of {m} files	בוטלה הנעילה של {n} מתוך {m} קבצים
+	Drop PDFs, images, text files or folders here, or choose them.	גרור לכאן קובצי PDF, תמונות, קובצי טקסט או תיקיות, או בחר אותם.
+	Add folder…	הוספת תיקייה…
+	Add folder and subfolders…	הוספת תיקייה ותיקיות משנה…
+	More ways to add files	דרכים נוספות להוספת קבצים
+	Every PDF, image and text file in the folder	כל קובצי ה־PDF, התמונות וקובצי הטקסט בתיקייה
+	Every PDF, image and text file in the folder and the folders inside it	כל קובצי ה־PDF, התמונות וקובצי הטקסט בתיקייה ובתיקיות שבתוכה
+	Add folder	הוספת תיקייה
+	Add folder and subfolders	הוספת תיקייה ותיקיות משנה
+	No PDFs, images or text files found in {folder}	לא נמצאו קובצי PDF, תמונות או קובצי טקסט ב־{folder}
+	Added the first {n} files in {folder}	נוספו {n} הקבצים הראשונים מתוך {folder}
+	Click to sort, drag to move the column. Drag its edge to resize it.	לחץ למיון, גרור להזזת העמודה. גרור את הקצה שלה לשינוי הגודל.
 	{n} files	{n} קבצים
 	File name	שם הקובץ
 	Export	ייצוא
