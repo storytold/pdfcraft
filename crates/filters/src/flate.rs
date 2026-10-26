@@ -27,9 +27,9 @@ pub(crate) fn decode(data: &[u8], max: usize) -> Step {
         Some(_) => match inflate_raw(&data[2..], max) {
             // A header that only looked valid: retry the whole input as raw deflate.
             Err(f) if f.partial.is_empty() && matches!(f.error, crate::FilterError::Corrupt { .. }) => match inflate_raw(data, max) {
-                // Keep the original corruption diagnostic only if the retry is corrupt
-                // too. A limit error must remain fatal even for tolerant decoding.
-                Err(retry) if matches!(retry.error, crate::FilterError::Corrupt { .. }) => Err(f),
+                // Keep the original diagnostic only if neither attempt produced bytes.
+                // A productive retry retains its partial output; limit errors stay fatal.
+                Err(retry) if retry.partial.is_empty() && matches!(retry.error, crate::FilterError::Corrupt { .. }) => Err(f),
                 retry => retry,
             },
             r => r,
