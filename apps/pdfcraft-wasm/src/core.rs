@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use pdfcraft_engine::{BlockStyle, DocId, Edit, Session};
-use pdfcraft_render::{OpenError, PageRenderer, RenderRequest, RequestKind, Tile};
+use pdfcraft_render::{OpenError, PageRenderer, RenderRequest, RenderWarning, RequestKind, Tile};
 
 /// Why a document did not open.
 #[derive(Debug, PartialEq, Eq)]
@@ -41,11 +41,19 @@ fn view_rect(page: &pdfcraft_render::PageInfo, r: [f64; 4]) -> [f32; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
 
+/// The largest tile side the renderer draws, and the scales it honours for a tile; anything else
+/// it would clamp, so a request outside them is refused instead of returning a different image.
+const TILE_MAX: u32 = 4096;
+const TILE_SCALES: std::ops::RangeInclusive<f32> = 0.01..=400.0;
+
 /// A rendered page or tile: premultiplied RGBA8, row-major.
 pub struct Raster {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// Conditions that make the picture partial or approximate: `content-truncated` (the page's
+    /// content budget ran out and the rest was skipped) and `colour-fallback`.
+    pub warnings: Vec<&'static str>,
 }
 
 pub struct Document {
@@ -90,13 +98,22 @@ impl Document {
         if !(scale.is_finite() && scale > 0.0) {
             return Err("the scale must be a positive number".into());
         }
+        if let Some((_, _, w, h)) = tile {
+            if !TILE_SCALES.contains(&scale) {
+                return Err(format!("a tile is drawn at a scale from {} to {}", TILE_SCALES.start(), TILE_SCALES.end()));
+            }
+            if !(1..=TILE_MAX).contains(&w) || !(1..=TILE_MAX).contains(&h) {
+                return Err(format!("a tile is 1 to {TILE_MAX} pixels on a side"));
+            }
+        }
         if page >= self.page_count() {
             return Err(format!("page {} does not exist", page.saturating_add(1)));
         }
         let display = self.doc()?.display.clone();
         let stale = self.renderer.as_ref().is_none_or(|(shown, _)| !Arc::ptr_eq(shown, &display));
         if stale {
-            let config = self.session.render_config(self.id).unwrap_or_default();
+            // A page too big for the scale is an error, not a smaller picture: ask for tiles.
+            let config = pdfcraft_render::RenderConfig { reject_oversize: true, ..self.session.render_config(self.id).unwrap_or_default() };
             self.renderer = Some((display.clone(), PageRenderer::new(display, config)));
         }
         let (_, renderer) = self.renderer.as_mut().ok_or_else(|| "no renderer".to_string())?;
@@ -104,7 +121,17 @@ impl Document {
         let out = renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag: 0, preview: false });
         match out.error {
             Some(e) => Err(e),
-            None => Ok(Raster { width: out.width, height: out.height, rgba: out.rgba.to_vec() }),
+            None => {
+                let warnings = out
+                    .warnings
+                    .iter()
+                    .map(|w| match w {
+                        RenderWarning::ContentTruncated => "content-truncated",
+                        RenderWarning::ColourFallback => "colour-fallback",
+                    })
+                    .collect();
+                Ok(Raster { width: out.width, height: out.height, rgba: out.rgba.to_vec(), warnings })
+            }
         }
     }
 
@@ -262,9 +289,26 @@ mod tests {
         assert!(page.rgba.chunks(4).any(|p| p[..3] != [255, 255, 255]), "the text is drawn");
         let tile = doc.render(0, 2.0, Some((0, 0, 100, 50))).expect("renders a tile");
         assert_eq!((tile.width, tile.height), (100, 50));
+        assert!(page.warnings.is_empty(), "a plain page draws completely");
         assert!(doc.render(1, 1.0, None).is_err());
         assert!(doc.render(0, 0.0, None).is_err());
         assert!(doc.render(0, f32::NAN, None).is_err());
+    }
+
+    #[test]
+    fn refuses_requests_the_renderer_would_change() {
+        let mut doc = open(1);
+        // a whole page at a scale beyond the side cap: an error, so the page asks for tiles
+        assert!(doc.render(0, 500.0, None).is_err());
+        // tiles outside the sizes and scales the renderer honours
+        assert!(doc.render(0, 1.0, Some((0, 0, 0, 10))).is_err(), "empty");
+        assert!(doc.render(0, 1.0, Some((0, 0, 4097, 10))).is_err(), "too wide");
+        assert!(doc.render(0, 1.0, Some((0, 0, 10, 4097))).is_err(), "too tall");
+        assert!(doc.render(0, 500.0, Some((0, 0, 10, 10))).is_err(), "scale too high");
+        assert!(doc.render(0, 0.001, Some((0, 0, 10, 10))).is_err(), "scale too low");
+        // and a tile at a high scale, which the whole page could not be, still works
+        let tile = doc.render(0, 50.0, Some((0, 0, 64, 64))).expect("a tile at a high scale");
+        assert_eq!((tile.width, tile.height), (64, 64));
     }
 
     #[test]

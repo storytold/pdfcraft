@@ -32,6 +32,12 @@ impl Rendered {
         self.inner.height
     }
 
+    /// Why the picture is partial or approximate, if it is: `content-truncated`, `colour-fallback`.
+    #[wasm_bindgen(getter)]
+    pub fn warnings(&self) -> Vec<String> {
+        self.inner.warnings.iter().map(|w| (*w).to_string()).collect()
+    }
+
     /// Premultiplied RGBA8 pixels, row by row.
     pub fn take_rgba(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.inner.rgba)
