@@ -464,3 +464,250 @@
 	Planned	מתוכנן
 	Planned for milestone	מתוכנן לאבן הדרך
 	open to see what it will include	פתח כדי לראות מה ייכלל
+	Mouse Exit	יציאה עם העכבר
+	On Focus	בעת קבלת מיקוד
+	On Blur	בעת איבוד מיקוד
+	Select Action:	בחירת פעולה:
+	Open a web link	פתיחת קישור לאינטרנט
+	Reset a form	איפוס טופס
+	Execute a menu item	הפעלת פריט בתפריט
+	Show a field	הצגת שדה
+	Hide a field	הסתרת שדה
+	Submit a form	שליחת טופס
+	Fields to reset (comma-separated; empty: all)	שדות לאיפוס (מופרדים בפסיקים; ריק פירושו הכול)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage או LastPage
+	Field names (comma-separated)	שמות שדות (מופרדים בפסיקים)
+	URL to submit to	כתובת URL לשליחה אליה
+	Script:	סקריפט:
+	Value:	ערך:
+	No actions	אין פעולות
+	Value is not calculated	הערך אינו מחושב
+	Value is the	הערך הוא
+	sum (+)	סכום (+)
+	product (x)	מכפלה (×)
+	average	ממוצע
+	minimum	מינימום
+	maximum	מקסימום
+	of the following fields:	של השדות הבאים:
+	Simplified field notation:	סימון שדות מקוצר:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	שמות שדות עם + - * / וסוגריים; יש להוסיף \\ לפני רווחים בשמות.
+	Finding document fonts…	מחפש גופנים במסמך…
+	Installed fonts…	גופנים מותקנים…
+	Keep source fonts	שמירה על גופני המקור
+	Load font…	טעינת גופן…
+	No openly licensed document fonts found. Load a font file.	לא נמצאו גופני מסמך ברישיון פתוח. טען קובץ גופן.
+	Format text	עיצוב טקסט
+	Bold	מודגש
+	Italic	נטוי
+	Align left	יישור לשמאל
+	Centre	מרכוז
+	Align right	יישור לימין
+	Justify	יישור לשני הצדדים
+	Thai and Arabic use regular fallback fonts when available.	לתאילנדית ולערבית נעשה שימוש בגופני חלופה רגילים, אם הם זמינים.
+	Edit image	עריכת תמונה
+	Rotate counterclockwise	סיבוב נגד כיוון השעון
+	Rotate clockwise	סיבוב עם כיוון השעון
+	Flip horizontal	היפוך אופקי
+	Flip vertical	היפוך אנכי
+	Replace image	החלפת תמונה
+	Crop (% trimmed from each side)	חיתוך (האחוז שיוסר מכל צד)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	לחץ על העמוד כדי להוסיף טקסט; כל לחיצה יוצרת תיבה חדשה, וסימון ✓ מסיים. גרור פריטים כדי להזיז אותם, גרור פינה לשינוי הגודל, ולחץ פעמיים על טקסט כדי לערוך אותו.
+	Choose an image	בחירת תמונה
+	Export to Image	ייצוא לתמונה
+	Export to Text	ייצוא לטקסט
+	Export All Images	ייצוא כל התמונות
+	Resolution	רזולוציה
+	Format	תבנית
+	Quality	איכות
+	One {f} file per page, named after the document.	קובץ {f} אחד לכל עמוד, בשם המסמך.
+	Exclude images smaller than	החרגת תמונות שקטנות מ־
+	No limit	ללא הגבלה
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	כל תמונה מיוצאת פעם אחת, בשם המסמך והעמוד. תמונות JPEG נשמרות ללא שינוי; אחרות נשמרות כ־PNG.
+	Plain text in reading order; pages are separated by form feeds.	טקסט פשוט לפי סדר הקריאה; העמודים מופרדים בתווי מעבר עמוד.
+	Create {what}	יצירת {what}
+	initials	ראשי תיבות
+	signature	חתימה
+	Create Custom Stamp	יצירת חותמת מותאמת אישית
+	From {file}	מתוך {file}
+	Category:	קטגוריה:
+	e.g. My stamps	לדוגמה: החותמות שלי
+	Name:	שם:
+	Custom	מותאם אישית
+	Delete stamp	מחיקת חותמת
+	Create custom stamp…	יצירת חותמת מותאמת אישית…
+	From a PDF page or an image	מעמוד PDF או מתמונה
+	Line spacing	מרווח בין שורות
+	Character spacing	מרווח בין תווים
+	Horizontal scale	קנה מידה אופקי
+	Rotate Clockwise	סיבוב עם כיוון השעון
+	Rotate Counterclockwise	סיבוב נגד כיוון השעון
+	Flip Horizontal	היפוך אופקי
+	Flip Vertical	היפוך אנכי
+	Replace Image…	החלפת תמונה…
+	Save Image As…	שמירת תמונה בשם…
+	Copy Image	העתקת תמונה
+	The image has been copied ({w} × {h} pixels)	התמונה הועתקה ({w} × {h} פיקסלים)
+	Couldn't copy the image: {e}	לא ניתן להעתיק את התמונה: {e}
+	Copy Image in Original Format	העתקת התמונה בפורמט המקורי
+	The image has been copied as a {ext} file	התמונה הועתקה כקובץ {ext}
+	The page has changed; select the image again	העמוד השתנה; בחר את התמונה מחדש
+	Check for updates	בדיקת עדכונים
+	No check has run yet.	עדיין לא בוצעה בדיקה.
+	Checking for a newer version…	בודק אם קיימת גרסה חדשה יותר…
+	PdfCraft {v} is available.	גרסת PdfCraft {v} זמינה.
+	You have version {c}. Download the new version from its release page.	ברשותך גרסה {c}. הורד את הגרסה החדשה מדף ההפצה שלה.
+	PdfCraft {c} is up to date.	PdfCraft {c} מעודכן לגרסה האחרונה.
+	Couldn't check for updates: {e}	לא ניתן לבדוק עדכונים: {e}
+	You have version {c}. All releases are listed at {page}.	ברשותך גרסה {c}. כל הגרסאות מופיעות בכתובת {page}.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	פונה ל־GitHub לקבלת פרטי הגרסה האחרונה. שום דבר אינו מורד או מותקן באופן אוטומטי.
+	Download	הורדה
+	Later	מאוחר יותר
+	none	ללא
+	Declared conformance: {shown}	רמת התאימות המוצהרת: {shown}
+	Output intent: {list}	כוונת הפלט: {list}
+	Conformance level:	רמת תאימות:
+	No problems found: the document conforms to {level}.	לא נמצאו בעיות: המסמך עומד בדרישות {level}.
+	Verify	אימות
+	Box	תיבה
+	Units	יחידות
+	Set to zero	הגדרה לאפס
+	Current page ({n})	העמוד הנוכחי ({n})
+	Subset	תת־קבוצה
+	Update	עדכון
+	Add	הוספה
+	{verb} Header and Footer	{verb} כותרת עליונה ותחתונה
+	{verb} Watermark	{verb} סימן מים
+	{verb} Background	{verb} רקע
+	Margins	שוליים
+	Left Header Text	טקסט בכותרת העליונה משמאל
+	Center Header Text	טקסט בכותרת העליונה במרכז
+	Right Header Text	טקסט בכותרת העליונה מימין
+	Left Footer Text	טקסט בכותרת התחתונה משמאל
+	Center Footer Text	טקסט בכותרת התחתונה במרכז
+	Right Footer Text	טקסט בכותרת התחתונה מימין
+	Insert Page Number	הוספת מספר עמוד
+	Insert Date	הוספת תאריך
+	Start page number	מספר העמוד ההתחלתי
+	Shrink the page content to make room for the header and footer	הקטנת תוכן העמוד כדי לפנות מקום לכותרת העליונה והתחתונה
+	Source	מקור
+	Fit to page	התאמה לעמוד
+	Rotation	סיבוב
+	Appear behind page	הצגה מאחורי תוכן העמוד
+	Appear on top of page	הצגה מעל תוכן העמוד
+	Offset from centre	היסט מהמרכז
+	From colour	צבע מקור
+	Page Range Options	אפשרויות טווח עמודים
+	Preview: page {p} of {n}	תצוגה מקדימה: עמוד {p} מתוך {n}
+	Applies to 1 page	חל על עמוד אחד
+	Applies to {n} pages	חל על {n} עמודים
+	Replaces the existing one on those pages.	מחליף את הפריט הקיים בעמודים האלה.
+	PDF or image	PDF או תמונה
+	No file chosen	לא נבחר קובץ
+	Page number	מספר עמוד
+	Scale relative to target page	קנה מידה ביחס לעמוד היעד
+	Link Properties	מאפייני קישור
+	Create Link	יצירת קישור
+	Link Appearance	מראה הקישור
+	Link Type:	סוג הקישור:
+	Visible Rectangle	מלבן גלוי
+	Invisible Rectangle	מלבן בלתי נראה
+	Highlight Style:	סגנון הדגשה:
+	Invert	היפוך צבעים
+	Outline	קו מתאר
+	Inset	פנימי
+	Line Thickness:	עובי קו:
+	Thin	דק
+	Thick	עבה
+	Line Style:	סגנון קו:
+	Solid	רציף
+	Dashed	מקווקו
+	Color:	צבע:
+	Link Action	פעולת הקישור
+	Open a web page	פתיחת דף אינטרנט
+	Go to a page view	מעבר לתצוגת עמוד
+	Type the web address.	הקלד את כתובת האינטרנט.
+	This document has no signatures.	במסמך זה אין חתימות.
+	The Keychain's digital IDs couldn't be listed: {e}	לא ניתן להציג את הזהויות הדיגיטליות שב־Keychain: {e}
+	Signed and saved to {path}	נחתם ונשמר ב־{path}
+	Couldn't open revision {n}: {e}	לא ניתן לפתוח את גרסה {n}: {e}
+	Couldn't open the signed version: {e}	לא ניתן לפתוח את הגרסה החתומה: {e}
+	Sign with a Digital ID	חתימה באמצעות זהות דיגיטלית
+	Choose the digital ID that you want to use for signing:	בחר את הזהות הדיגיטלית שבה ברצונך להשתמש לחתימה:
+	Keychain  ·  	Keychain  ·  
+	Windows store  ·  	מאגר האישורים של Windows  ·  
+	Issued by: 	הונפק על ידי: 
+	Digitally signed by	נחתם דיגיטלית על ידי
+	DN: 	DN: 
+	Reason: 	סיבה: 
+	Location: 	מיקום: 
+	Date: 	תאריך: 
+	The labels are in English: the signature's font can't draw them in this language.	התוויות באנגלית: הגופן של החתימה אינו יכול להציג אותן בשפה זו.
+	No digital IDs yet.	עדיין אין זהויות דיגיטליות.
+	Configure New Digital ID	הגדרת זהות דיגיטלית חדשה
+	Remove "{name}" from this list? The file itself is not deleted.	להסיר את "{name}" מהרשימה? הקובץ עצמו לא יימחק.
+	Continue	המשך
+	Configure a Digital ID for Signing	הגדרת זהות דיגיטלית לחתימה
+	Use a Digital ID from a file	שימוש בזהות דיגיטלית מקובץ
+	Create a new Digital ID (self-signed, saved to a password-protected file)	יצירת זהות דיגיטלית חדשה (חתימה עצמית, נשמרת בקובץ מוגן בסיסמה)
+	Name	שם
+	Organizational Unit	יחידה ארגונית
+	Organization Name	שם הארגון
+	Email Address	כתובת דוא״ל
+	Country/Region	מדינה/אזור
+	Key Algorithm	אלגוריתם מפתח
+	Confirm Password	אישור סיסמה
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	תקף לחמש שנים עבור חתימות דיגיטליות. בדרך כלל אין אמון בזהויות בחתימה עצמית מצד אחרים.
+	File (.p12, .pfx)	קובץ (.p12, .pfx)
+	Digital ID	זהות דיגיטלית
+	Browse…	עיון…
+	{verb} as "{name}"	{verb} בשם "{name}"
+	Certify	אישור
+	The signature will be invisible.	החתימה תהיה בלתי נראית.
+	The existing action will be preserved.	הפעולה הקיימת תישמר.
+	Distinguished name	שם ייחודי (DN)
+	Labels	תוויות
+	Graphic	גרפיקה
+	Signer's name	שם החותם
+	Fill & Sign signature	חתימת מילוי וחתימה
+	Choose image…	בחירת תמונה…
+	Permitted actions after certifying	פעולות מותרות לאחר האישור
+	No changes allowed	אין לאפשר שינויים
+	Annotations, form fill-in, and digital signatures	הערות, מילוי טפסים וחתימות דיגיטליות
+	Form fill-in and digital signatures	מילוי טפסים וחתימות דיגיטליות
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	המפתח נמצא ב־Keychain של macOS, שעשוי לבקש הרשאה לשימוש בו עבור PdfCraft.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	המפתח נמצא במאגר האישורים של Windows, שעשוי לבקש הרשאה לשימוש בו עבור PdfCraft.
+	Digital ID password	סיסמת הזהות הדיגיטלית
+	Back	חזרה
+	Validate all	אימות הכול
+	Sign this field…	חתימה על שדה זה…
+	Signature is valid:	החתימה תקפה:
+	Signature validity is UNKNOWN:	תוקף החתימה אינו ידוע:
+	Signature is INVALID:	החתימה אינה תקפה:
+	Signature Details	פרטי החתימה
+	Reason	סיבה
+	Signing time	מועד החתימה
+	Algorithm	אלגוריתם
+	Signer	חותם
+	Issued by	הונפק על ידי
+	Valid	תקף
+	Field	שדה
+	Field: {field} on page {p}	שדה: {field} בעמוד {p}
+	Add to trusted certificates	הוספה לאישורים מהימנים
+	View signed version	הצגת הגרסה החתומה
+	Show certificate…	הצגת אישור…
+	Export certificate…	ייצוא אישור…
+	Certificate Viewer	מציג האישורים
+	This dialog shows the details of a certificate and its chain.	תיבת דו־שיח זו מציגה את פרטי האישור ואת שרשרת האישורים שלו.
+	Trust	אמון
+	Issued to	הונפק עבור
+	Valid from	תקף מתאריך
+	Valid to	תקף עד
+	Intended usage	שימוש מיועד
+	Any	כלשהו
+	Version	גרסה
+	Serial number	מספר סידורי
+	Issuer	מנפיק
+	Validity starts	תחילת התוקף
+	Validity ends	סיום התוקף
+	Public key	מפתח ציבורי
+	Key usage	שימוש במפתח
