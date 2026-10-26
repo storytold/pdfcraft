@@ -1554,6 +1554,10 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
                     view.pending_action = Some(crate::canvas::ViewAction::PastePages);
                     ui.close();
                 }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Insert from clipboard"))).clicked() {
+                    view.pending_action = Some(crate::canvas::ViewAction::InsertFromClipboard);
+                    ui.close();
+                }
                 ui.separator();
                 let some_left = view.target_pages().len() < count;
                 // Never every page: a document keeps at least one.

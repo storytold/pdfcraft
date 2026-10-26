@@ -739,6 +739,8 @@ pub enum ViewAction {
     },
     /// Paste copied pages after the selection.
     PastePages,
+    /// Insert pages from clipboard (image, text, or copied pages).
+    InsertFromClipboard,
     /// Enhance ▸ Camera image: straighten what the corners enclose.
     EnhanceCamera,
     /// Leave Enhance ▸ Camera image (Cancel before Enhance page, Done after it).
@@ -5627,6 +5629,7 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
     resp.on_hover_text(label).clicked()
 }
 
+/// Render the organize pages thumbnail grid.
 fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
@@ -5820,6 +5823,10 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                     }
                     if ui.add_enabled(editable, egui::Button::new(tl!("Paste after"))).clicked() {
                         view.pending_action = Some(ViewAction::PastePages);
+                        ui.close();
+                    }
+                    if ui.add_enabled(editable, egui::Button::new(tl!("Insert from clipboard"))).clicked() {
+                        view.pending_action = Some(ViewAction::InsertFromClipboard);
                         ui.close();
                     }
                 });

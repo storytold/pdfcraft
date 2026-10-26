@@ -2760,11 +2760,13 @@ title = "Insert pages from the clipboard"
 area = "D"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["page.insert_clipboard"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/tests/it/create.rs::insert_from_clipboard_image_text_and_copied_pages",
+]
+notes = "Organize ▸ Insert ▸ From Clipboard: converts clipboard image or text to pages, or inserts copied page range at the target position; headless tools read files instead"
 
 [[feature]]
 id = "organize.insert-from-scanner"

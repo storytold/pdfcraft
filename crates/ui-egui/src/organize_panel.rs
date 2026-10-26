@@ -39,6 +39,7 @@ enum Act {
     Command(&'static str),
 }
 
+/// Render the organize pages left panel controls and actions.
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let Some((index, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
@@ -126,6 +127,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 }
                 if ui.button(tl!("Insert pages from a file…")).clicked() {
                     act = Some(Act::View(ViewAction::InsertFromFile));
+                }
+                if ui.button(tl!("Insert pages from the clipboard")).clicked() {
+                    act = Some(Act::Command("page.insert_clipboard"));
                 }
                 if ui.button(tl!("Duplicate pages")).clicked() {
                     act = Some(Act::Command("page.duplicate"));

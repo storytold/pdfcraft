@@ -115,10 +115,12 @@ impl PdfCraftApp {
     /// Create ▸ Clipboard: a new document from the image (one page, its size) or the text on
     /// the clipboard, as Acrobat does.
     pub(crate) fn create_from_clipboard(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let clip = read_clipboard();
-        #[cfg(target_arch = "wasm32")]
-        let clip: Option<Clip> = None;
+        let clip = match self.clipboard_override.clone() {
+            Some(c) => Some(c),
+            #[cfg(not(target_arch = "wasm32"))]
+            None if self.system_clipboard => read_clipboard(),
+            None => None,
+        };
         match clip {
             Some(c) => {
                 if let Err(e) = self.create_from_clip(c) {
@@ -139,6 +141,96 @@ impl PdfCraftApp {
             Clip::Text(t) => self.session.create_from_text("Clipboard", &t),
         };
         self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string()))
+    }
+
+    /// Organize ▸ Insert ▸ From Clipboard: insert pages from the clipboard image, text,
+    /// or from copied pages in the internal page clipboard.
+    pub fn insert_from_clipboard(&mut self) {
+        self.insert_from_clipboard_at(None);
+    }
+
+    /// Insert pages from the clipboard at gap `at` (0 = before the first page), or after
+    /// the current selection.
+    pub fn insert_from_clipboard_at(&mut self, at: Option<usize>) {
+        let Some((i, _)) = self.active_ids() else {
+            self.notify_tr("Open a document first");
+            return;
+        };
+        let clip = match self.clipboard_override.clone() {
+            Some(c) => Some(c),
+            #[cfg(not(target_arch = "wasm32"))]
+            None if self.system_clipboard => read_clipboard(),
+            None => None,
+        };
+
+        match (clip, self.page_clipboard.clone()) {
+            (Some(c), _) => {
+                if let Err(e) = self.insert_from_clip(c, at)
+                    && e != "page insertion failed"
+                {
+                    self.notify_fmt("Couldn't insert from clipboard: {e}", &[("e", &e)]);
+                }
+            }
+            (None, Some(page_clip)) => {
+                self.insert_from_page_clip(i, page_clip, at);
+            }
+            (None, None) => {
+                self.notify_tr("The clipboard has no image or text");
+            }
+        }
+    }
+
+    /// Insert pages converted from a clipboard image or text at gap `at` (or after selection).
+    pub fn insert_from_clip(&mut self, clip: Clip, at: Option<usize>) -> Result<(), String> {
+        let Some((i, id)) = self.active_ids() else {
+            return Err("no active document".into());
+        };
+        let created = match clip {
+            Clip::Image { width, height, rgba } => {
+                let png = png_from_rgba(width, height, &rgba)?;
+                self.session.create_from_images(&[("Clipboard.png".into(), png)])
+            }
+            Clip::Text(t) => self.session.create_from_text("Clipboard", &t),
+        };
+        let bytes = created.map_err(|e| e.to_string())?;
+        let page_count = self.session.page_count_of("Clipboard.pdf", &bytes).map_err(|e| e.to_string())?;
+        let after = self.views.get(i).and_then(|v| v.target_pages().last().copied()).map_or(0, |p| p + 1);
+        let total = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let target_at = at.unwrap_or(after).min(total);
+        if !self.apply_edit(pdfcraft_engine::Edit::InsertPagesFrom {
+            name: "Clipboard".into(),
+            bytes,
+            pages: None,
+            at: target_at,
+            field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
+        }) {
+            return Err("page insertion failed".into());
+        }
+        if let Some(view) = self.views.get_mut(i) {
+            view.select_pages(&(target_at..target_at + page_count).collect::<Vec<_>>());
+        }
+        Ok(())
+    }
+
+    /// Insert pages from an internal page clip at gap `at` (or after selection).
+    pub(crate) fn insert_from_page_clip(&mut self, active_idx: usize, page_clip: crate::PageClip, at: Option<usize>) {
+        let count = page_clip.pages.len();
+        let Some(view) = self.views.get_mut(active_idx) else { return };
+        let id = view.id;
+        let after = view.target_pages().last().copied().map_or(0, |p| p + 1);
+        let total = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let target_at = at.unwrap_or(after).min(total);
+        let field_conflicts = if id == page_clip.from { pdfcraft_engine::FieldConflicts::Merge } else { pdfcraft_engine::FieldConflicts::Rename };
+        if self.apply_edit(pdfcraft_engine::Edit::InsertPagesFrom {
+            name: page_clip.name.clone(),
+            bytes: page_clip.bytes.clone(),
+            pages: Some(page_clip.pages.clone()),
+            at: target_at,
+            field_conflicts,
+        }) && let Some(view) = self.views.get_mut(active_idx)
+        {
+            view.select_pages(&(target_at..target_at + count).collect::<Vec<_>>());
+        }
     }
 
     /// Create ▸ Blank page: a new untitled US Letter document.

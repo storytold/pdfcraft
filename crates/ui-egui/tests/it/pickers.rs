@@ -1031,3 +1031,30 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         std::fs::remove_dir_all(dir.0.join("a")).unwrap();
     }
 }
+
+/// Verify that cancelling an older file picker does not reset a newer picker's insertion gap.
+#[test]
+fn cancelling_an_older_picker_does_not_clear_a_newer_insertion_gap() {
+    let mut h = harness(&[3]);
+
+    // First pick starts at gap 1
+    h.state_mut().views[0].insert_at = Some(1);
+    let req1 = h.state().file_request(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![]);
+
+    // A newer pick starts at gap 2 before the first completes
+    h.state_mut().views[0].insert_at = Some(2);
+
+    // Cancel the first pick (empty files)
+    h.state_mut().requests.lock().unwrap().push(req1);
+    h.run_steps(2);
+
+    // The insertion gap is still owned by the second pick
+    assert_eq!(h.state().views[0].insert_at, Some(2));
+
+    // Cancelling the second pick (matching gap) clears the gap
+    let req2 = h.state().file_request(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![]);
+    h.state_mut().requests.lock().unwrap().push(req2);
+    h.run_steps(2);
+
+    assert_eq!(h.state().views[0].insert_at, None);
+}
