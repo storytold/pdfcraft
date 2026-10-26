@@ -16,7 +16,7 @@ fn fields() -> Vec<FieldState> {
 }
 
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false, layers: Vec::new() }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {

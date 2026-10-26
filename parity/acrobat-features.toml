@@ -3252,11 +3252,11 @@ title = "Page open/close actions"
 area = "D"
 tier = "P2"
 milestone = "M6"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["js_page"]
+evidence = ["crates/forms/src/tests.rs::page_scripts_are_the_pages_own_then_each_annotations_in_order", "crates/engine/src/tests.rs::page_actions_start_timers_that_turn_an_animations_frames_without_changing_the_document"]
+notes = "JavaScript page actions run in the document's live context when the page being read changes (the active tab's current page): the page's own open and close actions (/AA /O, /C) and its annotations' page-open, page-visible, page-close and page-invisible actions (/PO, /PV, /PC, /PI), which start and stop LaTeX animate animations. Fields they show or hide change the view, not the document. Not yet: actions chained with /Next, other kinds of page action, visibility by scrolling (page-visible runs with page-open), and the document's open action."
 
 [[feature]]
 id = "organize.page-templates"
@@ -5211,9 +5211,9 @@ tier = "P0"
 milestone = "M6"
 status = "partial"
 commands = ["tools.js_console"]
-tools = ["js_run"]
-evidence = ["crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/js/src/tests.rs::an_xfa_form_sees_the_xfa_plugin_installed", "crates/js/src/tests.rs::a_plain_form_sees_the_xfa_version_but_not_installed", "crates/engine/src/tests.rs::scripts_in_an_xfa_form_see_the_xfa_plugin_installed", "crates/js/src/tests.rs::scand_allows_separators_between_fields_but_nothing_before_or_after_them"]
-notes = "boa (pure Rust) with the forms object model: event, getField/Field (value, readonly, display, colours, items, check boxes), app (with execMenuItem for the side panels and Save As, from a button only, and Print where this.print() works), util.printf/printd/printx/scand (scand reads dates as another viewer was observed to, in AcroForm and XFA scripts), console, display, color; xfa_version (3.5) in every document and xfa_installed in XFA forms, so their version check passes; no annotations, layers or dialogs (app.response returns null) yet, and no app.findComponent."
+tools = ["js_run", "js_advance"]
+evidence = ["crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/js/src/tests.rs::an_xfa_form_sees_the_xfa_plugin_installed", "crates/js/src/tests.rs::a_plain_form_sees_the_xfa_version_but_not_installed", "crates/engine/src/tests.rs::scripts_in_an_xfa_form_see_the_xfa_plugin_installed", "crates/js/src/tests.rs::scand_allows_separators_between_fields_but_nothing_before_or_after_them", "crates/js/src/session.rs::an_interval_is_reported_fires_and_is_cleared", "crates/js/src/session.rs::variables_and_functions_stay_for_the_next_script", "crates/js/src/session.rs::layers_are_ocg_objects_a_script_turns_on_and_off", "crates/engine/src/tests.rs::a_timer_giving_a_button_another_buttons_icon_draws_that_icon_in_its_place"]
+notes = "boa (pure Rust) with the forms object model: event, getField/Field (value, readonly, display, colours, items, check boxes), app (with execMenuItem for the side panels and Save As, from a button only, and Print where this.print() works), util.printf/printd/printx/scand (scand reads dates as another viewer was observed to, in AcroForm and XFA scripts), console, display, color; xfa_version (3.5) in every document and xfa_installed in XFA forms, so their version check passes. Buttons, the console, page actions and timers share one context per document (an active XFA layout's console keeps a fresh one), so variables and functions stay (#269); field scripts still get a fresh context each. app.setInterval and setTimeOut fire as they fall due (10 ms at the shortest, 64 timers at most; a timer's alerts and requests go to the console), button icons (buttonGetIcon, buttonSetIcon) and layers (getOCGs, ocg.state) change only the view, so LaTeX animate animations play with each of its methods. No annotations or dialogs (app.response returns null) yet, getOCGs lists every layer whatever the page, and no app.findComponent."
 
 [[feature]]
 id = "form.js-console"

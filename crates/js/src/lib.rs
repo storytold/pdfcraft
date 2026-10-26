@@ -8,18 +8,21 @@
 //! - `event`: `value`, `change`, `willCommit`, `rc`, `name`, `type`, `target`, `targetName`.
 //! - the document (`this`, also the global object): `getField`, `numFields`,
 //!   `getNthFieldName`, `numPages`, `pageNum`, `documentFileName`, `info`, `resetForm`,
-//!   `calculateNow`, `print`, `submitForm`, `mailDoc`.
+//!   `calculateNow`, `print`, `submitForm`, `mailDoc`, `getOCGs` (OCG objects: `name`, `state`,
+//!   `initState`).
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
-//!   `setFocus`.
+//!   `setFocus`, `buttonGetIcon`, `buttonSetIcon`.
 //! - `app` (`alert`, `beep`, `response`, `launchURL`, `execMenuItem`, `viewerType`, `viewerVersion`,
-//!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
-//!   `show`, `clear`), `display` and `color`.
+//!   `platform`, `setTimeOut`, `setInterval`, `clearTimeOut`, `clearInterval`), `util` (`printf`,
+//!   `printd`, `printx`, `scand`), `console` (`println`, `show`, `clear`), `display` and `color`.
 //!
-//! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
-//! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
-//! in an [`Outcome`] for the caller to apply.
+//! The engine is a sandbox: no file or network access exists, and loops and recursion are
+//! bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned in an
+//! [`Outcome`] for the caller to apply. A single [`run`] keeps nothing; a document's
+//! [`session::ScriptSession`] keeps one context, so the variables and functions scripts define
+//! stay for the next script, and its timers are reported for the caller to fire when they fall due.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -85,6 +88,9 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// A push button showing another field's icon in place of its own (`buttonSetIcon` with an
+    /// icon from that field's `buttonGetIcon`): that field's name.
+    pub icon: Option<String>,
 }
 
 impl FieldState {
@@ -101,6 +107,7 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            icon: None,
         }
     }
 
@@ -146,6 +153,18 @@ pub struct DocInfo {
     pub info: Vec<(String, String)>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    /// The document's layers (optional content groups), for `getOCGs`, in the viewer's order.
+    pub layers: Vec<Layer>,
+}
+
+/// A layer (optional content group) as `getOCGs` shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Layer {
+    pub name: String,
+    /// Shown now (`ocg.state`).
+    pub on: bool,
+    /// Shown as the file opens (`ocg.initState`).
+    pub initial: bool,
 }
 
 /// Something a script asked the viewer to do.
@@ -216,6 +235,59 @@ pub struct Outcome {
     pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
+    /// Layers the script turned on or off (`ocg.state`), as they are now: their places in
+    /// [`DocInfo::layers`], and whether each is on.
+    pub layers: Vec<(usize, bool)>,
+    /// A session's timers as they stand after the script, in the order they were set. A single
+    /// [`run`] keeps none: there the timer functions return an object and nothing more.
+    pub timers: Vec<Timer>,
+}
+
+/// A timer a script set with `app.setInterval` or `app.setTimeOut`, as a session reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timer {
+    /// The session's name for it, never reused while the session lives.
+    pub id: u32,
+    /// Milliseconds between runs (`setInterval`) or before the one run (`setTimeOut`), at least
+    /// [`MIN_TIMER_MS`].
+    pub period_ms: u32,
+    /// `setInterval`: it runs until it is cleared. `setTimeOut`: once.
+    pub repeat: bool,
+}
+
+/// Most icons `buttonGetIcon` hands out in a run, or in a session's life.
+pub const MAX_ICONS: usize = 4096;
+
+/// Most timers a session keeps at once; setting another fails with an error.
+pub const MAX_TIMERS: usize = 64;
+/// The shortest period, in milliseconds: a timer asked to run sooner or more often runs at this.
+pub const MIN_TIMER_MS: u32 = 10;
+
+/// What a timer runs: its expression, or a function a script gave instead.
+enum TimerCode {
+    Source(String),
+    Function(JsObject),
+}
+
+struct TimerEntry {
+    /// The object `setInterval`/`setTimeOut` returned, which `clear*` is given back.
+    handle: JsObject,
+    code: TimerCode,
+    period_ms: u32,
+    repeat: bool,
+}
+
+/// A session's timers by id, in the order they were set (ids only grow).
+#[derive(Default)]
+struct Timers {
+    last: u32,
+    table: std::collections::BTreeMap<u32, TimerEntry>,
+}
+
+impl Timers {
+    fn report(&self) -> Vec<Timer> {
+        self.table.iter().map(|(id, t)| Timer { id: *id, period_ms: t.period_ms, repeat: t.repeat }).collect()
+    }
 }
 
 /// Bounds that keep a script from hanging the viewer.
@@ -242,9 +314,31 @@ struct Host {
     kept: usize,
     /// Alerts, console lines and requests the limits left out.
     dropped: usize,
+    /// A session's timers; `None` in a single run, where timers are inert.
+    timers: Option<Timers>,
+    /// The icons `buttonGetIcon` handed out, each with the field whose icon it is.
+    icons: Vec<(JsObject, String)>,
+    /// Layers a script turned on or off, by their places in [`DocInfo::layers`].
+    layers_changed: BTreeSet<usize>,
 }
 
 impl Host {
+    fn new(fields: Arc<Vec<FieldState>>, doc: DocInfo, timers: Option<Timers>) -> Host {
+        Host {
+            fields,
+            changed: BTreeSet::new(),
+            alerts: Vec::new(),
+            console: Vec::new(),
+            requests: Vec::new(),
+            doc,
+            kept: 0,
+            dropped: 0,
+            timers,
+            icons: Vec::new(),
+            layers_changed: BTreeSet::new(),
+        }
+    }
+
     /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.
     fn room(&mut self, bytes: usize) -> bool {
         match self.kept.checked_add(bytes).filter(|k| *k <= xfa::MAX_PAYLOAD) {
@@ -551,12 +645,34 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         host(c)?.borrow_mut().request(Request::Focus(name.to_std_string_escaped()));
         Ok(JsValue::undefined())
     }
+    /// `buttonGetIcon()`: an Icon object standing for the icon the button shows now.
+    fn button_get_icon(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        let source = f.icon.unwrap_or(f.name);
+        if host(c)?.borrow().icons.len() >= MAX_ICONS {
+            return Err(error(format!("a document's scripts can hold at most {MAX_ICONS} icons")));
+        }
+        let icon = ObjectInitializer::new(c).property(js_string!("name"), JsValue::null(), Attribute::READONLY).build();
+        host(c)?.borrow_mut().icons.push((icon.clone(), source));
+        Ok(icon.into())
+    }
+    /// `buttonSetIcon(oIcon)`: show the icon another button's `buttonGetIcon` gave (LaTeX
+    /// `animate` shows its frames so). Anything else is a TypeError.
+    fn button_set_icon(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let given = arg(args, 0).as_object();
+        let source = given.and_then(|o| host(c).ok()?.borrow().icons.iter().find(|(i, _)| JsObject::equals(i, &o)).map(|(_, s)| s.clone()));
+        let Some(source) = source else { return Err(error("buttonSetIcon needs an icon from a button's buttonGetIcon")) };
+        write(c, name, |f| f.icon = (f.name != source).then_some(source))?;
+        Ok(JsValue::undefined())
+    }
 
     let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
     let get_item_at = NativeFunction::from_copy_closure_with_captures(get_item_at, n.clone());
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
     let set_focus = NativeFunction::from_copy_closure_with_captures(set_focus, n.clone());
+    let button_get_icon = NativeFunction::from_copy_closure_with_captures(button_get_icon, n.clone());
+    let button_set_icon = NativeFunction::from_copy_closure_with_captures(button_set_icon, n.clone());
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
@@ -577,6 +693,8 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
         .function(set_focus, js_string!("setFocus"), 0)
+        .function(button_get_icon, js_string!("buttonGetIcon"), 1)
+        .function(button_set_icon, js_string!("buttonSetIcon"), 2)
         .build()
 }
 
@@ -644,6 +762,55 @@ fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     h.doc.page = p;
     h.request(Request::GoToPage(p));
     Ok(JsValue::undefined())
+}
+
+/// `this.getOCGs(nPage)`: the document's layers as OCG objects (`name`, `state`, `initState`),
+/// or `null` when it has none. Every layer is listed, whatever the page: which pages a layer is
+/// on isn't known here.
+fn get_ocgs(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let n = host(ctx)?.borrow().doc.layers.len();
+    if n == 0 {
+        return Ok(JsValue::null());
+    }
+    let items: Vec<JsValue> = (0..n).map(|i| ocg_object(ctx, i)).collect();
+    Ok(JsArray::from_iter(items, ctx).into())
+}
+
+/// An OCG object for the layer at `index` in [`DocInfo::layers`], reading and setting it live.
+fn ocg_object(ctx: &mut Context, index: usize) -> JsValue {
+    let i = u32::try_from(index).unwrap_or(u32::MAX);
+    fn layer(c: &Context, i: u32) -> JsResult<Layer> {
+        host(c)?.borrow().doc.layers.get(i as usize).cloned().ok_or_else(|| error("the layer is no longer available"))
+    }
+    fn name(_: &JsValue, _: &[JsValue], i: &u32, c: &mut Context) -> JsResult<JsValue> {
+        Ok(s(&layer(c, *i)?.name))
+    }
+    fn state(_: &JsValue, _: &[JsValue], i: &u32, c: &mut Context) -> JsResult<JsValue> {
+        Ok(JsValue::from(layer(c, *i)?.on))
+    }
+    fn initial(_: &JsValue, _: &[JsValue], i: &u32, c: &mut Context) -> JsResult<JsValue> {
+        Ok(JsValue::from(layer(c, *i)?.initial))
+    }
+    fn set_state(_: &JsValue, args: &[JsValue], i: &u32, c: &mut Context) -> JsResult<JsValue> {
+        let on = arg(args, 0).to_boolean();
+        let mut guard = host(c)?.borrow_mut();
+        let h: &mut Host = &mut guard;
+        let l = h.doc.layers.get_mut(*i as usize).ok_or_else(|| error("the layer is no longer available"))?;
+        l.on = on;
+        h.layers_changed.insert(*i as usize);
+        Ok(JsValue::undefined())
+    }
+    let name = function(ctx, NativeFunction::from_copy_closure_with_captures(name, i));
+    let state = function(ctx, NativeFunction::from_copy_closure_with_captures(state, i));
+    let set_state = function(ctx, NativeFunction::from_copy_closure_with_captures(set_state, i));
+    let initial = function(ctx, NativeFunction::from_copy_closure_with_captures(initial, i));
+    let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
+    ObjectInitializer::new(ctx)
+        .accessor(js_string!("name"), Some(name), None, rw)
+        .accessor(js_string!("state"), Some(state), Some(set_state), rw)
+        .accessor(js_string!("initState"), Some(initial), None, rw)
+        .build()
+        .into()
 }
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
@@ -727,9 +894,59 @@ fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
-fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    // Timers never fire in the sandbox; scripts get an object they can pass to clear*.
-    Ok(ObjectInitializer::new(ctx).build().into())
+/// `app.setInterval(cExpr, nMilliseconds)`: run the expression (or a function) every period
+/// until it is cleared.
+fn set_interval(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    set_timer(args, true, ctx)
+}
+
+/// `app.setTimeOut(cExpr, nMilliseconds)`: run the expression (or a function) once, after the
+/// period.
+fn set_time_out(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    set_timer(args, false, ctx)
+}
+
+/// Keep a timer in the session, and return the object a script passes back to `clear*`. In a
+/// single run, where nothing would ever fire it, the object is all there is.
+fn set_timer(args: &[JsValue], repeat: bool, ctx: &mut Context) -> JsResult<JsValue> {
+    let handle = ObjectInitializer::new(ctx).build();
+    if host(ctx)?.borrow().timers.is_none() {
+        return Ok(handle.into());
+    }
+    let what = arg(args, 0);
+    let code = match what.as_callable() {
+        Some(f) => TimerCode::Function(f),
+        None => {
+            let source = text(&what, ctx)?;
+            if source.len() > MAX_SCRIPT_BYTES {
+                return Err(error(format!("the timer's script is too long (the limit is {} KiB)", MAX_SCRIPT_BYTES / 1024)));
+            }
+            TimerCode::Source(source)
+        }
+    };
+    let ms = arg(args, 1).to_number(ctx)?;
+    // A missing, negative or NaN period runs as soon as allowed; the float cast saturates.
+    let period_ms = if ms.is_nan() { MIN_TIMER_MS } else { (ms.min(f64::from(u32::MAX)) as u32).max(MIN_TIMER_MS) };
+    let mut h = host(ctx)?.borrow_mut();
+    let Some(timers) = h.timers.as_mut() else { return Ok(handle.into()) };
+    if timers.table.len() >= MAX_TIMERS {
+        return Err(error(format!("a document's scripts can keep at most {MAX_TIMERS} timers")));
+    }
+    let id = timers.last.checked_add(1).ok_or_else(|| error("no more timers can be set"))?;
+    timers.last = id;
+    timers.table.insert(id, TimerEntry { handle: handle.clone(), code, period_ms, repeat });
+    Ok(handle.into())
+}
+
+/// `app.clearInterval(oInterval)` and `app.clearTimeOut(oTime)`: forget the timer the object
+/// stands for. Anything else, or a timer already gone, is ignored.
+fn clear_timer(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if let Some(o) = arg(args, 0).as_object()
+        && let Some(t) = host(ctx)?.borrow_mut().timers.as_mut()
+    {
+        t.table.retain(|_, e| !JsObject::equals(&e.handle, &o));
+    }
+    Ok(JsValue::undefined())
 }
 
 /// `util.printf(cFormat, …)`: `%[,n][+ 0#][width][.prec](d|f|s|x)`, where `,0` groups
@@ -1368,7 +1585,7 @@ const XFA_VERSION: f64 = 3.5;
 /// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
 /// `color` objects.
 fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 10] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -1377,6 +1594,7 @@ fn install(ctx: &mut Context) -> JsResult<()> {
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
         ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
+        ("getOCGs", 1, NativeFunction::from_fn_ptr(get_ocgs)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
     ];
     for (name, len, f) in globals {
@@ -1415,10 +1633,10 @@ fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearInterval"), 1)
+        .function(NativeFunction::from_fn_ptr(set_time_out), js_string!("setTimeOut"), 2)
+        .function(NativeFunction::from_fn_ptr(set_interval), js_string!("setInterval"), 2)
+        .function(NativeFunction::from_fn_ptr(clear_timer), js_string!("clearTimeOut"), 1)
+        .function(NativeFunction::from_fn_ptr(clear_timer), js_string!("clearInterval"), 1)
         .property(js_string!("viewerType"), s("Exchange-Pro"), Attribute::READONLY)
         .property(js_string!("viewerVariation"), s("Full"), Attribute::READONLY)
         .property(js_string!("viewerVersion"), JsValue::from(24.0), Attribute::READONLY)
@@ -1687,16 +1905,7 @@ fn run_here(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    ctx.insert_data(RefCell::new(Host {
-        fields,
-        changed: BTreeSet::new(),
-        alerts: Vec::new(),
-        console: Vec::new(),
-        requests: Vec::new(),
-        doc: doc.clone(),
-        kept: 0,
-        dropped: 0,
-    }));
+    ctx.insert_data(RefCell::new(Host::new(fields, doc.clone(), None)));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
     let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
@@ -1712,16 +1921,7 @@ fn run_here(
             }
         }
         let r = ctx.eval(Source::from_bytes(script))?;
-        if !r.is_undefined() {
-            out.result = Some(text(&r, &mut ctx)?);
-        }
-        let rc = ev.get(js_string!("rc"), &mut ctx)?;
-        out.rc = rc.to_boolean();
-        let v = ev.get(js_string!("value"), &mut ctx)?;
-        out.value = text(&v, &mut ctx)?;
-        let c = ev.get(js_string!("change"), &mut ctx)?;
-        out.change = text(&c, &mut ctx)?;
-        Ok(())
+        finish(r, &ev, &mut out, &mut ctx)
     })();
     if let Err(e) = result {
         out.error = Some(e.to_string());
@@ -1729,19 +1929,46 @@ fn run_here(
     doc_errors.sort_by_key(|(i, _)| *i);
     out.doc_errors = doc_errors.into_iter().map(|(_, e)| e).collect();
     if let Some(h) = ctx.remove_data::<Shared>() {
-        let h = h.into_inner();
-        out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
-        out.alerts = h.alerts;
-        out.console = h.console;
-        out.requests = h.requests;
-        if h.dropped > 0 {
-            out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
-        }
+        take_effects(&mut h.into_inner(), &mut out);
     }
     out
 }
 
+/// Read what a script that completed with `r` left in `out`: its completion value and the
+/// event's `rc`, `value` and `change`.
+fn finish(r: JsValue, ev: &JsObject, out: &mut Outcome, ctx: &mut Context) -> JsResult<()> {
+    if !r.is_undefined() {
+        out.result = Some(text(&r, ctx)?);
+    }
+    let rc = ev.get(js_string!("rc"), ctx)?;
+    out.rc = rc.to_boolean();
+    let v = ev.get(js_string!("value"), ctx)?;
+    out.value = text(&v, ctx)?;
+    let c = ev.get(js_string!("change"), ctx)?;
+    out.change = text(&c, ctx)?;
+    Ok(())
+}
+
+/// Move what a run left in the host into `out`: the fields it changed (as they are now), its
+/// alerts, console lines and requests, and the timers as they stand. The host is left ready for
+/// the next run of a session.
+fn take_effects(h: &mut Host, out: &mut Outcome) {
+    let changed = std::mem::take(&mut h.changed);
+    out.changed = changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
+    out.alerts = std::mem::take(&mut h.alerts);
+    out.console = std::mem::take(&mut h.console);
+    out.requests = std::mem::take(&mut h.requests);
+    if h.dropped > 0 {
+        out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
+    }
+    (h.kept, h.dropped) = (0, 0);
+    out.timers = h.timers.as_ref().map(Timers::report).unwrap_or_default();
+    let layers = std::mem::take(&mut h.layers_changed);
+    out.layers = layers.into_iter().filter_map(|i| h.doc.layers.get(i).map(|l| (i, l.on))).collect();
+}
+
 pub mod formcalc;
+pub mod session;
 pub mod xfa;
 pub mod xfa_session;
 

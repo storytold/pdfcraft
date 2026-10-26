@@ -4782,8 +4782,7 @@ fn scripts_in_an_xfa_form_see_the_xfa_plugin_installed() {
 /// helper stays defined, the form calculates, and the error is reported once.
 #[test]
 fn a_document_script_that_throws_still_lets_the_form_calculate() {
-    let helpers =
-        "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).buttonSetIcon\\(this.getField\\('go'\\).buttonGetIcon\\(\\)\\);";
+    let helpers = "function times\\(a, b\\) { return a * b; } app.findComponent\\({ cType: 'Digsig' }\\);";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
     let _ = s.take_js_output(id);
@@ -8718,4 +8717,154 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     for x in [20, 100, 180] {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
+}
+
+/// Two pages; on the first, an animation as the LaTeX `animate` package builds one: three
+/// frames as push buttons over one another (red showing, green and blue hidden), a widget whose
+/// page-open action defines the player and starts an interval and whose page-close action stops
+/// it, and a step button acting on mouse down.
+fn animation_pdf() -> Vec<u8> {
+    let fill = |rgb: &str| {
+        let body = format!("{rgb} rg 0 0 100 100 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >>\nstream\n{body}\nendstream", body.len())
+    };
+    let open = "if (typeof on == 'undefined') { var on = 0; var t = null; } \
+                function show(i) { getField('f' + on).display = display.hidden; on = i; getField('f' + on).display = display.visible; } \
+                function step() { show((on + 1) % 3); } t = app.setInterval('step()', 100);";
+    let widget = |name: &str, flags: u32, extra: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T ({name}) /F {flags} /Rect [50 100 150 200] /P 3 0 R {extra} >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 13 0 R] /Count 2 /MediaBox [0 0 200 300] >>".into(),                  // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),                   // 3
+        widget("f0", 4, "/AP << /N 9 0 R >>"),                                                              // 4
+        widget("f1", 6, "/AP << /N 10 0 R >>"),                                                             // 5
+        widget("f2", 6, "/AP << /N 11 0 R >>"),                                                             // 6
+        widget("anim", 4, "/AA << /PO << /S /JavaScript /JS 12 0 R >> /PC << /S /JavaScript /JS (app.clearInterval\\(t\\);) >> >>"), // 7
+        widget("step", 4, "/AA << /D << /S /JavaScript /JS (step\\(\\);) >> >>"),                           // 8
+        fill("1 0 0"),                                                                                      // 9
+        fill("0 1 0"),                                                                                      // 10
+        fill("0 0 1"),                                                                                      // 11
+        format!("<< /Length {} >>\nstream\n{open}\nendstream", open.len()),                                 // 12
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                                           // 13
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+const RED: [u8; 4] = [255, 0, 0, 255];
+const GREEN: [u8; 4] = [0, 255, 0, 255];
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+#[test]
+fn page_actions_start_timers_that_turn_an_animations_frames_without_changing_the_document() {
+    let mut s = Session::new();
+    let id = s.open("animation.pdf", None, Arc::new(animation_pdf()), None).unwrap();
+    let bytes = s.get(id).unwrap().bytes.clone();
+    assert_eq!(pixel(&s, id, 0, 100, 150), RED);
+    assert_eq!(s.next_timer(id), None);
+    let run = s.show_page(id, 0, 1000.0);
+    assert!(run.output.errors.is_empty(), "{run:?}");
+    assert_eq!(s.next_timer(id), Some(1100.0));
+    assert!(s.show_page(id, 0, 1010.0).is_empty(), "the same page again runs nothing");
+    assert!(s.run_timers(id, 1050.0).is_empty(), "not due yet");
+    let run = s.run_timers(id, 1100.0);
+    assert_eq!((run.pages.as_slice(), run.edited), ([0].as_slice(), false), "{run:?}");
+    assert_eq!(pixel(&s, id, 0, 100, 150), GREEN);
+    assert_eq!(s.next_timer(id), Some(1200.0));
+    let doc = s.get(id).unwrap();
+    assert!(Arc::ptr_eq(&doc.bytes, &bytes) && !doc.dirty, "the frames turn in the view, not in the document");
+    // A behind interval runs once and counts on from now.
+    s.run_timers(id, 1450.0);
+    assert_eq!(pixel(&s, id, 0, 100, 150), BLUE);
+    assert_eq!(s.next_timer(id), Some(1550.0));
+    // A button runs in the same context: the page action's functions and state are there.
+    let o = s.run_javascript(id, "step();", Some("step")).unwrap();
+    assert_eq!(o.error, None);
+    let o = s.run_javascript(id, "on", None).unwrap();
+    assert_eq!(o.result.as_deref(), Some("0"));
+    // Leaving the page runs its close action, which clears the interval.
+    s.show_page(id, 1, 1500.0);
+    assert_eq!(s.next_timer(id), None);
+    // With JavaScript off, page actions don't run.
+    s.set_javascript(false);
+    assert!(s.show_page(id, 0, 1600.0).is_empty());
+    assert_eq!(s.next_timer(id), None);
+}
+
+#[test]
+fn a_button_that_shows_a_frame_changes_the_document_and_the_views_frame_gives_way() {
+    let mut s = Session::new();
+    let id = s.open("animation.pdf", None, Arc::new(animation_pdf()), None).unwrap();
+    s.show_page(id, 0, 0.0);
+    s.run_timers(id, 100.0);
+    assert_eq!(pixel(&s, id, 0, 100, 150), GREEN);
+    // The step button acts on mouse down; a click runs it.
+    let step = s.get(id).unwrap().form.iter().find(|f| f.name == "step").and_then(|f| f.button.clone());
+    assert_eq!(step, Some(pdfcraft_forms::af::button_script("step();")));
+    s.run_javascript(id, "step();", Some("step")).unwrap();
+    assert_eq!(pixel(&s, id, 0, 100, 150), BLUE);
+    assert!(s.get(id).unwrap().dirty, "a button's change is the document's");
+    s.run_timers(id, 200.0);
+    assert_eq!(pixel(&s, id, 0, 100, 150), RED);
+}
+
+/// An animation as `animate` builds one by default (method=icon): hidden frames are buttons
+/// holding the icons, and the player gives the one showing button a frame's icon.
+#[test]
+fn a_timer_giving_a_button_another_buttons_icon_draws_that_icon_in_its_place() {
+    let fill = |rgb: &str| {
+        let body = format!("{rgb} rg 0 0 100 100 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >>\nstream\n{body}\nendstream", body.len())
+    };
+    let open = "if (typeof on == 'undefined') { var on = 0; var fr = [getField('f0').buttonGetIcon(), getField('f1').buttonGetIcon()]; } \
+                app.setInterval('on = 1 - on; getField(\"anim\").buttonSetIcon(fr[on]);', 100);";
+    let widget = |name: &str, flags: u32, extra: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T ({name}) /F {flags} /Rect [50 100 150 200] /P 3 0 R {extra} >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".into(),
+        widget("anim", 4, "/AP << /N 7 0 R >> /AA << /PO << /S /JavaScript /JS 9 0 R >> >>"),
+        widget("f0", 6, "/AP << /N 7 0 R >>"),
+        widget("f1", 6, "/AP << /N 8 0 R >>"),
+        fill("1 0 0"),
+        fill("0 1 0"),
+        format!("<< /Length {} >>\nstream\n{open}\nendstream", open.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("icons.pdf", None, Arc::new(out), None).unwrap();
+    assert_eq!(pixel(&s, id, 0, 100, 150), RED);
+    assert!(s.show_page(id, 0, 0.0).output.errors.is_empty());
+    let run = s.run_timers(id, 100.0);
+    assert_eq!((run.pages.as_slice(), run.output.errors.len()), ([0].as_slice(), 0), "{run:?}");
+    assert_eq!(pixel(&s, id, 0, 100, 150), GREEN);
+    s.run_timers(id, 200.0);
+    assert_eq!(pixel(&s, id, 0, 100, 150), RED, "its own icon again");
+    assert!(!s.get(id).unwrap().dirty);
 }

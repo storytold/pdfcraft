@@ -86,6 +86,38 @@ impl PdfCraftApp {
         }
     }
 
+    /// Each frame: the live scripts of the document being read. Its page's open actions run
+    /// when the page changes (after the close actions of the page it was at), and its timers
+    /// when they fall due, such as an animation's frames (LaTeX `animate`). Only the active tab
+    /// runs: an animation in another tab waits until its tab shows again.
+    pub(crate) fn script_tick(&mut self, ctx: &egui::Context) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let now_ms = ctx.input(|input| input.time) * 1000.0;
+        let page = self.views[i].current;
+        for run in [self.session.show_page(id, page, now_ms), self.session.run_timers(id, now_ms)] {
+            if run.is_empty() {
+                continue;
+            }
+            if run.edited {
+                if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
+                    self.views[i].document_changed(&info);
+                }
+            } else if run.layers {
+                self.views[i].invalidate_content();
+            } else {
+                for p in &run.pages {
+                    self.views[i].page_changed(*p);
+                }
+            }
+            self.handle_js(id, run.output);
+            ctx.request_repaint();
+        }
+        if let Some(at) = self.session.next_timer(id) {
+            let wait = ((at - now_ms) / 1000.0).clamp(0.0, 3600.0);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
+    }
+
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).

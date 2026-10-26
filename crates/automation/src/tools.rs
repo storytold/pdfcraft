@@ -1141,6 +1141,10 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
                 &["doc", "script"],
             )),
+        t("js_page", "Run page actions", "Read the document at `page`, as the viewer does when that page becomes the one being read: the actions the page it was at runs as it closes, then this page's open actions (its own, and its annotations' page-open and page-visible actions, which start an animation made with the LaTeX animate package), in the document's JavaScript context, which buttons, the console and timers share. Fields the actions show or hide change only how the document is shown, and page_render draws them so; values they change are applied as one undoable step. Returns the actions' alerts, console output, requests and errors, the pages showing a field they showed or hid, and when the next timer falls due on the script clock (js_advance moves it).")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("js_advance", "Advance the script clock", "Move the document's script clock on by `ms` milliseconds and run the timers its scripts set (app.setInterval, app.setTimeOut) as they fall due on the way, in order, as the viewer runs them over time: an animation shows its next frames. Fields timers show or hide change only how the document is shown, and page_render draws them so. A timer's alerts and requests go to its console output instead. Returns how many timers ran, their console output and errors, the pages showing a field they showed or hid, the clock, and when the next timer falls due.")
+            .with(schema(json!({ "doc": doc(), "ms": { "type": "number", "minimum": 0, "maximum": 3600000 } }), &["doc", "ms"])),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()
             .cmd("tools.document_js")

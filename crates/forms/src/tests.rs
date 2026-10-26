@@ -4577,3 +4577,39 @@ fn set_values_reads_the_form_once_not_per_value() {
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
+
+/// A page with open and close actions of its own (one script a stream), an animation's widget
+/// with page actions (one of them not a script), buttons acting on mouse down, and a screen
+/// annotation with a page-open action.
+fn page_actions_fixture() -> Document {
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page_open\\(\\);) >> /C << /S /JavaScript /JS 7 0 R >> >> /Annots [4 0 R 5 0 R 6 0 R 8 0 R] >>".into(), // 3
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (anim) /Rect [0 0 100 100] /P 3 0 R /AA << /PO << /S /JavaScript /JS (start\\(\\);) >> /PV << /S /JavaScript /JS (start\\(\\);) >> /PC << /S /JavaScript /JS (stop\\(\\);) >> /PI << /S /URI /URI (https://example.com) >> >> >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (step) /Rect [0 0 10 10] /P 3 0 R /AA << /D << /S /JavaScript /JS (step\\(\\);) >> >> >>".into(), // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (both) /Rect [20 0 30 10] /P 3 0 R /AA << /D << /S /JavaScript /JS (down\\(\\);) >> /U << /S /JavaScript /JS (up\\(\\);) >> >> >>".into(), // 6
+        "<< /Length 7 >>\nstream\nclose()\nendstream".into(), // 7
+        "<< /Type /Annot /Subtype /Screen /Rect [0 0 1 1] /AA << /PO << /S /JavaScript /JS (screen\\(\\);) >> >> >>".into(), // 8
+    ])
+}
+
+#[test]
+fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
+    let doc = page_actions_fixture();
+    let open = page_scripts(&doc, 0, PageEvent::Open);
+    let got: Vec<(Option<&str>, &str)> = open.iter().map(|s| (s.field.as_deref(), s.script.as_str())).collect();
+    assert_eq!(got, [(None, "page_open();"), (Some("anim"), "start();"), (Some("anim"), "start();"), (None, "screen();")]);
+    let close = page_scripts(&doc, 0, PageEvent::Close);
+    let got: Vec<(Option<&str>, &str)> = close.iter().map(|s| (s.field.as_deref(), s.script.trim())).collect();
+    assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
+    assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
+}
+
+#[test]
+fn a_button_with_only_a_mouse_down_action_runs_it_on_click() {
+    let doc = page_actions_fixture();
+    let all = fields(&doc);
+    assert_eq!(field(&all, "step").button, Some(af::button_script("step();")));
+    assert_eq!(field(&all, "both").button, Some(af::button_script("up();")), "mouse up comes first");
+}

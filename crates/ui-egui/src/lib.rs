@@ -3648,6 +3648,7 @@ impl eframe::App for PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        self.script_tick(ctx);
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);

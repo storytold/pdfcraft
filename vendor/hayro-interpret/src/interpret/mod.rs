@@ -111,6 +111,14 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
+    /// PdfCraft patch (67): viewer overrides for annotations (object number, generation, shown),
+    /// applied in place of their Hidden and NoView flags: what a document's scripts show and
+    /// hide while it is read (frames of an animation), without changing the document.
+    pub annotation_overrides: Arc<Vec<(i32, i32, bool)>>,
+    /// PdfCraft patch (68): annotations the viewer draws with another annotation's appearance
+    /// (object number and generation of each, the drawn one first), in its own `/Rect`: a push
+    /// button a document's script gave another button's icon (`buttonSetIcon`).
+    pub appearance_overrides: Arc<Vec<(i32, i32, i32, i32)>>,
     /// PdfCraft patch: once this is `true`, interpretation stops before the next content
     /// operator. What was drawn is then incomplete, so only set it when the output will be
     /// thrown away (a viewer's render whose result nobody can receive any more).
@@ -140,6 +148,8 @@ impl Default for InterpreterSettings {
             render_annotations: true,
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
+            annotation_overrides: Arc::new(Vec::new()),
+            appearance_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
         }
@@ -182,12 +192,30 @@ pub fn interpret_page<'a>(
         // PdfCraft patch (29): bracket the annotations so devices can tell their paints from
         // the document's own (the reading-colours setting recolours the document, not comments).
         device.begin_annotations();
-        for annot in annot_arr.iter::<Dict<'_>>() {
+        // PdfCraft patch (67): each annotation with its object, so the viewer can show or hide
+        // it by its object (`annotation_overrides`). An entry that isn't a dictionary is
+        // skipped; it no longer ends the list.
+        let xref = context.xref;
+        let annots = annot_arr.raw_iter().filter_map(|item| match item {
+            hayro_syntax::object::MaybeRef::Ref(r) => xref.get::<Dict<'_>>(r.into()).map(|d| (d, Some(r))),
+            hayro_syntax::object::MaybeRef::NotRef(Object::Dict(d)) => Some((d, None)),
+            hayro_syntax::object::MaybeRef::NotRef(_) => None,
+        });
+        for (annot, obj) in annots {
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
             // Annotation should be hidden (Hidden = bit 2, NoView = bit 6).
             // PdfCraft patch: NoView was not honoured upstream.
-            if flags & (2 | 32) != 0 {
+            // PdfCraft patch (67): the viewer's override, when it has one, decides instead.
+            let overridden = obj.and_then(|r| {
+                context
+                    .settings
+                    .annotation_overrides
+                    .iter()
+                    .find(|(num, generation, _)| *num == r.obj_number && *generation == r.gen_number)
+                    .map(|(_, _, shown)| !*shown)
+            });
+            if overridden.unwrap_or(flags & (2 | 32) != 0) {
                 continue;
             }
             // PdfCraft patch (56): Invisible (bit 1) hides an annotation of a type that isn't one
@@ -206,12 +234,24 @@ pub fn interpret_page<'a>(
                 continue;
             }
 
+            // PdfCraft patch (68): the viewer may draw an annotation with another's appearance
+            // (`appearance_overrides`): a push button a script gave another button's icon.
+            let face = obj
+                .and_then(|r| {
+                    context
+                        .settings
+                        .appearance_overrides
+                        .iter()
+                        .find(|(num, generation, _, _)| *num == r.obj_number && *generation == r.gen_number)
+                })
+                .and_then(|&(_, _, num, generation)| xref.get::<Dict<'_>>(hayro_syntax::object::ObjectIdentifier::new(num, generation)))
+                .unwrap_or_else(|| annot.clone());
             // PdfCraft patch: `/N` may be a stream or a dictionary of appearance states selected
             // by `/AS` (checkboxes, radio buttons, …). Upstream only handled the stream form.
-            let normal = annot.get::<Dict<'_>>(AP).and_then(|ap| {
+            let normal = face.get::<Dict<'_>>(AP).and_then(|ap| {
                 ap.get::<Stream<'_>>(N).or_else(|| {
                     let states = ap.get::<Dict<'_>>(N)?;
-                    let state = annot.get::<hayro_syntax::object::Name<'_>>(AS)?;
+                    let state = face.get::<hayro_syntax::object::Name<'_>>(AS)?;
                     states.get::<Stream<'_>>(state.as_ref())
                 })
             });
