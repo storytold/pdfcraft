@@ -488,6 +488,18 @@ mod tests {
     }
 
     #[test]
+    fn bold_keeps_the_typeface_of_existing_text() {
+        let times = String::from_utf8(fixture()).expect("ASCII").replace("/BaseFont /Helvetica", "/BaseFont /Times-Roman").into_bytes();
+        let mut doc = Document::open(&times, None, || 1_700_000_000).expect("opens");
+        let text = Target { kind: Kind::Text, index: 0 };
+        assert_eq!(objects(&doc)[0]["style"]["family"], "times");
+        doc.set_text(0, text, None, &TextStyle { bold: Some(true), ..TextStyle::default() }).expect("bolds");
+        let blocks: Vec<Value> = serde_json::from_str(&doc.text_blocks_json(0).expect("blocks")).expect("json");
+        assert_eq!(blocks[0]["bold"], true);
+        assert!(blocks[0]["font"].as_str().expect("font").contains("Times"), "still Times: {}", blocks[0]["font"]);
+    }
+
+    #[test]
     fn covers_an_area_with_white() {
         let mut doc = open();
         let before = doc.render(0, 1.0, None).expect("renders");
