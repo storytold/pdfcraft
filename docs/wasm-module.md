@@ -56,6 +56,21 @@ pdf.delete_object(0, "added", 1);
 pdf.cover(0, [10, 10, 80, 30]); // a white box over what is there (the content stays in the file)
 ```
 
+## Reading and marking up
+
+Same displayed coordinates.
+
+```js
+JSON.parse(pdf.find("invoice", false, false, 100)); // [{ page, text, rects }]: every match
+JSON.parse(pdf.select_text(0, [20, 40], [180, 52])); // { text, rects } between two points
+pdf.markup(0, "highlight", JSON.stringify(rects), [1, 0.9, 0]); // or "underline", "strikeout"
+pdf.add_link(0, [20, 40, 120, 60], "https://example.com"); // or "page:3"
+JSON.parse(pdf.links(0)); // [{ index, view, uri | page }]
+JSON.parse(pdf.annotations(0)); // [{ index, subtype, view, contents }], pdf.delete_annotation(0, index)
+JSON.parse(pdf.fields(0)); // [{ name, kind, value, view }]
+pdf.set_field("name", JSON.stringify({ text: "Ada" })); // { check: true } or { choice: ["a"] }
+```
+
 `kind` is `text` (a paragraph the page already had), `image` (a picture it already had) or `added`
 (something added with `add_text` or `add_image`).
 

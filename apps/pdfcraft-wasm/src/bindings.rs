@@ -167,6 +167,64 @@ impl Pdf {
         self.inner.cover(page, rect(&view)?).map_err(js)
     }
 
+    /// Every match of `query` as JSON: `page`, `text` and `rects` (one per line it spans).
+    pub fn find(&mut self, query: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Result<String, JsError> {
+        self.inner.find_json(query, case_sensitive, whole_words, limit).map_err(js)
+    }
+
+    /// The text between two points `[x, y]` of a page, as `{ "text": ..., "rects": [...] }`.
+    pub fn select_text(&mut self, page: usize, from: Vec<f64>, to: Vec<f64>) -> Result<String, JsError> {
+        match (from.as_slice(), to.as_slice()) {
+            ([a, b], [c, d]) => self.inner.select_text_json(page, [*a, *b], [*c, *d]).map_err(js),
+            _ => Err(js("a point is [x, y]".into())),
+        }
+    }
+
+    /// Marks text up (`highlight`, `underline` or `strikeout`). `rects` is JSON `[[x0, y0, x1, y1], ...]`
+    /// (what `select_text` gave) and `color` is `[r, g, b]` from 0 to 1, or left out.
+    pub fn markup(&mut self, page: usize, kind: &str, rects: &str, color: Option<Vec<f64>>) -> Result<(), JsError> {
+        let rects: Vec<[f64; 4]> = serde_json::from_str(rects).map_err(|e| js(e.to_string()))?;
+        let color = match color.as_deref() {
+            Some([r, g, b]) => Some([*r, *g, *b]),
+            Some(_) => return Err(js("a color is [r, g, b]".into())),
+            None => None,
+        };
+        self.inner.markup(page, kind, &rects, color).map_err(js)
+    }
+
+    /// Adds a link over a box: an http(s) or mailto: address, or `page:N` (1-based).
+    pub fn add_link(&mut self, page: usize, view: Vec<f64>, target: &str) -> Result<(), JsError> {
+        self.inner.add_link(page, rect(&view)?, target).map_err(js)
+    }
+
+    /// The page's links as JSON: `index`, `view`, and `uri` or `page` (0-based).
+    pub fn links(&self, page: usize) -> Result<String, JsError> {
+        self.inner.links_json(page).map_err(js)
+    }
+
+    pub fn delete_link(&mut self, page: usize, index: usize) -> Result<(), JsError> {
+        self.inner.delete_link(page, index).map_err(js)
+    }
+
+    /// The page's marks and comments as JSON: `index`, `subtype`, `view`, `contents`.
+    pub fn annotations(&self, page: usize) -> Result<String, JsError> {
+        self.inner.annotations_json(page).map_err(js)
+    }
+
+    pub fn delete_annotation(&mut self, page: usize, index: usize) -> Result<(), JsError> {
+        self.inner.delete_annotation(page, index).map_err(js)
+    }
+
+    /// The page's form fields as JSON: `name`, `kind`, `value`, `view`.
+    pub fn fields(&self, page: usize) -> Result<String, JsError> {
+        self.inner.fields_json(page).map_err(js)
+    }
+
+    /// Fills a field: `value` is JSON, `{"text": ...}`, `{"check": true}` or `{"choice": [...]}`.
+    pub fn set_field(&mut self, name: &str, value: &str) -> Result<(), JsError> {
+        self.inner.set_field(name, value).map_err(js)
+    }
+
     /// The label of the edit `undo` would take back, or nothing.
     pub fn can_undo(&self) -> Option<String> {
         self.inner.can_undo()

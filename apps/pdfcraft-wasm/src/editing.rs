@@ -187,6 +187,10 @@ impl Document {
         Ok([view[0], height - view[3], view[2], height - view[1]])
     }
 
+    pub(crate) fn page_info_ref(&self, page: usize) -> Result<&pdfcraft_render::PageInfo, String> {
+        self.page_info(page)
+    }
+
     fn page_info(&self, page: usize) -> Result<&pdfcraft_render::PageInfo, String> {
         self.doc()?.info.pages.get(page).ok_or_else(|| format!("page {} does not exist", page.saturating_add(1)))
     }

@@ -92,6 +92,31 @@ impl Document {
         self.doc().map(|d| d.info.encrypted).unwrap_or(false)
     }
 
+    /// The renderer for the document as it is now, made again after an edit.
+    pub(crate) fn renderer(&mut self) -> Result<&mut PageRenderer, String> {
+        let display = self.doc()?.display.clone();
+        let stale = self.renderer.as_ref().is_none_or(|(shown, _)| !Arc::ptr_eq(shown, &display));
+        if stale {
+            // A page too big for the scale is an error, not a smaller picture: ask for tiles.
+            let config = pdfcraft_render::RenderConfig { reject_oversize: true, ..self.session.render_config(self.id).unwrap_or_default() };
+            self.renderer = Some((display.clone(), PageRenderer::new(display, config)));
+        }
+        self.renderer.as_mut().map(|(_, r)| r).ok_or_else(|| "no renderer".to_string())
+    }
+
+    /// The text of a page with the position of every glyph, as displayed.
+    pub(crate) fn page_text(&mut self, page: usize) -> Result<Arc<pdfcraft_render::PageText>, String> {
+        if page >= self.page_count() {
+            return Err(format!("page {} does not exist", page.saturating_add(1)));
+        }
+        let out = self.renderer()?.render(RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
+        match (out.error, out.text) {
+            (Some(e), _) => Err(e),
+            (None, Some(t)) => Ok(t),
+            (None, None) => Ok(Arc::new(pdfcraft_render::PageText::default())),
+        }
+    }
+
     /// Draws page `page` at `scale` device pixels per point, or only `tile` (x, y, w, h in device
     /// pixels at that scale).
     pub fn render(&mut self, page: usize, scale: f32, tile: Option<(u32, u32, u32, u32)>) -> Result<Raster, String> {
@@ -109,14 +134,7 @@ impl Document {
         if page >= self.page_count() {
             return Err(format!("page {} does not exist", page.saturating_add(1)));
         }
-        let display = self.doc()?.display.clone();
-        let stale = self.renderer.as_ref().is_none_or(|(shown, _)| !Arc::ptr_eq(shown, &display));
-        if stale {
-            // A page too big for the scale is an error, not a smaller picture: ask for tiles.
-            let config = pdfcraft_render::RenderConfig { reject_oversize: true, ..self.session.render_config(self.id).unwrap_or_default() };
-            self.renderer = Some((display.clone(), PageRenderer::new(display, config)));
-        }
-        let (_, renderer) = self.renderer.as_mut().ok_or_else(|| "no renderer".to_string())?;
+        let renderer = self.renderer()?;
         let tile = tile.map(|(x, y, w, h)| Tile { x, y, w, h });
         let out = renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag: 0, preview: false });
         match out.error {
