@@ -1063,6 +1063,7 @@
 	Go to the page	מעבר לעמוד
 	Page Content	תוכן העמוד
 	Forms	טפסים
+	Alternate Text	טקסט חלופי
 	Tables	טבלאות
 	Lists	רשימות
 	Headings	כותרות
@@ -1313,12 +1314,129 @@
 	No comments match.	אין הערות תואמות.
 	Unknown author	מחבר לא ידוע
 	No colour	ללא צבע
+	Remove checkmark	הסרת סימן אישור
+	Mark with checkmark	סימון בסימן אישור
+	Reply	השב
+	Add a reply	הוספת תשובה
+	Post	פרסום
+	Page {label}	עמוד {label}
+	{kind} — click to show it on the page	{kind} — לחץ כדי להציג אותו בעמוד
+	Set status	הגדרת מצב
+	Copy text	העתקת טקסט
+	Properties…	מאפיינים…
+	Make Current Properties Default	הגדרת המאפיינים הנוכחיים כברירת מחדל
+	Make Properties Default	הגדרת המאפיינים כברירת מחדל
+	More options	אפשרויות נוספות
+	Sort by	מיון לפי
+	Author	מחבר
 	Type	סוג
+	Colour	צבע
+	Show all comments	הצגת כל ההערות
+	Create PDF comment summary…	יצירת סיכום הערות ב־PDF…
+	Export all to data file…	ייצוא הכול לקובץ נתונים…
+	Filter comments	סינון הערות
 	Status	מצב
+	Accepted	התקבל
+	Rejected	נדחה
+	Cancelled	בוטל
+	Completed	הושלם
+	Show all	הצגת הכול
+	Yellow	צהוב
+	Orange	כתום
+	Red	אדום
+	Pink	ורוד
+	Purple	סגול
+	Blue	כחול
+	Light blue	תכלת
+	Green	ירוק
+	Gray	אפור
+	Black	שחור
+	Bookmark options	אפשרויות סימנייה
+	Expand all bookmarks	הרחבת כל הסימניות
+	Expand top-level bookmarks	הרחבת הסימניות ברמה העליונה
+	Collapse all bookmarks	כיווץ כל הסימניות
+	New bookmark ({key})	סימנייה חדשה ({key})
+	This document has no bookmarks.	אין במסמך הזה סימניות.
+	This document has no layers.	אין במסמך הזה שכבות.
+	This document has no attachments.	אין במסמך הזה קבצים מצורפים.
+	Hide layer	הסתרת שכבה
+	Layer options	אפשרויות שכבה
+	Reset to Initial Visibility	איפוס לנראות הראשונית
+	Show layer	הצגת שכבה
+	Set layer visibility	הגדרת נראות השכבה
+	on page {label}	בעמוד {label}
+	Save attachment…	שמירת קובץ מצורף…
+	Open in a new tab	פתיחה בלשונית חדשה
+	This document has no pages.	אין במסמך הזה עמודים.
+	Find text	חיפוש טקסט
+	No matches	לא נמצאו התאמות
+	Searching… {s}/{p}	מחפש… {s}/{p}
+	{c} of {n}{more}	{c} מתוך {n}{more}
+	Previous ({key})	הקודם ({key})
+	Next ({key})	הבא ({key})
+	Find options	אפשרויות חיפוש
+	Whole words only	מילים שלמות בלבד
+	Case-sensitive	התאמה לאותיות גדולות וקטנות
+	Close (Esc)	סגירה (Esc)
+	Align	יישור
+	Top	למעלה
+	Bottom	למטה
+	Center horizontally	מרכוז אופקי
+	Center vertically	מרכוז אנכי
+	Distribute	פיזור אחיד
+	Horizontally	אופקית
+	Vertically	אנכית
+	Set Fields to Same Size	הגדרת גודל אחיד לשדות
+	Height	גובה
+	Width	רוחב
+	Both	שניהם
+	Duplicate…	שכפול…
+	All pages	כל העמודים
+	Odd pages	עמודים אי־זוגיים
+	Even pages	עמודים זוגיים
+	Landscape pages	עמודים לרוחב
+	Portrait pages	עמודים לאורך
+	Move earlier	הזזה מוקדם יותר
+	Move later	הזזה מאוחר יותר
+	Back to the document	חזרה למסמך
+	Protect Using Password	הגנה באמצעות סיסמה
+	Requires user to enter a password for:	נדרשת סיסמה מהמשתמש עבור:
+	Viewing	צפייה
+	Editing	עריכה
+	Type Password	הקלדת סיסמה
+	Re-type Password	הקלדת הסיסמה שוב
+	Strength: {s}	חוזק: {s}
+	Strong	חזקה
 	Medium	בינוני
+	Weak	חלשה
+	Advanced Options {chevron}	אפשרויות מתקדמות {chevron}
+	Compatibility	תאימות
+	Acrobat X and later (256-bit AES)	Acrobat X ואילך (AES ‏256 סיביות)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 ואילך (AES ‏128 סיביות)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 ואילך (RC4 ‏128 סיביות)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 ואילך (RC4 ‏40 סיביות)
+	Encrypt	הצפנה
+	All document contents	כל תוכן המסמך
+	All document contents except metadata	כל תוכן המסמך למעט מטא־נתונים
+	Printing allowed	הדפסה מותרת
+	Low Resolution (150 dpi)	רזולוציה נמוכה (150 dpi)
+	Changes allowed	שינויים מותרים
+	Inserting, deleting, and rotating pages	הוספה, מחיקה וסיבוב של עמודים
+	Filling in form fields and signing existing signature fields	מילוי שדות טופס וחתימה בשדות חתימה קיימים
+	Commenting, filling in form fields, and signing existing signature fields	הוספת הערות, מילוי שדות טופס וחתימה בשדות חתימה קיימים
+	Any except extracting pages	הכול, למעט חילוץ עמודים
+	Enable copying of text, images, and other content	אפשר העתקה של טקסט, תמונות ותוכן אחר
+	Enable text access for screen reader devices for the visually impaired	אפשר גישה לטקסט עבור קוראי מסך לאנשים עם לקות ראייה
+	Type a password.	הקלד סיסמה.
+	The passwords don't match.	הסיסמאות אינן תואמות.
+	This compatibility level supports only plain ASCII passwords.	רמת תאימות זו תומכת רק בסיסמאות ASCII פשוטות.
+	Anyone opening the document will need this password. It's applied when you save.	כל מי שיפתח את המסמך יזדקק לסיסמה זו. היא תחול בעת השמירה.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	אפשר לפתוח את המסמך ללא סיסמה; סיסמה זו נדרשת לשינוי ההגבלות. היא תחול בעת השמירה.
+	Recover unsaved documents?	לשחזר מסמכים שלא נשמרו?
 	All	הכול
 	Security	אבטחה
 	Advanced	מתקדם
+	Subject	נושא
 	Default	ברירת מחדל
 	Yes	כן
 	No	לא
@@ -1340,6 +1458,7 @@
 	Add bookmark	הוספת סימנייה
 	Edit text	עריכת טקסט
 	Scale	קנה מידה
+	Show	הצגה
 @plural	{n} field|{n} fields	{n} שדה|{n} שדות
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} שם שדה מתנגש עם קבצים קודמים וישונה: {list}|{n} שמות שדות מתנגשים עם קבצים קודמים וישונו: {list}
 @plural	{n} page|{n} pages	{n} עמוד|{n} עמודים
