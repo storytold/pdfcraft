@@ -428,6 +428,8 @@ pub struct Document {
     config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     js_output: js::JsOutput,
+    /// Its scripts' live context, page actions and timers (see [`Session::show_page`]).
+    scripts: js::LiveScripts,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
@@ -3968,6 +3970,7 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            scripts: Default::default(),
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,

@@ -728,6 +728,67 @@ impl Automation {
         )
     }
 
+    /// `js_page`: read the document at a page, running page actions as the viewer does.
+    pub(crate) fn js_page(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let page = self.page(a)?;
+        let clock = self.session.script_clock(id).unwrap_or(0.0);
+        let run = self.session.show_page(id, page, clock);
+        // What the actions showed or hid is in the document's view settings.
+        self.renderers.remove(&id);
+        Ok(self.script_run_json(id, &run))
+    }
+
+    /// `js_advance`: move the script clock on, running the timers that fall due on the way, in
+    /// the order they do.
+    pub(crate) fn js_advance(&mut self, a: &Args) -> Result<Value> {
+        /// Most timer runs one call makes (a 10 ms interval for a minute).
+        const MAX_RUNS: usize = 6000;
+        let id = self.doc(a)?.id;
+        let ms = a.opt_num("ms")?.ok_or_else(|| ToolError::InvalidArgs("ms is required".into()))?;
+        if !(0.0..=3_600_000.0).contains(&ms) {
+            return Err(ToolError::InvalidArgs("ms must be between 0 and 3600000".into()));
+        }
+        let start = self.session.script_clock(id).unwrap_or(0.0);
+        let end = start + ms;
+        let mut total = pdfcraft_engine::js::ScriptRun::default();
+        while total.ran < MAX_RUNS {
+            let Some(at) = self.session.next_timer(id).filter(|at| *at <= end) else { break };
+            let run = self.session.run_timers(id, at.max(start));
+            if run.ran == 0 {
+                break;
+            }
+            total.ran += run.ran;
+            total.edited |= run.edited;
+            total.layers |= run.layers;
+            total.output.append(run.output);
+            for p in run.pages {
+                if !total.pages.contains(&p) {
+                    total.pages.push(p);
+                }
+            }
+        }
+        let behind = self.session.next_timer(id).is_some_and(|at| at <= end);
+        // The clock ends where it was sent; a timer the run cap left behind counts on from there.
+        let last = self.session.run_timers(id, end);
+        total.ran += last.ran;
+        total.output.append(last.output);
+        self.renderers.remove(&id);
+        let mut out = self.script_run_json(id, &total);
+        out["ran"] = json!(total.ran);
+        out["stopped_early"] = json!(behind);
+        Ok(out)
+    }
+
+    fn script_run_json(&self, id: pdfcraft_engine::DocId, run: &pdfcraft_engine::js::ScriptRun) -> Value {
+        let reqs: Vec<Value> = run.output.requests.iter().map(request_json).collect();
+        let pages: Vec<usize> = run.pages.iter().map(|p| p + 1).collect();
+        let clock = self.session.script_clock(id).unwrap_or(0.0);
+        let next = self.session.next_timer(id).map(|at| (at - clock).max(0.0));
+        json!({ "alerts": run.output.alerts, "console": run.output.console, "requests": reqs, "errors": run.output.errors,
+            "pages": pages, "edited": run.edited, "layers": run.layers, "clock_ms": clock, "next_timer_in_ms": next })
+    }
+
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {
         let list: Vec<Value> = self.doc(a)?.document_scripts().into_iter().map(|(n, s)| json!({ "name": n, "script": s })).collect();
         Ok(json!({ "scripts": list }))

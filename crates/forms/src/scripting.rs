@@ -214,6 +214,73 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     out
 }
 
+/// When a page's actions run: as it becomes the page being read, or stops being it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageEvent {
+    Open,
+    Close,
+}
+
+/// A script a page runs as it opens or closes, with the field whose widget carries it (`None`:
+/// the page's own action, or an annotation that isn't a field's).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageScript {
+    pub field: Option<String>,
+    pub script: String,
+}
+
+/// Most annotations of one page whose actions are read.
+const MAX_PAGE_ANNOTATIONS: usize = 10_000;
+
+/// The JavaScript page `page` (0-based) runs for `event`, in the order it runs: the page's own
+/// action (`/AA /O` or `/C`), then each annotation's, in the page's `/Annots` order (`/AA /PO`
+/// then `/PV` as the page opens, `/PC` then `/PI` as it closes). Other kinds of action, and
+/// actions chained with `/Next`, are left out.
+pub fn page_scripts(doc: &Document, page: usize, event: PageEvent) -> Vec<PageScript> {
+    let Some(page_ref) = crate::page_refs(doc).get(page).copied() else { return Vec::new() };
+    let page_obj = doc.get(page_ref);
+    let Some(pd) = page_obj.as_dict() else { return Vec::new() };
+    let (own, keys): (&[u8], [&[u8]; 2]) = match event {
+        PageEvent::Open => (b"O", [b"PO", b"PV"]),
+        PageEvent::Close => (b"C", [b"PC", b"PI"]),
+    };
+    let additional = |d: &pdfcraft_cos::Dict| d.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned());
+    let mut budget = crate::script_budget();
+    let mut out = Vec::new();
+    if let Some(action) = additional(pd).and_then(|aa| aa.get(own).cloned())
+        && let Some(script) = javascript(doc, &action, &mut budget)
+    {
+        out.push(PageScript { field: None, script });
+    }
+    let annots = pd.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    for item in annots.iter().take(MAX_PAGE_ANNOTATIONS) {
+        let annot = doc.resolve(item);
+        let Some(ad) = annot.as_dict() else { continue };
+        let Some(aa) = additional(ad) else { continue };
+        let field = match item {
+            Object::Ref(r) if ad.name(b"Subtype") == Some(b"Widget".as_slice()) => crate::qualified_name(doc, *r),
+            _ => None,
+        };
+        for k in keys {
+            if let Some(action) = aa.get(k)
+                && let Some(script) = javascript(doc, action, &mut budget)
+            {
+                out.push(PageScript { field: field.clone(), script });
+            }
+        }
+    }
+    out
+}
+
+/// The script of a JavaScript action (`/S /JavaScript`); `None` for any other action.
+fn javascript(doc: &Document, action: &Object, budget: &mut pdfcraft_cos::DecodeBudget) -> Option<String> {
+    let a = doc.resolve(action);
+    if a.as_dict()?.name(b"S")? != b"JavaScript" {
+        return None;
+    }
+    crate::script(doc, action, budget)
+}
+
 /// Add (or replace) a document-level JavaScript named `name`.
 pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> Result<(), FormError> {
     let root = doc.root().ok_or(FormError::NoForm)?;

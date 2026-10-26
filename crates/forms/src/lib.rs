@@ -31,8 +31,8 @@ pub use author::{
 };
 pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
 pub use scripting::{
-    FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,
-    set_field_script,
+    FieldChange, FieldEvent, NoScripts, PageEvent, PageScript, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named,
+    page_scripts, set_document_script, set_field_script,
 };
 
 #[cfg(test)]
@@ -270,7 +270,9 @@ fn name_obj(text: &str) -> Object {
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
-/// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget).
+/// A push button's click action: its mouse-up action (`/A`, or `/AA /U`, on the field or its
+/// widget), or its mouse-down action (`/AA /D`) when it has only that, since a click both
+/// presses and releases it (the LaTeX `animate` package's controls act on mouse down).
 fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
     // A button PdfCraft generated for an XFA image field (`/PCXfaImage true`, no PDF action):
     // clicking it picks a picture, as `buttonImportIcon()` does.
@@ -278,7 +280,11 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         return Some(af::ButtonAction::ImportIcon);
     }
     let pick = |dict: &Dict| -> Option<Object> {
-        dict.get(b"A").cloned().or_else(|| dict.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|aa| aa.get(b"U").cloned())))
+        dict.get(b"A").cloned().or_else(|| {
+            let aa = doc.resolve(dict.get(b"AA")?);
+            let aa = aa.as_dict()?;
+            aa.get(b"U").or_else(|| aa.get(b"D")).cloned()
+        })
     };
     let action = pick(d).or_else(|| widgets.iter().find_map(|w| doc.get(*w).as_dict().and_then(pick)))?;
     let a = doc.resolve(&action);

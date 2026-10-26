@@ -59,7 +59,8 @@ impl JsOutput {
         }
     }
 
-    pub(crate) fn append(&mut self, other: JsOutput) {
+    /// Adds what other scripts produced, telling a document script's error once.
+    pub fn append(&mut self, other: JsOutput) {
         self.alerts.extend(other.alerts);
         self.console.extend(other.console);
         self.requests.extend(other.requests);
@@ -157,6 +158,8 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
+    /// An XFA form is laid out, so its own scripts run and the PDF container's don't.
+    pub(crate) xfa_active: bool,
     /// Immutable document snapshot from the start of the edit (for widget `display`).
     cos: pdfcraft_cos::Document,
     // `cos` is the same immutable pre-edit snapshot for the runner's lifetime. Cache only
@@ -171,15 +174,21 @@ impl JsRunner {
     /// an XFA form) and its document-level scripts, read once.
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
-        let doc =
-            pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos), xfa };
+        let doc = pdfcraft_js::DocInfo {
+            file_name: file_name.to_string(),
+            num_pages: pdfcraft_model::pages(cos).len(),
+            page: 0,
+            info: info(cos),
+            xfa,
+            layers: Vec::new(),
+        };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
         // AcroForm context with them: a viewer-compatibility alert would be misleading.
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner { doc, doc_scripts, xfa_active, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
     }
 }
 
@@ -286,38 +295,429 @@ impl Session {
                 ..Default::default()
             });
         }
-        let runner = JsRunner::new(&cos, &doc.name);
-        let fields = pdfcraft_forms::fields(&cos);
-        let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
-        let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
+        let fields = pdfcraft_forms::fields(&cos);
+        // The document's live context (#269), which page actions and timers share; a laid-out
+        // XFA form's container scripts don't run there, so its console gets a fresh context.
+        let (states, mut o) = match self.live(id, LiveTask::Script(script, event.clone())) {
+            Some(run) => run,
+            None => {
+                let runner = JsRunner::new(&cos, &doc_name(self, id));
+                let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
+                let o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
+                (states, o)
+            }
+        };
         let changes = changes(&states, &o.changed);
-        let resets: Vec<Vec<String>> = o
-            .requests
-            .iter()
-            .filter_map(|r| match r {
-                Request::Reset(n) => Some(n.clone()),
-                _ => None,
-            })
-            .collect();
-        o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        // A field a button shows or hides changes in the document: how page actions and timers
+        // showed it gives way. A button's icon is shown, not written into the document.
+        let icons = icon_changes(&states, &o.changed);
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+            let before = doc.scripts.shown.len();
+            doc.scripts.shown.retain(|name, _| !changes.iter().any(|c| c.display.is_some() && c.name == *name));
+            if doc.scripts.shown.len() != before {
+                use_shown(doc);
+            }
+            show_in_view(doc, Vec::new(), icons);
+            set_layers(doc, &o.layers);
+        }
+        let resets = take_resets(&mut o.requests);
         let mut edits = Vec::new();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
-        for names in resets {
-            let all: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-            let names = (!names.is_empty())
-                .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
-            edits.push(Edit::ResetForm { names });
-        }
+        edits.extend(reset_edits(resets, &fields));
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
         Ok(o)
+    }
+}
+
+fn doc_name(s: &Session, id: DocId) -> String {
+    s.get(id).map(|d| d.name.clone()).unwrap_or_default()
+}
+
+/// The `resetForm` requests among `requests`, taken out: each a list of field names (empty: all).
+fn take_resets(requests: &mut Vec<Request>) -> Vec<Vec<String>> {
+    let resets = requests
+        .iter()
+        .filter_map(|r| match r {
+            Request::Reset(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    requests.retain(|r| !matches!(r, Request::Reset(_)));
+    resets
+}
+
+/// The edits for `resetForm` requests: each name stands for the field and the fields below it.
+fn reset_edits(resets: Vec<Vec<String>>, fields: &[Field]) -> Vec<Edit> {
+    resets
+        .into_iter()
+        .map(|names| {
+            let names = (!names.is_empty())
+                .then(|| fields.iter().map(|f| f.name.clone()).filter(|n| names.iter().any(|x| n == x || n.starts_with(&format!("{x}.")))).collect());
+            Edit::ResetForm { names }
+        })
+        .collect()
+}
+
+// ── live scripts: page actions and timers ───────────────────────────────────────────────────
+
+/// Most timers one call to [`Session::run_timers`] runs: a document asking for more at once
+/// falls behind instead of holding up the viewer.
+const MAX_TIMER_RUNS: usize = 16;
+
+/// A timer of a document's scripts, on the caller's clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Due {
+    id: u32,
+    period_ms: u32,
+    repeat: bool,
+    /// When it falls due, in milliseconds.
+    at: f64,
+}
+
+/// A document's live scripts: the context they share, the page whose open actions ran last,
+/// the timers they set, and how page actions and timers showed fields while the document is
+/// read. Nothing here is part of the document.
+#[derive(Default)]
+pub(crate) struct LiveScripts {
+    session: Option<pdfcraft_js::session::ScriptSession>,
+    /// The page whose open actions ran last.
+    page: Option<usize>,
+    timers: Vec<Due>,
+    /// `display` page actions and timers gave fields, by name, over the document's own flags.
+    shown: std::collections::BTreeMap<String, i32>,
+    /// Push buttons showing another button's icon (`buttonSetIcon`), by name: that button's.
+    icons: std::collections::BTreeMap<String, String>,
+    /// The caller's clock when it last looked, in milliseconds: a timer set by a button or the
+    /// console counts from here.
+    clock: f64,
+    /// What the scripts read of the document (its information and document-level scripts), for
+    /// the edit generation it was read at.
+    read: Option<Read>,
+}
+
+/// What [`JsRunner::new`] read of a document, at one edit generation.
+struct Read {
+    generation: u64,
+    doc: pdfcraft_js::DocInfo,
+    doc_scripts: Vec<String>,
+    xfa_active: bool,
+}
+
+impl LiveScripts {
+    /// Keep the timers a run left: new ones count from the clock, cleared ones go.
+    fn schedule(&mut self, reported: &[pdfcraft_js::Timer]) {
+        self.timers.retain(|d| reported.iter().any(|t| t.id == d.id));
+        for t in reported {
+            if !self.timers.iter().any(|d| d.id == t.id) {
+                self.timers.push(Due { id: t.id, period_ms: t.period_ms, repeat: t.repeat, at: self.clock + f64::from(t.period_ms) });
+            }
+        }
+    }
+}
+
+/// What a live run is for.
+enum LiveTask<'a> {
+    Script(&'a str, pdfcraft_js::Event),
+    Timer(u32),
+}
+
+/// What running a document's page actions or timers did, for the viewer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScriptRun {
+    /// Alerts, console output, requests and errors, as from any script.
+    pub output: JsOutput,
+    /// Pages showing a field the scripts showed or hid: draw them again.
+    pub pages: Vec<usize>,
+    /// The scripts changed the document (a field's value, or a reset): read it again.
+    pub edited: bool,
+    /// How many timers ran.
+    pub ran: usize,
+    /// Layers were turned on or off (`ocg.state`): draw every page again.
+    pub layers: bool,
+}
+
+impl ScriptRun {
+    pub fn is_empty(&self) -> bool {
+        self.output.is_empty() && self.pages.is_empty() && !self.edited && !self.layers
+    }
+}
+
+/// Whether a field with this `display` shows on screen.
+fn on_screen(display: i32) -> bool {
+    display == pdfcraft_js::DISPLAY_VISIBLE || display == pdfcraft_js::DISPLAY_NO_PRINT
+}
+
+/// A widget's object as the renderer names it, when its number fits.
+fn object(w: &pdfcraft_forms::Widget) -> Option<(i32, i32)> {
+    Some((i32::try_from(w.obj.num).ok()?, i32::from(w.obj.generation)))
+}
+
+/// Hand the renderer how fields show while the document is read: the visibility page actions
+/// and timers gave them, and the icons scripts gave buttons.
+fn use_shown(doc: &mut crate::Document) {
+    let live = &doc.scripts;
+    let annotations: Vec<(i32, i32, bool)> = doc
+        .form
+        .iter()
+        .filter_map(|f| live.shown.get(&f.name).map(|d| (f, on_screen(*d))))
+        .flat_map(|(f, on)| f.widgets.iter().filter_map(move |w| object(w).map(|(n, g)| (n, g, on))))
+        .collect();
+    let appearances: Vec<(i32, i32, i32, i32)> = doc
+        .form
+        .iter()
+        .filter_map(|f| {
+            let source = live.icons.get(&f.name)?;
+            let (sn, sg) = doc.form.iter().find(|s| s.name == *source)?.widgets.first().and_then(object)?;
+            Some(f.widgets.iter().filter_map(move |w| object(w).map(|(n, g)| (n, g, sn, sg))))
+        })
+        .flatten()
+        .collect();
+    if *doc.config.annotations == annotations && *doc.config.appearances == appearances {
+        return;
+    }
+    doc.config.annotations = std::sync::Arc::new(annotations);
+    doc.config.appearances = std::sync::Arc::new(appearances);
+    doc.renderer = crate::RenderPool::new(doc.display.clone(), crate::render_threads(), doc.config.clone());
+}
+
+/// Turn layers on or off as a script set them (`ocg.state`), as the Layers panel does: how the
+/// document is shown, not the document. Returns whether any changed.
+fn set_layers(doc: &mut crate::Document, layers: &[(usize, bool)]) -> bool {
+    let mut changed = false;
+    for &(i, on) in layers {
+        if let Some(l) = doc.info.layers.get_mut(i)
+            && l.visible != on
+        {
+            l.visible = on;
+            changed = true;
+        }
+    }
+    if changed {
+        crate::use_layer_choices(doc);
+    }
+    changed
+}
+
+/// The icons a script gave buttons (`buttonSetIcon`), against the fields as they were: the
+/// button's name and the field whose icon it shows (`None`: its own again).
+fn icon_changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]) -> Vec<(String, Option<String>)> {
+    after
+        .iter()
+        .filter(|a| before.iter().find(|b| b.name == a.name).is_some_and(|b| b.icon != a.icon))
+        .map(|a| (a.name.clone(), a.icon.clone()))
+        .collect()
+}
+
+/// Show fields as scripts asked while the document is read, without changing it: `shown`
+/// their visibility, `icons` the buttons' icons. Returns the pages showing them.
+fn show_in_view(doc: &mut crate::Document, shown: Vec<(String, i32)>, icons: Vec<(String, Option<String>)>) -> std::collections::BTreeSet<usize> {
+    let mut pages = std::collections::BTreeSet::new();
+    if shown.is_empty() && icons.is_empty() {
+        return pages;
+    }
+    let names = shown.iter().map(|(n, _)| n).chain(icons.iter().map(|(n, _)| n));
+    for name in names {
+        pages.extend(doc.form.iter().filter(|f| f.name == *name).flat_map(|f| f.widgets.iter().filter_map(|w| w.page)));
+    }
+    let live = &mut doc.scripts;
+    live.shown.extend(shown);
+    for (name, icon) in icons {
+        match icon {
+            Some(source) => live.icons.insert(name, source),
+            None => live.icons.remove(&name),
+        };
+    }
+    use_shown(doc);
+    pages
+}
+
+impl Session {
+    /// Run `task` in document `id`'s live context, started now if it isn't yet, with the form as
+    /// it is (and as page actions and timers show it). Returns the form as the script saw it and
+    /// what it did; the timers it left are kept. `None` when the document's scripts don't run
+    /// live: JavaScript is off, the document can't be edited, or a laid-out XFA form runs its own.
+    fn live(&mut self, id: DocId, task: LiveTask<'_>) -> Option<(Vec<pdfcraft_js::FieldState>, Outcome)> {
+        if self.js_off {
+            return None;
+        }
+        let doc = self.docs.iter_mut().find(|d| d.id == id)?;
+        let cos = &doc.editor.as_ref()?.cos;
+        let live = &mut doc.scripts;
+        // What the scripts read of the document, read again only once it changed: timers run
+        // many times a second.
+        if live.read.as_ref().is_none_or(|r| r.generation != doc.generation) {
+            let runner = JsRunner::new(cos, &doc.name);
+            live.read = Some(Read { generation: doc.generation, doc: runner.doc, doc_scripts: runner.doc_scripts, xfa_active: runner.xfa_active });
+        }
+        let runner = live.read.as_ref()?;
+        if runner.xfa_active {
+            return None;
+        }
+        let (doc_info, doc_scripts) = (runner.doc.clone(), runner.doc_scripts.clone());
+        let states: Vec<_> = doc
+            .form
+            .iter()
+            .map(|f| {
+                let mut s = field_state(cos, f);
+                if let Some(d) = live.shown.get(&f.name) {
+                    s.display = *d;
+                }
+                s.icon = live.icons.get(&f.name).cloned();
+                s
+            })
+            .collect();
+        let shared = std::sync::Arc::new(states.clone());
+        let layers = doc.info.layers.iter().map(|l| pdfcraft_js::Layer { name: l.name.clone(), on: l.visible, initial: l.initial }).collect();
+        let info = pdfcraft_js::DocInfo { page: live.page.unwrap_or(0), num_pages: doc.info.pages.len(), layers, ..doc_info };
+        let session = live.session.get_or_insert_with(|| pdfcraft_js::session::ScriptSession::new(doc_scripts.clone(), Limits::default()));
+        session.set_doc_scripts(doc_scripts);
+        let o = match task {
+            LiveTask::Script(script, event) => session.run(script, &event, &info, shared),
+            LiveTask::Timer(t) => session.fire(t, &info, shared),
+        };
+        live.schedule(&o.timers);
+        Some((states, o))
+    }
+
+    /// Apply what a page action or timer did. Fields it showed or hid change only how the
+    /// document is shown; a value it changed, or a reset, changes the document (one undoable
+    /// step). A timer runs unasked and again and again, so what it asks of the viewer (alerts,
+    /// printing, navigation, links) goes to the console instead.
+    fn apply_live(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, timer: bool, run: &mut ScriptRun) {
+        let mut shown = Vec::new();
+        let mut changed = Vec::new();
+        for c in changes(states, &o.changed) {
+            if let Some(d) = c.display {
+                shown.push((c.name.clone(), d));
+            }
+            if c.value.is_some() || c.read_only.is_some() || c.required.is_some() {
+                changed.push(FieldChange { display: None, ..c });
+            }
+        }
+        let resets = take_resets(&mut o.requests);
+        if timer {
+            for a in std::mem::take(&mut o.alerts) {
+                o.console.push(format!("A timer's alert: {a}"));
+            }
+            for r in std::mem::take(&mut o.requests) {
+                o.console.push(format!("A timer asked for {r:?}; timers may only change fields"));
+            }
+        }
+        run.output.absorb(&o);
+        let icons = icon_changes(states, &o.changed);
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return };
+        for p in show_in_view(doc, shown, icons) {
+            if !run.pages.contains(&p) {
+                run.pages.push(p);
+            }
+        }
+        run.layers |= set_layers(doc, &o.layers);
+        let mut edits = Vec::new();
+        if !changed.is_empty() {
+            edits.push(Edit::ApplyScriptChanges { changes: changed });
+        }
+        edits.extend(reset_edits(resets, &doc.form));
+        if !edits.is_empty() {
+            match self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits }) {
+                Ok(()) => run.edited = true,
+                Err(e) => run.output.errors.push(e.to_string()),
+            }
+        }
+    }
+
+    /// Document `id` is read at page `page` (0-based), at `now_ms` on the caller's clock (on
+    /// which its timers fall due). When the page changed, the actions of the page it was at
+    /// that run as a page closes run, then `page`'s open actions (Acrobat's page-open and
+    /// page-visible actions of the page and of its annotations, such as an animation's
+    /// widget). Cheap when nothing changed; call it as often as the page can change. A reopened
+    /// or reloaded document starts again with its first page's open actions.
+    pub fn show_page(&mut self, id: DocId, page: usize, now_ms: f64) -> ScriptRun {
+        let mut run = ScriptRun::default();
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return run };
+        doc.scripts.clock = now_ms;
+        if self.js_off || doc.scripts.page == Some(page) {
+            return run;
+        }
+        let before = doc.scripts.page.replace(page);
+        let Some(cos) = doc.editor.as_ref().map(|e| e.cos.clone()) else { return run };
+        use pdfcraft_forms::PageEvent;
+        let mut scripts: Vec<(&str, pdfcraft_forms::PageScript)> = Vec::new();
+        if let Some(p) = before {
+            scripts.extend(pdfcraft_forms::page_scripts(&cos, p, PageEvent::Close).into_iter().map(|s| ("Close", s)));
+        }
+        scripts.extend(pdfcraft_forms::page_scripts(&cos, page, PageEvent::Open).into_iter().map(|s| ("Open", s)));
+        for (name, s) in scripts {
+            let event = pdfcraft_js::Event {
+                name: name.into(),
+                kind: "Page".into(),
+                target: s.field,
+                value: String::new(),
+                change: String::new(),
+                will_commit: false,
+            };
+            if let Some((states, o)) = self.live(id, LiveTask::Script(&s.script, event)) {
+                self.apply_live(id, &states, o, false, &mut run);
+            }
+        }
+        run
+    }
+
+    /// When document `id`'s next timer falls due, on the clock [`Session::show_page`] and
+    /// [`Session::run_timers`] are given; `None` without timers (or with JavaScript off).
+    pub fn next_timer(&self, id: DocId) -> Option<f64> {
+        if self.js_off {
+            return None;
+        }
+        self.get(id)?.scripts.timers.iter().map(|d| d.at).min_by(f64::total_cmp)
+    }
+
+    /// Run document `id`'s timers that are due at `now_ms`, earliest first, at most
+    /// [`MAX_TIMER_RUNS`] of them. An interval that fell behind runs once and then counts its
+    /// period from now, rather than catching up run by run.
+    pub fn run_timers(&mut self, id: DocId, now_ms: f64) -> ScriptRun {
+        let mut run = ScriptRun::default();
+        for _ in 0..MAX_TIMER_RUNS {
+            if self.js_off {
+                break;
+            }
+            let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { break };
+            let live = &mut doc.scripts;
+            live.clock = now_ms;
+            let Some(i) = live.timers.iter().enumerate().filter(|(_, d)| d.at <= now_ms).min_by(|a, b| a.1.at.total_cmp(&b.1.at)).map(|(i, _)| i)
+            else {
+                break;
+            };
+            let Some(due) = live.timers.get(i).copied() else { break };
+            if due.repeat {
+                let next = due.at + f64::from(due.period_ms);
+                if let Some(d) = live.timers.get_mut(i) {
+                    d.at = if next <= now_ms { now_ms + f64::from(due.period_ms) } else { next };
+                }
+            } else {
+                live.timers.remove(i);
+            }
+            match self.live(id, LiveTask::Timer(due.id)) {
+                Some((states, o)) => {
+                    run.ran += 1;
+                    self.apply_live(id, &states, o, true, &mut run);
+                }
+                None => break,
+            }
+        }
+        run
+    }
+
+    /// The clock of document `id`'s live scripts: the time it was last given (milliseconds).
+    pub fn script_clock(&self, id: DocId) -> Option<f64> {
+        Some(self.get(id)?.scripts.clock)
     }
 }
 
