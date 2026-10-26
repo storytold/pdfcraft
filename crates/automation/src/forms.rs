@@ -147,6 +147,7 @@ fn format_json(f: &Format) -> Value {
     }
 }
 
+/// Return the lowercase string representation of a form field kind.
 fn kind_name(k: FormFieldKind) -> &'static str {
     match k {
         FormFieldKind::Text => "text",
@@ -166,9 +167,39 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
         (FormFieldKind::CheckBox, Value::Bool(b)) => FieldValue::Check(*b),
         (FormFieldKind::Radio, Value::Null) => FieldValue::Radio(None),
         (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(s.clone())),
-        (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(
-            a.iter().map(|x| x.as_str().map(str::to_owned).ok_or_else(|| wrong("list values must be strings"))).collect::<Result<_>>()?,
-        ),
+        (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => {
+            if !a.is_empty() && a.iter().all(|x| x.is_number()) {
+                let idxs: Result<Vec<usize>> = a
+                    .iter()
+                    .map(|x| x.as_u64().and_then(|u| usize::try_from(u).ok()).ok_or_else(|| wrong("option index must be a non-negative integer")))
+                    .collect();
+                FieldValue::ChoiceIndices(idxs?)
+            } else {
+                FieldValue::Choice(
+                    a.iter()
+                        .map(|x| x.as_str().map(str::to_owned).ok_or_else(|| wrong("list values must be strings or integer indices")))
+                        .collect::<Result<_>>()?,
+                )
+            }
+        }
+        (FormFieldKind::Combo | FormFieldKind::List, Value::Number(n)) => {
+            let idx = n.as_u64().and_then(|u| usize::try_from(u).ok()).ok_or_else(|| wrong("option index must be a non-negative integer"))?;
+            FieldValue::ChoiceIndices(vec![idx])
+        }
+        (FormFieldKind::Combo | FormFieldKind::List, Value::Object(obj)) => {
+            if let Some(arr) = obj.get("indices").and_then(Value::as_array) {
+                let idxs: Result<Vec<usize>> = arr
+                    .iter()
+                    .map(|x| x.as_u64().and_then(|u| usize::try_from(u).ok()).ok_or_else(|| wrong("option index must be a non-negative integer")))
+                    .collect();
+                FieldValue::ChoiceIndices(idxs?)
+            } else if let Some(idx_val) = obj.get("index").and_then(Value::as_u64) {
+                let idx = usize::try_from(idx_val).map_err(|_| wrong("option index out of range"))?;
+                FieldValue::ChoiceIndices(vec![idx])
+            } else {
+                return Err(wrong("choice object must specify index or indices"));
+            }
+        }
         (FormFieldKind::Combo | FormFieldKind::List, Value::String(s)) => FieldValue::Choice(if s.is_empty() { Vec::new() } else { vec![s.clone()] }),
         (_, Value::String(s)) => FieldValue::Text(s.clone()),
         (_, Value::Number(n)) => FieldValue::Text(n.to_string()),
@@ -178,6 +209,7 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
 }
 
 impl Automation {
+    /// Return JSON listing every interactive form field with its properties, options, and selection indices.
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let out: Vec<Value> = doc
@@ -251,6 +283,7 @@ impl Automation {
                     }
                     FormFieldKind::Combo | FormFieldKind::List => {
                         o.insert("options".into(), f.options.iter().map(|(e, d)| json!({ "value": e, "label": d })).collect());
+                        o.insert("indices".into(), json!(f.indices));
                         o.insert("multi_select".into(), json!(f.has(field_flags::MULTI_SELECT)));
                         o.insert("editable".into(), json!(f.has(field_flags::EDIT)));
                     }

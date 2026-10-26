@@ -134,6 +134,11 @@ pub struct Field {
     /// selected export values.
     pub value: Vec<String>,
     pub default: Vec<String>,
+    /// For choice fields (combo box and list box), the zero-based indices of the selected
+    /// options in [`options`]. Derived from `/I` when present and consistent with `/V`,
+    /// or from `/V` otherwise (ISO 32000-2 Table 234). For single-select lists, at most
+    /// one index is retained. Empty for non-choice fields.
+    pub indices: Vec<usize>,
     pub flags: u32,
     pub max_len: Option<usize>,
     /// Choice options: (export value, display text).
@@ -196,6 +201,9 @@ impl Field {
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
+            FieldKind::Combo | FieldKind::List if !self.indices.is_empty() => {
+                self.indices.iter().filter_map(|&i| self.options.get(i)).map(|(_, d)| d.as_str()).collect::<Vec<_>>().join(", ")
+            }
             FieldKind::Combo | FieldKind::List => self
                 .value
                 .iter()
@@ -217,6 +225,8 @@ pub enum FieldValue {
     Radio(Option<String>),
     /// Combo box or list box: export values (several only for multi-select lists).
     Choice(Vec<String>),
+    /// Combo box or list box: 0-based option indices into [`Field::options`].
+    ChoiceIndices(Vec<usize>),
 }
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -458,6 +468,7 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
     out
 }
 
+/// Parse text or export values from a `/V` or `/DV` object.
 fn values_of(doc: &Document, o: Option<&Object>) -> Vec<String> {
     let Some(o) = o else { return Vec::new() };
     match &*doc.resolve(o) {
@@ -467,6 +478,66 @@ fn values_of(doc: &Document, o: Option<&Object>) -> Vec<String> {
     }
 }
 
+/// Parse zero-based option indices (`/I`) from an object, which may be an array of integers or a single integer.
+pub(crate) fn indices_of(doc: &Document, o: Option<&Object>) -> Vec<usize> {
+    let Some(o) = o else { return Vec::new() };
+    match &*doc.resolve(o) {
+        Object::Array(a) => a.iter().filter_map(|x| doc.resolve(x).as_int()).filter_map(|i| usize::try_from(i).ok()).collect(),
+        Object::Int(i) => usize::try_from(*i).ok().into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Reconcile choice field selection indices from `options`, `/V`, and `/I` (ISO 32000-2 Table 234).
+///
+/// When `/I` is present and valid, its elements represent 0-based indices into `options`.
+/// If the export values identified by `/I` differ from `/V`, `/V` takes precedence.
+/// When `/I` is absent or differs from `/V`, indices are derived from `/V`.
+/// If `multi` is false (single-select), at most one index is retained (lenient fallback
+/// for malformed multiple-value `/V`).
+pub(crate) fn resolve_choice_indices(options: &[(String, String)], v: &[String], raw_i: &[usize], multi: bool) -> Vec<usize> {
+    if options.is_empty() {
+        return Vec::new();
+    }
+    let valid_raw_i: Vec<usize> = raw_i.iter().copied().filter(|&i| i < options.len()).collect();
+    let use_i = if v.is_empty() || valid_raw_i.is_empty() {
+        false
+    } else if multi {
+        let mut v_sorted = v.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut i_sorted: Vec<&str> = valid_raw_i.iter().filter_map(|&i| options.get(i).map(|(e, _)| e.as_str())).collect();
+        v_sorted.sort_unstable();
+        i_sorted.sort_unstable();
+        v_sorted == i_sorted
+    } else {
+        valid_raw_i.first().is_some_and(|&first_i| options.get(first_i).map(|(e, _)| e.as_str()) == v.first().map(String::as_str))
+    };
+
+    let mut indices = if use_i {
+        if multi { valid_raw_i } else { valid_raw_i.into_iter().take(1).collect() }
+    } else {
+        let mut derived = Vec::new();
+        for val in v.iter().take(if multi { v.len() } else { 1 }) {
+            if let Some(pos) = options.iter().position(|(e, _)| e == val) {
+                if multi {
+                    if !derived.contains(&pos) {
+                        derived.push(pos);
+                    }
+                } else {
+                    derived.push(pos);
+                    break;
+                }
+            }
+        }
+        derived
+    };
+
+    if !multi && indices.len() > 1 {
+        indices.truncate(1);
+    }
+    indices
+}
+
+/// Parse an array of floating-point numbers from an object.
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
     o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
@@ -490,6 +561,7 @@ struct PageWalk<'a> {
 }
 
 impl<'a> PageWalk<'a> {
+    /// Create a new page walk starting at `top`.
     fn new(doc: &'a Document, top: ObjRef) -> Self {
         let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
         Self { doc, seen: Default::default(), pending: vec![(top, 0)] }
@@ -541,6 +613,7 @@ struct Inherited {
     ff: Option<u32>,
     v: Option<Object>,
     dv: Option<Object>,
+    i: Option<Object>,
     da: Option<String>,
     q: Option<i64>,
     max_len: Option<usize>,
@@ -820,7 +893,7 @@ fn walk(
     if let Some(ff) = field_flags(doc, d) {
         inh.ff = Some(ff);
     }
-    for (k, slot) in [(&b"V"[..], &mut inh.v), (b"DV", &mut inh.dv)] {
+    for (k, slot) in [(&b"V"[..], &mut inh.v), (b"DV", &mut inh.dv), (b"I", &mut inh.i)] {
         if let Some(v) = d.get(k) {
             *slot = Some(v.clone());
         }
@@ -903,7 +976,7 @@ fn walk(
             })
         })
         .collect();
-    let options = d
+    let options: Vec<(String, String)> = d
         .get(b"Opt")
         .map(|o| doc.resolve(o))
         .and_then(|o| o.as_array().cloned())
@@ -914,12 +987,21 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect();
+    let value = values_of(doc, inh.v.as_ref());
+    let default = values_of(doc, inh.dv.as_ref());
+    let raw_i = indices_of(doc, inh.i.as_ref());
+    let indices = if matches!(kind, FieldKind::Combo | FieldKind::List) {
+        resolve_choice_indices(&options, &value, &raw_i, ff & flags::MULTI_SELECT != 0)
+    } else {
+        Vec::new()
+    };
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref()),
-        default: values_of(doc, inh.dv.as_ref()),
+        value,
+        default,
+        indices,
         flags: ff,
         max_len: inh.max_len,
         options,
@@ -1129,10 +1211,12 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
         .collect()
 }
 
+/// Return a `FormError::Invalid` error.
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
 }
 
+/// Write the validated field value into the COS document dictionaries and redraw appearances.
 fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
@@ -1171,7 +1255,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                     }
                 }
                 FieldValue::Radio(None) => false,
-                FieldValue::Choice(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
+                FieldValue::Choice(_) | FieldValue::ChoiceIndices(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
             };
             set_states(doc, f, on.then_some(state.as_str()))
         }
@@ -1196,6 +1280,23 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             }
             set_states(doc, f, choice.as_deref())
         }
+        (FieldKind::Combo | FieldKind::List, FieldValue::ChoiceIndices(picked_indices)) => {
+            let multi = f.kind == FieldKind::List && f.has(flags::MULTI_SELECT);
+            if picked_indices.len() > 1 && !multi {
+                return invalid(format!("{:?} takes a single value", f.name));
+            }
+            let mut exports = Vec::with_capacity(picked_indices.len());
+            for &idx in picked_indices {
+                let Some((export, _)) = f.options.get(idx) else {
+                    return invalid(format!("{:?} has no option at index {idx} (options: {})", f.name, f.options.len()));
+                };
+                exports.push(export.clone());
+            }
+            let mut sorted_indices = picked_indices.clone();
+            sorted_indices.sort_unstable();
+            let indices: Vec<Object> = sorted_indices.into_iter().map(|i| Object::Int(i as i64)).collect();
+            apply_choice_value(doc, f, exports, indices, scripts)
+        }
         (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_)) => {
             let vals: Vec<String> = match value {
                 FieldValue::Choice(v) => v.clone(),
@@ -1208,9 +1309,13 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             }
             // Accept export values or display texts; free text only in editable combo boxes.
             let mut exports = Vec::new();
+            let mut indices = Vec::new();
             for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
-                    Some((e, _)) => exports.push(e.clone()),
+                match f.options.iter().enumerate().find(|(_, (e, d))| d == v || e == v) {
+                    Some((idx, (e, _))) => {
+                        exports.push(e.clone());
+                        indices.push(Object::Int(idx as i64));
+                    }
                     None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
                     None if f.options.is_empty() => exports.push(v.clone()),
                     None => {
@@ -1219,56 +1324,54 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                     }
                 }
             }
-            let mut indices: Vec<Object> =
-                exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
-            // /I lists option indices in ascending order; /V keeps the caller's value order.
-            // Every entry above is an integer, so this sorts by its numeric option index.
             indices.sort_unstable_by_key(Object::as_int);
-            // A list box scrolls (`/TI`) so the picked options are among the rows it draws, as
-            // in other viewers: a pick below the last visible row would otherwise not show (#1524).
-            let top = match (f.kind, f.widgets.first()) {
-                (FieldKind::List, Some(w)) => w.list.map(|rows| {
-                    let height = if matches!(w.rotation, 90 | 270) { w.rect[2] - w.rect[0] } else { w.rect[3] - w.rect[1] };
-                    let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
-                    (rows.top, appearance::ListRows::top_showing(rows.top, &picked, rows.visible(height), f.options.len()))
-                }),
-                _ => None,
-            };
-            doc.update_dict(f.obj, |d| {
-                match exports.as_slice() {
-                    [] => {
-                        d.remove(b"V");
-                    }
-                    [one] => d.set(b"V".to_vec(), PdfString::text(one)),
-                    many => d.set(b"V".to_vec(), Object::Array(many.iter().map(|e| Object::String(PdfString::text(e))).collect())),
-                }
-                if indices.is_empty() {
-                    d.remove(b"I");
-                } else {
-                    d.set(b"I".to_vec(), Object::Array(indices));
-                }
-                if let Some((old, new)) = top
-                    && old != new
-                {
-                    d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0)));
-                }
-            })?;
-            // A widget with its own `/TI` (read before the field's) scrolls too.
-            if let Some((old, new)) = top
-                && old != new
-            {
-                for w in f.widgets.iter().filter(|w| w.obj != f.obj) {
-                    if doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"TI")) {
-                        doc.update_dict(w.obj, |d| d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0))))?;
-                    }
-                }
-            }
-            redraw(doc, f, &exports, scripts)
+            apply_choice_value(doc, f, exports, indices, scripts)
         }
         (FieldKind::PushButton, _) => invalid(format!("{:?} is a button; it has no value", f.name)),
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
         (kind, v) => invalid(format!("{:?} is a {kind:?} field and can't take {v:?}", f.name)),
     }
+}
+
+/// Write updated choice field `/V`, `/I`, and `/TI` dictionaries, scrolling if necessary, and redraw.
+fn apply_choice_value(doc: &mut Document, f: &Field, exports: Vec<String>, indices: Vec<Object>, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    let top = match (f.kind, f.widgets.first()) {
+        (FieldKind::List, Some(w)) => w.list.map(|rows| {
+            let height = if matches!(w.rotation, 90 | 270) { w.rect[2] - w.rect[0] } else { w.rect[3] - w.rect[1] };
+            let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
+            (rows.top, appearance::ListRows::top_showing(rows.top, &picked, rows.visible(height), f.options.len()))
+        }),
+        _ => None,
+    };
+    doc.update_dict(f.obj, |d| {
+        match exports.as_slice() {
+            [] => {
+                d.remove(b"V");
+            }
+            [one] => d.set(b"V".to_vec(), PdfString::text(one)),
+            many => d.set(b"V".to_vec(), Object::Array(many.iter().map(|e| Object::String(PdfString::text(e))).collect())),
+        }
+        if indices.is_empty() {
+            d.remove(b"I");
+        } else {
+            d.set(b"I".to_vec(), Object::Array(indices));
+        }
+        if let Some((old, new)) = top
+            && old != new
+        {
+            d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0)));
+        }
+    })?;
+    if let Some((old, new)) = top
+        && old != new
+    {
+        for w in f.widgets.iter().filter(|w| w.obj != f.obj) {
+            if doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"TI")) {
+                doc.update_dict(w.obj, |d| d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0))))?;
+            }
+        }
+    }
+    redraw(doc, f, &exports, scripts)
 }
 
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.

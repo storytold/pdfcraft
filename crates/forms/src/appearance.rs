@@ -728,6 +728,7 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
 
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
 fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
+    let raw_values = values;
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -747,7 +748,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
     let text: String = if f.kind == FieldKind::Combo {
-        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+        let raw_i = crate::indices_of(doc, doc.get(f.obj).as_dict().and_then(|d| d.get(b"I")));
+        let picked = if values == raw_values { crate::resolve_choice_indices(&f.options, raw_values, &raw_i, false) } else { Vec::new() };
+        match picked.first().and_then(|&i| f.options.get(i)) {
+            Some((_, display)) => display.clone(),
+            None => {
+                values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+            }
+        }
     } else {
         values.first().cloned().unwrap_or_default()
     };
@@ -797,15 +805,17 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         FieldKind::List => {
             // Every option, one per line from the top (from `/TI`); selected ones highlighted.
             let fobj = doc.get(f.obj);
+            let raw_i = crate::indices_of(doc, fobj.as_dict().and_then(|d| d.get(b"I")));
+            let selected_indices = crate::resolve_choice_indices(&f.options, raw_values, &raw_i, f.has(flags::MULTI_SELECT));
             let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
-            for (export, display) in f.options.iter().skip(rows.top) {
+            for (idx, (_export, display)) in f.options.iter().enumerate().skip(rows.top) {
                 if y - line < 0.0 {
                     break;
                 }
-                if values.contains(export) {
+                if selected_indices.contains(&idx) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
                 show(&mut body, pad, y - line + size * 0.25, display);

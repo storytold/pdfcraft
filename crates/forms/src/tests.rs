@@ -1150,6 +1150,161 @@ fn multiselect_choice_indices_are_sorted_without_reordering_values() {
     }
 }
 
+/// A list box whose options share an export value resolves and highlights only the row specified by `/I`.
+#[test]
+fn list_box_options_sharing_export_value_respects_i() {
+    // Repro 1 from #4531:
+    // /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (1) /I [1]
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /NeedAppearances true /DA (/Helv 11 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (D_dup) /Ff 0 /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (1) /I [1] /Rect [330 600 520 644] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let d_dup = field(&all, "D_dup");
+    assert_eq!(d_dup.indices, [1], "option 1 (One-B) is selected via /I [1]");
+    assert_eq!(d_dup.value, ["1"]);
+    assert_eq!(d_dup.display_value(), "One-B");
+
+    // Appearance generation: only One-B is highlighted, not both One-A and One-B
+    let drawn = with_field_appearances(&doc).expect("draws appearances");
+    let app_stream = ap(&drawn, &d_dup.widgets[0]);
+    assert_eq!(app_stream.matches("0.6 0.75 0.86 rg").count(), 1, "only One-B is highlighted, not One-A");
+
+    // Save and reopen after choosing One-B again (via ChoiceIndices)
+    let mut doc = doc;
+    set_value(&mut doc, "D_dup", &FieldValue::ChoiceIndices(vec![1])).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let d_dup = field(&all, "D_dup");
+    assert_eq!(d_dup.indices, [1], "selection of One-B is retained across reopen");
+    assert_eq!(d_dup.display_value(), "One-B");
+    let app_stream = ap(&doc, &d_dup.widgets[0]);
+    assert_eq!(app_stream.matches("0.6 0.75 0.86 rg").count(), 1);
+
+    // Now select One-A (index 0)
+    let mut doc = doc;
+    set_value(&mut doc, "D_dup", &FieldValue::ChoiceIndices(vec![0])).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let d_dup = field(&all, "D_dup");
+    assert_eq!(d_dup.indices, [0], "selection of One-A is saved");
+    assert_eq!(d_dup.display_value(), "One-A");
+    let app_stream = ap(&doc, &d_dup.widgets[0]);
+    assert_eq!(app_stream.matches("0.6 0.75 0.86 rg").count(), 1);
+}
+
+/// A single-select list box given an array `/V` leniently retains and highlights only the first row.
+#[test]
+fn single_select_list_box_with_array_v_is_lenient_and_highlights_first_only() {
+    // Repro 2 from #4531:
+    // /Opt [[(TW) (Taiwan)] [(JP) (Japan)] [(US) (United States)]] /V [(TW) (JP)]
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /NeedAppearances true /DA (/Helv 11 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (H_twovals) /Ff 0 /Opt [[(TW) (Taiwan)] [(JP) (Japan)] [(US) (United States)]] /V [(TW) (JP)] /Rect [330 500 520 544] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let h = field(&all, "H_twovals");
+    assert_eq!(h.indices, [0], "only first value (TW) is retained for single-select");
+    assert_eq!(h.display_value(), "Taiwan");
+    let h_obj_orig = doc.get(h.obj);
+    let original_v = h_obj_orig.as_dict().unwrap().get(b"V").unwrap().clone();
+    let untouched = reopen(&doc);
+    let untouched_fields = fields(&untouched);
+    let untouched_h = field(&untouched_fields, "H_twovals");
+    let untouched_obj = untouched.get(untouched_h.obj);
+    let untouched_v = untouched_obj.as_dict().unwrap().get(b"V").unwrap();
+    assert_eq!(untouched_v, &original_v, "opening and saving without edits preserves /V");
+
+    // Appearance highlights Taiwan alone (one highlight rect, not two)
+    let drawn = with_field_appearances(&doc).expect("draws appearances");
+    let app_stream = ap(&drawn, &h.widgets[0]);
+    assert_eq!(app_stream.matches("0.6 0.75 0.86 rg").count(), 1, "only Taiwan highlighted, not both Taiwan and Japan");
+
+    // Picking a row writes a single string to /V
+    let mut doc = doc;
+    set_value(&mut doc, "H_twovals", &FieldValue::ChoiceIndices(vec![1])).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let h = field(&all, "H_twovals");
+    assert_eq!(h.value, ["JP"]);
+    assert_eq!(h.indices, [1]);
+    assert_eq!(h.display_value(), "Japan");
+    let h_obj = doc.get(h.obj);
+    let raw_v = h_obj.as_dict().unwrap().get(b"V").unwrap();
+    assert!(matches!(raw_v, pdfcraft_cos::Object::String(_)), "/V was written as a string, not an array");
+}
+
+/// When `/I` identifies export values that differ from `/V`, `/V` takes precedence per ISO 32000-2 Table 234.
+#[test]
+fn choice_field_v_takes_precedence_when_i_differs() {
+    // ISO 32000-2 Table 234: If the items identified by /I differ from those in /V, /V shall be used.
+    // /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (2) /I [1]
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /NeedAppearances true /DA (/Helv 11 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (D_conflict) /Ff 0 /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (2) /I [1] /Rect [330 600 520 644] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let d = field(&all, "D_conflict");
+    assert_eq!(d.indices, [2], "/V (2) overrides conflicting /I [1]");
+    assert_eq!(d.display_value(), "Two");
+    let drawn = with_field_appearances(&doc).expect("draws appearances");
+    let app_stream = ap(&drawn, &d.widgets[0]);
+    assert_eq!(app_stream.matches("0.6 0.75 0.86 rg").count(), 1, "Two alone is highlighted");
+}
+
+/// Choice indices validation rejects out-of-bounds indices and multiple indices on single-select fields.
+#[test]
+fn choice_indices_validation_and_errors() {
+    let mut doc = fixture();
+    // Out of bounds index
+    assert!(matches!(set_value(&mut doc, "country", &FieldValue::ChoiceIndices(vec![99])), Err(FormError::Invalid(_))));
+    // Multiple indices on single-select list
+    assert!(matches!(set_value(&mut doc, "country", &FieldValue::ChoiceIndices(vec![0, 1])), Err(FormError::Invalid(_))));
+}
+
+/// A combo box whose options share an export value renders the display text corresponding to `/I`.
+#[test]
+fn combo_box_options_sharing_export_value_respects_i() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /NeedAppearances true >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (combo_dup) /Rect [50 500 250 520] /DA (/Helv 12 Tf 0 g) /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (1) /I [1] >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    let d = field(&all, "combo_dup");
+    assert_eq!(d.indices, [1], "/I [1] selects One-B");
+    assert_eq!(d.display_value(), "One-B");
+    let drawn = with_field_appearances(&doc).expect("draws appearances");
+    let app_stream = ap(&drawn, &d.widgets[0]);
+    assert!(app_stream.contains("(One-B) Tj"), "appearance draws One-B, not One-A");
+    assert!(!app_stream.contains("(One-A) Tj"));
+
+    // Setting choice index 0 redraws One-A
+    set_value(&mut doc, "combo_dup", &FieldValue::ChoiceIndices(vec![0])).expect("set index 0");
+    let all2 = fields(&doc);
+    let d2 = field(&all2, "combo_dup");
+    assert_eq!(d2.indices, [0]);
+    assert_eq!(d2.display_value(), "One-A");
+    let app_stream2 = ap(&doc, &d2.widgets[0]);
+    assert!(app_stream2.contains("(One-A) Tj"));
+    assert!(!app_stream2.contains("(One-B) Tj"));
+}
+
 #[test]
 fn errors_are_specific_and_change_nothing() {
     let mut doc = fixture();

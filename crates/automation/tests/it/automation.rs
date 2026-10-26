@@ -9126,6 +9126,39 @@ fn form_fill_takes_free_text_only_in_an_editable_combo_box() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A choice field with options sharing an export value reports its 0-based selected index in
+/// `form_fields` (`indices`), and `form_fill` accepts a specific index or label (#4531).
+#[test]
+fn form_fields_and_fill_respect_choice_indices() {
+    let dir = workdir("choice-indices");
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /NeedAppearances true /DA (/Helv 11 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >> endobj\n\
+4 0 obj << /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (D_dup) /Ff 0 /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (1) /I [1] /Rect [330 600 520 644] >> endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF\n";
+    std::fs::write(dir.join("choice.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "choice.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let f = &fields["fields"][0];
+    assert_eq!(f["name"], "D_dup");
+    assert_eq!(f["value"], "1");
+    assert_eq!(f["indices"], json!([1]), "form_fields reports the selected index");
+
+    // Setting value by display text "One-A" targets index 0
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "D_dup": "One-A" } }));
+    let after = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!(after["fields"][0]["indices"], json!([0]));
+
+    // Setting value by index 1 targets index 1 (One-B)
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "D_dup": 1 } }));
+    let after_idx = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!(after_idx["fields"][0]["indices"], json!([1]));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `page_render`'s pixels show a rubber stamp written without an appearance as the stamp its
 /// `/Name` names (ISO 32000-2 Table 184), and one with an unknown name as a grey placeholder.
 #[test]
