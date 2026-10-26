@@ -6023,7 +6023,7 @@ fn new_marks_wrap_unbalanced_graphics_state_whole_without_changing_it() {
     for (data, probe_clean) in [("q 50 Tz", true), ("50 Tz q", true), ("q q Q", true), ("Q 50 Tz", false), ("q Q Q 50 Tz", false)] {
         let mut doc = isolation_fixture(&[("Wrap", data)]);
         let page = page_list(&doc).remove(0);
-        place_tagged(&mut doc, &page, "Probe", b"q /PCProbe Do Q".to_vec(), false).unwrap();
+        place_tagged(&mut doc, &page, "Probe", b"q /PCProbe Do Q".to_vec(), Layer::OnTop).unwrap();
         let after = streams(&doc, 0);
         assert_eq!(after.len(), 4, "{data}: {after:?}");
         assert_eq!((after[0].as_str(), after[1].as_str()), ("q %PdfCraft\n", data), "{data}");
@@ -6081,7 +6081,7 @@ fn new_marks_wrap_unfinished_text_paths_and_operands_whole() {
     for data in ["BT", "ET", "BT BT ET", "0 0 10 10 re", "q 0 0 m Q", "50"] {
         let mut doc = isolation_fixture(&[("Background", "q Q"), ("", data)]);
         let page = page_list(&doc).remove(0);
-        place_tagged(&mut doc, &page, "Probe", b"q /PCProbe Do Q".to_vec(), false).unwrap();
+        place_tagged(&mut doc, &page, "Probe", b"q /PCProbe Do Q".to_vec(), Layer::OnTop).unwrap();
         // The behind-mark stays outside the wrapper and the content itself is untouched.
         assert_eq!(streams(&doc, 0), ["q Q", "q %PdfCraft\n", data, "\nQ %PdfCraft\n", "q /PCProbe Do Q"], "{data}");
     }
@@ -6131,7 +6131,7 @@ fn updating_marks_on_unreadable_content_does_not_nest_wrappers() {
         let mut doc = isolation_fixture(&[("", data)]);
         let page = page_list(&doc).remove(0);
         for _ in 0..3 {
-            place_tagged(&mut doc, &page, MarkKind::HeaderFooter.tag(), b"q /PCProbe Do Q".to_vec(), false).unwrap();
+            place_tagged(&mut doc, &page, MarkKind::HeaderFooter.tag(), b"q /PCProbe Do Q".to_vec(), Layer::OnTop).unwrap();
             assert_eq!(streams(&doc, 0).len(), 4, "{data}: {:?}", streams(&doc, 0));
             assert_eq!(remove_marks(&mut doc, &[0], MarkKind::HeaderFooter).unwrap(), 1);
             assert_eq!(streams(&doc, 0), [data], "{data}: the original list comes back");
@@ -6146,11 +6146,11 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert!(probe_states(&doc).last().unwrap().is_empty());
     // Now balanced, the page reads cleanly: the close (with its extra `Q`) still pairs.
     let page = page_list(&doc).remove(0);
-    place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), false).unwrap();
+    place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), Layer::OnTop).unwrap();
     assert_eq!(streams(&doc, 0).len(), 5, "no second wrapper: {:?}", streams(&doc, 0));
     let mut doc = isolation_fixture(&[("", "q 2 0 0 2 0 0 cm")]);
     let page = page_list(&doc).remove(0);
-    place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), false).unwrap();
+    place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), Layer::OnTop).unwrap();
     assert_eq!(remove_marks(&mut doc, &[0], MarkKind::Watermark).unwrap(), 1);
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
@@ -7456,4 +7456,256 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+}
+
+/// A one-page document (600 × 800) whose content is `content`.
+fn filled_page(content: &str) -> Document {
+    filled_page_with_resources(content, "<< >>")
+}
+
+/// [`filled_page`], with the page's `/Resources`.
+fn filled_page_with_resources(content: &str, resources: &str) -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources {resources} >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// A blended background goes right over the page's own content, under the marks already on
+/// top, and draws with a Multiply graphics state; removing it restores the original content.
+#[test]
+fn blended_backgrounds_go_over_the_content_and_under_other_marks() {
+    let mut doc = fixture();
+    let original = streams(&doc, 0);
+    let mut hf = HeaderFooter::default();
+    hf.text[1] = "Head".into();
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let bg = Background { color: [0.0, 0.0, 1.0], opacity: 0.5, multiply: true, ..Background::default() };
+    add_background(&mut doc, &[0], &bg, false).unwrap();
+    let s = streams(&doc, 0);
+    assert_eq!(s.len(), 5, "wrapper open, original, wrapper close, background, header: {s:?}");
+    assert_eq!(s[1], original[0]);
+    assert!(s[2].trim_start().starts_with("Q %PdfCraft"), "{s:?}");
+    assert!(s[3].contains("/PCMark /Background") && s[3].contains("/PCGSM50 gs"), "{}", s[3]);
+    assert!(s[4].contains("/PCMark /HeaderFooter"), "the header stays on top: {}", s[4]);
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap());
+    let states = doc.resolve(res.as_dict().unwrap().get(b"ExtGState").unwrap());
+    let state = doc.resolve(states.as_dict().unwrap().get(b"PCGSM50").unwrap());
+    let state = state.as_dict().unwrap();
+    assert_eq!(state.name(b"BM"), Some(&b"Multiply"[..]));
+    assert_eq!(state.get(b"ca").and_then(Object::as_f64), Some(0.5));
+    // Updating swaps it in place, under the header still.
+    add_background(&mut doc, &[0], &Background { opacity: 1.0, ..bg.clone() }, true).unwrap();
+    let s = streams(&doc, 0);
+    assert!(s[3].contains("/PCGSM100 gs") && s[4].contains("/PCMark /HeaderFooter"), "{s:?}");
+    assert_eq!(marks_present(&reopen(&doc)).len(), 2);
+    assert_eq!(remove_marks(&mut doc, &[0], MarkKind::Background).unwrap(), 1);
+    assert_eq!(remove_marks(&mut doc, &[0], MarkKind::HeaderFooter).unwrap(), 1);
+    assert_eq!(streams(&reopen(&doc), 0), original, "back to exactly the original content");
+    // Behind stays the default, with no blending.
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    let s = streams(&doc, 0);
+    assert!(s[0].contains("/PCMark /Background") && s[0].contains("/PCGS100 gs"), "{s:?}");
+}
+
+/// Pages that paint an opaque fill over their whole area first hide a background behind them.
+#[test]
+fn page_hides_background_finds_a_page_sized_fill_first() {
+    let hides = |content: &str| page_hides_background(&filled_page(content), 0);
+    // As written by accounting software: a white page, then the text.
+    assert!(hides("q\n1 g\n0 0 600 800 re f\nQ\nBT /F1 12 Tf (x) Tj ET"));
+    assert!(hides("1 1 1 rg 0 0 600 800 re f* 0 g BT ET"), "any fill rule");
+    assert!(hides("/Artifact BMC 2 0 0 2 0 0 cm 0 0 300 400 re f EMC"), "through a scale");
+    assert!(hides("0 1 -1 0 600 0 cm 0 0 800 600 re f"), "through a quarter turn");
+    assert!(hides("-10 -10 620 820 re f"), "larger than the page");
+    assert!(hides("0 800 600 -800 re f"), "drawn with a negative height");
+    // Several rectangles can cancel out: even-odd (twice the same) or nonzero (opposite ways).
+    assert!(!hides("0 0 600 800 re 0 0 600 800 re f*"), "even-odd, twice the same rectangle");
+    assert!(!hides("0 0 600 800 re 600 0 -600 800 re f"), "nonzero, opposite windings");
+    assert!(!hides("-10 -10 620 820 re 10 10 5 5 re f"), "with another rectangle");
+    // Not a covering fill first.
+    assert!(!hides("BT /F1 12 Tf (x) Tj ET 1 g 0 0 600 800 re f"), "text comes first");
+    assert!(!hides("1 g 0 0 300 800 re f"), "half the page");
+    assert!(!hides("/GS0 gs 1 g 0 0 600 800 re f"), "a gs could make it translucent");
+    assert!(!hides("0 0 10 10 re W n 1 g 0 0 600 800 re f"), "clipped");
+    assert!(!hides("0.7 0.7 -0.7 0.7 0 0 cm 0 0 2000 2000 re f"), "turned by 45°");
+    assert!(!hides("0 0 m 600 0 l 600 800 l 0 800 l h f"), "not rectangles");
+    assert!(!hides("0 0 600 800 re S"), "stroked");
+    // Colour spaces: device and other plain spaces cover; a pattern can tile with gaps.
+    assert!(hides("/DeviceRGB cs 1 1 1 sc 0 0 600 800 re f"));
+    assert!(!hides("/Pattern cs /P0 scn 0 0 600 800 re f"), "a pattern");
+    assert!(!hides("/P0 scn 0 0 600 800 re f"), "scn naming a pattern");
+    let spaces = "<< /ColorSpace << /CS0 [/Pattern /DeviceRGB] /CS1 /DeviceGray /CS2 /Pattern /CS3 [/ICCBased 9 0 R] >> >>";
+    let hides_in = |content: &str| page_hides_background(&filled_page_with_resources(content, spaces), 0);
+    assert!(!hides_in("/CS0 cs 1 1 1 /P0 scn 0 0 600 800 re f"), "an uncoloured pattern space");
+    assert!(!hides_in("/CS2 cs 0 0 600 800 re f"), "a resource naming Pattern");
+    assert!(hides_in("/CS1 cs 1 sc 0 0 600 800 re f"), "a resource naming a device space");
+    assert!(hides_in("/CS3 cs 1 1 1 scn 0 0 600 800 re f"), "an ICC-based space");
+    assert!(!hides("cs 0 0 600 800 re f"), "cs without a name");
+    // A layer may be off, and the fill with it.
+    assert!(!hides("/OC /L1 BDC 1 g 0 0 600 800 re f EMC"), "inside optional content");
+    assert!(hides("/Span << /ActualText () >> BDC 1 g 0 0 600 800 re f EMC"), "other marked content is no layer");
+    assert!(!hides("0 0 600 800 re n 0 0 1 1 re f"), "the page-sized path was ended unpainted");
+    assert!(!hides("q Q Q Q"), "nothing painted");
+    assert!(!hides(""), "no content");
+    assert!(!hides("0 0 600 re f"), "malformed rectangle");
+    assert!(!hides("1 0 0 cm 0 0 600 800 re f"), "malformed matrix");
+    let big = "9".repeat(300);
+    assert!(!hides(&format!("{big} 0 0 {big} 0 0 cm {big} 0 0 {big} 0 0 cm 0 0 600 800 re f")), "a matrix that overflows");
+    assert!(!page_hides_background(&filled_page("1 g 0 0 600 800 re f"), 1), "no such page");
+    // Marks PdfCraft added don't count, and a background added behind doesn't change the answer.
+    let mut doc = filled_page("1 g 0 0 600 800 re f");
+    add_watermark(&mut doc, &[0], &Watermark { text: "DRAFT".into(), behind: true, ..Watermark::default() }, false).unwrap();
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    assert!(page_hides_background(&doc, 0));
+}
+
+/// The scan decodes only so much: a stream that would decode to more than that is not inflated
+/// at all, even when the fill is at its start (decoding stops at the budget and the stream is
+/// left unread), so the answer is `false`.
+#[test]
+fn page_hides_background_decodes_a_bounded_amount() {
+    let filler = "% padding\n".repeat(COVER_SCAN_BYTES / 10 + 1);
+    assert!(filler.len() > COVER_SCAN_BYTES);
+    let mut doc = filled_page("1 g 0 0 600 800 re f");
+    assert!(page_hides_background(&doc, 0));
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let fill = page.dict.get(b"Contents").cloned().unwrap();
+    let set = |doc: &mut Document, content: String| {
+        let big = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), content.as_bytes()))));
+        doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(vec![big, fill.clone()]))).unwrap();
+    };
+    // Compressed it is small; decoded it is past the budget, with the fill right at its start.
+    set(&mut doc, format!("1 g 0 0 600 800 re f\n{filler}"));
+    assert!(!page_hides_background(&doc, 0), "the oversized stream is not decoded");
+    // Within the budget the same stream is read.
+    set(&mut doc, "1 g 0 0 600 800 re f\n% short".into());
+    assert!(page_hides_background(&doc, 0));
+}
+
+/// On a page with no content of its own (a blank page with added text) a blended background
+/// goes first, under what was added, instead of over it.
+#[test]
+fn blended_backgrounds_go_under_additions_on_a_page_with_no_content() {
+    let mut doc = fixture();
+    let mut hf = HeaderFooter::default();
+    hf.text[1] = "Head".into();
+    // Page 3 of the fixture has no content.
+    add_header_footer(&mut doc, &[2], &hf, false, &cx()).unwrap();
+    add_background(&mut doc, &[2], &Background { multiply: true, ..Background::default() }, false).unwrap();
+    let s = streams(&doc, 2);
+    assert_eq!(s.len(), 2, "{s:?}");
+    assert!(s[0].contains("/PCMark /Background") && s[1].contains("/PCMark /HeaderFooter"), "{s:?}");
+    assert_eq!(remove_marks(&mut doc, &[2], MarkKind::Background).unwrap(), 1);
+    assert_eq!(streams(&doc, 2).len(), 1);
+    // Over a background already behind it, not under it (which would hide the new one).
+    add_background(&mut doc, &[2], &Background { color: [1.0; 3], ..Background::default() }, false).unwrap();
+    add_background(&mut doc, &[2], &Background { color: [0.0, 0.0, 1.0], multiply: true, ..Background::default() }, false).unwrap();
+    let s = streams(&doc, 2);
+    assert_eq!(s.len(), 3, "{s:?}");
+    assert!(s[0].contains("/PCGS100 gs") && s[1].contains("/PCGSM100 gs") && s[2].contains("/PCMark /HeaderFooter"), "{s:?}");
+}
+
+/// Normal backgrounds belong above a page's white paint, below its original foreground.
+#[test]
+fn background_under_content_preserves_original_stream_bytes() {
+    let mut doc = filled_page("q 1 g 0 0 600 800 re f Q\n1 0 0 rg 20 20 50 50 re f");
+    let original = streams(&doc, 0);
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    let s = streams(&doc, 0);
+    assert_eq!(s.len(), 3, "white prefix, background, original foreground");
+    assert!(s[0].contains("600 800 re f Q"));
+    assert!(s[1].contains("/PCMark /Background") && !s[1].contains("PCGSM"));
+    assert!(s[2].contains("1 0 0 rg"));
+    add_background(&mut doc, &[0], &Background { color: [0.0, 0.0, 1.0], ..Background::default() }, true).unwrap();
+    assert_eq!(streams(&doc, 0).len(), 3, "update does not keep splitting");
+    let mut doc = reopen(&doc);
+    remove_marks(&mut doc, &[0], MarkKind::Background).unwrap();
+    assert_eq!(streams(&doc, 0).concat(), original.concat(), "removing after save preserves every original content byte");
+}
+
+#[test]
+fn background_under_content_rejects_uncertain_prefixes() {
+    for content in [
+        "q 0.8 g 0 0 600 800 re f Q",
+        "q 1 g 0 0 600 800 re f", // no balanced insertion point
+        "q /GS gs 1 g 0 0 600 800 re f Q",
+        "q 0 0 600 800 re W n 1 g 0 0 600 800 re f Q",
+        "q 1 g 0 0 600 800 re B Q",
+        "/OC /Layer BDC q 1 g 0 0 600 800 re f Q EMC",
+        "q 1 g 0 0 600 800 re 0 0 600 800 re f* Q",
+        "q 1 g 0 0 599.9 800 re f Q",
+        "q 1 g 0 0 600 800 re f 0 0 10 10 re f Q",
+        "1 0 0 1 10 10 cm 1 g -10 -10 600 800 re f",
+    ] {
+        let doc = filled_page(content);
+        assert!(!page_has_white_background(&doc, 0), "{content}");
+    }
+    for space in ["DefaultGray", "DefaultRGB", "DefaultCMYK"] {
+        let doc = filled_page_with_resources("q 1 g 0 0 600 800 re f Q", &format!("<< /ColorSpace << /{space} /DeviceGray >> >>"));
+        assert!(!page_has_white_background(&doc, 0));
+    }
+}
+
+#[test]
+fn background_under_content_handles_arrays_transforms_and_later_edits() {
+    let mut doc = filled_page("q 2 0 0 2 0 0 cm 1 1 1 rg 0 0 300 400 re f Q\n0.5 g 20 20 10 10 re f");
+    let original = streams(&doc, 0);
+    assert!(page_has_white_background(&doc, 0));
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    assert_eq!(streams(&doc, 0).len(), 4);
+    remove_marks(&mut doc, &[0], MarkKind::Background).unwrap();
+    assert_eq!(streams(&doc, 0).concat(), original.concat());
+    // A prefix split across content streams still gives an exact insertion boundary.
+    let page = page_list(&doc).remove(0);
+    let head = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 0 0 0 0 k 0 0 600 800 re")));
+    let tail = doc.add(Object::Stream(Stream::flate(Dict::new(), b"f Q\n1 0 0 rg 20 20 10 10 re f")));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(head), Object::Ref(tail)]))).unwrap();
+    let original = streams(&doc, 0);
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    assert_eq!(streams(&doc, 0).len(), 4);
+    remove_marks(&mut doc, &[0], MarkKind::Background).unwrap();
+    assert_eq!(streams(&doc, 0).concat(), original.concat());
+    // A subsequent foreground edit must survive removal, without restoring an obsolete copy.
+    add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+    let page = page_list(&doc).remove(0);
+    let list = contents(&mut doc, &page).unwrap();
+    let r = list.last().unwrap().as_ref().unwrap();
+    doc.set(r, Object::Stream(Stream::flate(Dict::new(), b"0 1 0 rg 20 20 10 10 re f")));
+    remove_marks(&mut doc, &[0], MarkKind::Background).unwrap();
+    assert!(streams(&doc, 0).last().unwrap().contains("0 1 0 rg"));
+}
+
+#[test]
+fn background_under_content_selects_placement_for_each_page() {
+    let mut doc = fixture();
+    let page = page_list(&doc).remove(0);
+    let white = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 1 g 0 0 600 800 re f Q\n0 g 10 10 20 20 re f")));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"MediaBox".to_vec(), Object::Array([0, 0, 600, 800].map(Object::Int).to_vec()));
+        d.set(b"Contents".to_vec(), Object::Ref(white));
+    })
+    .unwrap();
+    assert!(page_has_white_background(&doc, 0));
+    assert!(!page_has_white_background(&doc, 2));
+    add_background(&mut doc, &[0, 2], &Background::default(), false).unwrap();
+    assert!(streams(&doc, 0)[1].contains("/PCMark /Background"));
+    assert!(streams(&doc, 2)[0].contains("/PCMark /Background"));
 }

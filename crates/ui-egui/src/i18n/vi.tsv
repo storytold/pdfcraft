@@ -281,6 +281,10 @@ theme	Appearance	Giao diện
 	Anyone opening the document will need this password. It's applied when you save.	Bất kỳ ai mở tài liệu đều cần mật khẩu này. Mật khẩu được áp dụng khi bạn lưu.
 	Appear behind page	Hiện phía sau trang
 	Appear on top of page	Hiện phía trên trang
+	Blend with page content	Hòa trộn với nội dung trang
+	Multiplies the background with the page: white areas show it and text stays dark.	Nhân nền với trang: vùng trắng hiện nền, chữ vẫn giữ màu tối.
+	This page has an opaque background of its own, so the background is blended with its content.	Trang này có nền đục riêng, nên nền được hòa trộn với nội dung của trang.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Trang này có nền đục riêng, che mọi thứ phía sau. Hãy chọn “Hòa trộn với nội dung trang”.
 	Appearance mode	Chế độ giao diện
 	Appearance settings…	Cài đặt giao diện…
 	Applies to 1 page	Áp dụng cho 1 trang
@@ -2768,6 +2772,7 @@ key	Space	Space
 	Subscript	Chỉ số dưới
 	Less	Ít hơn
 	Other options	Tùy chọn khác
+	Behind text and images	Phía sau văn bản và hình ảnh
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.

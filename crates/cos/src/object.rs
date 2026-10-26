@@ -323,8 +323,13 @@ impl Stream {
 
     /// Decoded data, bounded by [`MAX_DECODED`]; any corruption is an error.
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
+        self.decoded_strict_within(MAX_DECODED)
+    }
+
+    /// Strict decoding with a caller-supplied allocation limit (at most [`MAX_DECODED`]).
+    pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let decode = |chain: &[(Filter, Params)], data: &[u8], max| pdfcraft_filters::decode(chain, data, max).map(|v| (v, 0)).map_err(|e| (e, 0));
-        self.decode_chain(MAX_DECODED, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
+        self.decode_chain(max, decode).map(|(v, _)| v).map_err(|(e, _)| CosError::Filter(e.to_string()))
     }
 
     /// [`Stream::decoded_strict`] bounded by `max` and counted like
@@ -583,6 +588,18 @@ mod tests {
         let keys: Vec<_> = d.iter().map(|(k, _)| k.clone()).collect();
         assert_eq!(keys, vec![b"B".to_vec(), b"A".to_vec()]);
         assert_eq!(d.int(b"B"), Some(3));
+    }
+
+    #[test]
+    fn background_strict_decode_is_bounded_and_rejects_corruption() {
+        for stream in [Stream::from_raw(Dict::new(), b"abc".to_vec()), Stream::flate(Dict::new(), b"abc")] {
+            assert!(stream.decoded_strict_within(2).is_err());
+            assert_eq!(stream.decoded_strict_within(3).unwrap(), b"abc");
+        }
+        let stream = Stream::flate(Dict::new(), b"q 1 g 0 0 600 800 re f Q");
+        // Cut actual deflate data, not just the optional Adler-32 trailer.
+        let truncated = Stream::from_raw(stream.dict.clone(), stream.raw[..stream.raw.len() / 2].to_vec());
+        assert!(truncated.decoded_strict_within(1024).is_err());
     }
 
     #[test]

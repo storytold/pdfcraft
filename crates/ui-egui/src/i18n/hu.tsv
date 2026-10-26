@@ -830,6 +830,10 @@
 	Rotation	Elforgatás
 	Appear behind page	Az oldal mögött
 	Appear on top of page	Az oldal előtt
+	Blend with page content	Keverés az oldal tartalmával
+	Multiplies the background with the page: white areas show it and text stays dark.	Összeszorozza a hátteret az oldallal: a fehér részeken látszik, a szöveg sötét marad.
+	This page has an opaque background of its own, so the background is blended with its content.	Ennek az oldalnak saját, átlátszatlan háttere van, ezért a háttér a tartalmával keveredik.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Ennek az oldalnak saját, átlátszatlan háttere van, amely mindent eltakar, ami mögötte van. Válassza a „Keverés az oldal tartalmával” lehetőséget.
 	Offset from centre	Eltolás a középponttól
 	From colour	Színből
 	Page Range Options	Oldaltartomány beállításai
@@ -2556,3 +2560,5 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+
+	Behind text and images	A szöveg és a képek mögött

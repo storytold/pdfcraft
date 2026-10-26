@@ -8719,3 +8719,125 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
 }
+/// A 200 × 300 page as accounting software writes it: an opaque white rectangle over the whole
+/// page first, then the content (a black square standing in for the text, at 40,140–60,160).
+fn white_backed_page() -> Vec<u8> {
+    let content = "q\n1 g\n0 0 200 300 re f\nQ\n0 g 40 140 20 20 re f";
+    let objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A leading white fill is handled by normal placement. Explicit Multiply remains available
+/// for colour and picture backgrounds, including after saving and reopening.
+#[test]
+fn blended_backgrounds_show_on_pages_that_paint_themselves_white() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("white.pdf", None, Arc::new(white_backed_page()), None).unwrap();
+    assert!(s.get(id).unwrap().page_hides_background(0));
+    let blue = Background { color: [0.0, 0.0, 1.0], ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: blue.clone(), replace: false, file: None }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255], "normal placement goes above the white fill");
+    let blended = Background { multiply: true, ..blue };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: blended, replace: true, file: None }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255], "blended, it shows on the white");
+    assert_eq!(pixel(&s, id, 0, 50, 150), [0, 0, 0, 255], "and the text stays black");
+    assert!(s.get(id).unwrap().page_hides_background(0), "the page itself still paints white first");
+    // A picture (red) blends the same way.
+    let red = MarkFile { name: "cover.bmp".into(), bytes: Arc::new(bmp(4, 4, [0, 0, 255])), page: 0 };
+    let picture = Background { multiply: true, ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: picture.clone(), replace: true, file: Some(red) }).unwrap();
+    // Square, fitted to the page: 200 × 200 from y = 50.
+    let inside = pixel(&s, id, 0, 100, 60);
+    assert!(inside[0] > 200 && inside[1] < 40 && inside[2] < 40, "the picture shows: {inside:?}");
+    assert_eq!(pixel(&s, id, 0, 50, 150), [0, 0, 0, 255]);
+    // A PDF page as the picture, whose own content resets the blend mode (`/BM /Normal`): drawn
+    // as one group, the page's red still multiplies with the content under it.
+    let red_page = {
+        let content = "/Plain gs 1 0 0 rg 0 0 200 300 re f";
+        let objs = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /Plain << /BM /Normal /ca 1 >> >> >> >>".to_vec(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, obj) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(obj);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    };
+    let file = MarkFile { name: "red.pdf".into(), bytes: Arc::new(red_page), page: 0 };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: picture, replace: true, file: Some(file) }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [255, 0, 0, 255], "the PDF page shows on the white");
+    assert_eq!(pixel(&s, id, 0, 50, 150), [0, 0, 0, 255], "and the content under it stays black");
+    // Saved and reopened, it still draws blended.
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(pixel(&s, again, 0, 5, 5), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, again, 0, 50, 150), [0, 0, 0, 255]);
+    assert_eq!(s.get(again).unwrap().marks(), [MarkKind::Background]);
+}
+
+/// A real underlay keeps red and white foreground unchanged; Multiply cannot do that.
+#[test]
+fn background_under_content_preserves_coloured_and_white_foreground() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(white_backed_page())).unwrap();
+    let page = pdfcraft_model::pages(&cos).remove(0);
+    let stream = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
+        pdfcraft_cos::Dict::new(),
+        b"q 1 g 0 0 200 300 re f Q 1 0 0 rg 40 140 20 20 re f 1 g 80 140 20 20 re f",
+    )));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(stream))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("colours.pdf", None, bytes.clone(), None).unwrap();
+    let blue = Background { color: [0.0, 0.0, 1.0], ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: blue, replace: false, file: None }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255]);
+    assert_eq!(pixel(&s, id, 0, 50, 150), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, id, 0, 90, 150), [255, 255, 255, 255]);
+    s.undo(id).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [255, 255, 255, 255]);
+    s.redo(id).unwrap();
+    let image = MarkFile { name: "blue.bmp".into(), bytes: Arc::new(bmp(2, 3, [255, 0, 0])), page: 0 };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(image) }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 5), [0, 0, 255, 255]);
+    assert_eq!(pixel(&s, id, 0, 50, 150), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, id, 0, 90, 150), [255, 255, 255, 255]);
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(pixel(&s, again, 0, 50, 150), [255, 0, 0, 255]);
+    assert_eq!(pixel(&s, again, 0, 90, 150), [255, 255, 255, 255]);
+    s.apply(again, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
+    assert_eq!(pixel(&s, again, 0, 5, 5), [255, 255, 255, 255]);
+    assert_eq!(pixel(&s, again, 0, 50, 150), [255, 0, 0, 255]);
+}

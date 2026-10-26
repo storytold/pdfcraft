@@ -2795,3 +2795,8 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+	Blend with page content	Campur dengan konten halaman
+	Multiplies the background with the page: white areas show it and text stays dark.	Mengalikan latar belakang dengan halaman: area putih menampilkannya dan teks tetap gelap.
+	This page has an opaque background of its own, so the background is blended with its content.	Halaman ini memiliki latar belakang buramnya sendiri, jadi latar belakang dicampur dengan kontennya.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Halaman ini memiliki latar belakang buramnya sendiri, yang menyembunyikan apa pun di belakangnya. Pilih Campur dengan konten halaman.
+	Behind text and images	Di belakang teks dan gambar

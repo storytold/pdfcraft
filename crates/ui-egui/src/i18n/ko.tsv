@@ -2794,3 +2794,8 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+	Blend with page content	페이지 내용과 혼합
+	Multiplies the background with the page: white areas show it and text stays dark.	배경을 페이지와 곱합니다. 흰색 영역에는 배경이 보이고 텍스트는 어둡게 유지됩니다.
+	This page has an opaque background of its own, so the background is blended with its content.	이 페이지에는 자체 불투명 배경이 있으므로 배경이 페이지 내용과 혼합됩니다.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	이 페이지에는 뒤에 있는 모든 것을 가리는 자체 불투명 배경이 있습니다. 페이지 내용과 혼합을 선택하세요.
+	Behind text and images	텍스트와 이미지 뒤

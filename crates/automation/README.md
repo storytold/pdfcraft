@@ -229,3 +229,18 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+## Background placement
+
+`doc_background` normally puts a colour or image below text and images. For a recognised
+leading white page rectangle it inserts the mark after that fill, preserving foreground
+colours. Detection runs separately on every selected page and reads at most 1 MiB of content.
+Only balanced device-colour prefixes are accepted; clipping, graphics states, optional content,
+strokes and unknown operators prevent insertion. Unsupported pages keep behind-page placement;
+`hidden_behind` lists detected opaque fills that could still cover the result. This is not
+segmentation of scanned pages or arbitrary artwork.
+
+`multiply: true` explicitly blends over original content and can change its colours. Updating
+and removing either mode are undoable. Removing a normal background leaves the original
+content bytes in separate streams. No restoration references retain obsolete content, so a
+later redaction and full save can remove the original source objects.

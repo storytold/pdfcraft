@@ -432,6 +432,10 @@
 	Source	Πηγή
 	Appear behind page	Εμφάνιση πίσω από τη σελίδα
 	Appear on top of page	Εμφάνιση πάνω από τη σελίδα
+	Blend with page content	Ανάμειξη με το περιεχόμενο της σελίδας
+	Multiplies the background with the page: white areas show it and text stays dark.	Πολλαπλασιάζει το φόντο με τη σελίδα: οι λευκές περιοχές το δείχνουν και το κείμενο μένει σκούρο.
+	This page has an opaque background of its own, so the background is blended with its content.	Αυτή η σελίδα έχει δικό της αδιαφανές φόντο, γι' αυτό το φόντο αναμειγνύεται με το περιεχόμενό της.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Αυτή η σελίδα έχει δικό της αδιαφανές φόντο, που κρύβει ό,τι βρίσκεται πίσω του. Επιλέξτε «Ανάμειξη με το περιεχόμενο της σελίδας».
 	From colour	Από χρώμα
 	Page Range Options	Επιλογές περιοχής σελίδων
 	Preview: page {p} of {n}	Προεπισκόπηση: σελίδα {p} από {n}
@@ -2563,3 +2567,5 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+
+	Behind text and images	Πίσω από κείμενο και εικόνες

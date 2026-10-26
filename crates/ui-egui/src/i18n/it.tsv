@@ -856,6 +856,10 @@
 	Rotation	Rotazione
 	Appear behind page	Dietro la pagina
 	Appear on top of page	Sopra la pagina
+	Blend with page content	Fondi con il contenuto della pagina
+	Multiplies the background with the page: white areas show it and text stays dark.	Moltiplica lo sfondo con la pagina: le aree bianche lo mostrano e il testo resta scuro.
+	This page has an opaque background of its own, so the background is blended with its content.	Questa pagina ha uno sfondo opaco proprio, quindi lo sfondo viene fuso con il suo contenuto.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Questa pagina ha uno sfondo opaco proprio, che nasconde tutto ciò che sta dietro. Scegli «Fondi con il contenuto della pagina».
 	Offset from centre	Scostamento dal centro
 	From colour	Da colore
 	Page Range Options	Opzioni intervallo di pagine
@@ -2789,3 +2793,5 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+
+	Behind text and images	Dietro testo e immagini

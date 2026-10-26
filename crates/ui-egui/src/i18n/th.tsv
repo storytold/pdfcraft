@@ -2720,3 +2720,8 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+	Blend with page content	ผสมกับเนื้อหาของหน้า
+	Multiplies the background with the page: white areas show it and text stays dark.	คูณพื้นหลังกับหน้า: บริเวณสีขาวจะแสดงพื้นหลัง และข้อความยังคงเข้ม
+	This page has an opaque background of its own, so the background is blended with its content.	หน้านี้มีพื้นหลังทึบของตัวเอง จึงผสมพื้นหลังเข้ากับเนื้อหาของหน้า
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	หน้านี้มีพื้นหลังทึบของตัวเองซึ่งบังทุกอย่างที่อยู่ด้านหลัง เลือก ผสมกับเนื้อหาของหน้า
+	Behind text and images	ด้านหลังข้อความและรูปภาพ

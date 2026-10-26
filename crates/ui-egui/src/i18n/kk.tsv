@@ -816,6 +816,10 @@
 	Rotation	Бұрылу
 	Appear behind page	Беттің артында көріну
 	Appear on top of page	Беттің үстінде көріну
+	Blend with page content	Бет мазмұнымен араластыру
+	Multiplies the background with the page: white areas show it and text stays dark.	Фонды бетпен көбейтеді: ақ аймақтарда фон көрінеді, мәтін қою болып қалады.
+	This page has an opaque background of its own, so the background is blended with its content.	Бұл беттің өз мөлдір емес фоны бар, сондықтан фон оның мазмұнымен араластырылады.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Бұл беттің өз мөлдір емес фоны бар, ол артындағының бәрін жасырады. «Бет мазмұнымен араластыру» опциясын таңдаңыз.
 	From colour	Түстен
 	Page Range Options	Беттер ауқымының параметрлері
 	Preview: page {p} of {n}	Алдын ала қарау: {n} беттің {p}-сі
@@ -2555,3 +2559,5 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+
+	Behind text and images	Мәтін мен суреттердің артында

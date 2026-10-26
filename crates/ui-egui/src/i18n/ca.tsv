@@ -2818,3 +2818,8 @@ theme	Appearance	Aspecte
 	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
+	Blend with page content	Barreja amb el contingut de la pàgina
+	Multiplies the background with the page: white areas show it and text stays dark.	Multiplica el fons amb la pàgina: les zones blanques el mostren i el text continua fosc.
+	This page has an opaque background of its own, so the background is blended with its content.	Aquesta pàgina té un fons opac propi, de manera que el fons es barreja amb el seu contingut.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Aquesta pàgina té un fons opac propi, que amaga tot el que hi ha al darrere. Trieu «Barreja amb el contingut de la pàgina».
+	Behind text and images	Darrere del text i les imatges

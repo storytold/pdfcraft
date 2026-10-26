@@ -996,10 +996,20 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
-        t("doc_background", "Add background", "Fill page backgrounds with a colour, or a picture from `file` (an image, or page `file_page` of a PDF) fitted at `scale` (default 1), behind the content. Undoable.")
+        t("doc_background", "Add background", "Fill page backgrounds with a colour, or a picture from `file` (an image, or page `file_page` of a PDF) fitted at `scale` (default 1). Normal placement preserves foreground colours: above a recognised leading white fill and below the original text and images, otherwise behind the page. Recognition is conservative (balanced device-colour rectangle prefix, no clipping or graphics states). With multiply: true, blend over the original content instead, which can change foreground colours. The result lists unsupported opaque covering fills in `hidden_behind` (1-based) when multiply is off. Undoable.")
             .cmd("edit.background")
             .with(schema(
-                json!({ "doc": doc(), "pages": pages("to fill (default: all)"), "color": { "type": "string" }, "file": { "type": "string" }, "file_page": { "type": "integer", "minimum": 1 }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "replace": { "type": "boolean" } }),
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to fill (default: all)"),
+                    "color": { "type": "string" },
+                    "file": { "type": "string" },
+                    "file_page": { "type": "integer", "minimum": 1 },
+                    "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                    "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "multiply": { "type": "boolean", "description": "Blend over the page content instead of placing below its foreground (default false)." },
+                    "replace": { "type": "boolean" },
+                }),
                 &["doc"],
             )),
         t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PdfCraft (or a compatible tool) added. Undoable.")

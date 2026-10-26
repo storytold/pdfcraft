@@ -2544,3 +2544,8 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+	Blend with page content	Përziej me përmbajtjen e faqes
+	Multiplies the background with the page: white areas show it and text stays dark.	Shumëzon sfondin me faqen: zonat e bardha e shfaqin dhe teksti mbetet i errët.
+	This page has an opaque background of its own, so the background is blended with its content.	Kjo faqe ka sfondin e saj të patejdukshëm, prandaj sfondi përzihet me përmbajtjen e saj.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Kjo faqe ka sfondin e saj të patejdukshëm, që fsheh gjithçka pas tij. Zgjidhni Përziej me përmbajtjen e faqes.
+	Behind text and images	Pas tekstit dhe imazheve

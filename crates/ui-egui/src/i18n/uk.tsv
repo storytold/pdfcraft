@@ -857,6 +857,10 @@
 	Rotation	Поворот
 	Appear behind page	Позаду сторінки
 	Appear on top of page	Поверх сторінки
+	Blend with page content	Змішати із вмістом сторінки
+	Multiplies the background with the page: white areas show it and text stays dark.	Множить тло на сторінку: білі ділянки показують тло, а текст лишається темним.
+	This page has an opaque background of its own, so the background is blended with its content.	Ця сторінка має власне непрозоре тло, тому тло змішується з її вмістом.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Ця сторінка має власне непрозоре тло, яке приховує все позаду. Виберіть «Змішати із вмістом сторінки».
 	Offset from centre	Зсув від центру
 	From colour	Із кольору
 	Page Range Options	Параметри діапазону сторінок
@@ -2579,3 +2583,5 @@ animation effects	Off	Вимкнено
 	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
+
+	Behind text and images	Під текстом і зображеннями

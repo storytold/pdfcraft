@@ -111,7 +111,7 @@ fn depth_budget_bounds_emitted_closures_and_overflow_is_refused_on_top() {
     let mut doc = fixture(&[&combined]);
     let page = page_list(&doc).remove(0);
     let original = contents(&mut doc, &page).unwrap();
-    place_tagged(&mut doc, &page, MarkKind::HeaderFooter.tag(), b"q Q\n".to_vec(), false).unwrap();
+    place_tagged(&mut doc, &page, MarkKind::HeaderFooter.tag(), b"q Q\n".to_vec(), Layer::OnTop).unwrap();
     assert_eq!(remove_marks(&mut doc, &[0], MarkKind::HeaderFooter).unwrap(), 1);
     assert_eq!(contents(&mut doc, &page).unwrap(), original, "maximum combined close can be removed without nesting wrappers");
     // Past the budget the depth is unknown, so nothing can close the page's (possibly hidden)
@@ -128,7 +128,7 @@ fn depth_budget_bounds_emitted_closures_and_overflow_is_refused_on_top() {
             "overflow cannot resume speculative depth tracking after EMC"
         );
         assert_eq!(contents(&mut doc, &page).unwrap(), original);
-        place_tagged(&mut doc, &page, MarkKind::Background.tag(), b"q Q\n".to_vec(), true).unwrap();
+        place_tagged(&mut doc, &page, MarkKind::Background.tag(), b"q Q\n".to_vec(), Layer::Behind).unwrap();
     }
 }
 

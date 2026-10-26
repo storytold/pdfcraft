@@ -2733,3 +2733,8 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+	Blend with page content	Bland med sideinnholdet
+	Multiplies the background with the page: white areas show it and text stays dark.	Multipliserer bakgrunnen med siden: hvite områder viser den, og teksten forblir mørk.
+	This page has an opaque background of its own, so the background is blended with its content.	Denne siden har en egen ugjennomsiktig bakgrunn, så bakgrunnen blandes med innholdet.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Denne siden har en egen ugjennomsiktig bakgrunn som skjuler alt bak den. Velg Bland med sideinnholdet.
+	Behind text and images	Bak tekst og bilder

@@ -938,6 +938,10 @@ key	Space	Mezerník
 	Rotation	Otočení
 	Appear behind page	Zobrazit za stránkou
 	Appear on top of page	Zobrazit nad stránkou
+	Blend with page content	Smíchat s obsahem stránky
+	Multiplies the background with the page: white areas show it and text stays dark.	Násobí pozadí se stránkou: bílé oblasti ho ukážou a text zůstane tmavý.
+	This page has an opaque background of its own, so the background is blended with its content.	Tato stránka má vlastní neprůhledné pozadí, proto se pozadí smíchá s jejím obsahem.
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	Tato stránka má vlastní neprůhledné pozadí, které zakryje vše za ním. Zvolte „Smíchat s obsahem stránky“.
 	From colour	Z barvy
 	Page Range Options	Možnosti rozsahu stránek
 	Preview: page {p} of {n}	Náhled: stránka {p} z {n}
@@ -2864,3 +2868,5 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+
+	Behind text and images	Za textem a obrázky

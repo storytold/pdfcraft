@@ -3098,3 +3098,23 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
 }
+
+/// Background insertion must not keep a hidden copy of text after secure redaction.
+#[test]
+fn background_under_content_does_not_retain_redacted_source_streams() {
+    let mut doc = one_page(b"q 1 g 0 0 300 300 re f Q\nBT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    pdfcraft_edit::add_background(&mut doc, &[0], &pdfcraft_edit::Background::default(), false).unwrap();
+    // Also exercise saved/reopened backgrounds: no in-memory cleanup can hide a persistent leak.
+    let mut doc = reopen(&doc);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!content(&doc, 0).contains("1234"));
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    for (r, object) in saved.scan_objects() {
+        if let Object::Stream(stream) = &*object {
+            let decoded = stream.decoded().unwrap();
+            assert!(!decoded.windows(4).any(|w| w == b"1234"), "redacted text retained in stream {r}");
+        }
+    }
+}
