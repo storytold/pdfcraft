@@ -271,11 +271,13 @@ impl Session {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
                 let saved = cos.bytes().clone();
+                let saved_security = cos.output_security_identity();
                 (
                     Some(Editor {
                         cos,
                         saved,
                         saved_keys: keys.clone(),
+                        saved_security,
                         unsaved_file: false,
                         undo: Vec::new(),
                         redo: Vec::new(),

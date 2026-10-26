@@ -5,7 +5,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use pdfcraft_cos::{Algorithm, Auth, CosError, Document, NewEncryption, ObjRef, Object, PdfString, SaveOptions, write_full, write_incremental};
+use pdfcraft_cos::{Algorithm, Auth, CosError, Dict, Document, NewEncryption, ObjRef, Object, PdfString, SaveOptions, write_full, write_incremental};
 
 const SECRET: &str = "BT /F1 18 Tf 20 100 Td (Secret page) Tj ET";
 
@@ -493,4 +493,275 @@ fn a_stream_labelled_xref_is_encrypted_when_saved() {
     .unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the labelled stream was written in the clear");
+}
+
+// Undo can restore a snapshot whose output security differs from the last saved file (#3276).
+// Overlaying such a snapshot onto that file must be refused before anything changes.
+
+/// Edit `/Title` in the document information dictionary, adding one if there is none: an unsaved
+/// change to compare.
+fn set_title(doc: &mut Document, title: &str) {
+    let title = Object::String(PdfString { bytes: title.as_bytes().to_vec(), hex: false });
+    match doc.trailer().reference(b"Info") {
+        Some(info) => doc.update_dict(info, |d| d.set(b"Title".to_vec(), title)).unwrap(),
+        None => {
+            let mut info = Dict::new();
+            info.set(b"Title".to_vec(), title);
+            let info = doc.add(Object::Dict(info));
+            doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
+        }
+    }
+}
+
+/// Protect again with the same passwords and no restrictions. `seed` picks the AES-256 key, and
+/// the `/ID` when the document has none.
+fn rekey(doc: &mut Document, alg: Algorithm, seed: u8) {
+    doc.set_encryption(&NewEncryption {
+        algorithm: alg,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [seed; 32],
+    })
+    .unwrap();
+}
+
+/// Replace the first file identifier, which is part of the key, and keep the second.
+fn with_first_id(doc: &mut Document, id: &[u8]) {
+    let Some(Object::Array(ids)) = doc.trailer().get(b"ID").cloned() else { panic!("no /ID") };
+    let id = Object::String(PdfString { bytes: id.to_vec(), hex: true });
+    doc.trailer_mut().set(b"ID".to_vec(), Object::Array(vec![id, ids[1].clone()]));
+}
+
+/// Everything an overlay could change: the graph and trailer an incremental save would write.
+fn state(doc: &Document) -> (Dict, Vec<u32>, Vec<u32>, bool, Vec<u8>) {
+    let save = write_incremental(doc, &SaveOptions::default()).unwrap();
+    (doc.trailer().clone(), doc.object_numbers(), doc.modified_objects(), doc.is_modified(), save)
+}
+
+/// Protect `fixture()` as [`protect`] does, without its `/Info` dictionary. A full save numbers
+/// the trailer's `/Root`, `/Info` and `/Encrypt` first, in that order, so the same seed keeps the
+/// dictionary, key and `/ID` but `/Encrypt` is written under another number.
+fn protect_moved(alg: Algorithm) -> Vec<u8> {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.trailer_mut().remove(b"Info");
+    rekey(&mut doc, alg, 9);
+    write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+/// Every incompatible pairing returns `false` and leaves the target exactly as it was; the same
+/// overlay with matching security does apply.
+#[test]
+fn an_overlay_with_different_output_security_is_refused_before_any_change() {
+    let encrypted = Arc::new(protect(Algorithm::Aes256, "user", "owner", -1));
+    let open_owner = || Document::open_with_password(encrypted.clone(), Some("owner")).unwrap();
+    // Each target carries an unsaved edit, so a wrongful overlay would have something to change.
+    let encrypted_target = || {
+        let mut d = open_owner();
+        set_title(&mut d, "Saved title");
+        d
+    };
+    let plain_target = || {
+        let mut d = Document::open(Arc::new(fixture())).unwrap();
+        set_title(&mut d, "Saved title");
+        d
+    };
+    let mut cases: Vec<(&str, Document, Document)> = Vec::new();
+    let mut plain = Document::open(Arc::new(fixture())).unwrap();
+    set_title(&mut plain, "Restored title");
+    cases.push(("encrypted target, plain snapshot", encrypted_target(), plain));
+    let mut protected = open_owner();
+    set_title(&mut protected, "Restored title");
+    cases.push(("plain target, encrypted snapshot", plain_target(), protected));
+    let mut rekeyed = open_owner();
+    rekey(&mut rekeyed, Algorithm::Aes256, 3);
+    set_title(&mut rekeyed, "Restored title");
+    cases.push(("same passwords, new key", encrypted_target(), rekeyed));
+    let mut other_alg = open_owner();
+    rekey(&mut other_alg, Algorithm::Rc4_128, 9);
+    cases.push(("same passwords, other algorithm", encrypted_target(), other_alg));
+    // Below revision 5 the first /ID is part of the key.
+    let aes128 = Arc::new(protect(Algorithm::Aes128, "user", "owner", -1));
+    let mut aes128_target = Document::open_with_password(aes128.clone(), Some("owner")).unwrap();
+    set_title(&mut aes128_target, "Saved title");
+    let mut other_id = Document::open_with_password(aes128, Some("owner")).unwrap();
+    with_first_id(&mut other_id, b"another file id!");
+    set_title(&mut other_id, "Restored title");
+    cases.push(("AES-128, different first /ID", aes128_target, other_id));
+
+    for (case, mut target, current) in cases {
+        assert!(!target.has_same_output_security(&current) && !current.has_same_output_security(&target), "{case}");
+        let before = state(&target);
+        let result = target.overlay_changes_from(&current);
+        assert!(matches!(result, Ok(false)), "{case}: {result:?}");
+        assert!(before == state(&target), "{case}: a refused overlay changed the target");
+    }
+
+    // A target with a pending security change is refused even when the snapshot matches what
+    // that change will write.
+    let mut pending = Document::open(Arc::new(fixture())).unwrap();
+    rekey(&mut pending, Algorithm::Aes256, 9);
+    set_title(&mut pending, "Saved title");
+    let matching = Document::open_with_password(Arc::new(protect(Algorithm::Aes256, "user", "owner", -1)), Some("owner")).unwrap();
+    assert!(pending.has_same_output_security(&matching));
+    let before = state(&pending);
+    assert!(matches!(pending.overlay_changes_from(&matching), Ok(false)), "pending security change");
+    assert!(before == state(&pending), "a refused overlay changed the target");
+
+    // Control: the same overlay with matching security does change the target.
+    let mut target = encrypted_target();
+    let mut current = open_owner();
+    set_title(&mut current, "Restored title");
+    assert!(target.has_same_output_security(&current));
+    let before = state(&target);
+    assert!(target.overlay_changes_from(&current).unwrap());
+    assert!(before != state(&target), "a compatible overlay applies the snapshot");
+    assert_eq!(title(&target).as_deref(), Some("Restored title"));
+}
+
+/// A full save can move the `/Encrypt` dictionary (renumbered by compaction, or written inline by
+/// another tool) without changing the encryption. Undo across it still appends to the saved
+/// file, and the update leaves unencrypted the dictionary its trailer names.
+#[test]
+fn an_overlay_takes_the_encrypt_dictionary_from_the_snapshot() {
+    let place = |doc: &Document| match doc.trailer().get(b"Encrypt") {
+        Some(Object::Ref(r)) => Some(r.num),
+        _ => None,
+    };
+    for alg in ALL {
+        let files =
+            [("indirect", protect(alg, "user", "owner", -1)), ("moved", protect_moved(alg)), ("inline", protect_inline(alg, "user", "owner"))];
+        let open = |bytes: &Vec<u8>| Document::open_with_password(Arc::new(bytes.clone()), Some("owner")).unwrap();
+        for (saved_name, saved) in &files {
+            for (snapshot_name, snapshot) in &files {
+                if saved_name == snapshot_name {
+                    continue;
+                }
+                let case = format!("{alg:?}: {snapshot_name} snapshot over the {saved_name} save");
+                let mut base = open(saved);
+                let mut current = open(snapshot);
+                assert_ne!(place(&base), place(&current), "{case}");
+                assert!(base.has_same_output_security(&current), "{case}");
+                set_title(&mut current, "Restored title");
+                assert!(base.overlay_changes_from(&current).unwrap(), "{case}");
+                let bytes = write_incremental(&base, &SaveOptions::default()).unwrap();
+                assert!(bytes.starts_with(saved), "{case}: appended to the saved file");
+                assert!(!String::from_utf8_lossy(&bytes).contains("Secret page"), "{case}: plaintext leaked");
+                let bytes = Arc::new(bytes);
+                assert!(matches!(Document::open(bytes.clone()), Err(CosError::NeedsPassword)), "{case}");
+                for password in ["user", "owner"] {
+                    let reopened = Document::open_with_password(bytes.clone(), Some(password)).unwrap_or_else(|e| panic!("{case}/{password}: {e:?}"));
+                    assert_eq!(place(&reopened), place(&current), "{case}");
+                    assert_eq!(content(&reopened), SECRET, "{case}/{password}");
+                    assert_eq!(title(&reopened).as_deref(), Some("Restored title"), "{case}/{password}");
+                }
+                // Independent check, as in `every_algorithm_round_trips_and_hides_the_content`.
+                let hay = hayro_syntax::Pdf::new_with_password(bytes.as_ref().clone(), "user").unwrap_or_else(|e| panic!("{case}: {e:?}"));
+                let page = hay.pages().first().unwrap().page_stream().map(|s| String::from_utf8_lossy(s).trim().to_string());
+                assert_eq!(page.as_deref(), Some(SECRET), "{case}");
+            }
+        }
+    }
+}
+
+/// The user and owner passwords unlock the same file key: either opening may be overlaid on the
+/// other, and doing so neither elevates nor drops the user's restrictions in the saved file.
+#[test]
+fn output_security_does_not_depend_on_the_authentication_level() {
+    let no_print_or_copy = !(4 | 16);
+    for alg in ALL {
+        let bytes = Arc::new(protect(alg, "user", "owner", no_print_or_copy));
+        let user = Document::open_with_password(bytes.clone(), Some("user")).unwrap();
+        let owner = Document::open_with_password(bytes.clone(), Some("owner")).unwrap();
+        assert_eq!((user.security().unwrap().auth(), owner.security().unwrap().auth()), (Auth::User, Auth::Owner), "{alg:?}");
+        assert!(user.has_same_output_security(&owner) && owner.has_same_output_security(&user), "{alg:?}");
+        let mut unlocked = Document::open_with_password(bytes.clone(), Some("user")).unwrap();
+        unlocked.unlock("owner").unwrap();
+        assert!(unlocked.has_same_output_security(&user), "{alg:?}: unlocking keeps the output security");
+
+        // A snapshot edited as user, overlaid on the owner's opening (and the reverse).
+        for (base, password) in [("owner", "user"), ("user", "owner")] {
+            let mut target = Document::open_with_password(bytes.clone(), Some(base)).unwrap();
+            let mut current = Document::open_with_password(bytes.clone(), Some(password)).unwrap();
+            set_title(&mut current, "Edited");
+            assert!(target.overlay_changes_from(&current).unwrap(), "{alg:?}");
+            let saved = Arc::new(write_incremental(&target, &SaveOptions::default()).unwrap());
+            assert!(!String::from_utf8_lossy(&saved).contains("Secret page"), "{alg:?}: plaintext leaked");
+            assert!(matches!(Document::open(saved.clone()), Err(CosError::NeedsPassword)), "{alg:?}");
+            let reopened = Document::open_with_password(saved.clone(), Some("user")).unwrap();
+            assert_eq!(title(&reopened).as_deref(), Some("Edited"), "{alg:?}");
+            assert_eq!(content(&reopened), SECRET, "{alg:?}");
+            let p = reopened.permissions().unwrap();
+            assert!(!p.print() && !p.copy() && p.modify(), "{alg:?}, {base} base: user restrictions survive the save");
+            let p = Document::open_with_password(saved, Some("owner")).unwrap().permissions().unwrap();
+            assert!(p.print() && p.copy(), "{alg:?}: the owner keeps full rights");
+        }
+    }
+}
+
+/// Compatible output security means the same security dictionary and file key, and below
+/// revision 5 the same first file identifier. Each differs alone here; where the dictionary is
+/// stored is not compared, and unencrypted documents always match.
+#[test]
+fn output_security_compares_dictionary_key_and_first_id() {
+    let plain = || Document::open(Arc::new(fixture())).unwrap();
+    assert!(plain().has_same_output_security(&plain()), "two unencrypted documents");
+
+    for alg in ALL {
+        let encrypted = Arc::new(protect(alg, "user", "owner", -1));
+        let open = || Document::open_with_password(encrypted.clone(), Some("owner")).unwrap();
+        assert!(open().has_same_output_security(&open()), "{alg:?}: the same file opened twice");
+        assert!(!plain().has_same_output_security(&open()) && !open().has_same_output_security(&plain()), "{alg:?}");
+
+        // Only the first /ID differs. AES-256 (revision 6) draws its key at random instead.
+        let mut other_id = open();
+        with_first_id(&mut other_id, b"another file id!");
+        assert_eq!(open().has_same_output_security(&other_id), alg == Algorithm::Aes256, "{alg:?}: first /ID");
+        // The second /ID changes on every save and is never part of the key.
+        let Some(Object::Array(ids)) = open().trailer().get(b"ID").cloned() else { panic!("no /ID") };
+        let mut second = open();
+        second.trailer_mut().set(b"ID".to_vec(), Object::Array(vec![ids[0].clone(), Object::String(PdfString { bytes: b"x".to_vec(), hex: true })]));
+        assert!(open().has_same_output_security(&second), "{alg:?}: second /ID");
+
+        // Protected again with the same passwords: AES-256 draws a new key, and another algorithm
+        // is another dictionary. (Below revision 5 the same algorithm derives the same key from
+        // the passwords and /ID, so whether it matches is not what this checks.)
+        for other in ALL.into_iter().filter(|&other| other != alg || alg == Algorithm::Aes256) {
+            let mut rekeyed = open();
+            rekey(&mut rekeyed, other, 3);
+            assert!(!open().has_same_output_security(&rekeyed), "{alg:?} protected again as {other:?}");
+        }
+
+        // Only where the dictionary is stored differs: renumbered, or inline.
+        let moved = Document::open_with_password(Arc::new(protect_moved(alg)), Some("owner")).unwrap();
+        let inline = Document::open_with_password(Arc::new(protect_inline(alg, "user", "owner")), Some("owner")).unwrap();
+        assert_ne!(open().trailer().get(b"Encrypt"), moved.trailer().get(b"Encrypt"), "{alg:?}");
+        assert!(matches!(inline.trailer().get(b"Encrypt"), Some(Object::Dict(_))), "{alg:?}");
+        for other in [&moved, &inline] {
+            assert_eq!(open().security().unwrap().dict(), other.security().unwrap().dict(), "{alg:?}");
+            assert!(open().has_same_output_security(other) && other.has_same_output_security(&open()), "{alg:?}: dictionary place");
+        }
+    }
+
+    // Only the dictionary differs: AES-256 draws its file key from the seed, so new permissions
+    // or metadata encryption keep the key and /ID.
+    for (permissions, encrypt_metadata) in [(!(4 | 16), true), (-1, false)] {
+        let mut a = plain();
+        rekey(&mut a, Algorithm::Aes256, 5);
+        let mut b = plain();
+        b.set_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "user",
+            owner_password: "owner",
+            permissions,
+            encrypt_metadata,
+            seed: [5; 32],
+        })
+        .unwrap();
+        let (sa, sb) = (a.output_handler().unwrap(), b.output_handler().unwrap());
+        assert_eq!(sa.file_key(), sb.file_key(), "{permissions}, {encrypt_metadata}");
+        assert_ne!(sa.dict(), sb.dict(), "{permissions}, {encrypt_metadata}");
+        assert!(!a.has_same_output_security(&b), "{permissions}, {encrypt_metadata}: security dictionary");
+    }
 }

@@ -108,6 +108,9 @@ pub(crate) struct Editor {
     pub(crate) saved: Arc<Vec<u8>>,
     /// Passwords that open [`Self::saved`].
     pub(crate) saved_keys: Keys,
+    /// How [`Self::saved`] is encrypted, recorded with it: compared before deciding what a save
+    /// can append to.
+    pub(crate) saved_security: Option<pdfcraft_cos::SecurityIdentity>,
     /// [`Self::saved`] was never written where the document belongs: a new document (combine,
     /// extract, create) or one restored from recovery. It stays unsaved until a save, whatever
     /// undo brings back, or closing it would lose the whole document without asking.

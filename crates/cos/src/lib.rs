@@ -24,7 +24,7 @@ mod writer;
 
 pub use budget::{DecodeBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
-pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
+pub use document::{Document, ReadState, Revision, SecurityIdentity, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
