@@ -73,8 +73,6 @@ use pages::{FIND_FIRST_BATCH, FIND_MAX_WARNING_BYTES, FIND_MAX_WARNINGS, extract
 #[cfg(test)]
 pub(crate) use paths::MAX_INPUT;
 use paths::{child, write_atomic};
-#[cfg(test)]
-use paths::lexical;
 pub(crate) use paths::{read_input, read_input_bytes};
 #[cfg(test)]
 use paths::{write_atomic_synced, write_atomic_with};
