@@ -31,6 +31,11 @@ pub(crate) fn date_letters(picture: &str) -> Option<String> {
 pub(crate) fn data_date_letters(f: &Field) -> Option<String> {
     let picture = f.data_picture.as_deref()?;
     let letters = date_letters(picture)?;
+    // The shared converter maps E/EE to d/dd, which would read/write an extra day of
+    // month even when the picture also has D/DD. Keep ISO until numeric weekdays work.
+    if date_clause(picture).split(|c| c != 'E').any(|run| matches!(run.len(), 1 | 2)) {
+        return None;
+    }
     let tokens = date_tokens(&letters);
     let has = |any: &[&str]| tokens.iter().any(|t| any.contains(&t.as_str()));
     // E/EE become d/dd for the shared converter, but cannot supply a day of month.

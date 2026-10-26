@@ -835,6 +835,13 @@ fn named_month_data_pictures_require_a_complete_date() {
         ("date{DD MMM YYYY}", Some("dd mmm yyyy")),
         ("date{MMMM D, YYYY}", Some("mmmm d, yyyy")),
         ("date{EEE, MMM D, YYYY}", Some("ddd, mmm d, yyyy")),
+        ("date{EEEE, MMMM DD, YYYY}", Some("dddd, mmmm dd, yyyy")),
+        ("date{E MMM D YYYY}", None),
+        ("date{EE MMMM DD YYYY}", None),
+        ("date{D MMM E YYYY}", None),
+        ("date{DD MMMM EE YYYY}", None),
+        ("date{E MM D YYYY}", None),
+        ("EE M DD YYYY", None),
         ("date{MMM YYYY}", None),
         ("date{E MMM YYYY}", None),
         ("date{EE MMMM YYYY}", None),
@@ -852,10 +859,17 @@ fn named_month_data_pictures_require_a_complete_date() {
     }
 }
 
-/// Numeric weekday tokens cannot supply a missing day of month during data reads or writes.
+/// Numeric weekday tokens never become day-of-month fields, even beside a real day token.
 #[test]
 fn named_month_data_pictures_with_only_weekdays_keep_iso_fallback() {
-    for (picture, initial) in [("E MMM YYYY", "1 Oct 2026"), ("EE MMMM YYYY", "01 October 2026")] {
+    for (picture, initial) in [
+        ("E MMM YYYY", "1 Oct 2026"),
+        ("EE MMMM YYYY", "01 October 2026"),
+        ("E MMM D YYYY", "1 Oct 19 2026"),
+        ("EE MMMM DD YYYY", "01 October 19 2026"),
+        ("D MMM E YYYY", "19 Oct 1 2026"),
+        ("DD MMMM EE YYYY", "19 October 01 2026"),
+    ] {
         let xml =
             bound_date_template(&format!("<form><page><due>{initial}</due></page></form>")).replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
         let (tpl, _) = parse(&xml).unwrap();
@@ -882,11 +896,36 @@ fn named_month_data_pictures_with_only_weekdays_keep_iso_fallback() {
     }
 }
 
+/// A newly filled date uses ISO instead of writing a day number into a weekday position.
+#[test]
+fn named_month_data_pictures_with_numeric_weekdays_write_iso_from_empty_data() {
+    for picture in ["E MMM D YYYY", "EE MMMM DD YYYY", "D MMM E YYYY", "DD MMMM EE YYYY"] {
+        let xml = bound_date_template("").replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        let due = fields.iter_mut().find(|f| f.name == "due").unwrap();
+        due.data = FieldData::Text("10/19/2026".into());
+        doc.update_dict(due.obj, |d| d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text("10/19/2026")))).unwrap();
+        let report = write_datasets(&mut doc, &fields).unwrap();
+        assert!(report.written && report.warnings.is_empty(), "{picture}: {report:?}");
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let packets = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some("2026-10-19"), "{picture}");
+    }
+}
+
 /// A named-month bind picture controls dataset reads and writes, while the field shows its
 /// numeric edit picture and scripts read ISO. Save/reopen keeps the bound spelling and other data.
 #[test]
 fn named_month_data_pictures_round_trip_through_saved_datasets() {
-    for (picture, initial, edited) in [("DD MMM YYYY", "18 Oct 2026", "19 Oct 2026"), ("MMMM D, YYYY", "October 18, 2026", "October 19, 2026")] {
+    for (picture, initial, edited) in [
+        ("DD MMM YYYY", "18 Oct 2026", "19 Oct 2026"),
+        ("MMMM D, YYYY", "October 18, 2026", "October 19, 2026"),
+        ("EEE, MMM D YYYY", "Sun, Oct 18 2026", "Mon, Oct 19 2026"),
+        ("EEEE, MMMM D YYYY", "Sunday, October 18 2026", "Monday, October 19 2026"),
+    ] {
         let xml = bound_date_template(&format!("<form><page><due>{initial}</due><other>keep me</other></page></form>"))
             .replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
         let (tpl, _) = parse(&xml).unwrap();
