@@ -2611,17 +2611,6 @@ animation effects	Off	Wyłączone
 	{n} word(s) or phrase(s)	Słowa lub frazy: {n}
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Wyświetlasz rewizję {rev} dokumentu „{from}”. To migawka: zmiany wprowadzone tutaj nie wpłyną na oryginał.
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Wyświetlasz podpisaną wersję dokumentu „{from}” (rewizja {rev}). To migawka: zmiany wprowadzone tutaj nie wpłyną na oryginał.
-# Untranslated: English text until a translator fills these in.
-	Float panel	Float panel
-	Move to group	Move to group
-	Panels	Panels
-	Resize panel window	Resize panel window
-	Resize panels	Resize panels
-	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	The signature's signed attributes have no content type, which CMS requires; it was read anyway.
-	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
-	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
-	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-
 # Prepare a form ▸ Text field table
 	Add text field table	Dodaj tabelę pól tekstowych
 	Text field table	Tabela pól tekstowych
@@ -2653,3 +2642,169 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+
+# The keys the other catalogs had and the Polish catalog lacked (AI-assisted, reviewed by a native speaker)
+	 on page {label}	 na stronie {label}
+	A font isn't embedded	Czcionka nie jest osadzona
+	a table has 1 to {max} columns	tabela może mieć od 1 do {max} kolumn
+	a table has 1 to {max} rows	tabela może mieć od 1 do {max} wierszy
+	A {} action isn't allowed	Akcja {} jest niedozwolona
+	A {} annotation has additional actions	Adnotacja {} ma dodatkowe akcje
+	A {} annotation has no appearance stream	Adnotacja {} nie ma strumienia wyglądu
+	A {} annotation isn't set to print, or is hidden	Adnotacja {} nie jest ustawiona do drukowania lub jest ukryta
+	Accessibility Report	Raport dostępności
+	alternate text hides an annotation inside it	tekst alternatywny ukrywa zawartą w nim adnotację
+	alternate text on an element with no page content	tekst alternatywny w elemencie bez zawartości strony
+	Always	Zawsze
+theme	Appearance	Wygląd
+certificate	Basic constraints	Podstawowe ograniczenia
+	Certificate Signing	Podpisywanie certyfikatów
+	Change Author	Zmień autora
+	Change Keywords	Zmień słowa kluczowe
+	Change Subject	Zmień temat
+	Change Title	Zmień tytuł
+	Choose a digital ID.	Wybierz identyfikator cyfrowy.
+	Color	Kolor
+	Column select	Zaznaczanie kolumnowe
+	Comment	Komentarz
+	Create links	Utwórz łącza
+	CRL Signing	Podpisywanie list CRL
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Tryb „Wytnij i ułóż w stos” wymaga wyłączenia druku dwustronnego. Drukuj arkusze jednostronnie.
+	Data Encipherment	Szyfrowanie danych
+	Decipher Only	Tylko odszyfrowywanie
+@plural	Delete {n} field|Delete {n} fields	Usuń {n} pole|Usuń {n} pola|Usuń {n} pól
+	Detailed Report	Raport szczegółowy
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Użyto DeviceCMYK, ale profil wyjściowy PDF/A nie jest profilem CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Użyto DeviceRGB, ale profil wyjściowy PDF/A nie jest profilem RGB
+	Digital Signature	Podpis cyfrowy
+	Disabled	Wyłączone
+	Duplicate	Duplikuj
+	Enabled	Włączone
+	Encipher Only	Tylko szyfrowanie
+	English	Angielski
+	Enter a name.	Wpisz nazwę.
+	Enter a page number	Wpisz numer strony
+	Enter a URL	Wpisz adres URL
+	Enter the field names	Wpisz nazwy pól
+	Error	Błąd
+	Filename	Nazwa pliku
+	Flatten Fill & Sign	Spłaszcz elementy Wypełnij i podpisz
+	Folder	Folder
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Czcionka (bez nazwy) na stronie {p} nie mapuje swoich znaków na Unicode
+	Font {} on page {p} doesn't map its characters to Unicode	Czcionka {} na stronie {p} nie mapuje swoich znaków na Unicode
+	Form field on page {p} isn't tagged	Pole formularza na stronie {p} nie ma tagu
+calendar weekday	Fr	Pt
+	H{n} follows an H{d}; headings should not skip levels	H{n} występuje po H{d}; nagłówki nie powinny pomijać poziomów
+	Import	Importuj
+	Information	Informacje
+	Inspector	Inspektor
+certificate	Intended usage	Przeznaczenie
+certificate	Issued by	Wystawiony przez
+certificate	Issued to	Wystawiony dla
+certificate	Issuer	Wystawca
+	its alternate text is inside another element's and will never be read	jego tekst alternatywny znajduje się wewnątrz tekstu innego elementu i nigdy nie zostanie odczytany
+	Key Agreement	Uzgadnianie klucza
+	Key Encipherment	Szyfrowanie klucza
+certificate	Key usage	Użycie klucza
+calendar weekday	Mo	Pn
+	Move	Przenieś
+	Never	Nigdy
+	Next	Dalej
+	no alternate text	brak tekstu alternatywnego
+	No document language is set	Nie ustawiono języka dokumentu
+	no header cells (TH)	brak komórek nagłówka (TH)
+	No page has text: the document appears to be images of pages	Żadna strona nie zawiera tekstu: dokument wygląda na obrazy stron
+	no summary	brak podsumowania
+	Non-Repudiation	Niezaprzeczalność
+	not in a Table, THead, TBody or TFoot	nie znajduje się w elemencie Table, THead, TBody ani TFoot
+	not in a TR	nie znajduje się w elemencie TR
+	not in an L (list)	nie znajduje się w elemencie L (lista)
+	not in an LI (list item)	nie znajduje się w elemencie LI (element listy)
+	of	z
+	On	Włączony
+	Page {n}	Strona {n}
+	page {n} is out of range (1–{count})	strona {n} jest poza zakresem (1–{count})
+	Page {n} of {total}	Strona {n} z {total}
+	Page {p} doesn't tab in structure order	Strona {p} nie ustawia kolejności tabulacji według struktury
+	Page {p}: {n} untagged content item	Strona {p}: {n} element treści bez tagów
+	Page {p}: {n} untagged content items	Strona {p}: {n} elementów treści bez tagów
+	Page {} has additional actions	Strona {} ma dodatkowe akcje
+	Paste	Wklej
+	Previous	Wstecz
+certificate	Public key	Klucz publiczny
+	Remove {standard} identification	Usuń identyfikację {standard}
+	Rendering…	Renderowanie…
+	Report created	Utworzony raport
+	Rev. {rev}: Certified by an unknown signer	Rew. {rev}: certyfikowane przez nieznanego podpisującego
+	Rev. {rev}: Certified by {name}	Rew. {rev}: certyfikowane przez {name}
+	Rev. {rev}: Signed by an unknown signer	Rew. {rev}: podpisane przez nieznanego podpisującego
+	Rev. {rev}: Signed by {name}	Rew. {rev}: podpisane przez {name}
+	rows have between {min} and {max} columns	wiersze mają od {min} do {max} kolumn
+	Rule Name	Nazwa reguły
+calendar weekday	Sa	So
+	Save (M4)	Zapisz (M4)
+	Save as {level}	Zapisz jako {level}
+	Save changes?	Zapisać zmiany?
+	Saved {place}: {before} → {after} (not smaller){detail}	Zapisano {place}: {before} → {after} (nie mniejszy){detail}
+	Select all	Zaznacz wszystko
+certificate	Self-signed	Samopodpisany
+certificate	Serial number	Numer seryjny
+certificate	SHA-1 digest	Skrót SHA-1
+certificate	SHA-256 digest	Skrót SHA-256
+	Still rendering — this page is unusually complex…	Nadal trwa renderowanie — ta strona jest wyjątkowo złożona…
+calendar weekday	Su	Nd
+	Success	Powodzenie
+	System	Systemowy
+calendar weekday	Th	Cz
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	obszar, odstęp i szerokości kolumn muszą być liczbami, odstęp musi wynosić 0 lub więcej, a każda szerokość więcej niż 0
+	The checker found problems which may prevent the document from being fully accessible.	Sprawdzanie wykryło problemy, które mogą uniemożliwić pełną dostępność dokumentu.
+	The document has no tags (structure tree)	Dokument nie ma tagów (drzewa struktury)
+	The document has no title	Dokument nie ma tytułu
+	The document isn't marked as tagged (MarkInfo Marked)	Dokument nie jest oznaczony jako mający tagi (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	Dokument nie ma tagów, więc żadna jego zawartość ich nie ma
+	the first heading is an H{n}; headings should not skip levels	pierwszy nagłówek to H{n}; nagłówki nie powinny pomijać poziomów
+	the first row number can be at most {max}	numer pierwszego wiersza może wynosić najwyżej {max}
+	The font {} isn't embedded	Czcionka {} nie jest osadzona
+	The metadata doesn't identify the file as {}	Metadane nie identyfikują pliku jako {}
+	The password is incorrect.	Hasło jest nieprawidłowe.
+	The password must have at least 8 characters.	Hasło musi mieć co najmniej 8 znaków.
+	The passwords do not match.	Hasła nie są zgodne.
+	The security settings don't allow screen readers to read the text	Ustawienia zabezpieczeń nie pozwalają czytnikom ekranu odczytywać tekstu
+	The window shows the file name, not the title (Initial View > Show)	Okno pokazuje nazwę pliku zamiast tytułu (Widok początkowy > Pokaż)
+	Theme	Motyw
+	There is no folder to save the digital ID in.	Brak folderu, w którym można zapisać identyfikator cyfrowy.
+	This file is already as small as it can be made ({size}). No copy was saved.	Ten plik ma już najmniejszy możliwy rozmiar ({size}). Nie zapisano kopii.
+	Tools	Narzędzia
+calendar weekday	Tu	Wt
+	Unsigned signature field: {name}	Niepodpisane pole podpisu: {name}
+certificate	Valid from	Ważny od
+certificate	Valid to	Ważny do
+certificate	Validity ends	Koniec ważności
+certificate	Validity starts	Początek ważności
+certificate	Version	Wersja
+	Warning	Ostrzeżenie
+calendar weekday	We	Śr
+	{name} is too large for a word list (at most 1 MB).	Plik {name} jest za duży na listę słów (maksymalnie 1 MB).
+@plural	{n} byte|{n} bytes	{n} bajt|{n} bajty|{n} bajtów
+@plural	{n} file|{n} files	{n} plik|{n} pliki|{n} plików
+@plural	{n} image optimized|{n} images optimized	Zoptymalizowano {n} obraz|Zoptymalizowano {n} obrazy|Zoptymalizowano {n} obrazów
+@plural	{n} item discarded|{n} items discarded	Usunięto {n} element|Usunięto {n} elementy|Usunięto {n} elementów
+	{n} pages and no bookmarks	Liczba stron: {n}, brak zakładek
+@plural	{n} pixel|{n} pixels	{n} piksel|{n} piksele|{n} pikseli
+	{page} is not a page number or label	{page} nie jest numerem ani etykietą strony
+	{ty} element on page {p}: {what}	Element {ty} na stronie {p}: {what}
+	{ty} element: {what}	Element {ty}: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, certyfikat wystawiony przez nieznanego wystawcę.
+	{who}, certificate issued by {issuer}.	{who}, certyfikat wystawiony przez {issuer}.
+	{} annotation on page {p} isn't tagged	Adnotacja {} na stronie {p} nie ma tagu
+	{} annotations aren't allowed	Adnotacje {} są niedozwolone
+	… and {n} more	… i jeszcze {n}
+	Float panel	Odepnij panel
+	Move to group	Przenieś do grupy
+	Panels	Panele
+	Resize panel window	Zmień rozmiar okna panelu
+	Resize panels	Zmień rozmiar paneli
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Podpisane atrybuty podpisu nie zawierają typu zawartości wymaganego przez CMS; mimo to podpis został odczytany.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Podpisane atrybuty podpisu nie zawierają skrótu wiadomości, więc podpis nie obejmuje dokumentu.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Podpisane atrybuty podpisu wskazują typ zawartości inny niż dane, więc nie jest to podpis dokumentu.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Ten podpis używa klucza RSA krótszego niż 2048 bitów, który nie jest już uważany za wystarczająco silny do podpisów. Podpis nadal przechodzi weryfikację, ale nie należy na nim polegać.
