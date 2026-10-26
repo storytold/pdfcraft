@@ -132,6 +132,12 @@ impl Pdf {
         self.inner.move_objects(page, &targets, dx, dy).map_err(js)
     }
 
+    /// Turns a picture by quarter turns clockwise (negative for anticlockwise).
+    pub fn rotate_object(&mut self, page: usize, kind: &str, index: usize, quarter_turns: i32) -> Result<(), JsError> {
+        let target = Target { kind: Kind::parse(kind).map_err(js)?, index };
+        self.inner.rotate_object(page, target, quarter_turns).map_err(js)
+    }
+
     /// Gives an object the displayed box `[x0, y0, x1, y1]`.
     pub fn resize_object(&mut self, page: usize, kind: &str, index: usize, view: Vec<f64>) -> Result<(), JsError> {
         let target = Target { kind: Kind::parse(kind).map_err(js)?, index };

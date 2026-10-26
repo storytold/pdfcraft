@@ -281,6 +281,29 @@ impl Document {
         }
     }
 
+    /// Turns a picture by quarter turns clockwise (negative for anticlockwise) about its centre.
+    /// An added picture swaps its width and height on an odd turn, so it keeps its place.
+    pub fn rotate_object(&mut self, page: usize, target: Target, quarter_turns: i32) -> Result<(), String> {
+        let turns = quarter_turns.rem_euclid(4);
+        match target.kind {
+            Kind::Image => self.apply(Edit::EditPageImage { page, index: target.index, change: ImageEdit::Rotate(turns) }),
+            Kind::Added => match self.added_content(page, target.index)? {
+                AddedContent::Image(mut i) => {
+                    // the engine counts quarter turns anticlockwise
+                    i.rotation = ((i64::from(i.rotation) + i64::from(4 - turns)).rem_euclid(4)) as u8;
+                    if turns % 2 == 1 {
+                        let [x0, y0, x1, y1] = i.rect;
+                        let (cx, cy, hw, hh) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+                        i.rect = [cx - hh, cy - hw, cx + hh, cy + hw];
+                    }
+                    self.apply(Edit::UpdateContent { page, index: target.index, content: AddedContent::Image(i) })
+                }
+                AddedContent::Text(_) => Err("only a picture can be turned".into()),
+            },
+            Kind::Text => Err("only a picture can be turned".into()),
+        }
+    }
+
     /// Adds a text box over `view` (the width wraps the text; the height follows it).
     pub fn add_text(&mut self, page: usize, view: [f64; 4], text: &str, style: &TextStyle) -> Result<(), String> {
         let rect = self.to_display_space(page, checked(view)?)?;
@@ -464,6 +487,26 @@ mod tests {
         assert!(objects(&doc).iter().all(|o| o["type"] != "image"));
         assert!(doc.move_objects(0, &[target], 1.0, 1.0).is_err(), "it no longer exists");
         assert!(doc.move_objects(0, &[target], f64::NAN, 1.0).is_err());
+    }
+
+    #[test]
+    fn turns_an_added_picture() {
+        let mut doc = open();
+        doc.add_image(0, "pic.png", &png(), Some([100.0, 200.0, 180.0, 240.0])).expect("adds an image");
+        let image = objects(&doc).into_iter().find(|o| o["type"] == "image").expect("listed");
+        let target = Target { kind: Kind::Added, index: image["index"].as_u64().expect("index") as usize };
+        let before = view_of(&image);
+        doc.rotate_object(0, target, 1).expect("turns");
+        let after = view_of(objects(&doc).iter().find(|o| o["type"] == "image").expect("still there"));
+        assert!((after[2] - after[0] - (before[3] - before[1])).abs() < 0.5, "wide as it was tall: {before:?} {after:?}");
+        assert!(((after[0] + after[2]) - (before[0] + before[2])).abs() < 0.5, "same centre: {before:?} {after:?}");
+        doc.rotate_object(0, target, -1).expect("turns back");
+        let back = view_of(objects(&doc).iter().find(|o| o["type"] == "image").expect("still there"));
+        assert!((back[2] - back[0] - (before[2] - before[0])).abs() < 0.5, "as it was: {before:?} {back:?}");
+        doc.add_text(0, [20.0, 40.0, 120.0, 70.0], "Box", &TextStyle::default()).expect("adds");
+        let text = objects(&doc).into_iter().find(|o| o["type"] == "text").expect("text");
+        let t = Target { kind: Kind::Added, index: text["index"].as_u64().expect("index") as usize };
+        assert!(doc.rotate_object(0, t, 1).is_err(), "text does not turn");
     }
 
     #[test]
