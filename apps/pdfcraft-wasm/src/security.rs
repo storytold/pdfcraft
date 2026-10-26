@@ -52,10 +52,21 @@ impl Document {
         self.apply(Edit::DeleteField { name: name.to_string() })
     }
 
-    /// Changes a field: `{"name"?, "tooltip"?, "required"?, "readOnly"?, "options"?, "fontSize"?}`.
+    /// Changes a field: `{"name"?, "tooltip"?, "required"?, "readOnly"?, "options"?, "fontSize"?, "box"?}`; the box
+    /// (displayed points) moves and resizes its first widget.
     pub fn set_field_props(&mut self, name: &str, spec: &str) -> Result<(), String> {
         let v: Value = serde_json::from_str(spec).map_err(|e| e.to_string())?;
+        // where its first widget is: a displayed box, as the other calls take
+        let rect = match v.get("box") {
+            None | Some(Value::Null) => None,
+            Some(_) => {
+                let b = boxed(&v, "box")?;
+                let page = self.doc()?.info.fields.iter().find(|f| f.name == name).and_then(|f| f.page).ok_or("that field is not on a page")?;
+                Some((0, self.page_info_ref(page)?.view_rect_to_user([b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]).map(f64::from)))
+            }
+        };
         let props = FieldProps {
+            rect,
             name: v["name"].as_str().map(str::to_string),
             tooltip: v["tooltip"].as_str().map(str::to_string),
             required: v["required"].as_bool(),
@@ -237,6 +248,15 @@ mod tests {
         let fields: Vec<Value> = serde_json::from_str(&doc.fields_json(0).expect("fields")).expect("json");
         assert_eq!(fields.len(), kinds.len());
         doc.set_field_props("Name", r#"{"tooltip":"Your name","required":true}"#).expect("changes it");
+        doc.set_field_props("Name", r#"{"box":[30,40,150,70]}"#).expect("moves and resizes it");
+        let fields: Vec<Value> = serde_json::from_str(&doc.fields_json(0).expect("fields")).expect("json");
+        let moved = fields.iter().find(|f| f["name"] == "Name").expect("still there");
+        let v: Vec<f64> = moved["view"].as_array().expect("view").iter().map(|n| n.as_f64().expect("n")).collect();
+        assert!(
+            (v[0] - 30.0).abs() < 1.0 && (v[1] - 40.0).abs() < 1.0 && (v[2] - 150.0).abs() < 1.0 && (v[3] - 70.0).abs() < 1.0,
+            "where it was put: {v:?}"
+        );
+        assert!(doc.set_field_props("Nobody", r#"{"box":[0,0,10,10]}"#).is_err());
         doc.delete_field("Notes").expect("deletes it");
         let fields: Vec<Value> = serde_json::from_str(&doc.fields_json(0).expect("fields")).expect("json");
         assert_eq!(fields.len(), kinds.len() - 1);
