@@ -207,6 +207,7 @@ impl PdfCraftApp {
             alt_draft: Default::default(),
             os_key_store_ids: false,
             cert_viewer: None,
+            cert_import: None,
             space_audit: Vec::new(),
             space_audit_of: None,
             combine_draft: Vec::new(),
