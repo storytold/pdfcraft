@@ -892,7 +892,8 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
 }
 
 /// Candidates from earlier layouts are validated by the embedding helper against our own
-/// program, Unicode map and glyph mapping before reuse; a resource name alone is never trusted.
+/// program, Unicode map and glyph mapping before reuse. This TrueType fallback also requires
+/// its original horizontal identity encoding; a resource name alone is never trusted.
 fn earlier_fallback_fonts(doc: &Document, pages: ObjRef) -> Dict {
     let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
     for page in kids.iter().take(MAX_PAGES_SEARCHED) {
@@ -900,6 +901,10 @@ fn earlier_fallback_fonts(doc: &Document, pages: ObjRef) -> Dict {
         let Some(resources) = page.get(b"Resources").and_then(|r| doc.dict(r)) else { continue };
         let Some(fonts) = resources.get(b"Font").and_then(|f| doc.dict(f)) else { continue };
         if let Some(font) = fonts.get(FALLBACK_FONT.as_bytes()) {
+            let Some(dictionary) = doc.dict(font) else { continue };
+            if dictionary.get(b"Encoding").map(|e| doc.resolve(e)).as_deref().and_then(Object::as_name) != Some(b"Identity-H") {
+                continue;
+            }
             let mut out = Dict::new();
             out.set(FALLBACK_FONT.as_bytes().to_vec(), font.clone());
             return out;

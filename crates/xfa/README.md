@@ -61,7 +61,9 @@ that warning and keeps the existing layout and accepted widget values.
 For fixed page text, a span that WinAnsi cannot encode uses the existing bundled Inter Regular
 when that face covers the whole span and has a usable advance. Rejected zero-advance spans
 do not allocate a font. The complete Unicode font is embedded once and reused
-across pages and validated relayouts, including save/reopen. The span is fitted horizontally to
+across pages and validated relayouts, including save/reopen. Reuse requires the original
+horizontal `Identity-H` encoding (direct or indirect), in addition to the bundled program
+and mapping checks. Other or missing encodings are replaced without modifying the old font. The span is fitted horizontally to
 its measured standard-font advance, preserving wrapping, alignment and link bounds. Other spans
 keep their standard face. This is a Regular fallback, not source-font/style fidelity or complex
 script shaping; uncovered spans keep the existing question-mark warning. Field appearances

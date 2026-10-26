@@ -458,6 +458,79 @@ fn template_zero_advance_text_does_not_allocate_fallback_fonts() {
     }
 }
 
+/// First-page fallback resource from the original symbol fixture.
+fn symbol_font(doc: &Document) -> Object {
+    let page = symbol_pages(doc).remove(0);
+    let resources = doc.dict(page.get(b"Resources").unwrap()).unwrap();
+    doc.dict(resources.get(b"Font").unwrap()).unwrap().get(b"PCFullXfaFallback").unwrap().clone()
+}
+
+/// A changed encoding must survive on the source font but never reach regenerated text.
+fn rejects_symbol_encoding(encoding: Option<Object>) {
+    for indirect in [false, true] {
+        let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+        let form = layout_xml(symbol_template()).unwrap();
+        crate::pdf::write_form(&mut doc, &form).unwrap();
+        let original = symbol_font(&doc);
+        let original_ref = original.as_ref().unwrap();
+        let encoding = encoding.clone().map(|o| if indirect || matches!(o, Object::Stream(_)) { Object::Ref(doc.add(o)) } else { o });
+        doc.update_dict(original_ref, |d| {
+            d.remove(b"Encoding");
+            if let Some(encoding) = &encoding {
+                d.set(b"Encoding".to_vec(), encoding.clone());
+            }
+        })
+        .unwrap();
+        let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let mut reopened = Document::open(Arc::new(bytes)).unwrap();
+        let report = crate::pdf::write_form(&mut reopened, &form).unwrap();
+        assert!(!report.warnings.iter().any(|w| w.contains("standard fonts can't draw")));
+        let replacement = symbol_font(&reopened);
+        assert_ne!(replacement, original, "a changed encoding must not be reused");
+        let font = reopened.dict(&replacement).unwrap();
+        assert_eq!(font.get(b"Encoding").map(|e| reopened.resolve(e)).and_then(|e| e.as_name().map(Vec::from)), Some(b"Identity-H".to_vec()));
+        let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&reopened, &font);
+        assert_eq!(metrics.decode(&metrics.encode("► Start").unwrap()), "► Start");
+        assert_eq!(reopened.dict(&original).unwrap().get(b"Encoding"), encoding.as_ref(), "the source font stays unchanged");
+        crate::pdf::write_form(&mut reopened, &form).unwrap();
+        assert_eq!(symbol_font(&reopened), replacement, "the repaired embedding is reusable");
+    }
+}
+
+/// Vertical encoding cannot replace the horizontal encoding this fallback emits.
+#[test]
+fn template_symbol_fallback_rejects_vertical_encoding() {
+    rejects_symbol_encoding(Some(Object::name("Identity-V")));
+}
+
+/// Even matching programs and glyph maps cannot authorize a different character-to-CID map.
+#[test]
+fn template_symbol_fallback_rejects_remapped_encoding() {
+    let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Changed def /CMapType 1 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFE> 1 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    rejects_symbol_encoding(Some(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), cmap.to_vec()))));
+}
+
+/// A malformed candidate without Encoding cannot be reused either.
+#[test]
+fn template_symbol_fallback_rejects_missing_encoding() {
+    rejects_symbol_encoding(None);
+}
+
+/// A valid indirect horizontal encoding is still reused after save/reopen.
+#[test]
+fn template_symbol_fallback_reuses_indirect_horizontal_encoding() {
+    let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+    let form = layout_xml(symbol_template()).unwrap();
+    crate::pdf::write_form(&mut doc, &form).unwrap();
+    let original = symbol_font(&doc);
+    let encoding = doc.add(Object::name("Identity-H"));
+    doc.update_dict(original.as_ref().unwrap(), |d| d.set(b"Encoding".to_vec(), Object::Ref(encoding))).unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut reopened = Document::open(Arc::new(bytes)).unwrap();
+    crate::pdf::write_form(&mut reopened, &form).unwrap();
+    assert_eq!(symbol_font(&reopened), original);
+}
+
 /// A field whose ui doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for
 /// one line, `vScrollPolicy="off"` for several) is written with DoNotScroll (`/Ff` bit 24), so it
 /// takes no more text than it shows; the other direction's policy, or the default, doesn't.
