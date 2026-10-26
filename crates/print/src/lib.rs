@@ -18,7 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_content::Matrix;
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
 pub mod range;
 pub mod spool;
@@ -147,6 +147,19 @@ pub enum BookletSubset {
     BothSides,
     FrontOnly,
     BackOnly,
+}
+
+/// How a booklet goes through the printer (#2707): it decides two-sided printing itself, as
+/// Acrobat does (its Print dialog hides Two-sided while Booklet is chosen; Using Acrobat X Pro,
+/// Print dialog box options: "Acrobat automatically enables duplex printing, if available, for
+/// booklet printing"). Both sides flip on the short edge, the fold of a 2-up sheet turned
+/// sideways; front side only or back side only is one pass of a manual duplex and prints
+/// single-sided.
+pub fn booklet_duplex(subset: BookletSubset) -> spool::Duplex {
+    match subset {
+        BookletSubset::BothSides => spool::Duplex::ShortEdge,
+        BookletSubset::FrontOnly | BookletSubset::BackOnly => spool::Duplex::Off,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -279,7 +292,7 @@ impl Default for Settings {
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 20] = [
+pub const PAPERS: [(&str, (f64, f64)); 21] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
@@ -300,24 +313,52 @@ pub const PAPERS: [(&str, (f64, f64)); 20] = [
     ("A1", (1683.78, 2383.94)),
     ("A0", (2383.94, 3370.39)),
     ("4 x 6 in label (101.6 x 152.4 mm)", (288.0, 432.0)),
+    ("US #10 Envelope (4.125 x 9.5 in)", (297.0, 684.0)),
 ];
 
 /// `PAPERS` index of the 4 × 6 in shipping label.
 pub const LABEL_PAPER: usize = 19;
 
 /// The CUPS media name for `PAPERS[index]`, so the spooler feeds the sheet the PDF was laid out
-/// on rather than the queue's default (PPD keywords; `w288h432` is the usual 4×6 label).
+/// on rather than the queue's default; `None` only past the end of `PAPERS`. The common sizes
+/// use their PPD keywords (`w288h432` is the usual 4×6 label, `Env10` the US #10 envelope).
+/// The rest use PWG 5101.1 names (ARCH E1 is its `wide-format` size), spelled exactly as the
+/// spec and the IANA registry have them: a driverless printer may take only the names it
+/// advertises. They carry their dimensions, so CUPS feeds the PPD size of those dimensions
+/// whatever the driver calls it (`ARCHD`, `AnsiD`) (#3752).
 pub fn cups_media(index: usize) -> Option<&'static str> {
-    match PAPERS.get(index)?.0 {
-        "US Letter" => Some("Letter"),
-        "US Legal" => Some("Legal"),
-        "Tabloid" => Some("Tabloid"),
-        "A3" => Some("A3"),
-        "A4" => Some("A4"),
-        "A5" => Some("A5"),
-        _ if index == LABEL_PAPER => Some("w288h432"),
-        _ => None,
-    }
+    Some(match PAPERS.get(index)?.0 {
+        "US Letter" => "Letter",
+        "US Legal" => "Legal",
+        "Tabloid" => "Tabloid",
+        "A3" => "A3",
+        "A4" => "A4",
+        "A5" => "A5",
+        "A6" => "iso_a6_105x148mm",
+        "ARCH A (9 x 12 in)" => "na_arch-a_9x12in",
+        "ARCH B (12 x 18 in)" => "na_arch-b_12x18in",
+        "ARCH C (18 x 24 in)" => "na_arch-c_18x24in",
+        "ARCH D (24 x 36 in)" => "na_arch-d_24x36in",
+        "ARCH E1 (30 x 42 in)" => "na_wide-format_30x42in",
+        "ARCH E (36 x 48 in)" => "na_arch-e_36x48in",
+        "ANSI C (17 x 22 in)" => "na_c_17x22in",
+        "ANSI D (22 x 34 in)" => "na_d_22x34in",
+        "ANSI E (34 x 44 in)" => "na_e_34x44in",
+        "A2" => "iso_a2_420x594mm",
+        "A1" => "iso_a1_594x841mm",
+        "A0" => "iso_a0_841x1189mm",
+        "US #10 Envelope (4.125 x 9.5 in)" => "Env10",
+        _ if index == LABEL_PAPER => "w288h432",
+        // A size added to PAPERS without a name here: its tests fail, and meanwhile the queue's
+        // paper stands, as it did for every size before #1583.
+        _ => return None,
+    })
+}
+
+/// The job option that feeds `PAPERS[index]` (`media`, see [`cups_media`]), for the Print
+/// dialog's jobs and `doc_print`'s alike.
+pub fn media_option(index: usize) -> Option<(String, String)> {
+    cups_media(index).map(|m| ("media".to_string(), m.to_string()))
 }
 
 /// Whether most of page `index`'s text runs bottom-to-top as the page displays (a label laid
@@ -328,11 +369,14 @@ pub fn text_reads_up(doc: &Document, index: usize) -> bool {
     let to_display = Matrix(page.view_matrix(doc)).invert().unwrap_or_default();
     let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut score = 0i64;
-    text_direction(doc, &decoded_contents(doc, &page.dict), &res, to_display, 0, &mut score);
+    let mut budget = DecodeBudget::page();
+    // Content past the budget is left out: the answer is a guess from the text read so far.
+    let data = decoded_contents(doc, &page.dict, &mut budget).unwrap_or_default();
+    text_direction(doc, &data, &res, to_display, 0, &mut score, &mut budget);
     score > 0
 }
 
-fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matrix, depth: usize, score: &mut i64) {
+fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matrix, depth: usize, score: &mut i64, budget: &mut DecodeBudget) {
     let (mut ctm, mut tm, mut stack) = (base, Matrix::IDENTITY, Vec::new());
     for op in pdfcraft_content::parse(data).ops {
         match op.op.as_slice() {
@@ -355,8 +399,11 @@ fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matrix, depth: 
                 }
                 let m = form.dict.get(b"Matrix").and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a))).unwrap_or_default();
                 let inner = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_else(|| res.clone());
-                if let Ok(body) = form.decoded() {
-                    text_direction(doc, &body, &inner, m.then(&ctm), depth + 1, score);
+                if !budget.enter_form() {
+                    continue;
+                }
+                if let Ok(body) = budget.decode(form) {
+                    text_direction(doc, &body, &inner, m.then(&ctm), depth + 1, score, budget);
                 }
             }
             _ => {}
@@ -673,39 +720,94 @@ fn n(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
-fn decoded_contents(doc: &Document, page: &Dict) -> Vec<u8> {
-    let list: Vec<Object> = match page.get(b"Contents") {
-        None => Vec::new(),
-        Some(c) => match &*doc.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        },
-    };
+/// The page's content streams decoded against `budget` and joined; streams that don't decode
+/// are left out. `None` when the budget ran out, so part of the content is missing.
+fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
+    let Some(contents) = page.get(b"Contents") else { return Some(Vec::new()) };
     let mut out = Vec::new();
-    for o in list {
-        if let Object::Stream(s) = &*doc.resolve(&o)
-            && let Ok(d) = s.decoded()
-        {
-            out.extend_from_slice(&d);
-            out.push(b'\n');
+    for data in budget.decode_contents(doc, contents) {
+        match data {
+            Ok(data) => {
+                out.extend_from_slice(&data);
+                out.push(b'\n');
+            }
+            Err(_) if budget.remaining() == 0 => return None,
+            Err(_) => {}
         }
     }
-    out
+    Some(out)
 }
+
+/// Reduce `doc`'s pages to what [`impose`] draws of them under `content`: the annotations that
+/// don't print are dropped, and with [`Content::FormFieldsOnly`] the page content too. For
+/// printing pages as pictures, where a renderer draws each page as it stands.
+pub fn keep_printed(doc: &mut Document, content: Content) {
+    for page in pdfcraft_model::pages(doc) {
+        let annots = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
+        let kept: Vec<Object> = annots.into_iter().filter(|a| doc.resolve(a).as_dict().is_some_and(|d| prints(doc, d, content))).collect();
+        // Fails only when the page object isn't a dictionary, and such a page draws nothing.
+        let _ = doc.update_dict(page.obj, |d| {
+            if content == Content::FormFieldsOnly {
+                d.remove(b"Contents");
+            }
+            if d.contains(b"Annots") {
+                d.set(b"Annots".to_vec(), Object::Array(kept));
+            }
+        });
+    }
+}
+
+/// The standard annotation types of ISO 32000-2 Table 171.
+const STANDARD_ANNOTATION_TYPES: [&[u8]; 28] = [
+    b"Text",
+    b"Link",
+    b"FreeText",
+    b"Line",
+    b"Square",
+    b"Circle",
+    b"Polygon",
+    b"PolyLine",
+    b"Highlight",
+    b"Underline",
+    b"Squiggly",
+    b"StrikeOut",
+    b"Caret",
+    b"Stamp",
+    b"Ink",
+    b"Popup",
+    b"FileAttachment",
+    b"Sound",
+    b"Movie",
+    b"Screen",
+    b"Widget",
+    b"PrinterMark",
+    b"TrapNet",
+    b"Watermark",
+    b"3D",
+    b"Redact",
+    b"Projection",
+    b"RichMedia",
+];
 
 /// Does annotation `d` print under `content`?
 fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
+    const INVISIBLE: i64 = 1;
     const HIDDEN: i64 = 2;
     const PRINT: i64 = 4;
     let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
     if flags & PRINT == 0 || flags & HIDDEN != 0 {
         return false;
     }
-    let subtype = d.name(b"Subtype").unwrap_or(b"");
+    // `/Subtype` may be an indirect reference (ISO 32000-2 §7.3.10), so resolve it first.
+    let subtype_obj = d.get(b"Subtype").map(|s| doc.resolve(s));
+    let subtype = subtype_obj.as_deref().and_then(Object::as_name).unwrap_or(b"");
     match subtype {
         b"Widget" => true,
         b"Link" | b"Popup" => false,
         b"Stamp" => content != Content::Document && content != Content::FormFieldsOnly,
+        // ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard (Table
+        // 171) is not printed even with its Print flag set.
+        _ if flags & INVISIBLE != 0 && !STANDARD_ANNOTATION_TYPES.contains(&subtype) => false,
         _ => content == Content::DocumentAndMarkups,
     }
 }
@@ -748,11 +850,24 @@ fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matr
 }
 
 /// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
-fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRef, PrintError> {
-    let page = pdfcraft_model::pages(doc).swap_remove(index);
+/// `pages` are the document's pages, listed once by the caller: listing them for each page
+/// printed would make printing quadratic in the page count.
+fn page_form(
+    doc: &mut Document,
+    pages: &[pdfcraft_model::Page],
+    index: usize,
+    content: Content,
+    promoted: &mut std::collections::HashMap<ObjRef, ObjRef>,
+) -> Result<ObjRef, PrintError> {
+    let page = pages.get(index).ok_or_else(|| PrintError::Invalid(format!("there is no page {}", index.saturating_add(1))))?;
     let crop = page.crop(doc);
     let mut res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let mut body = if content == Content::FormFieldsOnly { Vec::new() } else { decoded_contents(doc, &page.dict) };
+    let mut body = if content == Content::FormFieldsOnly {
+        Vec::new()
+    } else {
+        decoded_contents(doc, &page.dict, &mut DecodeBudget::page())
+            .ok_or_else(|| PrintError::Invalid(format!("page {} has more content than can be printed", index + 1)))?
+    };
     // Wrap the page content so a state it leaves behind can't affect the annotations.
     if !body.is_empty() {
         let mut wrapped = b"q\n".to_vec();
@@ -762,7 +877,7 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
     }
     let annots = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
     let mut xobjects = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
-    let mut k = 0;
+    let mut k = 0usize;
     for a in annots {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
         if !prints(doc, &d, content) {
@@ -777,8 +892,32 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
         let Some(ap) = appearance(doc, &d) else { continue };
         let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
         let Some(m) = appearance_matrix(doc, &form, rect) else { continue };
-        let name = format!("PCPrA{k}");
-        k += 1;
+        let ap = if !form.contains(b"Subtype")
+            && let Object::Stream(stream) = &*doc.get(ap)
+        {
+            // Some existing annotation appearances omit Subtype, but Do dispatch needs a Form XObject.
+            // Keep the original intact: other document objects can share this appearance.
+            if let Some(&cached) = promoted.get(&ap) {
+                cached
+            } else {
+                let mut stream = stream.clone();
+                stream.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+                let copy = doc.add(Object::Stream(stream));
+                promoted.insert(ap, copy);
+                copy
+            }
+        } else {
+            ap
+        };
+        // Keep the page's own XObjects, including names previous print operations generated.
+        // Check the growing map so each appearance also keeps the name just assigned to it.
+        let name = loop {
+            let name = format!("PCPrA{k}");
+            k = k.checked_add(1).ok_or_else(|| PrintError::Invalid("too many annotation appearance resources".into()))?;
+            if !xobjects.contains(name.as_bytes()) {
+                break name;
+            }
+        };
         let [a0, b0, c0, d0, e0, f0] = m.0;
         body.extend(format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0)).bytes());
         xobjects.set(name.into_bytes(), Object::Ref(ap));
@@ -797,15 +936,30 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
     Ok(doc.add(Object::Stream(Stream::flate(d, &body))))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Pages listed by [`source_pages`] on this thread.
+    static PAGES_LISTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The source document's pages, for printing.
+fn source_pages(doc: &Document) -> Vec<pdfcraft_model::Page> {
+    let pages = pdfcraft_model::pages(doc);
+    #[cfg(test)]
+    PAGES_LISTED.with(|c| c.set(c.get() + pages.len()));
+    pages
+}
+
 /// Build the print-ready PDF for `settings`. Encryption is not carried over (the file goes to a
 /// printer or is the user's own copy); callers must check the print permission first.
 pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError> {
-    let pages = pdfcraft_model::pages(src);
+    let pages = source_pages(src);
     let sizes: Vec<(f64, f64)> = pages.iter().map(|p| p.display_size(src)).collect();
     let sheets = layout(&sizes, settings)?;
     let mut doc = src.clone();
     // One form per source page used (a page may appear on several sheets: posters).
     let mut forms: std::collections::HashMap<usize, ObjRef> = std::collections::HashMap::new();
+    let mut promoted = std::collections::HashMap::new();
     let views: Vec<[f64; 6]> = pages.iter().map(|p| p.view_matrix(src)).collect();
     let pages_root = doc.add(Object::Null);
     let mut kids = Vec::new();
@@ -816,7 +970,7 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             let form = match forms.get(&pl.page) {
                 Some(f) => *f,
                 None => {
-                    let f = page_form(&mut doc, pl.page, settings.content)?;
+                    let f = page_form(&mut doc, &pages, pl.page, settings.content, &mut promoted)?;
                     forms.insert(pl.page, f);
                     f
                 }

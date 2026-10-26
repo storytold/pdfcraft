@@ -109,6 +109,8 @@
 	Next view	Következő nézet
 	Page display	Oldalmegjelenítés
 	Continuous scrolling	Folyamatos görgetés
+	Show gaps between pages	Oldalak közötti térköz megjelenítése
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Rejtse el a térközöket az oldalszélek összeillesztéséhez. A PDF-en belüli margók változatlanok maradnak.
 	Two-page view	Kétoldalas nézet
 	Single page	Egy oldal
 	Show cover page in two-page view	Borító megjelenítése kétoldalas nézetben
@@ -153,6 +155,15 @@
 	Available	Elérhető
 	Ready	Kész
 	Search tools and commands…	Eszközök és parancsok keresése…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Hozzáadott szöveg
+	Link URL	Hivatkozás URL-je
+	Search tools and commands	Eszközök és parancsok keresése
+	Text editing line	Szövegszerkesztő sor
+	Text to place	Elhelyezendő szöveg
+	Tooltip	Elemleírás
+	Words or phrases to redact	Kitakarni kívánt szavak vagy kifejezések
 	No matching tools	Nincs illeszkedő eszköz
 	Tool	Eszköz
 	Command	Parancs
@@ -490,6 +501,36 @@
 	Could not save: {e}	A mentés nem sikerült: {e}
 	Earlier in tab order	Előbbre a tab-sorrendben
 	Later in tab order	Hátrébb a tab-sorrendben
+	Calculation order	Számítási sorrend
+	Fix order	Sorrend javítása
+	Move only what must move, so every field calculates after the fields it reads.	Csak azt mozgatja, amit muszáj, hogy minden mező az általa olvasott mezők után számítódjon.
+	Earlier in calculation order	Előbbre a számítási sorrendben
+	Later in calculation order	Hátrébb a számítási sorrendben
+	Too early	Túl korán
+	Reads {name}, which calculates later, so it shows an old value.	Ezt olvassa: {name}, amely később számítódik, ezért régi értéket mutat.
+	Loop	Hurok
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Ezeket olvassa: {names}, amelyek visszaolvassák. Hurkot semmilyen sorrend nem javít meg: módosítsd az egyik képletet.
+	Not in order	Nincs a sorrendben
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Hiányzik a PDF-ben mentett számítási sorrendből: más PDF-megjelenítők talán nem számítják ki.
+	Back to Prepare a form	Vissza az Űrlap előkészítéséhez
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ennek az űrlapnak még egyik mezője sem számítja ki az értékét. Adj egy mezőnek számítást a tulajdonságai Számítás lapján, és itt megjelenik.
+	{names} and {last}	{names} és {last}
+	{field} reads no other field	{field} nem olvas más mezőt
+	{field} reads {fields}	{field} olvassa: {fields}
+	No field reads it	Egyik mező sem olvassa
+	The order saved in the PDF needs tidying	A PDF-ben mentett sorrend rendbetételre szorul
+	Moves only what must move	Csak azt mozgatja, amit muszáj
+	Every field calculates after the fields it reads.	Minden mező az általa olvasott mezők után számítódik.
+	Every field outside a loop calculates after the fields it reads.	A hurkokon kívül minden mező az általa olvasott mezők után számítódik.
+	{field} reads its own value	{field} a saját értékét olvassa
+	{fields} read each other	{fields} egymást olvassák
+	No order can fix a loop. Change one of the formulas.	Egy hurkot semmilyen sorrend nem javít meg. Módosítsd az egyik képletet.
+	Edit {field}'s formula	{field} képletének szerkesztése
+	Order · top calculates first	Sorrend · a felső számítódik először
+	Script	Szkript
+	Links on page	Kapcsolatok az oldalon
+	Show on the page which fields each field reads	Az oldalon mutatja, melyik mező mely mezőket olvassa
+	Drag a field to move it, or select it and press {up} or {down}.	Húzz el egy mezőt az áthelyezéshez, vagy jelöld ki, és nyomd meg ezt: {up} vagy {down}.
 	From:	Ettől:
 	To:	Eddig:
 	High Resolution	Nagy felbontás
@@ -550,6 +591,7 @@
 	Discard private data of other applications	Más alkalmazások privát adatainak elvetése
 	Discard hidden text	Rejtett szöveg elvetése
 	Use Flate to encode streams that are not encoded	A kódolatlan adatfolyamok Flate kódolása
+	In streams that use LZW encoding, use Flate instead	Az LZW kódolású adatfolyamok Flate kódolása
 	Remove invalid links and bookmarks	Érvénytelen hivatkozások és könyvjelzők eltávolítása
 	Remove unreferenced named destinations	Hivatkozás nélküli elnevezett célok eltávolítása
 	Compress document structure (object streams)	Dokumentumszerkezet tömörítése (objektumfolyamok)
@@ -782,6 +824,7 @@
 	Insert Page Number	Oldalszám beszúrása
 	Insert Date	Dátum beszúrása
 	Start page number	Kezdő oldalszám
+	Shrink the page content to make room for the header and footer	Az oldal tartalmának kicsinyítése, hogy elférjen az élőfej és az élőláb
 	Source	Forrás
 	Fit to page	Oldalhoz igazítás
 	Rotation	Elforgatás
@@ -1160,6 +1203,7 @@
 	Off	Ki
 	Flip on long edge	Hosszú él mentén
 	Flip on short edge	Rövid él mentén
+	Printer default	Nyomtató alapértéke
 	Paper:	Papír:
 	Pages to Print	Nyomtatandó oldalak
 	More options:	További beállítások:
@@ -1303,6 +1347,8 @@
 	This document has no layers.	Ebben a dokumentumban nincs réteg.
 	This document has no attachments.	Ebben a dokumentumban nincs melléklet.
 	Hide layer	Réteg elrejtése
+	Layer options	Réteg beállításai
+	Reset to Initial Visibility	Kezdeti láthatóság visszaállítása
 	Show layer	Réteg megjelenítése
 	on page {label}	{label}. oldal
 	Save attachment…	Melléklet mentése…
@@ -1599,6 +1645,7 @@
 	Looking for printers…	Nyomtatók keresése…
 	Sending sheet {s} of {n} to {printer}…	{s}. lap / {n} küldése ide: {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nem található nyomtató. Ellenőrizze, hogy a nyomtató telepítve van-e, és fut-e a nyomtatási sorkezelő, majd nyissa meg újra a Nyomtatást.
+	Reading the printer's settings…	A nyomtató beállításainak beolvasása…
 	Sending to {printer}…	Küldés ide: {printer}…
 	Choose a folder for the searchable files	Válassz mappát a kereshető fájloknak
 	Files are combined in this order. Leave Pages empty to take every page.	A fájlok ebben a sorrendben egyesülnek. Hagyd üresen az Oldalak mezőt, ha minden oldalt kéred.
@@ -1685,6 +1732,7 @@
 	This document has no restrictions to lift	Ebben a dokumentumban nincs feloldható korlátozás
 	The document's security settings don't allow this change	A dokumentum biztonsági beállításai nem engedik ezt a módosítást
 	The document's security settings don't allow copying text and images	A dokumentum biztonsági beállításai nem engedik a szöveg és a képek másolását
+	The document's security settings don't allow printing	A dokumentum biztonsági beállításai nem engedik a nyomtatást
 	Open a document first	Előbb nyiss meg egy dokumentumot
 	Security will be removed when you save	A védelem mentéskor megszűnik
 	Click text or an image to edit it	Kattints a szövegre vagy egy képre a szerkesztéshez
@@ -1848,6 +1896,7 @@
 	Delete field	Mező törlése
 	Duplicate field	Mező megkettőzése
 	Set tab order	Tab-sorrend beállítása
+	Set calculation order	Számítási sorrend beállítása
 	Change initial view	Kezdeti nézet módosítása
 	Set alternate text	Helyettesítő szöveg beállítása
 	Mark figure as decorative	Ábra megjelölése dekoratívként
@@ -1922,6 +1971,10 @@
 	Perimeter	Kerület
 	Area	Terület
 	Drawing scale	Rajz méretaránya
+	Scale	Méretarány
+	Common scales	Gyakori méretarányok
+	Enter a scale such as 1:50.	Adjon meg egy méretarányt, például 1:50.
+	Applying a scale switches units to m / mm.	A méretarány alkalmazása m / mm mértékegységre vált.
 	Snapping	Illesztés
 	Export measurements	Mérések exportálása
 	Open a PDF to measure it.	Nyiss meg egy PDF-et a méréshez.
@@ -2131,6 +2184,7 @@ comment menu	Edit	Szerkesztés
 signature pad	Type	Gépelés
 action wizard	Start	Indítás
 	Reopen the files that were open when PdfCraft last closed	A PdfCraft legutóbbi bezárásakor megnyitott fájlok újranyitása
+	Restore the last view (page, zoom and page display) when a document is opened again	A legutóbbi nézet (oldal, nagyítás és oldalmegjelenítés) visszaállítása a dokumentum újbóli megnyitásakor
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
 	Remove from Recent	Eltávolítás a legutóbbiak közül
 	Remove {name} from Recent	{name} eltávolítása a legutóbbiak közül
@@ -2279,6 +2333,9 @@ key	Space	Szóköz
 	Printer paper and scaling may differ. Check driver settings.	A nyomtató papírja és méretezése eltérhet. Ellenőrizze az illesztőprogram beállításait.
 	Drawing scale changes. Use Actual size for full-scale plans.	A rajz méretaránya változik. Méretarányos tervekhez használja a Tényleges méret beállítást.
 	Reload documents when their files change on disk	Dokumentumok újratöltése, ha a fájljuk megváltozik a lemezen
+	Don't show again	Ne jelenjen meg újra
+	Show a notice when a document is secured	Értesítés megjelenítése, ha egy dokumentum védett
+	Always use my default zoom and page layout	Mindig az alapértelmezett nagyításom és oldalelrendezésem használata
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ez a fájl megváltozott a lemezen. Az Újratöltés az új változatot mutatja, és eldobja a nem mentett módosításokat; a Mentés erre a változatra cseréli le.
 	Reload	Újratöltés
 	Couldn't reload {name}: {e}	{name} újratöltése nem sikerült: {e}
@@ -2340,6 +2397,13 @@ animation effects	Off	Ki
 	no unused output name	nincs szabad kimeneti név
 	no output folder was chosen	nincs kiválasztva kimeneti mappa
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF letöltve|{n} PDF letöltve
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} számítás mostantól az új nevet használja.|{n} számítás mostantól az új nevet használja.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	A számítási sorrendben {n} bejegyzés semmit nem számít ki. A „Sorrend javítása” eltávolítja.|A számítási sorrendben {n} bejegyzés semmit nem számít ki. A „Sorrend javítása” eltávolítja őket.
+@plural	{fields} reads it|{fields} read it	{fields} olvassa|{fields} olvassák
+@plural	{n} field shows an old value|{n} fields show old values	{n} mező régi értéket mutat|{n} mező régi értéket mutat
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} előbb számítódik, mint {fields}, amelyet olvas.|{field} előbb számítódik, mint {fields}, amelyeket olvas.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	További {n} mező túl korán számítódik.|További {n} mező túl korán számítódik.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} hiányzik a PDF-ben mentett sorrendből, ezért más PDF-megjelenítők esetleg nem számítják ki.|{fields} hiányoznak a PDF-ben mentett sorrendből, ezért más PDF-megjelenítők esetleg nem számítják ki őket.
 	Scan	Beolvasás
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Írja alá a nevét egy fehér papírlapon, és fényképezze le erős, egyenletes fényben (vakuval). Válassza ki a fényképet, vagy húzza ide: a PdfCraft megkeresi az aláírást, és eltávolítja a papírt.
 	Choose photo…	Fénykép kiválasztása…
@@ -2433,3 +2497,62 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Create & Edit	Létrehozás és szerkesztés
+	Review & Compare	Áttekintés és összehasonlítás
+	Forms & Signatures	Űrlapok és aláírások
+	Protect & Standardize	Védelem és szabványosítás
+	Customize & Automate	Testreszabás és automatizálás
+	No tools match your search.	Egy eszköz sem felel meg a keresésnek.
+	Expand all tools	Az összes eszköz kibontása
+	Collapse all tools	Az összes eszköz összecsukása
+	Attach a file…	Fájl csatolása…
+	Delete attachment	Melléklet törlése
+	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el
+	Attach {name}	{name} csatolása
+	Delete attachment {key}	{key} melléklet törlése
+	Font	Betűtípus
+	Bulleted list	Felsorolás
+	Numbered list	Számozott lista
+	Alignment	Igazítás
+	Superscript	Felső index
+	Subscript	Alsó index
+	Paragraph spacing	Bekezdéstávolság
+	Less	Kevesebb
+	Other options	Egyéb beállítások
+	Thumbnail size	Bélyegképek mérete
+	Smaller thumbnails	Kisebb bélyegképek
+	Larger thumbnails	Nagyobb bélyegképek
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Megjegyzés alakjának módosítása
+
+# Prepare a form ▸ Text field table
+	Add text field table	Szövegmező-táblázat hozzáadása
+	Text field table	Szövegmező-táblázat
+	Text Field Table	Szövegmező-táblázat
+	Columns	Oszlopok
+	Row spacing	Sorköz
+	Column spacing	Oszlopköz
+	First row number	Első sor száma
+	Column widths	Oszlopszélességek
+	Distribute evenly	Egyenletes elosztás
+	Field names	Mezőnevek
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	Az N vagy a {row} a sor száma, a {col} az oszlopé, a {seq} a cellaé. Ha egyik sincs, a sor száma a végére kerül.
+	Column {n}	{n}. oszlop
+	Add fields	Mezők hozzáadása
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	a sorok túl alacsonyak: növeld a terület magasságát, vagy használj kevesebb sort vagy kisebb sorközt
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	egy oszlop túl keskeny: szélesítsd a területet, adj több helyet az oszlopnak, vagy használj kevesebb oszlopot vagy kisebb oszlopközt
+	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
+	two cells would both be named {name}	két cella neve is {name} lenne
+	a field named {name} already exists	már van {name} nevű mező
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Ma
+@plural	{n} reply|{n} replies	{n} válasz|{n} válasz
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Oldaleszközök
+	Insert pages from a file after the selection…	Oldalak beszúrása fájlból a kijelölés után…
+	Rotate the selected pages counterclockwise	A kijelölt oldalak forgatása az óramutató járásával ellentétesen
+	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
+	Extract the selected pages…	A kijelölt oldalak kibontása…
+	Delete the selected pages	A kijelölt oldalak törlése

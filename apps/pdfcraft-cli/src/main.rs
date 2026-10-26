@@ -84,7 +84,24 @@ help and feedback: https://discord.gg/artcraft"
 );
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `std::env::args` panics on an argument that is not UTF-8 ("called `Result::unwrap()` on an
+    // `Err` value"), which a Latin-1 file name is, and it panics while collecting them: even
+    // `--help` ended that way. Such a name cannot be passed on either, since the paths here are
+    // `str`, so it is a usage error (photocraft#1108).
+    let mut args: Vec<String> = Vec::new();
+    for arg in std::env::args_os().skip(1) {
+        match arg.into_string() {
+            Ok(a) => args.push(a),
+            Err(bad) => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "pdfcraft-cli: `{}` is not valid UTF-8, so it cannot be used as an argument",
+                    bad.to_string_lossy()
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     // `<command> --help` too; only right after the command, so a later `-h` (a value) still reaches it.
     let command = match args.get(1).map(String::as_str) {
         Some("--help" | "-h") => Some("--help"),
@@ -169,14 +186,19 @@ fn version() -> Result<(), CliError> {
 /// found so scripts and CI can gate on it, and when the audit itself cannot run.
 fn audit(args: &[String]) -> Result<(), CliError> {
     validate_options("audit", args, AUDIT_OPTIONS)?;
-    let path = *positional(args).first().ok_or("audit: missing file")?;
+    let path = *positional(args, AUDIT_OPTIONS).first().ok_or("audit: missing file")?;
     let bytes = read(path)?;
     let password = flag(args, "--password");
     let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| format!("{path}: {e}"))?;
     let findings = pdfcraft_audit::audit_redactions(&doc).map_err(|e| format!("{path}: {e}"))?;
     // Rectangles in points from the top-left of the displayed page, as `doc_audit_redactions`
     // reports them; the page geometry is read only when there is something to place.
-    let info = if findings.is_empty() { None } else { Some(inspect(bytes, password).map_err(|e| format!("{path}: {e}"))?) };
+    let info = if findings.is_empty() {
+        None
+    } else {
+        let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+        Some(inspect(bytes, render_password.as_deref()).map_err(|e| format!("{path}: {e}"))?)
+    };
     let items: Vec<serde_json::Value> = findings
         .into_iter()
         .map(|f| {
@@ -203,6 +225,28 @@ struct OptionSpec {
     takes_value: bool,
 }
 
+/// The options whose value is a file or folder. Only these refuse a value that is another
+/// option: a file named `--password` is never what was meant, while a password can be anything
+/// (`--password --page` is a password of `--page`, which tests/text.rs pins), and so can a title.
+/// The way to name a file that does start with `-` is `./--name`, as `--root` already offered.
+const PATH_VALUE_OPTIONS: [&str; 6] = ["--out", "--out-dir", "--json", "--root", "--control", "--script"];
+
+/// Whether a token can be the value of a path option. Another option cannot: `--out --password`
+/// used to write the PDF to a file called `--password` and exit 0 (photocraft#6944).
+fn can_be_path_value(name: &str, value: Option<&str>) -> bool {
+    !PATH_VALUE_OPTIONS.contains(&name) || value.is_some_and(|v| !v.is_empty() && !v.starts_with("--"))
+}
+
+/// The complaint about a path option whose value is missing or is another option.
+fn needs_value(command: &str, name: &str, value: Option<&str>) -> String {
+    match value {
+        Some(v) if !v.is_empty() => {
+            format!("{command}: {name} needs a value and `{v}` is another option; write `./{v}` for a file of that name")
+        }
+        _ => format!("{command}: {name} needs a value"),
+    }
+}
+
 /// Refuse unknown options and malformed confinement flags before any file is read.
 fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Result<(), CliError> {
     if specs.iter().any(|spec| spec.name == "--root") {
@@ -225,9 +269,19 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
             let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
                 return Err(format!("{command}: unknown option --{name}").into());
             };
-            // Other missing or malformed values are left to the command, which reports them in its own
-            // terms (`text` and `extract` explain what a page value must be).
-            i += if spec.takes_value { 2 } else { 1 };
+            // A file's name is not another option, which also closes the gap the walk left for
+            // those: an unknown option in that value position was skipped along with it. Other
+            // values, missing or malformed, are left to the command, which reports them in its
+            // own terms (`text` and `extract` explain what a page value must be).
+            i += if spec.takes_value {
+                let value = args.get(i + 1).map(String::as_str);
+                if !can_be_path_value(spec.name, value) {
+                    return Err(needs_value(command, spec.name, value).into());
+                }
+                2
+            } else {
+                1
+            };
         } else {
             i += 1;
         }
@@ -273,19 +327,24 @@ const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value:
 #[cfg(feature = "mcp")]
 const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--root", takes_value: true }, OptionSpec { name: "--compact", takes_value: false }];
 
-fn positional(args: &[String]) -> Vec<&str> {
+/// The arguments that are not options or their values. Which tokens are values is the spec's
+/// answer: skipping the one after every option made `check-one --edit file.pdf` report "missing
+/// file", the file having been read as `--edit`'s value.
+fn positional<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a str> {
     let mut out = Vec::new();
-    let mut skip = false;
-    for a in args {
-        if skip {
-            skip = false;
-            continue;
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        match specs.iter().find(|spec| spec.name == a.as_str()) {
+            Some(spec) if spec.takes_value => i += 2,
+            // An option that takes no value, and an unknown one, which `validate_options` has
+            // already refused by the time this runs.
+            Some(_) => i += 1,
+            None if a.starts_with("--") => i += 1,
+            None => {
+                out.push(a.as_str());
+                i += 1;
+            }
         }
-        if a.starts_with("--") {
-            skip = true;
-            continue;
-        }
-        out.push(a.as_str());
     }
     out
 }
@@ -296,10 +355,12 @@ fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
 
 fn info(args: &[String]) -> Result<(), CliError> {
     validate_options("info", args, INFO_OPTIONS)?;
-    let path = *positional(args).first().ok_or("info: missing file")?;
+    let path = *positional(args, INFO_OPTIONS).first().ok_or("info: missing file")?;
     let bytes = read(path)?;
     let password = flag(args, "--password");
-    let mut info = inspect(bytes.clone(), password).map_err(|e| e.to_string())?;
+    // The renderer takes only the user password of R2–R4 files; `Session::open` takes either.
+    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
@@ -347,7 +408,7 @@ fn info(args: &[String]) -> Result<(), CliError> {
 
 fn text(args: &[String]) -> Result<(), CliError> {
     validate_options("text", args, TEXT_OPTIONS)?;
-    let path = *positional(args).first().ok_or("text: missing file")?;
+    let path = *positional(args, TEXT_OPTIONS).first().ok_or("text: missing file")?;
     let mut selected_page = None;
     // Validate every supplied value before reading, retaining the first valid selection.
     let mut options = args.iter();
@@ -366,6 +427,9 @@ fn text(args: &[String]) -> Result<(), CliError> {
     }
     let password = flag(args, "--password");
     let mut bytes = read(path)?;
+    // The renderer takes only the user password of R2–R4 files; `Session::open` takes either.
+    // Worked out from the file as read: `bytes` may become the session's display copy below.
+    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
     // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
     // permissions password, a document that doesn't allow copying gives no text.
     let mut session = pdfcraft_engine::Session::new();
@@ -378,12 +442,12 @@ fn text(args: &[String]) -> Result<(), CliError> {
             bytes = doc.display.clone();
         }
     }
-    let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() });
     // A document the renderer could not open (wrong or missing password, unparseable file) has
     // no pages, and "extract every page" of nothing would print nothing and exit 0 (#132). Ask
     // `inspect` why instead, so a protected file fails the same way `info` does.
     if r.page_count() == 0 {
-        let info = inspect(bytes.clone(), password).map_err(|e| format!("text: {e}"))?;
+        let info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| format!("text: {e}"))?;
         if !info.pages.is_empty() {
             return Err("text: the document could not be parsed".into());
         }
@@ -472,23 +536,43 @@ fn edit(args: &[String]) -> Result<(), CliError> {
                 continue;
             }
         }
-        let value = args.get(i + 1).map(String::as_str).ok_or_else(|| format!("edit: {arg} needs a value"))?;
+        // `edit` parses its own options (they run in order), so `--out` is checked here in the
+        // same way: it wrote a PDF to a file called `--full`.
+        let value = args.get(i + 1).map(String::as_str);
+        if !can_be_path_value(arg, value) {
+            return Err(needs_value("edit", arg, value).into());
+        }
+        let value = value.ok_or_else(|| format!("edit: {arg} needs a value"))?;
         match arg {
             "--out" => out = Some(value),
             "--password" => password = Some(value),
             "--rotate" => {
                 let (pages, deg) = value.split_once(':').ok_or("--rotate PAGES:DEGREES")?;
-                edits.push(Edit::RotatePages { pages: page_list(pages)?, degrees: deg.parse().map_err(|_| "bad degrees")? });
+                let degrees: i64 = deg.parse().map_err(|_| format!("bad --rotate degrees: expected a whole number of degrees, got {deg:?}"))?;
+                // The same rule `rotate_pages` enforces, checked here so a bad angle is named
+                // with its option before any file is opened.
+                if degrees % 90 != 0 {
+                    return Err(format!("bad --rotate degrees: expected a multiple of 90 (such as 90, -90 or 180), got {degrees}").into());
+                }
+                edits.push(Edit::RotatePages { pages: page_list(pages)?, degrees });
             }
             "--delete" => edits.push(Edit::DeletePages { pages: page_list(value)? }),
             "--move" => {
                 let (pages, to) = value.split_once(':').ok_or("--move PAGES:TO")?;
-                let to: usize = to.parse().map_err(|_| "bad target")?;
-                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.checked_sub(1).ok_or("--move target must be at least 1")? });
+                let target: usize = to
+                    .parse()
+                    .ok()
+                    .filter(|target| *target > 0)
+                    .ok_or_else(|| format!("bad --move target: expected a page number of at least 1, got {to:?}"))?;
+                edits.push(Edit::MovePages { pages: page_list(pages)?, to: target - 1 });
             }
             "--insert-blank" => {
-                let at: usize = value.parse().map_err(|_| "bad position")?;
-                edits.push(Edit::InsertBlankPage { at: at.checked_sub(1).ok_or("--insert-blank must be at least 1")?, width: 612.0, height: 792.0 });
+                let position: usize = value
+                    .parse()
+                    .ok()
+                    .filter(|position| *position > 0)
+                    .ok_or_else(|| format!("bad --insert-blank position: expected a page position of at least 1, got {value:?}"))?;
+                edits.push(Edit::InsertBlankPage { at: position - 1, width: 612.0, height: 792.0 });
             }
             "--title" => edits.push(Edit::SetInfo { key: "Title".into(), value: value.into() }),
             "--author" => edits.push(Edit::SetInfo { key: "Author".into(), value: value.into() }),
@@ -545,7 +629,7 @@ fn file_stem(path: &str) -> String {
 fn combine(args: &[String]) -> Result<(), CliError> {
     validate_options("combine", args, COMBINE_OPTIONS)?;
     let out = flag(args, "--out").ok_or("combine: missing --out")?;
-    let inputs = positional(args);
+    let inputs = positional(args, COMBINE_OPTIONS);
     if inputs.len() < 2 {
         return Err("combine: give at least two input files".into());
     }
@@ -556,7 +640,7 @@ fn combine(args: &[String]) -> Result<(), CliError> {
 
 fn extract(args: &[String]) -> Result<(), CliError> {
     validate_options("extract", args, EXTRACT_OPTIONS)?;
-    let path = *positional(args).first().ok_or("extract: missing file")?;
+    let path = *positional(args, EXTRACT_OPTIONS).first().ok_or("extract: missing file")?;
     let out = flag(args, "--out").ok_or("extract: missing --out")?;
     let pages = page_list(flag(args, "--pages").ok_or("extract: missing --pages")?)?;
     let mut session = pdfcraft_engine::Session::new();
@@ -568,9 +652,18 @@ fn extract(args: &[String]) -> Result<(), CliError> {
 fn split(args: &[String]) -> Result<(), CliError> {
     validate_options("split", args, SPLIT_OPTIONS)?;
     use pdfcraft_engine::SplitBy;
-    let path = *positional(args).first().ok_or("split: missing file")?;
+    let path = *positional(args, SPLIT_OPTIONS).first().ok_or("split: missing file")?;
     let by = match (flag(args, "--every"), flag(args, "--before")) {
-        (Some(n), None) => SplitBy::PageCount(n.parse().map_err(|_| "bad --every")?),
+        (Some(n), None) => {
+            // A count the splitter cannot hold is refused here, before the file is opened,
+            // rather than silently clamped to 1 further down.
+            let count = n
+                .parse::<usize>()
+                .ok()
+                .filter(|count| *count > 0)
+                .ok_or_else(|| format!("bad --every: expected a positive whole number of pages, got {n:?}"))?;
+            SplitBy::PageCount(count)
+        }
         (None, Some(list)) => SplitBy::Before(page_list(list)?),
         _ => return Err("split: give either --every N or --before PAGES".into()),
     };
@@ -590,15 +683,28 @@ fn split(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// A `--dpi` the renderer can be asked for: a positive, finite number. `0`, a negative value
+/// or `NaN` parse as an `f32` but reach the renderer as a scale it refuses with its own
+/// internal message (and in `check`, passed on as text, they would turn every file into a
+/// child that printed nothing), so the CLI names the option and the value instead.
+fn parse_dpi(value: &str) -> Result<f32, String> {
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|dpi| dpi.is_finite() && *dpi > 0.0)
+        .ok_or_else(|| format!("bad --dpi: expected a positive number of dots per inch, got {value:?}"))
+}
+
 fn render(args: &[String]) -> Result<(), CliError> {
     validate_options("render", args, RENDER_OPTIONS)?;
-    let path = *positional(args).first().ok_or("render: missing file")?;
-    let page: usize = flag(args, "--page").unwrap_or("1").parse().map_err(|_| "bad --page")?;
-    let page_index = page.checked_sub(1).ok_or("--page must be at least 1")?;
-    let dpi: f32 = flag(args, "--dpi").unwrap_or("96").parse().map_err(|_| "bad --dpi")?;
+    let path = *positional(args, RENDER_OPTIONS).first().ok_or("render: missing file")?;
+    let page: usize =
+        flag(args, "--page").unwrap_or("1").parse().ok().filter(|page| *page > 0).ok_or("bad --page: expected a positive page number")?;
+    let page_index = page - 1;
+    let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("96"))?;
     let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
     // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
-    let format = match Path::new(out).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+    let format = match Path::new(out).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).as_deref() {
         Some("png") => Some(ImageFormat::Png),
         Some("jpg" | "jpeg") => Some(ImageFormat::Jpeg { quality: 90 }),
         Some("tif" | "tiff") => Some(ImageFormat::Tiff),
@@ -609,14 +715,18 @@ fn render(args: &[String]) -> Result<(), CliError> {
     // must agree with it (and with independent viewers), while keeping the file it reads intact.
     let bytes = read(path)?;
     let password = flag(args, "--password");
-    let display = if inspect(bytes.clone(), password).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
+    // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
+    // copy take either.
+    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
         let mut session = pdfcraft_engine::Session::new();
         let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
         session.get(id).ok_or("render: the document could not be opened")?.display.clone()
     } else {
         pdfcraft_engine::display_bytes_for(bytes, password)
     };
-    let mut r = PageRenderer::new(display, RenderConfig { password: password.map(Arc::from), reject_oversize: true, ..Default::default() });
+    let mut r =
+        PageRenderer::new(display, RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() });
     let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
     if let Some(e) = p.error {
         return Err(e.into());
@@ -638,6 +748,10 @@ fn render(args: &[String]) -> Result<(), CliError> {
             pdfcraft_render::RenderWarning::ContentTruncated => {
                 let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: content past the page's safety budget was skipped");
             }
+            pdfcraft_render::RenderWarning::ColourFallback => {
+                let _ =
+                    writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
+            }
         }
     }
     Ok(())
@@ -646,8 +760,8 @@ fn render(args: &[String]) -> Result<(), CliError> {
 /// Child-process body for `check`: prints one JSON line.
 fn check_one(args: &[String]) -> Result<(), CliError> {
     validate_options("check-one", args, CHECK_ONE_OPTIONS)?;
-    let path = *positional(args).first().ok_or("check-one: missing file")?;
-    let dpi: f32 = flag(args, "--dpi").unwrap_or("36").parse().map_err(|_| "bad --dpi")?;
+    let path = *positional(args, CHECK_ONE_OPTIONS).first().ok_or("check-one: missing file")?;
+    let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("36"))?;
     let start = Instant::now();
     let bytes = read(path)?;
     let (status, pages, failed, detail, warnings) = match inspect(bytes.clone(), None) {
@@ -729,7 +843,7 @@ fn collect(paths: &[&str]) -> Vec<PathBuf> {
             if let Ok(rd) = std::fs::read_dir(&p) {
                 stack.extend(rd.flatten().map(|e| e.path()));
             }
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        } else if p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
             out.push(p);
         }
     }
@@ -739,12 +853,23 @@ fn collect(paths: &[&str]) -> Vec<PathBuf> {
 
 fn check(args: &[String]) -> Result<(), CliError> {
     validate_options("check", args, CHECK_OPTIONS)?;
-    let files = collect(&positional(args));
+    // Every option is checked before the inputs are scanned, so a bad value is one message,
+    // not one problem per file: a zero timeout used to make every file time out, and a bad
+    // dpi used to reach each child, which printed nothing and was reported as a crash.
+    let timeout_value = flag(args, "--timeout").unwrap_or("20");
+    let timeout = Duration::from_secs(
+        timeout_value
+            .parse::<u64>()
+            .ok()
+            .filter(|secs| *secs > 0)
+            .ok_or_else(|| format!("bad --timeout: expected a positive whole number of seconds, got {timeout_value:?}"))?,
+    );
+    let dpi = flag(args, "--dpi").unwrap_or("36").to_string();
+    parse_dpi(&dpi)?;
+    let files = collect(&positional(args, CHECK_OPTIONS));
     if files.is_empty() {
         return Err("check: no PDF files found".into());
     }
-    let timeout = Duration::from_secs(flag(args, "--timeout").unwrap_or("20").parse().map_err(|_| "bad --timeout")?);
-    let dpi = flag(args, "--dpi").unwrap_or("36").to_string();
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut results = Vec::new();
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
@@ -924,9 +1049,9 @@ fn run(args: &[String]) -> Result<(), CliError> {
         }
         return Ok(());
     }
-    let tool = *positional(args).first().ok_or("run: missing tool name (see `pdfcraft-cli tools`)")?;
+    let tool = *positional(args, RUN_OPTIONS).first().ok_or("run: missing tool name (see `pdfcraft-cli tools`)")?;
     let mut obj = serde_json::Map::new();
-    for kv in positional(args).iter().skip(1) {
+    for kv in positional(args, RUN_OPTIONS).iter().skip(1) {
         let (k, v) = kv.split_once('=').ok_or(format!("run: expected key=value, got {kv:?}"))?;
         let value = serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.to_string()));
         obj.insert(k.to_string(), value);
@@ -992,7 +1117,7 @@ fn ui(args: &[String]) -> Result<(), CliError> {
     // Refused rather than truncated, which would quietly reach some other port.
     let port = u16::try_from(port).map_err(|_| format!("{file}: {port} is not a port number"))?;
     let token = info["token"].as_str().ok_or(format!("{file}: no token"))?;
-    let pos = positional(args);
+    let pos = positional(args, UI_OPTIONS);
     let method = *pos.first().ok_or("ui: missing method (state, inspect, click, drag, type, key, command, commands, set, open, screenshot)")?;
     let method = if method.starts_with("ui.") { method.to_string() } else { format!("ui.{method}") };
     let mut params = serde_json::Map::new();

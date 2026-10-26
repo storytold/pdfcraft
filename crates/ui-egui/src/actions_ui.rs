@@ -301,16 +301,18 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool
     close
 }
 
+/// Draw the custom-action editor: name, description and ordered steps; Save stays disabled until the name is
+/// unique and non-empty and at least one step exists.
 fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some((original, a)) = app.wizard.editing.as_mut() else { return false };
     ui.label(egui::RichText::new(if original.is_some() { tl!("Edit Action") } else { tl!("New Action") }).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     egui::Grid::new("action-edit").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label(tl!("Action name:"));
-        ui.add(crate::widgets::line(&mut a.name).desired_width(320.0).id_salt("action-name"));
+        let name_label = ui.label(tl!("Action name:"));
+        ui.add(crate::widgets::line(&mut a.name).desired_width(320.0).id_salt("action-name")).labelled_by(name_label.id);
         ui.end_row();
-        ui.label(tl!("Description:"));
-        ui.add(crate::widgets::line(&mut a.description).desired_width(320.0).id_salt("action-description"));
+        let description_label = ui.label(tl!("Description:"));
+        ui.add(crate::widgets::line(&mut a.description).desired_width(320.0).id_salt("action-description")).labelled_by(description_label.id);
         ui.end_row();
     });
     ui.add_space(6.0);
@@ -324,9 +326,9 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         for (i, s) in a.steps.iter_mut().enumerate() {
             ui.push_id(i, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("{}. {}", i + 1, tl!(s.label())));
+                    let step_label = ui.label(format!("{}. {}", i + 1, tl!(s.label())));
                     if let Some(arg) = s.arg_mut() {
-                        ui.add(crate::widgets::line(arg).desired_width(220.0));
+                        ui.add(crate::widgets::line(arg).desired_width(220.0)).labelled_by(step_label.id);
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button(tl!("Remove")).clicked() {

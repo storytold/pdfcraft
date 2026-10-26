@@ -96,7 +96,7 @@ impl PageSelectionInput {
                     .char_limit(16_384)
                     .hint_text(current.saturating_add(1).to_string()),
             );
-            field.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), label));
+            field.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), label));
             commit = ui.is_enabled() && !cancel && field.lost_focus();
             let pick = crate::icons::button(ui, "chevron-down", 26.0, false, tl!("Select pages"));
             chosen = egui::Popup::menu(&pick).show(menu).and_then(|r| r.inner);

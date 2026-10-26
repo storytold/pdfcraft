@@ -214,6 +214,9 @@ fn has_pdfa_intent(doc: &Document) -> bool {
     pdfa_intent_profile(doc).is_some()
 }
 
+/// Largest output-intent profile decoded to read its header; real ICC profiles stay well under it.
+const MAX_ICC_PROFILE: usize = 16 << 20;
+
 /// The PDF/A output intent's destination profile: `Some(n)` with the profile's number of colour
 /// components (`/N`, else the ICC header's data colour space; `None` when neither says), or
 /// `None` when the document has no PDF/A output intent.
@@ -229,7 +232,7 @@ fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
         let Object::Stream(s) = &*profile else { return Some(None) };
         Some(s.dict.int(b"N").or_else(|| {
             // ICC.1 header: the data colour space is bytes 16–19.
-            match s.decoded().ok()?.get(16..20)? {
+            match s.decoded_within(MAX_ICC_PROFILE).ok()?.get(16..20)? {
                 b"GRAY" => Some(1),
                 b"RGB " => Some(3),
                 b"CMYK" => Some(4),
@@ -339,8 +342,17 @@ fn is_content(d: &Dict) -> bool {
 /// The device colour a content stream sets. It is read operator by operator, so the bytes of a
 /// string, a comment or an inline image are never taken for an operator, and an operator right
 /// before a delimiter (`1 k/GS0 gs`) is still found.
-fn content_colour(data: &[u8], used: &mut DeviceColour) {
-    for op in pdfcraft_content::parse(data).ops {
+///
+/// Operators are read one at a time and dropped, so a stream of millions of tiny operators never
+/// becomes millions of parsed ones in memory, and reading stops once all three spaces are set.
+/// Returns how many operators it read.
+fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
+    let mut read = 0;
+    for op in pdfcraft_content::ops(data) {
+        if used.gray && used.rgb && used.cmyk {
+            break;
+        }
+        read += 1;
         match op.op.as_slice() {
             b"g" | b"G" => used.gray = true,
             b"rg" | b"RG" => used.rgb = true,
@@ -366,6 +378,7 @@ fn content_colour(data: &[u8], used: &mut DeviceColour) {
             _ => {}
         }
     }
+    read
 }
 
 /// Whether any content or object uses a device colour space.
@@ -400,10 +413,16 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
             && (referenced.contains(r) || is_content(&s.dict))
             && let Ok(data) = s.decoded()
         {
-            content_colour(&data, &mut used);
+            let _ = content_colour(&data, &mut used);
         }
     }
     used
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Page `/Annots` entries read while matching annotations to their pages.
+    static ANNOT_ENTRIES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Check `doc` against `level`.
@@ -476,17 +495,20 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
-    let page_of = |r: ObjRef| {
-        pages.iter().position(|p| {
-            p.dict
-                .get(b"Annots")
-                .map(|a| doc.resolve(a))
-                .and_then(|a| a.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .any(|x| x.as_ref() == Some(r))
-        })
-    };
+    // Each annotation's page: the first page that lists it.
+    let mut annot_pages: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
+    for (i, p) in pages.iter().enumerate() {
+        if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(a) = a.as_array()
+        {
+            #[cfg(test)]
+            ANNOT_ENTRIES_READ.with(|n| n.set(n.get() + a.len()));
+            for r in a.iter().filter_map(Object::as_ref) {
+                annot_pages.entry(r).or_insert(i);
+            }
+        }
+    }
+    let page_of = |r: ObjRef| annot_pages.get(&r).copied();
     for (i, p) in pages.iter().enumerate() {
         if p.dict.get(b"AA").is_some() {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
@@ -496,12 +518,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         let Some(d) = dict_of(o) else { continue };
         let ty = d.name(b"Type");
         let sub = d.name(b"Subtype");
-        // Actions anywhere (structure elements also have /S: their role).
-        if let Some(s) = d.name(b"S")
-            && FORBIDDEN_ACTIONS.contains(&s)
-            && is_action(d)
-        {
-            issue("6.5.1", "A {} action isn't allowed", Some(String::from_utf8_lossy(s).into_owned()), None, true);
+        // Actions anywhere (structure elements also have /S: their role), with the actions they
+        // chain to and those written directly in an /A or /OpenAction.
+        let own = (d.get(b"S").is_some() && is_action(d)).then_some(d);
+        let direct = [b"A".as_slice(), b"OpenAction"].map(|k| d.get(k).and_then(|a| a.as_dict()));
+        for a in [own].into_iter().chain(direct).flatten() {
+            if let Some(s) = chain_forbidden(doc, a) {
+                issue("6.5.1", "A {} action isn't allowed", Some(s), None, true);
+            }
         }
         // Annotations.
         if ty == Some(b"Annot") || (sub.is_some() && d.get(b"Rect").is_some() && d.get(b"P").is_some()) {
@@ -633,10 +657,62 @@ fn is_action(d: &Dict) -> bool {
     }
 }
 
-/// Whether `o` is (or refers to) a forbidden action, or to nothing.
+/// How many actions one action and the `/Next` actions written inside it may hold before the
+/// whole chain counts as forbidden, since it can't be checked.
+const MAX_ACTION_CHAIN: usize = 1024;
+
+/// The first forbidden action type in the action `a` or in the actions written directly in its
+/// `/Next` (ISO 32000-2 12.6.2: a dictionary or an array of them, which may be an object of its
+/// own). An action `/Next` refers to is an object of its own, checked and removed as one.
+fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
+    let mut read = 0;
+    let mut seen = std::collections::HashSet::new();
+    // Actions written in an indirect `/Next` array, copied out of it.
+    let mut held: Vec<Dict> = Vec::new();
+    if let Some(s) = walk_chain(doc, a, &mut read, &mut seen, &mut held) {
+        return Some(s);
+    }
+    while let Some(d) = held.pop() {
+        if let Some(s) = walk_chain(doc, &d, &mut read, &mut seen, &mut held) {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// [`chain_forbidden`] for the actions reachable from `a` through direct `/Next` entries. The
+/// actions of each indirect `/Next` array (each read once) go to `held`.
+fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collections::HashSet<ObjRef>, held: &mut Vec<Dict>) -> Option<String> {
+    let mut stack = vec![a];
+    while let Some(d) = stack.pop() {
+        *read += 1;
+        if *read > MAX_ACTION_CHAIN {
+            return Some("too deeply chained".into());
+        }
+        if let Some(s) = d.name(b"S")
+            && FORBIDDEN_ACTIONS.contains(&s)
+        {
+            return Some(String::from_utf8_lossy(s).into_owned());
+        }
+        match d.get(b"Next") {
+            Some(Object::Dict(next)) => stack.push(next),
+            Some(Object::Array(list)) => stack.extend(list.iter().filter_map(Object::as_dict)),
+            Some(Object::Ref(r)) if seen.insert(*r) => {
+                if let Object::Array(list) = &*doc.get(*r) {
+                    // More than the chain limit can't be read anyway.
+                    held.extend(list.iter().filter_map(Object::as_dict).take(MAX_ACTION_CHAIN).cloned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether `o` is (or refers to) a forbidden action or one chaining to it, or to nothing.
 fn forbidden(doc: &Document, o: &Object) -> bool {
     match &*doc.resolve(o) {
-        Object::Dict(a) => a.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s)),
+        Object::Dict(a) => chain_forbidden(doc, a).is_some(),
         Object::Null => true,
         _ => false,
     }
@@ -782,13 +858,19 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             files += 1;
         }
     }
-    // Forbidden actions left as objects of their own (nothing refers to them any more).
+    // Forbidden actions left as objects of their own, or chained to by one, and those written
+    // directly in an /A elsewhere (an outline item's, say).
     for (r, o) in objects(doc) {
-        if let Object::Dict(d) = &*o
-            && d.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s))
-            && is_action(d)
-        {
+        let Object::Dict(d) = &*o else { continue };
+        if d.get(b"S").is_some() && is_action(d) && chain_forbidden(doc, d).is_some() {
             doc.set(r, Object::Null);
+            actions += 1;
+        } else if let Some(Object::Dict(a)) = d.get(b"A")
+            && chain_forbidden(doc, a).is_some()
+        {
+            let mut nd = d.clone();
+            nd.remove(b"A");
+            doc.set(r, Object::Dict(nd));
             actions += 1;
         }
     }

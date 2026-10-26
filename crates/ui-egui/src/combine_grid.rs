@@ -34,9 +34,13 @@ const UPLOAD_BYTES_PER_FRAME: usize = 8 << 20;
 /// view are kept even over budget (at most a screenful of thumbnails of at most [`MAX_SIDE`]).
 const TEXTURE_BUDGET: usize = 32 << 20;
 /// The longest side of a thumbnail, in pixels.
-/// (Room for a Letter page at 200% on a screen of 1.5 pixels per point; sharper screens upscale a
-/// little at the largest sizes.)
-const MAX_SIDE: f32 = 768.0;
+/// (Room for a Letter page at 500% on a screen of 1.5 pixels per point; sharper screens upscale a
+/// little at the largest sizes.) This only binds near the top of the zoom range: a card below it
+/// asks for less than this and costs no more than it did. Near the top one thumbnail is a few
+/// megabytes, so [`TEXTURE_BUDGET`] and [`UPLOAD_BYTES_PER_FRAME`] keep the cache at a screenful
+/// plus one frame's uploads — and at the top of the range a screenful is a card or two, because a
+/// card is wider than most windows.
+const MAX_SIDE: f32 = 1536.0;
 /// Thumbnail sizes round up to this many pixels, so a slightly different layout reuses them.
 const SIZE_STEP: u32 = 16;
 /// The box a page is fitted in at 100%, and the room the card adds around it (for the hover bar
@@ -50,8 +54,8 @@ const ABOVE: f32 = 32.0;
 const BAR_H: f32 = 34.0;
 /// The grid's zoom range, and the sizes its buttons and keys step through (the slider, the wheel
 /// and a pinch go anywhere between).
-pub(crate) const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.6..=2.0;
-const ZOOM_STEPS: [f32; 7] = [0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0];
+pub(crate) const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.6..=5.0;
+const ZOOM_STEPS: [f32; 11] = [0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0];
 
 /// The next size up (or down) from `zoom`; the end of the range stays put.
 pub(crate) fn zoom_step(zoom: f32, larger: bool) -> f32 {
@@ -610,7 +614,14 @@ pub(crate) fn grid(
     let over_grid = ui.rect_contains_pointer(viewport);
     let mut width = viewport.width();
     let mut focused_card = None;
-    let output = egui::ScrollArea::vertical().id_salt("combine-grid").auto_shrink([false, false]).show_viewport(ui, |ui, clip| {
+    // A zoom in the previous frame asks for a new scroll position. 0.37 keeps `State`'s offset
+    // private, so the request is applied through the builder and consumed here.
+    let pending_offset = ctx.data_mut(|d| d.remove_temp::<Vec2>(pending_offset_id()));
+    let mut grid = egui::ScrollArea::vertical().id_salt("combine-grid").auto_shrink([false, false]);
+    if let Some(offset) = pending_offset {
+        grid = grid.vertical_scroll_offset(offset.y);
+    }
+    grid.show_viewport(ui, |ui, clip| {
         // Dragging near the top or bottom edge scrolls.
         if drag.is_some()
             && let Some(p) = pointer
@@ -788,18 +799,21 @@ pub(crate) fn grid(
                 let cols = columns_in(width, cell);
                 let content = TOP + places.len().div_ceil(cols) as f32 * cell.y;
                 let y = (TOP + (i / cols) as f32 * cell.y - above).min(content - viewport.height()).max(0.0);
-                // Set as the scroll position itself, before the next frame draws anything: no
+                // Applied by the next frame's scroll area, before anything is drawn there: no
                 // jump, and no scroll still animating (to a card revealed by the keys, say) can
-                // carry it elsewhere.
-                let mut state = egui::scroll_area::State::default();
-                state.offset = vec2(0.0, y);
-                state.store(&ctx, output.id);
+                // carry it elsewhere. The request is consumed once.
+                ctx.data_mut(|d| d.insert_temp(pending_offset_id(), vec2(0.0, y)));
             }
             ctx.request_repaint();
         }
     }
 
     action
+}
+
+/// The scroll position a zoom asked the next frame's grid to start at.
+fn pending_offset_id() -> egui::Id {
+    egui::Id::unique("pdfcraft-combine-grid-offset")
 }
 
 /// One card's place and what it shows.
@@ -822,8 +836,8 @@ struct Card {
 impl Card {
     fn id(&self, ui: &egui::Ui, f: &CombineFile) -> egui::Id {
         match self.page {
-            None => ui.id().with(("combine-card", f.id)),
-            Some((nth, ..)) => ui.id().with(("combine-page", f.id, nth)),
+            None => ui.scope_id().with(("combine-card", f.id)),
+            Some((nth, ..)) => ui.scope_id().with(("combine-page", f.id, nth)),
         }
     }
 
@@ -841,7 +855,7 @@ impl Card {
         };
         // As the organize grid's pages: a check box that is on when selected; and, for screen
         // readers, selected as items in a list are.
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, self.selected, &label));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, self.selected, &label));
         let pages = match self.page {
             // For screen readers: which page of how many.
             Some((_, p, _)) => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &p.saturating_add(1).to_string()), ("n", &f.pages.to_string())]),
@@ -965,9 +979,11 @@ impl Card {
             }
             None => (theme::medium(12.5), t.text, name_y),
         };
-        let fits = |s: &str| painter.layout_no_wrap(crate::bidi::visual(s).into_owned(), font.clone(), colour).size().x <= max_w;
-        let shown = crate::bidi::visual(&fit_name(&f.name, fits)).into_owned();
-        painter.text(pos2(c.center().x, y), Align2::CENTER_CENTER, shown, font, colour);
+        let fits = |s: &str| crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), colour).size().x <= max_w;
+        let shown = fit_name(&f.name, fits);
+        // A file name is file/path chrome: always left to right, so an Arabic name ends in `.pdf`.
+        let name_galley = crate::bidi::layout_ltr(ui, shown, font, colour);
+        painter.galley(pos2(c.center().x - name_galley.size().x / 2.0, y - name_galley.size().y / 2.0), name_galley, colour);
         let note = if self.page.is_none() && !f.range.trim().is_empty() {
             match &self.check {
                 Ok(k) => Some((crate::i18n::fmt(tl!("Pages: {k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]), t.text_muted)),
@@ -1139,10 +1155,10 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens) {
     // No larger than the GPU takes, or the render would be refused.
     let longest = ctx.input(|i| i.max_texture_side as f32).min(PREVIEW_SIDE);
     let thumbs = &mut app.combine_thumbs;
-    let modal = egui::Modal::new(egui::Id::new("combine-preview")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("combine-preview")).show(ctx, |ui| {
         ui.set_width(width);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::bidi::visual(&f.name)).font(theme::semibold(15.0)));
+            ui.label(egui::RichText::new(f.name.clone()).font(theme::semibold(15.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if icons::button(ui, "x", 30.0, false, tl!("Close")).clicked() {
                     close = true;
@@ -1371,10 +1387,10 @@ mod tests {
         // The box follows the zoom, within its range; nonsense is 100%.
         assert_eq!(paper_box(1.0), PAPER);
         assert_eq!(paper_box(2.0), PAPER * 2.0);
-        assert_eq!(paper_box(99.0), PAPER * 2.0);
+        assert_eq!(paper_box(99.0), PAPER * 5.0);
         assert_eq!(paper_box(-1.0), PAPER * 0.6);
         assert_eq!(paper_box(f32::NAN), PAPER);
-        for zoom in [0.6, 1.0, 2.0] {
+        for zoom in [0.6, 1.0, 2.0, 5.0] {
             let fit = paper_box(zoom);
             // Letter is a little wider than the box: it fills the width. A tall page fills the height.
             let letter = paper_size(612.0, 792.0, fit).unwrap();
@@ -1394,18 +1410,41 @@ mod tests {
     fn zoom_buttons_step_through_round_sizes() {
         let mut z = 0.6;
         let mut up = vec![z];
-        while z < 2.0 {
+        while z < 5.0 {
             z = zoom_step(z, true);
             up.push(z);
         }
         assert_eq!(up, ZOOM_STEPS);
-        assert_eq!(zoom_step(2.0, true), 2.0, "the largest stays put");
+        assert_eq!(zoom_step(5.0, true), 5.0, "the largest stays put");
         assert_eq!(zoom_step(0.6, false), 0.6, "the smallest stays put");
         // From anywhere the slider left it, to the next round size.
         assert_eq!(zoom_step(1.1, true), 1.25);
         assert_eq!(zoom_step(1.1, false), 1.0);
         assert_eq!(zoom_step(1.953, true), 2.0);
         assert_eq!(zoom_step(1.0000001, true), 1.25, "a hair over a size counts as that size");
+    }
+
+    #[test]
+    fn the_cards_zoom_far_enough_to_read_a_value() {
+        // #2531: the grid stopped at 200%, which was not enough to read invoice values while
+        // reordering the pages of a statement. It has to reach 500%.
+        assert_eq!(*ZOOM_RANGE.end(), 5.0, "the grid stops at {}%, not 500%", ZOOM_RANGE.end() * 100.0);
+        assert_eq!(paper_box(5.0), PAPER * 5.0, "500% is kept, not clamped to the old ceiling");
+        // Every round size above the old 200% ceiling is a step the toolbar can reach.
+        let mut z = *ZOOM_RANGE.start();
+        let mut up = vec![z];
+        while z < *ZOOM_RANGE.end() {
+            z = zoom_step(z, true);
+            up.push(z);
+        }
+        for want in [2.5, 3.0, 4.0, 5.0] {
+            assert!(up.contains(&want), "no step reaches {want}%: {up:?}");
+        }
+        // A card stays sharp at the ceiling instead of upscaled from the old 768px cap. A Letter
+        // page fills the height of the box, so at 500% it needs PAPER.y * 5.0 points of it, which
+        // on a 1.5 pixels-per-point screen is this many pixels.
+        let wanted = PAPER.y * 5.0 * 1.5;
+        assert!(MAX_SIDE >= wanted, "MAX_SIDE {MAX_SIDE} is under the {wanted}px a card needs at 500%");
     }
 
     #[test]

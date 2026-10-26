@@ -146,6 +146,13 @@ impl<'a> InterpreterCache<'a> {
     pub fn decoded_image_decodes(&self) -> usize {
         self.decoded_cache.decodes()
     }
+
+    /// PdfCraft patch (48): how many `/ICCBased` profiles were read through this cache, for
+    /// diagnostics and tests. A profile used again, by the same stream object or by a copy with
+    /// the same dictionary and bytes, is read once.
+    pub fn icc_profile_reads(&self) -> usize {
+        self.object_cache.icc_profile_reads()
+    }
 }
 
 /// A per-page interpretation context that borrows shared data from an [`InterpreterCache`].
@@ -162,6 +169,35 @@ pub struct Context<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) ocg_state: OcgState,
     nesting_depth: u32,
+    /// PdfCraft patch: estimated bytes held by saved states, and for each `q` not saved because
+    /// a limit was reached, the clip count to return to at its `Q`.
+    saved_bytes: usize,
+    skipped_saves: Vec<usize>,
+    // PdfCraft patch (63).
+    /// This is the content of a luminosity soft mask whose group colour space is `/DeviceCMYK`,
+    /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
+    /// §10.4.2.3) rather than through the CMYK profile used for display.
+    pub(crate) luminosity_in_device_cmyk: bool,
+}
+
+/// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
+/// array and clip list included, so without a limit short operators multiply one large state.
+const MAX_SAVED_STATES: usize = 4096;
+/// PdfCraft patch: most bytes all saved states may hold together.
+const MAX_SAVED_STATE_BYTES: usize = 64 << 20;
+
+/// Roughly what a saved copy of `state` holds.
+fn state_bytes(state: &State<'_>) -> usize {
+    size_of::<State<'_>>()
+        .saturating_add(
+            state
+                .graphics_state
+                .stroke_props
+                .dash_array
+                .len()
+                .saturating_mul(size_of::<f32>()),
+        )
+        .saturating_add(state.clips.len().saturating_mul(size_of::<ClipType>()))
 }
 
 impl<'a> Context<'a> {
@@ -178,6 +214,8 @@ impl<'a> Context<'a> {
         NESTED_PAINTS.with(|n| n.set(0));
         CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
+        // PdfCraft patch (55): a fallback left over from another page is not this page's.
+        crate::color::take_color_fallback();
         crate::encode::reset_mesh_budget();
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
@@ -216,15 +254,34 @@ impl<'a> Context<'a> {
             interpreter_cache: cache.clone(),
             ocg_state,
             nesting_depth,
+            saved_bytes: 0,
+            skipped_saves: Vec::new(),
+            luminosity_in_device_cmyk: false,
         }
     }
 
     pub(crate) fn save_state(&mut self) {
-        let Some(cur) = self.states.last().cloned() else {
+        let Some(cur) = self.states.last() else {
             warn!("attempted to save state without existing state");
             return;
         };
 
+        // PdfCraft patch: past either limit the `q` is recorded but nothing is copied. Its `Q`
+        // still removes the clips added since; other changes made in between are kept.
+        let bytes = state_bytes(cur);
+        if !self.skipped_saves.is_empty()
+            || self.states.len() >= MAX_SAVED_STATES
+            || self.saved_bytes.saturating_add(bytes) > MAX_SAVED_STATE_BYTES
+        {
+            if self.skipped_saves.is_empty() {
+                warn!("too many saved graphics states; further saves are not kept");
+            }
+            self.skipped_saves.push(cur.clips.len());
+            return;
+        }
+
+        let cur = cur.clone();
+        self.saved_bytes = self.saved_bytes.saturating_add(bytes);
         self.states.push(cur);
     }
 
@@ -301,6 +358,14 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn restore_state(&mut self, device: &mut impl Device<'a>) {
+        // PdfCraft patch: a save that was not kept is the most recent one.
+        if let Some(target_clips) = self.skipped_saves.pop() {
+            while self.get().clips.len() > target_clips {
+                self.pop_clip_path(device);
+            }
+            return;
+        }
+
         let Some(target_clips) = self
             .states
             .get(self.states.len().saturating_sub(2))
@@ -317,6 +382,10 @@ impl<'a> Context<'a> {
         // The first state should never be popped.
         if self.states.len() > 1 {
             self.states.pop();
+            // PdfCraft patch: the state now on top is the copy that was charged when saved.
+            if let Some(top) = self.states.last() {
+                self.saved_bytes = self.saved_bytes.saturating_sub(state_bytes(top));
+            }
         }
 
         device.set_soft_mask(
@@ -388,7 +457,8 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn num_states(&self) -> usize {
-        self.states.len()
+        // PdfCraft patch: saves not kept still count, so callers restore back past them.
+        self.states.len().saturating_add(self.skipped_saves.len())
     }
 
     pub(crate) fn nesting_depth(&self) -> u32 {
@@ -447,36 +517,160 @@ pub(crate) fn path_as_rect(path: &BezPath) -> Option<Rect> {
         return None;
     }
 
-    let bbox = path.fast_bounding_box();
-    let (min_x, min_y, max_x, max_y) = (bbox.min_x(), bbox.min_y(), bbox.max_x(), bbox.max_y());
-    let mut corners = [false; 4];
-
-    let mut check_point = |p: Point| {
-        corners[0] |= p.x.is_nearly_equal(min_x) && p.y.is_nearly_equal(min_y);
-        corners[1] |= p.x.is_nearly_equal(min_x) && p.y.is_nearly_equal(max_y);
-        corners[2] |= p.x.is_nearly_equal(max_x) && p.y.is_nearly_equal(min_y);
-        corners[3] |= p.x.is_nearly_equal(max_x) && p.y.is_nearly_equal(max_y);
-    };
-
+    // PdfCraft patch: the points have to trace the rectangle, not merely reach its corners. The
+    // length check above admits one MoveTo and four LineTo as well as the intended one MoveTo,
+    // three LineTo and one ClosePath, and asking only that each corner of the bounding box was
+    // visited says nothing about the order or the steps between: a five-point polyline whose
+    // ends reached every corner of its own bounding box was painted as that box, and a clip of
+    // that shape was discarded. Four distinct points, each step along one axis, the last point
+    // back at the first: that is a rectangle and nothing else is.
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    let mut closed = false;
     for (idx, el) in path.elements().iter().enumerate() {
         match el {
             PathEl::MoveTo(p) => {
                 if idx != 0 {
                     return None;
                 }
-
-                check_point(*p);
+                points.push(*p);
             }
-            PathEl::LineTo(l) => check_point(*l),
+            PathEl::LineTo(p) => points.push(*p),
             PathEl::QuadTo(_, _) => return None,
             PathEl::CurveTo(_, _, _) => return None,
-            PathEl::ClosePath => {}
+            // A subpath that ends and starts again is more than one shape.
+            PathEl::ClosePath => {
+                if idx + 1 != path.elements().len() {
+                    return None;
+                }
+                closed = true;
+            }
         }
     }
 
-    if corners[0] && corners[1] && corners[2] && corners[3] {
-        Some(bbox)
-    } else {
-        None
+    // Exactly equal, not nearly: `is_nearly_equal` allows a 256th of a path unit, and the matrix
+    // is applied after this, so a `cm` of 10,000 turns that into tens of device units -- a path
+    // that only nearly closes would be painted as the rectangle, with a side it does not have.
+    // A rectangle's coordinates are equal in the content stream, not approximately equal, so
+    // nothing that is one loses the fast path by this; a path that misses takes the general route
+    // and is painted as written (#3327 review).
+    let same = |a: Point, b: Point| a.x == b.x && a.y == b.y;
+    // `m l l l l`: the fourth line goes back to the start, which `m l l l h` does with ClosePath.
+    if !closed {
+        if points.len() != 5 || !same(points[4], points[0]) {
+            return None;
+        }
+        points.pop();
+    }
+    if points.len() != 4 {
+        return None;
+    }
+    // Distinct, so a degenerate path is not one, and each step along one axis only: the four
+    // points of an axis-aligned rectangle, in order round it.
+    for (i, p) in points.iter().enumerate() {
+        let q = points[(i + 1) % 4];
+        let along_x = p.y == q.y && p.x != q.x;
+        let along_y = p.x == q.x && p.y != q.y;
+        if !(along_x || along_y) {
+            return None;
+        }
+        if points.iter().skip(i + 1).any(|o| same(*p, *o)) {
+            return None;
+        }
+    }
+
+    Some(path.fast_bounding_box())
+}
+
+/// PdfCraft patch tests (ported from craft-libs): the graphics-state stack is bounded by count
+/// and by bytes, and every `q` still pairs with its `Q`.
+#[cfg(test)]
+mod saved_state_tests {
+    use super::*;
+    use crate::device::DummyDevice;
+    use hayro_syntax::Pdf;
+
+    fn pdf() -> Pdf {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Count 0 /Kids [] >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(b"xref\n0 3\n0000000000 65535 f \n");
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!("trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    fn triangle() -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to((10.0, 10.0));
+        path.line_to((90.0, 10.0));
+        path.line_to((50.0, 90.0));
+        path.close_path();
+        path
+    }
+
+    /// Saves `saves` more times, checks a clip added after the last save goes at its `Q`, and unwinds.
+    fn save_and_unwind(ctx: &mut Context<'_>, saves: usize) {
+        let before = ctx.num_states();
+        for _ in 0..saves {
+            ctx.save_state();
+        }
+        assert!(ctx.states.len() <= MAX_SAVED_STATES);
+        assert!(ctx.saved_bytes <= MAX_SAVED_STATE_BYTES);
+        assert_eq!(ctx.num_states(), before + saves, "every q still counts");
+
+        let mut device = DummyDevice;
+        let clips = ctx.get().clips.len();
+        ctx.push_clip_path(triangle(), FillRule::NonZero, &mut device);
+        assert_eq!(ctx.get().clips.len(), clips + 1);
+        ctx.restore_state(&mut device);
+        assert_eq!(ctx.get().clips.len(), clips);
+
+        while ctx.num_states() > 1 {
+            ctx.restore_state(&mut device);
+        }
+        assert_eq!(ctx.states.len(), 1);
+        assert!(ctx.skipped_saves.is_empty());
+        assert_eq!(ctx.saved_bytes, 0);
+    }
+
+    #[test]
+    fn repeated_saves_stay_bounded_and_balanced() {
+        let pdf = pdf();
+        let cache = InterpreterCache::new();
+        let bbox = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let settings = InterpreterSettings::default();
+        let mut ctx = Context::new(Affine::IDENTITY, bbox, &cache, pdf.xref(), settings);
+
+        // A small state reaches the count limit.
+        save_and_unwind(&mut ctx, 20_000);
+
+        // A large one (a 64 Ki-entry dash array, 256 KiB a copy) reaches the byte limit first.
+        ctx.get_mut().graphics_state.stroke_props.dash_array = (0..1 << 16).map(|_| 2.0).collect();
+        ctx.save_state();
+        assert_eq!(ctx.states.len(), 2);
+        while ctx.skipped_saves.is_empty() {
+            ctx.save_state();
+        }
+        assert!(ctx.states.len() < MAX_SAVED_STATES);
+        save_and_unwind(&mut ctx, 1000);
+
+        // Once unwound, a kept save restores what changed after it.
+        let mut device = DummyDevice;
+        ctx.save_state();
+        ctx.pre_concat_affine(Affine::scale(2.0));
+        ctx.restore_state(&mut device);
+        assert_eq!(ctx.get().ctm, Affine::IDENTITY);
     }
 }

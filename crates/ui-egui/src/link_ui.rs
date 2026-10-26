@@ -7,6 +7,7 @@ use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
@@ -56,21 +57,23 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 }
 
 /// Link tool input on one page. Returns `true` when the gesture belongs to the tool.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     links: &[LinkItem],
     view: &mut DocView,
 ) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let pointer = ptr.pos;
     let lv = &mut view.links;
     if let Some((dp, start)) = lv.drag
         && dp == page
     {
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             lv.drag = None;
             let end = pointer.unwrap_or(start);
             let r = Rect::from_two_pos(start, end).intersect(xf.rect);
@@ -104,7 +107,7 @@ pub(crate) fn page_input(
         return true;
     }
     if resp.drag_started() {
-        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+        let origin = ptr.origin.unwrap_or(p);
         lv.drag = Some((page, origin));
         return true;
     }
@@ -112,7 +115,7 @@ pub(crate) fn page_input(
 }
 
 /// Outlines of the page's links (selected one bold) and the rectangle being drawn.
-pub(crate) fn paint(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, links: &[LinkItem], view: &DocView) {
+pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, links: &[LinkItem], view: &DocView, pointer: Option<Pos2>) {
     for l in links.iter().filter(|l| l.page == page) {
         let r = screen_rect(xf, info, page, l.rect);
         let selected = view.links.selected == Some((page, l.index));
@@ -123,7 +126,7 @@ pub(crate) fn paint(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page
             egui::StrokeKind::Outside,
         );
     }
-    if let (Some((dp, start)), Some(p)) = (view.links.drag, ui.input(|i| i.pointer.hover_pos()))
+    if let (Some((dp, start)), Some(p)) = (view.links.drag, pointer)
         && dp == page
     {
         let r = Rect::from_two_pos(start, p);
@@ -288,7 +291,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
         ui.add_enabled_ui(d.web, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(24.0);
-                ui.add(crate::widgets::line(&mut d.url).desired_width(360.0).hint_text("https://example.org"));
+                ui.add(crate::widgets::line(&mut d.url).desired_width(360.0).hint_text("https://example.org")).accessible_name(tl!("Link URL"));
             });
         });
         widgets::radio_value(ui, &mut d.web, false, tl!("Go to a page view"));

@@ -118,8 +118,8 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
 pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(RichText::new(tl_ctx!("theme", "Appearance")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
-        ui.label(tl!("Appearance mode"));
-        egui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
+        let label = ui.label(tl!("Appearance mode"));
+        let combo = egui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
             for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark] {
                 if ui.selectable_label(app.theme_preference == preference, tl!(mode_label(preference))).clicked() {
                     app.execute(mode_command(preference));
@@ -127,6 +127,8 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
                 }
             }
         });
+        // The visible label names the combo box for assistive technology and tests.
+        combo.response.labelled_by(label.id);
     });
     ui.add_space(4.0);
     let light_active = app.theme == ThemeKind::Light;
@@ -139,6 +141,9 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
             app.execute(mode_command(ThemePreference::Dark));
         }
     });
+    ui.add_space(4.0);
+    // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
+    ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
 }
 
 #[cfg(test)]
@@ -175,6 +180,12 @@ mod tests {
         if let Ok(path) = std::env::var("PDFCRAFT_APPEARANCE_SHOT") {
             h.render().unwrap().save(path).unwrap();
         }
+
+        // The field-highlight preference is on for new settings, and the box turns it off.
+        assert!(h.state().view_defaults.highlight_fields);
+        h.get_by_label("Highlight fields").click();
+        h.run();
+        assert!(!h.state().view_defaults.highlight_fields);
 
         let combo = egui::accesskit::Role::ComboBox;
         h.get_by_role(combo).click();

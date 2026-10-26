@@ -683,6 +683,74 @@ fn jpeg_images_with_a_soft_mask_export_as_png_with_alpha() {
 }
 
 #[test]
+/// Both image export paths apply mask intervals independently of the image's component Decode.
+fn soft_mask_decode_ranges_become_exported_alpha() {
+    for indirect in [false, true] {
+        for (range, expected) in [
+            ([0.25, 0.75], [64, 128, 191]),
+            ([0.75, 0.25], [191, 127, 64]),
+            ([1.0, 0.0], [255, 127, 0]),
+            ([-1.0, 2.0], [0, 129, 255]),
+            ([0.5, 0.5], [128, 128, 128]),
+        ] {
+            let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+            with_image(&mut doc, |doc| {
+                let endpoints = range.into_iter().map(|v| {
+                    let value = Object::Real(v);
+                    if indirect { Object::Ref(doc.add(value)) } else { value }
+                });
+                let decode = Object::Array(endpoints.collect());
+                let decode = if indirect { Object::Ref(doc.add(decode)) } else { decode };
+                let mut mask = image_dict(3, 1, "DeviceGray", 8);
+                mask.set(b"Decode".to_vec(), decode);
+                let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0, 128, 255])));
+                let mut image = image_dict(3, 1, "DeviceRGB", 8);
+                image.set(b"SMask".to_vec(), Object::Ref(mask));
+                image.set(b"Decode".to_vec(), decode_array(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0]));
+                Stream::from_raw(image, [0, 64, 255].repeat(3))
+            });
+            let doc = reopen(&doc);
+            let out = extract_images(&doc, &[0], 0);
+            assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+            assert_eq!(out.images.len(), 1);
+            let pixels = exported_png_pixels(&out.images[0].data);
+            assert_eq!(alphas(&pixels), expected, "Decode {range:?}, indirect={indirect}");
+            assert!(pixels.as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 64, 255]), "image component Decode stays independent");
+            let (ext, bytes) = image_file(&doc, out.images[0].object).unwrap();
+            assert_eq!(ext, "png");
+            assert_eq!(exported_png_pixels(&bytes), pixels, "Save Image As and Export all images agree");
+        }
+    }
+}
+
+#[test]
+/// Packed and JPEG samples map to opacity before resizing to their image's dimensions.
+fn soft_mask_decode_maps_packed_and_jpeg_masks_before_resizing() {
+    for jpeg in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mask = if jpeg {
+                let mut mask = image_dict(4, 2, "DeviceGray", 8);
+                mask.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+                mask.set(b"Decode".to_vec(), decode_array(&[0.25, 0.25]));
+                Stream::from_raw(mask, real_jpeg())
+            } else {
+                let mut mask = image_dict(2, 1, "DeviceGray", 1);
+                mask.set(b"Decode".to_vec(), decode_array(&[-1.0, 2.0]));
+                Stream::from_raw(mask, vec![0b0100_0000])
+            };
+            let mask = doc.add(Object::Stream(mask));
+            let mut image = image_dict(4, 2, "DeviceRGB", 8);
+            image.set(b"SMask".to_vec(), Object::Ref(mask));
+            Stream::from_raw(image, vec![10; 24])
+        });
+        // Clipping before resizing differs from resizing first, then clipping to [0, 255].
+        let expected = if jpeg { vec![64; 8] } else { vec![0, 64, 191, 255, 0, 64, 191, 255] };
+        assert_eq!(alphas(&exported_rgba(&reopen(&doc)).1), expected, "jpeg={jpeg}");
+    }
+}
+
+#[test]
 fn soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha() {
     // A 2×1 soft mask on a 4×2 image is scaled to the image's size.
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
@@ -830,6 +898,15 @@ fn indexed_hival_resolves_indirect_values_and_stream_palettes() {
         assert_eq!(ext, "png");
         assert_eq!(exported_png_pixels(&bytes), vec![255, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255]);
     }
+}
+
+#[test]
+fn indexed_lookup_stream_has_a_size_cap() {
+    // A lookup table needs 256 × 4 bytes at most; a 1 MiB one is refused, not decoded whole.
+    let mut palette = vec![255, 0, 0, 0, 0, 255];
+    palette.resize(1 << 20, 0);
+    let (doc, image) = indexed_export_fixture(Object::Int(1), palette, true, false, 8, vec![0, 1, 0, 1]);
+    assert!(crate::extract::image_file(&doc, image).unwrap_err().contains("lookup table"));
 }
 
 #[test]
@@ -1180,4 +1257,64 @@ fn a_jpeg_with_an_exif_orientation_becomes_an_upright_page() {
     assert!((m1[2] - 60.0).abs() < 0.01 && (m1[3] - 20.0).abs() < 0.01, "{m1:?}");
     let img = image_of(&doc, 1);
     assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(60), Some(20)));
+}
+
+#[test]
+fn a_cyclic_indexed_colour_space_is_refused() {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    // 5 0 obj [/Indexed 5 0 R 255 <00>]: the base is the indexed space itself.
+    let cs = doc.add(Object::Null);
+    doc.set(cs, Object::Array(vec![Object::name("Indexed"), Object::Ref(cs), Object::Int(255), Object::String(PdfString::literal(vec![0]))]));
+    with_image(&mut doc, |_| {
+        let mut dict = image_dict(1, 1, "DeviceGray", 8);
+        dict.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+        Stream::from_raw(dict, vec![0])
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty());
+    assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+}
+
+/// A TIFF of `pages` 64×64 gray pages, then (with `unreadable`) one whose samples Create can't read.
+fn gray_tiff(pages: usize, unreadable: bool) -> Vec<u8> {
+    let mut tif = std::io::Cursor::new(Vec::new());
+    let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
+    for _ in 0..pages {
+        enc.write_image::<tiff::encoder::colortype::Gray8>(64, 64, &[128; 64 * 64]).unwrap();
+    }
+    if unreadable {
+        enc.write_image::<tiff::encoder::colortype::RGB32Float>(1, 1, &[0.5; 3]).unwrap();
+    }
+    tif.into_inner()
+}
+
+/// Many small IFDs can each decode to a large page: the pages a TIFF keeps in memory together
+/// are bounded, and embedding one image reads only its first page.
+#[test]
+fn tiff_pages_are_decoded_within_a_total_budget() {
+    let tif = gray_tiff(3, false);
+    assert!(matches!(tiff_pages_within("t.tif", &tif, usize::MAX, 10_000), Err(CreateError::Image(..))), "12 KiB of pages past a 10 KB budget");
+    assert_eq!(tiff_pages_within("t.tif", &tif, usize::MAX, 20_000).unwrap().len(), 3);
+    let tif = gray_tiff(1, true);
+    let mut doc = Document::new_empty();
+    assert!(image_xobject(&mut doc, "t.tif", &tif).is_ok(), "the unreadable last page is never decoded");
+}
+
+/// A one-pixel GIF on a `w`×`h` logical screen: the decoder paints it on a canvas that size.
+fn gif_on_screen(w: u16, h: u16) -> Vec<u8> {
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&w.to_le_bytes());
+    gif.extend_from_slice(&h.to_le_bytes());
+    gif.extend_from_slice(&[0x80, 0, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0]);
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 1, 0, 0x3B]);
+    gif
+}
+
+/// The decoder's own limit lets a 74-byte GIF ask for a canvas of hundreds of MB, which the
+/// conversion then copies; a screen past [`MAX_GIF_PIXELS`] is refused before decoding.
+#[test]
+fn a_tiny_gif_on_a_huge_screen_is_refused() {
+    assert!(matches!(from_images(&[("big.gif".into(), gif_on_screen(4200, 4100))]), Err(CreateError::Image(..))));
+    let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }

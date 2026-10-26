@@ -1,0 +1,2820 @@
+# Romanian (ro) catalog. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_ro` in i18n/mod.rs): one (1) | few (0, and n % 100 in 1-19: 2, 19, 101) | other ("de" form: 20, 100, 120).
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Romanian computing vocabulary. No proprietary localisation resource, string table or product UI
+# (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay as they are;
+# the trailing "…" of dialog commands is kept. Commands use the noun form ("Salvare", "Deschidere…"),
+# messages address the user formally ("Alegeți", "dvs.").
+
+	Menu	Meniu
+	Edit	Editare
+	Pages	Pagini
+	View	Vizualizare
+	Help	Ajutor
+	Zoom	Zoom
+	Actual size	Dimensiune reală
+	Zoom to page level	Zoom la nivel de pagină
+	Fit to width	Potrivire la lățime
+	Display theme	Temă de afișare
+	Side panels	Panouri laterale
+	Preferences	Preferințe
+	Preferences…	Preferințe…
+	Interface language	Limba interfeței
+	Interface size	Dimensiunea interfeței
+	Auto ({percent}%)	Automat ({percent}%)
+	Identity	Identitate
+	Name on new comments	Numele pe comentariile noi
+	Open…	Deschidere…
+	Open Recent	Deschidere fișiere recente
+	Clear Recent Files	Golire listă fișiere recente
+	Remove from Recent	Eliminare din recente
+	No recent files	Niciun fișier recent
+	New blank PDF	PDF gol nou
+	Create PDF from file…	Creare PDF din fișier…
+	Create PDF from images…	Creare PDF din imagini…
+	Create PDF from multiple files…	Creare PDF din mai multe fișiere…
+	Create separate PDFs…	Creare PDF-uri separate…
+	Create PDF from clipboard	Creare PDF din clipboard
+	Combine files…	Combinare fișiere…
+	Save	Salvare
+	Save as…	Salvare ca…
+	Close file	Închidere fișier
+	Close all	Închidere toate
+	Revert	Revenire la versiunea salvată
+	Print…	Imprimare…
+	Document properties…	Proprietăți document…
+	Find…	Găsire…
+	Advanced search…	Căutare avansată…
+	Copy	Copiere
+	Cut	Decupare
+	Paste	Lipire
+	Delete	Ștergere
+	Select all	Selectare totală
+	Cancel	Anulare
+	OK	OK
+	Apply	Aplicare
+	Close	Închidere
+	Back	Înapoi
+	Next	Următorul
+	Previous	Anteriorul
+	Name	Nume
+	File name	Nume fișier
+	Location	Locație
+	Browse…	Răsfoire…
+	Choose…	Alegere…
+	Search	Căutare
+	Clear	Golire
+	Refresh	Reîmprospătare
+	Loading…	Se încarcă…
+	Save changes?	Salvați modificările?
+	Don't save	Nu salva
+	Page	Pagină
+	Page {n}	Pagina {n}
+	of	din
+	Fit one full page	Potrivire pagină întreagă
+	Single page	O singură pagină
+	Two-page view	Vizualizare două pagini
+	Continuous scrolling	Derulare continuă
+	Show gaps between pages	Afișează spațiile dintre pagini
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Ascunde spațiile pentru a uni marginile paginilor. Marginile din interiorul PDF-ului rămân neschimbate.
+	Page display	Afișare pagini
+	Default page display	Afișare implicită a paginilor
+	Default zoom	Zoom implicit
+	Full screen mode	Mod ecran complet
+	Read mode	Mod citire
+	Next tab	Fila următoare
+	Previous tab	Fila anterioară
+	Comments	Comentarii
+	Comment	Comentariu
+	Add comment	Adăugare comentariu
+	Delete comment	Ștergere comentariu
+	Reply	Răspuns
+	Highlight	Evidențiere
+	Underline	Subliniere
+	Strikethrough	Tăiere cu o linie
+	Text	Text
+	Font	Font
+	Size	Dimensiune
+	Color	Culoare
+	Opacity	Opacitate
+	Width	Lățime
+	Height	Înălțime
+	Rotation	Rotire
+	More	Mai multe
+	Settings	Setări
+	General	General
+	Language	Limbă
+	Appearance	Aspect
+	Theme	Temă
+	Light	Luminoasă
+	Dark	Întunecată
+	System	Sistem
+	Open file	Deschidere fișier
+	Save file	Salvare fișier
+	Export	Exportare
+	Import	Importare
+	Export to image…	Exportare ca imagine…
+	Export to text…	Exportare ca text…
+	Export to Word…	Exportare în Word…
+	Export to HTML…	Exportare în HTML…
+	Export to RTF…	Exportare în RTF…
+	Reduce file size…	Reducere dimensiune fișier…
+	Optimize PDF…	Optimizare PDF…
+	Protect using password…	Protejare cu parolă…
+	Remove security	Eliminare securitate
+	Security properties…	Proprietăți de securitate…
+	Organize pages	Organizare pagini
+	Rotate pages…	Rotire pagini…
+	Delete pages	Ștergere pagini
+	Insert blank page	Inserare pagină goală
+	Insert pages from file…	Inserare pagini din fișier…
+	Replace pages…	Înlocuire pagini…
+	Extract pages…	Extragere pagini…
+	Split document…	Împărțire document…
+	Number pages…	Numerotare pagini…
+	Bookmarks	Semne de carte
+	New bookmark	Semn de carte nou
+	Forms	Formulare
+	Form fields	Câmpuri de formular
+	Signatures	Semnături
+	Sign	Semnare
+	Fill & Sign	Completare și semnare
+	Accessibility	Accesibilitate
+	Help…	Ajutor…
+	Check for updates…	Căutare actualizări…
+	About PdfCraft	Despre PdfCraft
+	Automatically	Automat
+	Never	Niciodată
+	Always	Întotdeauna
+	Yes	Da
+	No	Nu
+	On	Activat
+	Off	Dezactivat
+	Enabled	Activat
+	Disabled	Dezactivat
+	Required	Obligatoriu
+	Optional	Opțional
+	None	Niciunul
+	Unknown	Necunoscut
+	Error	Eroare
+	Warning	Avertisment
+	Information	Informații
+	Success	Reușit
+	Failed	Eșuat
+	File	Fișier
+	Folder	Folder
+	Choose a file…	Alegeți un fișier…
+	Choose a folder…	Alegeți un folder…
+	Open folder	Deschidere folder
+	Create folder	Creare folder
+	Remove	Eliminare
+	Rename	Redenumire
+	Duplicate	Duplicare
+	Move	Mutare
+	Copy to clipboard	Copiere în clipboard
+	Copied to clipboard	Copiat în clipboard
+	Undo	Anulare acțiune
+	Redo	Refacere
+	Keyboard shortcuts	Comenzi rapide de la tastatură
+	Find tools and commands…	Găsire instrumente și comenzi…
+	Take a snapshot	Captură instantanee
+	Organize	Organizare
+	Comment and review	Comentare și revizuire
+	Prepare a form	Pregătire formular
+	Protect	Protejare
+	Print	Imprimare
+	Create	Creare
+	Convert	Conversie
+	Optimize	Optimizare
+	Measure	Măsurare
+	Redact	Anonimizare
+	Search results	Rezultatele căutării
+	No results	Niciun rezultat
+	Page {n} of {total}	Pagina {n} din {total}
+	{n} pages selected	{n} pagini selectate
+	  · not fixable here	  · nu se poate corecta aici
+	 (page {p})	 (pagina {p})
+	 (searching… {s} of {p} pages)	 (se caută… {s} din {p} pagini)
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} la {dpi} dpi, dimensiunea maximă la care pot fi desenate)
+	 ({s} not exported: {first})	 ({s} neexportate: {first})
+	 on page {p}	 pe pagina {p}
+	 · password-protected	 · protejat cu parolă
+	(none)	(niciunul)
+	, Expires: 	, Expiră: 
+	1 difference found	1 diferență găsită
+	1 file	1 fișier
+	1 file done	1 fișier finalizat
+	1 file needs attention	1 fișier necesită atenție
+	1 instance	1 apariție
+	1 issue	1 problemă
+	1 mark	1 marcaj
+	1 page	1 pagină
+	1 page selected	1 pagină selectată
+	1 page selected.	1 pagină selectată.
+	180 degrees	180 de grade
+	9 digit, A letter, O letter or digit, X any character	9 cifră, A literă, O literă sau cifră, X orice caracter
+	; 1 page already had text	; 1 pagină avea deja text
+	; failed: {list}	; eșuate: {list}
+	; {n} pages already had text	; {n} pagini aveau deja text
+	? of {n}	? din {n}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	O aplicație PDF open-source, clean-room, scrisă în Rust. MIT OR Apache-2.0.
+	Accessibility Checker	Verificator de accesibilitate
+	Accessibility Checker Options	Opțiuni verificator de accesibilitate
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 și ulterior (RC4 pe 40 de biți)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 și ulterior (RC4 pe 128 de biți)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 și ulterior (AES pe 128 de biți)
+	Acrobat X and later (256-bit AES)	Acrobat X și ulterior (AES pe 256 de biți)
+	Action name:	Nume acțiune:
+	Actions	Acțiuni
+	Active	Activ
+	Actual Size	Dimensiune reală
+	Actual text	Text real
+	Add	Adăugare
+	Add Step	Adăugare pas
+	Add a comment	Adăugați un comentariu
+	Add a reply	Adăugați un răspuns
+	Add a sticky note here	Adăugare notă aici
+	Add an Action	Adăugare acțiune
+	Add at least two files	Adăugați cel puțin două fișiere
+	Add files…	Adăugare fișiere…
+	Add folder	Adăugare folder
+	Add folder and subfolders	Adăugare folder și subfoldere
+	Add folder and subfolders…	Adăugare folder și subfoldere…
+	Add folder…	Adăugare folder…
+	Add open documents	Adăugare documente deschise
+	Add the choices people pick from.	Adăugați opțiunile din care se poate alege.
+	Add the files to combine	Adăugați fișierele de combinat
+	Add the steps this action runs, in order.	Adăugați pașii pe care îi rulează această acțiune, în ordine.
+	Add to Trusted Certificates	Adăugare la certificatele de încredere
+	Add to trusted certificates	Adăugare la certificatele de încredere
+	Added 1 comment	A fost adăugat 1 comentariu
+	Added more than once	Adăugat de mai multe ori
+	Added {n} comments	Au fost adăugate {n} comentarii
+	Adds invisible text over each word; the page image is not changed	Adaugă text invizibil peste fiecare cuvânt; imaginea paginii nu se modifică
+	Advanced	Avansat
+	Advanced Options {chevron}	Opțiuni avansate {chevron}
+	Align	Aliniere
+	Align left	Aliniere la stânga
+	Align right	Aliniere la dreapta
+	Alignment:	Aliniere:
+	All	Toate
+	All document contents	Tot conținutul documentului
+	All document contents except metadata	Tot conținutul documentului, cu excepția metadatelor
+	All open documents	Toate documentele deschise
+	All pages	Toate paginile
+	All pages in document	Toate paginile din document
+	All pages in range	Toate paginile din interval
+	Allow Rich Text Formatting	Permite formatare de text îmbogățit
+	Allow user to enter custom text	Permite utilizatorului să introducă text personalizat
+	Also recognize pages that already have text	Recunoaște și paginile care au deja text
+	Alternate text	Text alternativ
+	An action with this name already exists.	Există deja o acțiune cu acest nume.
+	An open-source PDF workbench — local, private, and scriptable.	Un spațiu de lucru PDF open-source: local, privat și scriptabil.
+	Angle	Unghi
+	Animation effects	Efecte de animație
+	Annotations, form fill-in, and digital signatures	Adnotări, completarea formularelor și semnături digitale
+	Any	Oricare
+	Any except extracting pages	Orice, cu excepția extragerii paginilor
+	Anyone opening the document will need this password. It's applied when you save.	Oricine deschide documentul va avea nevoie de această parolă. Se aplică la salvare.
+	Appear behind page	Apare în spatele paginii
+	Appear on top of page	Apare deasupra paginii
+	Appearance mode	Mod de aspect
+	Appearance settings…	Setări de aspect…
+	Applies to 1 page	Se aplică la 1 pagină
+	Applies to {n} pages	Se aplică la {n} pagini
+	Apply redactions	Aplicare anonimizări
+	Apply scale	Aplicare scară
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Întreabă GitHub care este cea mai nouă versiune. Nimic nu se descarcă sau se instalează automat.
+	At most	Cel mult
+	Attachments	Atașamente
+	Attachments Panel and Page	Panoul Atașamente și pagina
+	Audit space usage…	Analiză utilizare spațiu…
+	Author	Autor
+	Auto	Automat
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automat urmează dimensiunea textului din sistem. Paginile se afișează mereu la rezoluția completă a ecranului.
+	Auto portrait/landscape	Portret/peisaj automat
+	Auto-rotate pages	Rotire automată pagini
+	Auto-size text to fit redaction region	Dimensionare automată a textului pentru a umple zona anonimizată
+	Available	Disponibil
+	Back side only	Doar verso
+	Back to all tools	Înapoi la toate instrumentele
+	Back to the document	Înapoi la document
+	Before each selected page (select pages in Organize)	Înaintea fiecărei pagini selectate (selectați paginile în Organizare)
+	Before the number	Înaintea numărului
+	Bicubic downsampling to	Reeșantionare bicubică la
+	Binding	Legare
+	Binding:	Legare:
+	Black and white	Alb-negru
+	Bold	Aldin
+	Booklet	Broșură
+	Booklet subset:	Selecție broșură:
+	Bookmark options	Opțiuni semne de carte
+	Bookmarks Panel and Page	Panoul Semne de carte și pagina
+	Border Color:	Culoare chenar:
+	Borders and Colors	Chenare și culori
+	Both sides	Față-verso
+	Bottom	Jos
+	Bottom:	Jos:
+	Box	Casetă
+	Browser's print dialog	Dialogul de imprimare al browserului
+	Butt	Plat
+	Button is checked by default	Butonul este bifat implicit
+	Buttons with the same name and value are selected in unison	Butoanele cu același nume și valoare se selectează împreună
+	Bytes	Octeți
+	Calibrate from two points	Calibrare din două puncte
+	Can't be read: {e}	Nu poate fi citit: {e}
+	Cancelling…	Se anulează…
+	Case-sensitive	Sensibil la majuscule
+	Category:	Categorie:
+	Center	Centru
+	Center window on screen	Centrare fereastră pe ecran
+	Centre	Centru
+	Certify	Certificare
+	Change settings…	Modificare setări…
+	Change the colour of line art as well as text	Schimbă culoarea liniilor grafice, nu doar a textului
+	Change {what}	Modificare {what}
+	Changes allowed	Modificări permise
+	Character limit 0 means no limit. A comb of characters needs a limit.	Limita de caractere 0 înseamnă fără limită. Un pieptene de caractere are nevoie de o limită.
+	Character spacing	Spațiere caractere
+	Check Again	Verificare din nou
+	Check again	Verificare din nou
+	Check box is checked by default	Caseta de selectare este bifată implicit
+	Check for updates	Căutare actualizări
+	Check spelling	Verificare ortografică
+	Check the pages	Verificați paginile
+	Check the pages of {name}: {why}	Verificați paginile din {name}: {why}
+	Checking Options ({on} of 32 in all categories)	Opțiuni de verificare ({on} din 32 în toate categoriile)
+	Checking for a newer version…	Se caută o versiune mai nouă…
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Alegeți o imagine PNG sau JPEG (până la 4 MiB). Transparența se păstrează.
+	Choose a folder for the exported files	Alegeți un folder pentru fișierele exportate
+	Choose a folder for the extracted pages	Alegeți un folder pentru paginile extrase
+	Choose a folder for the results	Alegeți un folder pentru rezultate
+	Choose a folder for the searchable files	Alegeți un folder pentru fișierele în care se poate căuta
+	Choose a layout:	Alegeți un aspect:
+	Choose a stamp, then click on the page to place it.	Alegeți o ștampilă, apoi faceți clic pe pagină pentru a o plasa.
+	Choose an image	Alegeți o imagine
+	Choose images	Alegeți imagini
+	Choose image…	Alegere imagine…
+	Choose photo…	Alegere fotografie…
+	Choose the digital ID that you want to use for signing:	Alegeți ID-ul digital pe care doriți să îl folosiți pentru semnare:
+	Circle	Cerc
+	Clean Up	Curățare
+	Clean-up	Curățare
+	Clear All	Golire totală
+	Clear all	Golire totală
+	Clear selection / close find	Golire selecție / închidere căutare
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Faceți clic pe pagină pentru a adăuga text; fiecare clic începe o casetă nouă, iar ✓ încheie. Trageți elementele pentru a le muta, trageți de un colț pentru a le redimensiona, faceți dublu clic pe text pentru a-l edita.
+	Click the first point to begin.	Faceți clic pe primul punct pentru a începe.
+	Click to sort, drag to move the column. Drag its edge to resize it.	Clic pentru sortare, trageți pentru a muta coloana. Trageți de margine pentru a o redimensiona.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Faceți clic pe vârfuri. Enter sau dublu clic încheie un perimetru sau o arie. Faceți clic pe primul punct pentru a închide o arie.
+	Clockwise 90 degrees	90 de grade în sensul acelor de ceasornic
+	Close (Esc)	Închidere (Esc)
+	Close Tab	Închidere filă
+	Close panel	Închidere panou
+	Closed arrow	Săgeată închisă
+	Collapse	Restrângere
+	Collapse all	Restrângere toate
+	Collapse all bookmarks	Restrângere toate semnele de carte
+	Collapse tag	Restrângere etichetă
+	Collate	Colaționare
+	Color:	Culoare:
+	Colour	Culoare
+	Colours are remapped while rendering; the document itself never changes.	Culorile se înlocuiesc doar la afișare; documentul nu se modifică niciodată.
+	Comb of	Pieptene de
+	Combine the rest	Combinare restul
+	Combined {n} files	Au fost combinate {n} fișiere
+	Coming in milestone	Urmează în etapa
+	Comment and form data	Date de comentarii și formulare
+	Commenting, filling in form fields, and signing existing signature fields	Comentarii, completarea câmpurilor de formular și semnarea câmpurilor de semnătură existente
+	Comments & Forms	Comentarii și formulare
+	Comments only	Doar comentarii
+	Commit selected value immediately	Valoarea selectată se aplică imediat
+	Common Properties	Proprietăți comune
+	Compare Files	Comparare fișiere
+	Compare this file with an older version: Compare files… in All tools.	Comparați acest fișier cu o versiune mai veche: Comparare fișiere… în Toate instrumentele.
+	Compatibility	Compatibilitate
+	Compress document structure (object streams)	Comprimare structură document (fluxuri de obiecte)
+	Compression	Comprimare
+	Configure New Digital ID	Configurare ID digital nou
+	Remove "{name}" from this list? The file itself is not deleted.	Eliminați „{name}” din această listă? Fișierul în sine nu se șterge.
+	Confirm Password	Confirmare parolă
+	Conformance level:	Nivel de conformitate:
+	Continue	Continuare
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Copiile, imprimarea față-verso și culoarea se aleg în dialogul de imprimare al browserului.
+	Copies:	Copii:
+	Copy selected text	Copiere text selectat
+	Copy text	Copiere text
+	Couldn't check for updates: {e}	Nu s-au putut căuta actualizări: {e}
+	Couldn't open the printer's preferences: {e}	Nu s-au putut deschide preferințele imprimantei: {e}
+	Counterclockwise 90 degrees	90 de grade în sens invers acelor de ceasornic
+	Country/Region	Țară/regiune
+	Create Custom Stamp	Creare ștampilă personalizată
+	Create Link	Creare link
+	Create PDF Comment Summary	Creare rezumat comentarii PDF
+	Create PDF comment summary…	Creare rezumat comentarii PDF…
+	Create PDF from images	Creare PDF din imagini
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Creare ID digital nou (autosemnat, salvat într-un fișier protejat cu parolă)
+	Create accessibility report	Creare raport de accesibilitate
+	Create custom stamp…	Creare ștampilă personalizată…
+	Create {what}	Creare {what}
+	Created a PDF from {n} files	A fost creat un PDF din {n} fișiere
+	Created a PDF from {n} files; left out: {names}	A fost creat un PDF din {n} fișiere; omise: {names}
+	Creates 1 file from {n} pages.	Creează 1 fișier din {n} pagini.
+	Creates {f} files from {n} pages.	Creează {f} fișiere din {n} pagini.
+	Crop (% trimmed from each side)	Decupare (% tăiat din fiecare parte)
+	Currency symbol:	Simbol monedă:
+	Current page	Pagina curentă
+	Current page ({n})	Pagina curentă ({n})
+	Current page — type a page number or label (such as iv) and press Enter	Pagina curentă: introduceți un număr sau o etichetă de pagină (de ex. iv) și apăsați Enter
+	Custom	Personalizat
+	Custom scale:	Scară personalizată:
+	Custom text:	Text personalizat:
+	Custom:	Personalizat:
+	Cut and stack	Taie și stivuiește
+	Cut marks	Semne de tăiere
+	DPI sets the printed page size without resampling the image.	DPI stabilește dimensiunea paginii imprimate fără a reeșantiona imaginea.
+	Dark theme	Temă întunecată
+	Date format	Format dată
+	Decimal places:	Zecimale:
+	Decimals	Zecimale
+	Declared conformance: {shown}	Conformitate declarată: {shown}
+	Decorative figure	Figură decorativă
+	Default	Implicit
+	Default Value:	Valoare implicită:
+	Default workspace mode	Mod implicit al spațiului de lucru
+	Default:	Implicit:
+	Delete page {label}	Ștergere pagina {label}
+	Delete pages (Delete)	Ștergere pagini (Delete)
+	Delete pages after extracting	Ștergere pagini după extragere
+	Delete selected pages (Organize)	Ștergere pagini selectate (Organizare)
+	Delete stamp	Ștergere ștampilă
+	Delete {o}	Ștergere {o}
+	Describe the figure	Descrieți figura
+	Description	Descriere
+	Description:	Descriere:
+	Details	Detalii
+	Diamond	Romb
+	Digital ID	ID digital
+	Digital ID password	Parola ID-ului digital
+	Direction:	Direcție:
+	Discard	Renunțare
+	Discard Objects	Eliminare obiecte
+	Discard User Data	Eliminare date utilizator
+	Discard alternate images	Eliminare imagini alternative
+	Discard document tags	Eliminare etichete document
+	Discard embedded page thumbnails	Eliminare miniaturi de pagină încorporate
+	Discard embedded print settings	Eliminare setări de imprimare încorporate
+	Discard this text (Esc)	Renunțare la acest text (Esc)
+	Dismiss	Închidere
+	Distinguished name	Nume distinctiv
+	Distribute	Distribuire
+	Document	Document
+	Document Properties	Proprietăți document
+	Document Title	Titlul documentului
+	Document and markups	Document și marcaje
+	Document and stamps	Document și ștampile
+	Document language	Limba documentului
+	Document properties ({key})	Proprietăți document ({key})
+	Documents and view	Documente și vizualizare
+	Done	Gata
+	Done adding text	Terminare adăugare text
+	Download	Descărcare
+	Downsample to	Reeșantionare la
+	Drag the selection to move it. Esc clears the selection.	Trageți selecția pentru a o muta. Esc golește selecția.
+	Drag to reorder	Trageți pentru a reordona
+	Draw	Desenare
+	Draw your {what} below.	Desenați {what} mai jos.
+	Drawing scale changes. Use Actual size for full-scale plans.	Scara desenului se schimbă. Folosiți Dimensiune reală pentru planuri la scară completă.
+	Drop PDFs, images, text files or folders here, or choose them.	Plasați aici PDF-uri, imagini, fișiere text sau foldere, sau alegeți-le.
+	Duplicate "{name}" onto:	Duplicare „{name}” pe:
+	Duplicate Field	Duplicare câmp
+	Duplicate…	Duplicare…
+	Dynamic	Dinamic
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formular XFA dinamic, așezat după șablonul său: {pages}, {fields}.
+	Each file holds as many of the {n} pages as fit.	Fiecare fișier conține câte dintre cele {n} pagini încap.
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Fiecare imagine e măsurată acolo unde o desenează paginile; o imagine se înlocuiește doar dacă rezultatul e mai mic.
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Fiecare imagine o singură dată, denumită după document și pagină. Imaginile JPEG se salvează neschimbate; celelalte ca PNG.
+	Earlier in tab order	Mai devreme în ordinea de tabulare
+	Edit Action	Editare acțiune
+	Edit image	Editare imagine
+	Edit text…	Editare text…
+	Edit…	Editare…
+	Email Address	Adresă de e-mail
+	Enable Acrobat JavaScript	Activare Acrobat JavaScript
+	Enable copying of text, images, and other content	Permite copierea textului, imaginilor și a altui conținut
+	Enable text access for screen reader devices for the visually impaired	Permite accesul la text pentru cititoarele de ecran folosite de persoanele cu deficiențe de vedere
+	Encrypt	Criptare
+	Endpoints	Capete
+	Enhance page	Îmbunătățire pagină
+	Enter the password that opens it	Introduceți parola care îl deschide
+	Enter the permissions password to allow combining	Introduceți parola de permisiuni pentru a permite combinarea
+	Entire page	Pagina întreagă
+	Even Pages Only	Doar paginile pare
+	Even and Odd Pages	Pagini pare și impare
+	Even pages only	Doar paginile pare
+	Every PDF, image and text file in the folder	Toate fișierele PDF, imagine și text din folder
+	Every PDF, image and text file in the folder and the folders inside it	Toate fișierele PDF, imagine și text din folder și din folderele din interiorul lui
+	Example: {sample}	Exemplu: {sample}
+	Exclude images smaller than	Exclude imaginile mai mici de
+	Expand	Extindere
+	Expand all	Extindere toate
+	Expand all bookmarks	Extindere toate semnele de carte
+	Expand tag	Extindere etichetă
+	Expand top-level bookmarks	Extindere semne de carte de nivel superior
+	Explain	Explicație
+	Export All Images	Exportare toate imaginile
+	Export Value: {on}	Valoare de export: {on}
+	Export all to data file…	Exportare totală în fișier de date…
+	Export certificate…	Exportare certificat…
+	Export comments	Exportare comentarii
+	Export form data	Exportare date formular
+	Export stopped: {e}	Exportarea s-a oprit: {e}
+	Export to Image	Exportare ca imagine
+	Export to Text	Exportare ca text
+	Exported 1 image	A fost exportată 1 imagine
+	Exported the text of 1 page	A fost exportat textul unei pagini
+	Exported the text of {n} pages	A fost exportat textul a {n} pagini
+	Exported {n} images	Au fost exportate {n} imagini
+	Exporting… {d} of {t}	Se exportă… {d} din {t}
+	Export…	Exportare…
+	Extract pages as separate files	Extragere pagini ca fișiere separate
+	Extract pages to a new document	Extragere pagini într-un document nou
+	Extracted 1 page	A fost extrasă 1 pagină
+	Extracted {n} pages	Au fost extrase {n} pagini
+	Field is used for file selection	Câmpul este folosit pentru selectarea fișierelor
+	Field names (comma-separated)	Nume câmpuri (separate prin virgulă)
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Nume de câmpuri cu + - * / și paranteze; puneți \\ înaintea spațiilor din nume.
+	Field value is in range:	Valoarea câmpului este în intervalul:
+	Field value is not validated	Valoarea câmpului nu este validată
+	Field: {field} on page {p}	Câmp: {field} pe pagina {p}
+	Fields to reset (comma-separated; empty: all)	Câmpuri de resetat (separate prin virgulă; gol: toate)
+	Figure {i} of {n}{page}	Figura {i} din {n}{page}
+	File (.p12, .pfx)	Fișier (.p12, .pfx)
+	File Name	Nume fișier
+	File size	Dimensiune fișier
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Fișierele se combină de sus în jos. Lăsați Pagini gol pentru a lua toate paginile.
+	Files are combined in the order shown. Drag them to change it.	Fișierele se combină în ordinea afișată. Trageți-le pentru a o schimba.
+	Files for {name}	Fișiere pentru {name}
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Fișierele pe care le deschideți în PdfCraft apar aici. Plasați un PDF oriunde pentru a-l deschide.
+	Fill & Sign dates	Date Completare și semnare
+	Fill & Sign signature	Semnătură Completare și semnare
+	Fill Color:	Culoare umplere:
+	Fill colour	Culoare umplere
+	Fill colour: none	Culoare umplere: niciuna
+	Filling in form fields and signing existing signature fields	Completarea câmpurilor de formular și semnarea câmpurilor de semnătură existente
+	Filter comments	Filtrare comentarii
+	Find a tag	Găsire etichetă
+	Find options	Opțiuni de căutare
+	Find text	Găsire text
+	Find tools and commands	Găsire instrumente și comenzi
+	Finding document fonts…	Se caută fonturile documentului…
+	Finish or discard the text being edited before selecting several objects.	Terminați sau renunțați la textul în curs de editare înainte de a selecta mai multe obiecte.
+	First / last page	Prima / ultima pagină
+	Fit	Potrivire
+	Fit Height	Potrivire înălțime
+	Fit Page	Potrivire pagină
+	Fit Visible	Potrivire zonă vizibilă
+	Fit Width	Potrivire lățime
+	Fit to height	Potrivire la înălțime
+	Fit to page	Potrivire la pagină
+	Fix	Corectare
+	Fixed what could be fixed; 1 problem remains	S-a corectat ce se putea; rămâne 1 problemă
+	Fixed what could be fixed; {n} problems remain	S-a corectat ce se putea; rămân {n} probleme
+	Flatten Fill & Sign when saving	Aplatizare Completare și semnare la salvare
+	Flip Horizontal	Răsturnare orizontală
+	Flip Vertical	Răsturnare verticală
+	Flip horizontal	Răsturnare orizontală
+	Flip on long edge	Întoarcere pe latura lungă
+	Flip on short edge	Întoarcere pe latura scurtă
+	Flip vertical	Răsturnare verticală
+	Folders	Foldere
+	Font Size:	Dimensiune font:
+	Font colour:	Culoare font:
+	Font size 0 uses automatic sizing.	Dimensiunea de font 0 folosește dimensionarea automată.
+	Font size:	Dimensiune font:
+	Font:	Font:
+	Font: Helvetica	Font: Helvetica
+	Fonts	Fonturi
+	For page sizes and margins.	Pentru dimensiunile paginilor și margini.
+	Form data and PDF forms	Date de formular și formulare PDF
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Câmpurile de formular sunt aplatizate: valorile lor rămân vizibile. Salvarea rescrie tot fișierul.
+	Form fields only	Doar câmpurile de formular
+	Form fill-in and digital signatures	Completarea formularelor și semnături digitale
+	Format	Format
+	Format text	Formatare text
+	Format:	Format:
+	From	De la
+	From a PDF page or an image	Dintr-o pagină PDF sau o imagine
+	From colour	Din culoarea
+	From {file}	Din {file}
+	From:	De la:
+	Front side only	Doar față
+	Get help, share feedback and follow development on Discord.	Primiți ajutor, trimiteți păreri și urmăriți dezvoltarea pe Discord.
+	Go to a page view	Salt la o vizualizare de pagină
+	Go to page {p}	Salt la pagina {p}
+	Go to the page	Salt la pagină
+	Go to this result	Salt la acest rezultat
+	Graphic	Grafic
+	Greyscale	Tonuri de gri
+	Grid view	Vizualizare grilă
+	Hand (H)	Mână (H)
+	Has JavaScript actions (run in M6)	Are acțiuni JavaScript (rulate în M6)
+	Height:	Înălțime:
+	Hide field highlights	Ascundere evidențiere câmpuri
+	Hide layer	Ascundere strat
+	Hide menu bar	Ascundere bară de meniu
+	Hide password	Ascundere parolă
+	Hide toolbars	Ascundere bare de instrumente
+	Hide window controls	Ascundere controale fereastră
+	High Resolution	Rezoluție înaltă
+	High resolution	Rezoluție înaltă
+	Highlight Style:	Stil evidențiere:
+	Highlight fields	Evidențiere câmpuri
+	Home	Acasă
+	Horizontal	Orizontal
+	Horizontal reversed	Orizontal inversat
+	Horizontal scale	Scară orizontală
+	Icon	Pictogramă
+	Images and text	Imagini și text
+	Images and text (converted to PDF)	Imagini și text (convertite în PDF)
+	Import list…	Importare listă…
+	Includes unsaved changes	Include modificările nesalvate
+	Indent	Indentare
+	Initial View	Vizualizare inițială
+	Ink sensitivity	Sensibilitate cerneală
+	Insert Date	Inserare dată
+	Insert Page Number	Inserare număr de pagină
+	Insert a blank page after the selection	Inserare pagină goală după selecție
+	Insert a file at the end	Inserare fișier la sfârșit
+	Insert a file before page {label}	Inserare fișier înaintea paginii {label}
+	Insert pages from a file…	Inserare pagini dintr-un fișier…
+	Inserting, deleting, and rotating pages	Inserarea, ștergerea și rotirea paginilor
+	Installed fonts…	Fonturi instalate…
+	Intersections	Intersecții
+	Invisible Rectangle	Dreptunghi invizibil
+	Issued by: 	Emis de: 
+	Italic	Cursiv
+	Item List	Listă elemente
+	Item:	Element:
+	Items marked Ready work today.	Elementele marcate Gata funcționează deja.
+	Its security settings don't allow copying pages	Setările sale de securitate nu permit copierea paginilor
+	JavaScript Console	Consolă JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript este dezactivat (Preferințe > JavaScript).
+	JavaScript, e.g. getField("total").value	JavaScript, de ex. getField("total").value
+	Join our Discord	Intrați pe Discord-ul nostru
+	Join the ArtCraft community	Alăturați-vă comunității ArtCraft
+	Justify	Aliniere stânga-dreapta
+	Keep source fonts	Păstrare fonturi sursă
+	Keep tool selected	Instrumentul rămâne selectat
+	Keep tool selected: on	Instrumentul rămâne selectat: activat
+	Key Algorithm	Algoritm cheie
+	Keychain  ·  	Keychain  ·  
+	Label	Etichetă
+	Labels	Etichete
+	Labels: {preview}. Later pages keep their labels.	Etichete: {preview}. Paginile următoare își păstrează etichetele.
+	Landscape	Peisaj
+	Landscape Pages	Pagini peisaj
+	Landscape and Portrait Pages	Pagini peisaj și portret
+	Larger pages	Pagini mai mari
+	Later	Mai târziu
+	Later in tab order	Mai târziu în ordinea de tabulare
+	Layers	Straturi
+	Layers Panel and Page	Panoul Straturi și pagina
+	Layout and Magnification	Aspect și mărire
+	Leave out files that can't be read?	Omiteți fișierele care nu pot fi citite?
+	Left	Stânga
+	Left Edge	Marginea stângă
+	Left out: {names}	Omise: {names}
+	Left:	Stânga:
+	Light theme	Temă luminoasă
+	Limit of	Limită de
+	Line Style:	Stil linie:
+	Line Thickness:	Grosime linie:
+	Line ending	Capăt de linie
+	Line spacing	Spațiere între rânduri
+	Line thickness	Grosime linie
+	Link Action	Acțiune link
+	Link Appearance	Aspect link
+	Link Properties	Proprietăți link
+	Link Type:	Tip link:
+	List view	Vizualizare listă
+	Load font…	Încărcare font…
+	Locked	Blocat
+	Looking for PDFs…	Se caută PDF-uri…
+	Looking for printers…	Se caută imprimante…
+	Low Resolution (150 dpi)	Rezoluție mică (150 dpi)
+	Low resolution	Rezoluție mică
+	Magnification	Mărire
+	Make Current Properties Default	Proprietățile curente devin implicite
+	Margins	Margini
+	Mark Page Range	Marcare interval de pagini
+	Mark as comments	Marcare ca și comentarii
+	Mark with checkmark	Marcare cu bifă
+	Marked	Marcat
+	Mask:	Mască:
+	Match page at 100%	Potrivire pagină la 100%
+	Medium	Mediu
+	Midpoints	Mijloace
+	Mixed	Mixt
+	Modified	Modificat
+	More options	Mai multe opțiuni
+	More options:	Mai multe opțiuni:
+	More ways to add files	Alte moduri de a adăuga fișiere
+	Mouse wheel scroll speed	Viteza de derulare cu rotița mouse-ului
+	Move down	Mutare în jos
+	Move earlier	Mutare mai devreme
+	Move later	Mutare mai târziu
+	Move up	Mutare în sus
+	Multi-line	Mai multe rânduri
+	Multiple	Multiplu
+	Multiple selection	Selecție multiplă
+	Multiple words or phrases	Mai multe cuvinte sau expresii
+	Name:	Nume:
+	Navigation tab	Filă de navigare
+	Needs manual check	Necesită verificare manuală
+	Negative number style:	Stil numere negative:
+	New Action	Acțiune nouă
+	New Action…	Acțiune nouă…
+	New bookmark ({key})	Semn de carte nou ({key})
+	New file:	Fișier nou:
+	Next ({key})	Următorul ({key})
+	Next / previous match	Potrivirea următoare / anterioară
+	Next figure	Figura următoare
+	Next month	Luna următoare
+	Next page	Pagina următoare
+	Next sheet	Foaia următoare
+	Next view	Vizualizarea următoare
+	No PDFs in this folder yet	Încă nu există PDF-uri în acest folder
+	No actions	Nicio acțiune
+	No changes allowed	Nicio modificare permisă
+	No changes to save	Nicio modificare de salvat
+	No check has run yet.	Încă nu s-a rulat nicio verificare.
+	No color	Fără culoare
+	No colour	Fără culoare
+	No comments match.	Niciun comentariu nu se potrivește.
+	No comments yet.	Încă nu există comentarii.
+	No differences in the text.	Nicio diferență în text.
+	No digital IDs yet.	Încă nu există ID-uri digitale.
+	No documents are open	Niciun document deschis
+	No file chosen	Niciun fișier ales
+	No fill	Fără umplere
+	No fonts are referenced by the pages.	Paginile nu folosesc niciun font.
+	No issues found	Nu s-a găsit nicio problemă
+	No limit	Fără limită
+	No matches	Nicio potrivire
+	No matches.	Nicio potrivire.
+	No matching tools	Niciun instrument potrivit
+	No openly licensed document fonts found. Load a font file.	Nu s-a găsit niciun font de document cu licență deschisă. Încărcați un fișier de font.
+	No pages selected	Nicio pagină selectată
+	No photo chosen	Nicio fotografie aleasă
+	No preview	Fără previzualizare
+	No problems found: the document conforms to {level}.	Nu s-a găsit nicio problemă: documentul este conform cu {level}.
+	No security	Fără securitate
+	No sheets	Nicio foaie
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Nu s-a găsit nicio semnătură în cadru. Mutați cadrul peste semnătură sau măriți sensibilitatea cernelii.
+	No status has been set.	Nu s-a setat nicio stare.
+	None (prefix only)	Niciunul (doar prefix)
+	None found	Nu s-a găsit nimic
+	None — everything is allowed	Niciuna: totul este permis
+	Not allowed	Nepermis
+	Not present	Absent
+	Nothing to redo	Nimic de refăcut
+	Nothing to undo	Nimic de anulat
+	Number	Număr
+	Number of pages	Număr de pagini
+	Number pages	Numerotare pagini
+	Odd Pages Only	Doar paginile impare
+	Odd pages only	Doar paginile impare
+	Offset from centre	Decalaj față de centru
+	Old file:	Fișier vechi:
+	One word or phrase per line	Un cuvânt sau o expresie pe rând
+	One {f} file per page, named after the document.	Un fișier {f} pe pagină, denumit după document.
+	Only change the colour of black text or line art	Schimbă doar culoarea textului sau a liniilor negre
+	Only checked properties will change. Mixed means the selected fields have different values.	Se modifică doar proprietățile bifate. Mixt înseamnă că câmpurile selectate au valori diferite.
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Se modifică doar conținutul paginii: linkurile, comentariile, câmpurile de formular și semnele de carte de pe paginile originale rămân.
+	Open	Deschidere
+	Open a PDF ({key})	Deschideți un PDF ({key})
+	Open a PDF to measure it.	Deschideți un PDF pentru a-l măsura.
+	Open a document first	Deschideți întâi un document
+	Open a web page	Deschidere pagină web
+	Open arrow	Săgeată deschisă
+	Open email app	Deschidere aplicație de e-mail
+	Open in Full Screen mode	Deschidere în modul Ecran complet
+	Open in a new tab	Deschidere într-o filă nouă
+	Open link	Deschidere link
+	Open the file as it was saved then	Deschide fișierul așa cum era salvat atunci
+	Open the older version first	Deschideți întâi versiunea mai veche
+	Open this web page?	Deschideți această pagină web?
+	Open to page	Deschidere la pagina
+	Opened, but its security settings don't allow combining. Enter the permissions password.	S-a deschis, dar setările sale de securitate nu permit combinarea. Introduceți parola de permisiuni.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Deschide preferințele driverului de imprimantă. Se salvează pentru toate imprimările de pe acest calculator; numărul de copii, față-verso, tonurile de gri și hârtia alese aici se aplică în continuare.
+	Optimizing… cleaning up	Se optimizează… curățare
+	Optimizing… image {d} of {t}	Se optimizează… imaginea {d} din {t}
+	Optimizing… merging identical objects	Se optimizează… unificare obiecte identice
+	Optimizing… removing user data	Se optimizează… eliminare date utilizator
+	Optimizing… writing the copy	Se optimizează… scriere copie
+	Optional: needs an AI provider you configure	Opțional: necesită un furnizor AI configurat de dvs.
+	Options…	Opțiuni…
+	Organization Name	Nume organizație
+	Organizational Unit	Departament
+	Orientation:	Orientare:
+	Original	Original
+	Original: replace pages	Original: înlocuire pagini
+	Other colour…	Altă culoare…
+	Outdent	Reducere indentare
+	Output	Ieșire
+	Output appears here.	Rezultatul apare aici.
+	Output intent: {list}	Intenție de ieșire: {list}
+	Overlap:	Suprapunere:
+	Owner password (no restrictions apply)	Parola proprietarului (nu se aplică restricții)
+	PDF Optimizer	Optimizator PDF
+	PDF or image	PDF sau imagine
+	PDF page: {size}	Pagină PDF: {size}
+	PDF scale: {scale}%	Scară PDF: {scale}%
+	PDF, images and text	PDF, imagini și text
+	Page Only	Doar pagina
+	Page Range Options	Opțiuni interval de pagini
+	Page Sizing & Handling	Dimensionare și gestionare pagini
+	Page background	Fundalul paginii
+	Page display: {layout}	Afișare pagini: {layout}
+	Page layout	Aspect pagină
+	Page navigation	Navigare pagini
+	Page number	Număr pagină
+	Page order:	Ordinea paginilor:
+	Page size	Dimensiune pagină
+	Page {label}	Pagina {label}
+	Page {p} of {n}	Pagina {p} din {n}
+	Pages Panel and Page	Panoul Pagini și pagina
+	Pages from	Pagini din
+	Pages of {name} to combine, e.g. 1-3, 6	Paginile din {name} de combinat, de ex. 1-3, 6
+	Pages per file	Pagini pe fișier
+	Pages per sheet:	Pagini pe foaie:
+	Pages to Print	Pagini de imprimat
+	Pages:	Pagini:
+	Pages: {k} of {n}	Pagini: {k} din {n}
+	Paper:	Hârtie:
+	Part of	Parte din
+	Password	Parolă
+	Password required	Este necesară parola
+	Password security	Securitate prin parolă
+	Password-protected	Protejat cu parolă
+	Paste after	Lipire după
+	Paths	Trasee
+	Pattern	Model
+	Patterns	Modele
+	Patterns (graphics objects)	Modele (obiecte grafice)
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft nu s-a închis normal. Aceste documente aveau modificări salvate automat:
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funcționează offline. Fără telemetrie, fără cont și fără procesare în cloud, cu excepția cazului în care adăugați un furnizor.
+	PdfCraft {c} is up to date.	PdfCraft {c} este la zi.
+	PdfCraft {v} is available.	Este disponibil PdfCraft {v}.
+	Percentage	Procent
+	Permissions password	Parolă de permisiuni
+	Permitted actions after certifying	Acțiuni permise după certificare
+	Photo	Fotografie
+	Pick a tool in the quick bar, or type above.	Alegeți un instrument din bara rapidă sau scrieți mai sus.
+	Pictures on those pages are recognized too; words already in the page's text are not added again	Sunt recunoscute și imaginile de pe acele pagini; cuvintele aflate deja în textul paginii nu se adaugă din nou
+	Pin a folder to Home	Fixare folder în Acasă
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fixați un folder pentru a-i vedea aici cele mai noi PDF-uri, de exemplu unde salvează scanerul sau un drive cloud sincronizat.
+	Pin a folder…	Fixare folder…
+	Plain text in reading order; pages are separated by form feeds.	Text simplu în ordinea de citire; paginile sunt separate prin salturi de pagină.
+	Planned	Planificat
+	Planned for milestone	Planificat pentru etapa
+	Points from the page's bottom-left corner.	Puncte de la colțul din stânga jos al paginii.
+	Portrait	Portret
+	Portrait Pages	Pagini portret
+	Post	Publicare
+	Poster	Poster
+	Prefix	Prefix
+	Preview	Previzualizare
+	Preview unavailable: {e}	Previzualizare indisponibilă: {e}
+	Preview: page {p} of {n}	Previzualizare: pagina {p} din {n}
+	Previous ({key})	Anteriorul ({key})
+	Previous / next page	Pagina anterioară / următoare
+	Previous figure	Figura anterioară
+	Previous month	Luna anterioară
+	Previous page	Pagina anterioară
+	Previous sheet	Foaia anterioară
+	Previous view	Vizualizarea anterioară
+	Print ({key})	Imprimare ({key})
+	Print in grayscale	Imprimare în tonuri de gri
+	Print page border	Imprimare chenar pagină
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage sau LastPage
+	Printer paper and scaling may differ. Check driver settings.	Hârtia și scalarea imprimantei pot fi diferite. Verificați setările driverului.
+	Printer properties	Proprietăți imprimantă
+	Printer:	Imprimantă:
+	Printing allowed	Imprimare permisă
+	Privacy	Confidențialitate
+	Properties…	Proprietăți…
+	Protect Using Password	Protejare cu parolă
+	Protected: the combined file won't keep its security settings	Protejat: fișierul combinat nu își va păstra setările de securitate
+	Quality	Calitate
+	Read Only	Doar citire
+	Reading colours	Culori de citire
+	Ready	Gata
+	Reason	Motiv
+	Recent	Recente
+	Recent colours	Culori recente
+	Recognize Text	Recunoaștere text
+	Recognized 1 word	A fost recunoscut 1 cuvânt
+	Recognized {n} words	Au fost recunoscute {n} cuvinte
+	Recognized {w} words in 1 file	Au fost recunoscute {w} cuvinte într-un fișier
+	Recognized {w} words in {n} files	Au fost recunoscute {w} cuvinte în {n} fișiere
+	Recognizing text… file {d} of {t}	Se recunoaște textul… fișierul {d} din {t}
+	Recognizing text… page {d} of {t}	Se recunoaște textul… pagina {d} din {t}
+	Recommended tools	Instrumente recomandate
+	Recover	Recuperare
+	Recover unsaved documents?	Recuperați documentele nesalvate?
+	Redact all	Anonimizare toate
+	Redacted area fill colour:	Culoare de umplere a zonei anonimizate:
+	Redaction Tool Properties	Proprietăți instrument de anonimizare
+	Redaction code:	Cod de anonimizare:
+	Reload	Reîncărcare
+	Reload documents when their files change on disk	Reîncarcă documentele când fișierele lor se modifică pe disc
+	Don't show again	Nu mai afișa
+	Show a notice when a document is secured	Afișează o notificare când un document este securizat
+	Remove checkmark	Eliminare bifă
+	Remove invalid links and bookmarks	Eliminare linkuri și semne de carte nevalide
+	Remove page	Eliminare pagină
+	Remove unreferenced named destinations	Eliminare destinații denumite nefolosite
+	Remove unused objects and merge identical ones	Eliminare obiecte nefolosite și unificare obiecte identice
+	Remove {name}	Eliminare {name}
+	Remove {name} from Recent	Eliminare {name} din recente
+	Remove {n} files	Eliminare {n} fișiere
+	Remove {n} pages	Eliminare {n} pagini
+	Reopen Closed Tab	Redeschidere filă închisă
+	Reopen the files that were open when PdfCraft last closed	Redeschide fișierele care erau deschise la ultima închidere a PdfCraft
+	Repair log	Jurnal de reparare
+	Repeat overlay text	Repetare text suprapus
+	Replace Image…	Înlocuire imagine…
+	Replace Pages	Înlocuire pagini
+	Replace document colours	Înlocuire culori document
+	Replace image	Înlocuire imagine
+	Replacement text	Text de înlocuire
+	Replacement: pages of {name}	Înlocuire: pagini din {name}
+	Replaces the existing one on those pages.	Înlocuiește-l pe cel existent pe acele pagini.
+	Report	Raport
+	Report…	Raport…
+	Requires user to enter a password for:	Utilizatorul trebuie să introducă o parolă pentru:
+	Reset columns	Resetare coloane
+	Reset page size	Resetare dimensiune pagină
+	Reset to printer defaults	Resetare la setările implicite ale imprimantei
+	Resize window to initial page	Redimensionare fereastră la pagina inițială
+	Resolution	Rezoluție
+	Retain existing	Păstrare existente
+	Reveal in File Explorer	Afișare în File Explorer
+	Reveal in Finder	Afișare în Finder
+	Reverse closed arrow	Săgeată închisă inversată
+	Reverse open arrow	Săgeată deschisă inversată
+	Reverse pages	Inversare ordine pagini
+	Revert changes	Anulare modificări
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Reveniți la versiunea salvată anterior a „{name}”? Modificările făcute de atunci nu mai pot fi recuperate.
+	Review History	Istoric revizuire
+	Revisions	Revizii
+	Right	Dreapta
+	Right Edge	Marginea dreaptă
+	Rotate Clockwise	Rotire în sensul acelor de ceasornic
+	Rotate Counterclockwise	Rotire în sens invers acelor de ceasornic
+	Rotate Pages	Rotire pagini
+	Rotate clockwise	Rotire în sensul acelor de ceasornic
+	Rotate counterclockwise	Rotire în sens invers acelor de ceasornic
+	Rotate view	Rotire vizualizare
+	Rotate view clockwise	Rotire vizualizare în sensul acelor de ceasornic
+	Rotate view clockwise ({key})	Rotire vizualizare în sensul acelor de ceasornic ({key})
+	Rotate view counterclockwise	Rotire vizualizare în sens invers acelor de ceasornic
+	Rotate:	Rotire:
+	Rotation:	Rotire:
+	Running action… file {d} of {t}	Se rulează acțiunea… fișierul {d} din {t}
+	Same as interface ({language})	La fel ca interfața ({language})
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	Igienizarea elimină informațiile ascunse din document: metadate, fișiere atașate, comentarii, câmpuri de formular (aplatizate), text și straturi ascunse, semne de carte, linkuri, acțiuni și scripturi, precum și date private ale aplicațiilor.
+	Save & Close	Salvare și închidere
+	Save ({key})	Salvare ({key})
+	Save Image As…	Salvare imagine ca…
+	Copy Image	Copiere imagine
+	The image has been copied ({w} × {h} pixels)	Imaginea a fost copiată ({w} × {h} pixeli)
+	Couldn't copy the image: {e}	Nu s-a putut copia imaginea: {e}
+	Copy Image in Original Format	Copiere imagine în formatul original
+	The image has been copied as a {ext} file	Imaginea a fost copiată ca fișier {ext}
+	The page has changed; select the image again	Pagina s-a schimbat; selectați din nou imaginea
+	Save as PDF	Salvare ca PDF
+	Save attachment…	Salvare atașament…
+	Save changes to “{name}” before closing?	Salvați modificările din „{name}” înainte de închidere?
+	Save pages	Salvare pagini
+	Save tag properties	Salvare proprietăți etichetă
+	Save the accessibility report	Salvare raport de accesibilitate
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Salvați documentul după aceea: salvarea rescrie tot fișierul, astfel încât să nu rămână nicio urmă a conținutului eliminat.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Salvați documentul după aceea; salvarea rescrie tot fișierul, astfel încât nimic eliminat să nu rămână în el.
+	Save the spreadsheet	Salvare foaie de calcul
+	Save these pages as one PDF	Salvare aceste pagini ca un singur PDF
+	Saved measurements	Măsurători salvate
+	Saved measurements.	Măsurători salvate.
+	Scale relative to target page	Scară relativă la pagina țintă
+	Scan	Scanare
+	Script Name:	Nume script:
+	Script:	Script:
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Scripturile rulează într-un mediu izolat, fără acces la fișiere sau la rețea. Un script care cere deschiderea unei pagini web are nevoie întâi de permisiunea dvs. Cu JavaScript dezactivat, funcțiile standard Acrobat de formatare, validare și calcul funcționează în continuare.
+	Scroll long text	Derulare text lung
+	Scroll tabs left	Derulare file la stânga
+	Scroll tabs right	Derulare file la dreapta
+	Search comments	Căutare în comentarii
+	Search tools and commands…	Căutare instrumente și comenzi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text adăugat
+	Link URL	URL-ul linkului
+	Search tools and commands	Căutare instrumente și comenzi
+	Text editing line	Linie de editare a textului
+	Text to place	Text de plasat
+	Tooltip	Sfat ecran
+	Words or phrases to redact	Cuvinte sau expresii de anonimizat
+	Searchable Image (Exact)	Imagine în care se poate căuta (exactă)
+	Searching… {s} of {p} pages	Se caută… {s} din {p} pagini
+	Searching… {s}/{p}	Se caută… {s}/{p}
+	Security	Securitate
+	Security settings	Setări de securitate
+	Select (V)	Selectare (V)
+	Select Action:	Selectare acțiune:
+	Select All	Selectare totală
+	Select Icon	Selectare pictogramă
+	Select Trigger:	Selectare declanșator:
+	Select a file first	Selectați întâi un fișier
+	Select a file for the stamp	Selectați un fișier pentru ștampilă
+	Select a password-protected file first	Selectați întâi un fișier protejat cu parolă
+	Select a word	Selectare cuvânt
+	Select all pages (Organize)	Selectare toate paginile (Organizare)
+	Select at most 1000 objects at a time.	Selectați cel mult 1000 de obiecte o dată.
+	Select data files to merge	Selectați fișierele de date de unificat
+	Select format category:	Selectare categorie format:
+	Select page {label}	Selectare pagina {label}
+	Select pages	Selectare pagini
+	Select the items to remove from this document.	Selectați elementele de eliminat din acest document.
+	Selected image files: {count}	Fișiere imagine selectate: {count}
+	Selected pages	Pagini selectate
+	Selection	Selecție
+	Sending to {printer}…	Se trimite la {printer}…
+	Sensitivity	Sensibilitate
+	Sent to {printer}	Trimis la {printer}
+	Sent to {printer}: {msg}	Trimis la {printer}: {msg}
+	Separator style:	Stil separator:
+	Set Alternate Text	Setare text alternativ
+	Set Fields to Same Size	Aceeași dimensiune pentru câmpuri
+	Set Page Boxes	Setare casete pagină
+	Set layer visibility	Setare vizibilitate straturi
+	Set status	Setare stare
+	Set to current page ({n})	Setare la pagina curentă ({n})
+	Set to zero	Setare la zero
+	Shared Field Properties	Proprietăți comune ale câmpurilor
+	Sheet {s} of {n}	Foaia {s} din {n}
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift limitează la 45 de grade. Backspace elimină un vârf. Escape anulează.
+	Shift- or Ctrl/Command-click to select several fields.	Shift- sau Ctrl/Command-clic pentru a selecta mai multe câmpuri.
+	Shift-click to select several objects. Drag empty space to select an area.	Shift-clic pentru a selecta mai multe obiecte. Trageți pe un spațiu gol pentru a selecta o zonă.
+	Show Report	Afișare raport
+	Show all	Afișare toate
+	Show all comments	Afișare toate comentariile
+	Show certificate…	Afișare certificat…
+	Show layer	Afișare strat
+	Show less	Afișare mai puțin
+	Show password	Afișare parolă
+	Show the accessibility report	Afișare raport de accesibilitate
+	Show this dialog when the Checker starts	Afișează acest dialog la pornirea verificatorului
+	Show {n} more	Afișare încă {n}
+	Show:	Afișare:
+	Shrink oversized pages	Micșorare pagini supradimensionate
+	Sign Here	Semnați aici
+	Sign this field…	Semnare acest câmp…
+	Sign yourself	Semnați personal
+	Signature Details	Detalii semnătură
+	Signature is INVALID:	Semnătura este NEVALIDĂ:
+	Signature is valid:	Semnătura este validă:
+	Signature panel	Panou semnături
+	Signature validity is UNKNOWN:	Valabilitatea semnăturii este NECUNOSCUTĂ:
+	Signer's name	Numele semnatarului
+	Simplified field notation:	Notație simplificată pentru câmpuri:
+	Single Page	O singură pagină
+	Single Page Continuous	O singură pagină, continuu
+	Single word or phrase	Un singur cuvânt sau o expresie
+	Skip Rule	Omitere regulă
+	Skipped	Omis
+	Slash	Bară oblică
+	Smaller pages	Pagini mai mici
+	Snap to drawing	Aliniere la desen
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Unele semne de carte nu apar aici: panoul afișează un număr limitat, cu o adâncime de imbricare limitată.
+	Some page content couldn't be read; snapping uses the rest.	O parte din conținutul paginii nu a putut fi citit; alinierea folosește restul.
+	Sort by	Sortare după
+	Sort comments by:	Sortare comentarii după:
+	Sort items	Sortare elemente
+	Source	Sursă
+	Space Audit	Analiză spațiu
+	Special	Special
+	Split document	Împărțire document
+	Split into files…	Împărțire în fișiere…
+	Square	Pătrat
+	Standard Business	Afaceri standard
+	Start	Începe de la
+	Start Checking	Pornire verificare
+	Start page number	Număr pagină de început
+	Status	Stare
+	Steps	Pași
+	Strength: {s}	Putere: {s}
+	Style	Stil
+	Subject	Subiect
+	Subset	Selecție
+	Summarize Options	Opțiuni rezumat
+	Summary	Rezumat
+	Switch to List view to change the pages it takes.	Treceți la vizualizarea Listă pentru a schimba paginile pe care le ia.
+	Switch to two-page view first to show the cover page	Treceți întâi la vizualizarea pe două pagini pentru a afișa pagina de copertă
+	Tab order: move a field with its arrows.	Ordinea de tabulare: mutați un câmp cu săgețile lui.
+	Tag type	Tip etichetă
+	Tags	Etichete
+	Text Color:	Culoare text:
+	Text alignment:	Aliniere text:
+	Text in images isn't found; recognise text (OCR) first.	Textul din imagini nu este găsit; rulați întâi recunoașterea textului (OCR).
+	Text is compared word by word; the differences are shown on the new file.	Textul se compară cuvânt cu cuvânt; diferențele sunt afișate pe fișierul nou.
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Recunoașterea textului nu este instalată: lipsesc fișierele modelului. Reinstalați PdfCraft sau setați PDFCRAFT_MODELS la folderul care le conține.
+	Text to find	Text de găsit
+	Text to insert	Text de inserat
+	Text used as a clipping path cannot be moved with this selection.	Textul folosit ca traseu de decupare nu poate fi mutat cu această selecție.
+	Text, marks and signatures become part of the page. Other comments stay editable.	Textul, marcajele și semnăturile devin parte din pagină. Celelalte comentarii rămân editabile.
+	Thai and Arabic use regular fallback fonts when available.	Pentru thai și arabă se folosesc fonturi de rezervă obișnuite, dacă există.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Fonturile de text PDF nu pot desena „{c}” ({code}). Alegeți un text acceptat.
+	The checker found 1 problem which may prevent the document from being fully accessible.	Verificatorul a găsit 1 problemă care poate împiedica accesibilitatea completă a documentului.
+	The checker found no problems in this document.	Verificatorul nu a găsit nicio problemă în acest document.
+	The checker found {n} problems which may prevent the document from being fully accessible.	Verificatorul a găsit {n} probleme care pot împiedica accesibilitatea completă a documentului.
+	The document now conforms to {level}; save it to keep the changes	Documentul este acum conform cu {level}; salvați-l pentru a păstra modificările
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Documentul se deschide fără parolă; această parolă este necesară pentru a modifica restricțiile. Se aplică la salvare.
+	The document's security settings don't allow copying text and images	Setările de securitate ale documentului nu permit copierea textului și a imaginilor
+	The document's security settings don't allow this change	Setările de securitate ale documentului nu permit această modificare
+	The existing action will be preserved.	Acțiunea existentă va fi păstrată.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Fonturile cu care scrie PdfCraft nu pot desena „{c}” ({code}), așa că apare ca ? în orice vizualizator PDF. Textul se salvează.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Cheia se află în depozitul de certificate Windows, care poate cere permisiunea ca PdfCraft să o folosească.
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Cheia se află în Keychain-ul macOS, care poate cere permisiunea ca PdfCraft să o folosească.
+	The newest {n} of {total} PDFs	Cele mai noi {n} din {total} PDF-uri
+	The password is only used to read the file; it isn't saved.	Parola este folosită doar pentru citirea fișierului; nu se salvează.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Setările proprii ale driverului de imprimantă pentru această imprimare: tava de hârtie, tipul de hârtie, finisarea și altele.
+	The replacement file doesn't have that many pages.	Fișierul de înlocuire nu are atâtea pagini.
+	The same password is tried on each file.	Aceeași parolă se încearcă la fiecare fișier.
+	The signature will be invisible.	Semnătura va fi invizibilă.
+	The text is the same	Textul este identic
+	The value is shown as typed.	Valoarea se afișează așa cum a fost scrisă.
+	There are no redaction marks (mark text, areas or pages first)	Nu există marcaje de anonimizare (marcați întâi text, zone sau pagini)
+	These files can't be read, so they won't be in the combined PDF:	Aceste fișiere nu pot fi citite, așa că nu vor fi incluse în PDF-ul combinat:
+	These objects could not be moved. Select them again and try a smaller move.	Aceste obiecte nu au putut fi mutate. Selectați-le din nou și încercați o mutare mai mică.
+	Thick	Groasă
+	Thickness	Grosime
+	Thin	Subțire
+	This area has too many overlapping paths; intersection snapping is limited.	Această zonă are prea multe trasee suprapuse; alinierea la intersecții este limitată.
+	This certificate is in your list of trusted certificates.	Acest certificat se află în lista certificatelor de încredere.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Acest certificat nu este de încredere. Semnăturile făcute cu el arată o identitate necunoscută.
+	This certificate is trusted through a certificate above it in the chain.	Acest certificat este de încredere printr-un certificat aflat deasupra lui în lanț.
+	This comment's appearance can't be changed yet.	Aspectul acestui comentariu nu poate fi schimbat încă.
+	This dialog shows the details of a certificate and its chain.	Acest dialog arată detaliile unui certificat și ale lanțului său.
+	This document contains {n} interactive form fields.	Acest document conține {n} câmpuri de formular interactive.
+	This document has no comments to flatten	Acest document nu are comentarii de aplatizat
+	This document has no document-level scripts.	Acest document nu are scripturi la nivel de document.
+	This document has no editable structure tags.	Acest document nu are etichete de structură editabile.
+	This document has no form fields to flatten	Acest document nu are câmpuri de formular de aplatizat
+	This document has no form fields you can fill in	Acest document nu are câmpuri de formular pe care să le puteți completa
+	This document has no pages.	Acest document nu are pagini.
+	This document has no restrictions to lift	Acest document nu are restricții de eliminat
+	This document has no signatures.	Acest document nu are semnături.
+	This document has no tagged figures.	Acest document nu are figuri etichetate.
+	This document has no {kind} to change	Acest document nu are {kind} de modificat
+	This document hasn't been checked yet.	Acest document nu a fost încă verificat.
+	This document is secured. Some changes are restricted by its security settings.	Acest document este securizat. Unele modificări sunt restricționate de setările sale de securitate.
+	This document isn't password-protected	Acest document nu este protejat cu parolă
+	This drawing exceeds the snapping limit; only the first paths are used.	Acest desen depășește limita de aliniere; se folosesc doar primele trasee.
+	This field is locked. Unlock it to change its properties.	Acest câmp este blocat. Deblocați-l pentru a-i modifica proprietățile.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Acest fișier s-a modificat pe disc. Reîncărcați-l pentru a vedea noua versiune; modificările nesalvate se vor pierde.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	Acest fișier era deteriorat și a fost reparat. Salvarea păstrează versiunea reparată.
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Acest folder nu este disponibil acum. Poate a fost mutat sau unitatea ori sincronizarea cloud este offline.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Scripturile acestui formular sunt dezactivate pentru că unul a rulat prea mult. Redeschideți documentul pentru a le rula din nou.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Acesta este un formular XFA dinamic, pe care PdfCraft nu îl poate afișa încă. Ce vedeți este pagina de rezervă a fișierului.
+	This measurement needs at least {n} points.	Această măsurătoare are nevoie de cel puțin {n} puncte.
+	This page contains objects that cannot be selected together.	Această pagină conține obiecte care nu pot fi selectate împreună.
+	This page couldn't be displayed.\n{e}	Această pagină nu a putut fi afișată.\n{e}
+	This printer offers no settings of its own.	Această imprimantă nu are setări proprii.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Driverul acestei imprimante nu preia setările față-verso de la alte programe, așa că se aplică setarea proprie. Schimbați-o în Proprietăți…
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Această adresă web amestecă litere din alfabete diferite, o metodă obișnuită de a imita numele altui site.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Această adresă web folosește litere din alt alfabet, care pot semăna cu cele cunoscute.
+	Tile scale:	Scară placare:
+	Time	Oră
+	Title	Titlu
+	To change locked fields, also set Locked to No.	Pentru a modifica câmpurile blocate, setați și Blocat la Nu.
+	To:	Către:
+	Today: {date}	Astăzi: {date}
+	Toggle fit page / fit width	Comutare potrivire pagină / potrivire lățime
+	Tool	Instrument
+	Tools panel side	Partea panoului de instrumente
+	Tooltip:	Sfat ecran:
+	Top	Sus
+	Top-level bookmarks ({n})	Semne de carte de nivel superior ({n})
+	Total	Total
+	Trust	Încredere
+	Try the form as people filling it in will see it	Încercați formularul așa cum îl vor vedea cei care îl completează
+	Two-Up (Cover Page)	Două pagini (cu copertă)
+	Two-Up (Facing)	Două pagini (față în față)
+	Two-Up Continuous (Cover Page)	Două pagini continuu (cu copertă)
+	Two-Up Continuous (Facing)	Două pagini continuu (față în față)
+	Two-sided:	Față-verso:
+	Type	Tip
+	Type text	Scriere text
+	Type the web address.	Introduceți adresa web.
+	Type your {what}.	Scrieți {what}.
+	URL to submit to	URL de trimitere
+	Unit	Unitate
+	Units	Unități
+	Unknown author	Autor necunoscut
+	Unlock	Deblocare
+	Unlock {name}	Deblocare {name}
+	Unlock {n} files	Deblocare {n} fișiere
+	Unlocked: the combined file won't be password-protected	Deblocat: fișierul combinat nu va fi protejat cu parolă
+	Unlock…	Deblocare…
+	Unpin	Anulare fixare
+	Unpin {folder}	Anulare fixare {folder}
+	Unplaced	Neplasat
+	Unsupported measurements	Măsurători neacceptate
+	Up	Sus
+	Update	Actualizare
+	Use 72 DPI (one point per pixel)	Folosire 72 DPI (un punct pe pixel)
+	Use Flate to encode streams that are not encoded	Folosire Flate pentru codarea fluxurilor necodate
+	In streams that use LZW encoding, use Flate instead	Folosire Flate în locul LZW pentru fluxurile codate LZW
+	Use a Digital ID from a file	Folosire ID digital dintr-un fișier
+	Use custom DPI	Folosire DPI personalizat
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Folosește DPI-ul încorporat al fiecărei imagini; 72 DPI când lipsește.
+	Use image resolution	Folosire rezoluție imagine
+	Use now	Folosiți acum
+	Use overlay text	Folosire text suprapus
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Se folosește când un PDF nu cere un anumit aspect sau zoom. Derularea continuă nu se oprește niciodată între pagini.
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Se folosește la deschiderea PDF-urilor. Un mod de lansare sau de control explicit are prioritate pentru sesiune.
+	User Interface Options	Opțiuni interfață utilizator
+	User password	Parolă utilizator
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	Valabil 5 ani, pentru semnături digitale. ID-urile autosemnate de obicei nu sunt considerate de încredere de alții.
+	Validate all	Validare toate
+	Value is not calculated	Valoarea nu se calculează
+	Value is the	Valoarea este
+	Value:	Valoare:
+	Verify	Verificare
+	Verify to see what the document needs.	Verificați pentru a vedea de ce are nevoie documentul.
+	Version {v}	Versiunea {v}
+	Vertical	Vertical
+	Vertical reversed	Vertical inversat
+	Vertical text cannot be moved with this selection.	Textul vertical nu poate fi mutat cu această selecție.
+	View revision {n}	Vizualizare revizia {n}
+	View signed version	Vizualizare versiune semnată
+	Viewport	Zonă de vizualizare
+	Viewport rectangle in page points (x, y, width, height)	Dreptunghiul zonei de vizualizare în puncte de pagină (x, y, lățime, înălțime)
+	Visible Rectangle	Dreptunghi vizibil
+	Visual	Vizual
+	Warnings	Avertismente
+	Welcome to PdfCraft	Bun venit în PdfCraft
+	What word or phrase would you like to search for?	Ce cuvânt sau expresie doriți să căutați?
+	Whole words only	Doar cuvinte întregi
+	Width:	Lățime:
+	Window Options	Opțiuni fereastră
+	Windows store  ·  	Depozit Windows  ·  
+	Write this email?	Scrieți acest e-mail?
+	Wrong password	Parolă greșită
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formular XFA: câmpurile și datele XFA sunt sincronizate, ca alte vizualizatoare să arate ce completați.
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați 1 marcaj de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați {n} marcaje de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
+	You have version {c}. All releases are listed at {page}.	Aveți versiunea {c}. Toate versiunile sunt listate la {page}.
+	You have version {c}. Download the new version from its release page.	Aveți versiunea {c}. Descărcați versiunea nouă de pe pagina ei de lansare.
+	Your changes will be lost if you don't save them.	Modificările se vor pierde dacă nu le salvați.
+	ZIP	ZIP
+	Zoom in	Mărire
+	Zoom in ({key})	Mărire ({key})
+	Zoom in / out (also pinch or {key}-scroll)	Mărire / micșorare (și prin ciupire sau {key}-derulare)
+	Zoom out	Micșorare
+	Zoom out ({key})	Micșorare ({key})
+	already a PDF	deja PDF
+	and {n} more	și încă {n}
+	background	fundal
+	characters	caractere
+	e.g. My stamps	de ex. Ștampilele mele
+	e.g. en-US	de ex. ro-RO
+	for images above	pentru imaginile peste
+	header or footer	antet sau subsol
+	initials	inițiale
+	is available	este disponibil
+	is not available yet	nu este disponibil încă
+	just now	chiar acum
+	yesterday	ieri
+	needs an AI provider (off by default)	necesită un furnizor AI (dezactivat implicit)
+	no output folder was chosen	nu s-a ales niciun folder de ieșire
+	no unused output name	niciun nume de ieșire liber
+	none	niciunul
+	of the following fields:	din următoarele câmpuri:
+	AI assistant	Asistent AI
+	Action Wizard	Asistent acțiuni
+	Action Wizard…	Asistent acțiuni…
+	Actions list	Listă acțiuni
+	Add Bates numbering…	Adăugare numerotare Bates…
+	Add a button	Adăugare buton
+	Add a callout	Adăugare casetă explicativă
+	Add a checkbox	Adăugare casetă de selectare
+	Add a date field	Adăugare câmp dată
+	Add a digital signature field	Adăugare câmp de semnătură digitală
+	Add a drop-down list	Adăugare listă derulantă
+	Add a list box	Adăugare casetă listă
+	Add a radio button	Adăugare buton radio
+	Add a stamp	Adăugare ștampilă
+	Add a sticky note	Adăugare notă
+	Add a text box	Adăugare casetă text
+	Add a text field	Adăugare câmp text
+	Add alternate text	Adăugare text alternativ
+	Add alternate text…	Adăugare text alternativ…
+	Add an image field	Adăugare câmp imagine
+	Add background…	Adăugare fundal…
+	Add comments	Adăugare comentarii
+	Add content	Adăugare conținut
+	Add files to combine	Adăugare fișiere de combinat
+	Add form components	Adăugare componente formular
+	Add header & footer…	Adăugare antet și subsol…
+	Add image…	Adăugare imagine…
+	Add or edit links	Adăugare sau editare linkuri
+	Add printer marks	Adăugare semne de imprimare
+	Add search index	Adăugare index de căutare
+	Add text	Adăugare text
+	Add watermark…	Adăugare filigran…
+	Advanced optimization	Optimizare avansată
+	Advanced options	Opțiuni avansate
+	Apply PDF standards	Aplicare standarde PDF
+	Apply redactions…	Aplicare anonimizări…
+	Archive documents	Arhivare documente
+	Area	Arie
+	Arrow	Săgeată
+	ArtCraft website	Site-ul ArtCraft
+	Ask about this document	Întrebări despre acest document
+	Attach a file	Atașare fișier
+	Attach file	Atașare fișier
+	Audit space usage	Analiză utilizare spațiu
+	Automatically tag PDF	Etichetare automată PDF
+	Background	Fundal
+	Bates numbering	Numerotare Bates
+	Blank page	Pagină goală
+	Bring your own model (off by default)	Folosiți propriul model (dezactivat implicit)
+	Button	Buton
+	Certificates	Certificate
+	Certify (invisible signature)	Certificare (semnătură invizibilă)
+	Certify (visible signature)	Certificare (semnătură vizibilă)
+	Change initials	Schimbare inițiale
+	Change reading options	Schimbare opțiuni de citire
+	Change reading options…	Schimbare opțiuni de citire…
+	Change signature	Schimbare semnătură
+	Check for accessibility	Verificare accesibilitate
+	Check for accessibility…	Verificare accesibilitate…
+	Checkbox	Casetă de selectare
+	Checkmark	Bifă
+	Clear form	Golire formular
+	Clear redaction marks	Golire marcaje de anonimizare
+	Clipboard	Clipboard
+	Cloud	Nor
+	Column select	Selectare coloană
+	Combine	Combinare
+	Combine files	Combinare fișiere
+	Comment list	Listă comentarii
+	Comments panel	Panou comentarii
+	Compare	Comparare
+	Compare files	Comparare fișiere
+	Compare files…	Comparare fișiere…
+	Compress a PDF	Comprimare PDF
+	Console	Consolă
+	Convert colors	Conversie culori
+	Copy pages	Copiere pagini
+	Correct recognized text	Corectare text recunoscut
+	Create a PDF	Creare PDF
+	Create from	Creare din
+	Create links from URLs	Creare linkuri din URL-uri
+	Crop pages	Decupare pagini
+	Cross	Cruce
+	Cut pages	Decupare pagini
+	Dark gray	Gri închis
+	Date	Dată
+	Date field	Câmp dată
+	Detect form fields	Detectare câmpuri de formular
+	Digital signature	Semnătură digitală
+	Digitally sign	Semnare digitală
+	Distance	Distanță
+	Document JavaScripts	Scripturi JavaScript ale documentului
+	Document JavaScripts…	Scripturi JavaScript ale documentului…
+	Document actions	Acțiuni document
+	Dot	Punct
+	Draw a cloud	Desenare nor
+	Draw a line	Desenare linie
+	Draw a polygon	Desenare poligon
+	Draw a rectangle	Desenare dreptunghi
+	Draw an arrow	Desenare săgeată
+	Draw an oval	Desenare oval
+	Draw connected lines	Desenare linii conectate
+	Draw freehand	Desenare liberă
+	Drawing	Desen
+	Drawing scale	Scara desenului
+	Scale	Scară
+	Common scales	Scări uzuale
+	Enter a scale such as 1:50.	Introduceți o scară, de exemplu 1:50.
+	Applying a scale switches units to m / mm.	Aplicarea unei scări schimbă unitățile în m / mm.
+	Drop-down list	Listă derulantă
+	Duplicate pages	Duplicare pagini
+	Edit a PDF	Editare PDF
+	Edit text & images	Editare text și imagini
+	Encrypt with certificate	Criptare cu certificat
+	Enhance camera image	Îmbunătățire imagine de la cameră
+	Enhance scanned file	Îmbunătățire fișier scanat
+	Enter permissions password…	Introducere parolă de permisiuni…
+	Erase drawings	Ștergere desene
+	Export a PDF	Exportare PDF
+	Export all comments to data file…	Exportare toate comentariile în fișier de date…
+	Export all images	Exportare toate imaginile
+	Export all images…	Exportare toate imaginile…
+	Export data	Exportare date
+	Export form data…	Exportare date formular…
+	Export measurements	Exportare măsurători
+	Export measurements as CSV	Exportare măsurători ca CSV
+	Export to	Exportare în
+	Export to PowerPoint…	Exportare în PowerPoint…
+	Extract	Extragere
+	Extract pages	Extragere pagini
+	Field list	Listă câmpuri
+	Field properties	Proprietăți câmp
+	Field properties…	Proprietăți câmp…
+	Fields	Câmpuri
+	Fill	Completare
+	Fill & Sign: add text	Completare și semnare: adăugare text
+	Fill & Sign: change initials	Completare și semnare: schimbare inițiale
+	Fill & Sign: change signature	Completare și semnare: schimbare semnătură
+	Fill & Sign: checkmark	Completare și semnare: bifă
+	Fill & Sign: cross	Completare și semnare: cruce
+	Fill & Sign: date	Completare și semnare: dată
+	Fill & Sign: dot	Completare și semnare: punct
+	Fill & Sign: initials	Completare și semnare: inițiale
+	Fill & Sign: line	Completare și semnare: linie
+	Fill & Sign: remove saved initials	Completare și semnare: eliminare inițiale salvate
+	Fill & Sign: remove saved signature	Completare și semnare: eliminare semnătură salvată
+	Fill & Sign: sign	Completare și semnare: semnare
+	Find text and redact	Găsire text și anonimizare
+	Find text and redact…	Găsire text și anonimizare…
+	Fit to width scrolling	Derulare cu potrivire la lățime
+	Fit visible	Potrivire zonă vizibilă
+	Fix hairlines	Corectare linii foarte subțiri
+	Fix reading order	Corectare ordine de citire
+	Flatten comments	Aplatizare comentarii
+	Flatten form fields	Aplatizare câmpuri de formular
+	Form fields panel	Panou câmpuri de formular
+	Geospatial location	Locație geospațială
+	Go to page…	Salt la pagina…
+	HTML web page	Pagină web HTML
+	Header and footer	Antet și subsol
+	Hide all comments	Ascundere toate comentariile
+	Highlight text	Evidențiere text
+	Image	Imagine
+	Image (PNG)	Imagine (PNG)
+	Image field	Câmp imagine
+	Images	Imagini
+	Import comments…	Importare comentarii…
+	Import data	Importare date
+	Import form data…	Importare date formular…
+	In multiple files	În mai multe fișiere
+	In this file	În acest fișier
+	Index	Index
+	Initials	Inițiale
+	Insert	Inserare
+	Insert pages	Inserare pagini
+	Insert text	Inserare text
+	JavaScript	JavaScript
+	JavaScript console…	Consolă JavaScript…
+	Join the ArtCraft Discord	Intrați pe Discord-ul ArtCraft
+	Light gray	Gri deschis
+	Line	Linie
+	Link	Link
+	List box	Casetă listă
+	Make accessible	Asigurare accesibilitate
+	Manage embedded index	Gestionare index încorporat
+	Markup	Marcare
+	Marquee zoom	Zoom pe zonă selectată
+	Measure area	Măsurare arie
+	Measure distance	Măsurare distanță
+	Measure objects	Măsurare obiecte
+	Measure perimeter	Măsurare perimetru
+	Measurement information	Informații măsurare
+	Measurement snapping	Aliniere la măsurare
+	Merge data files into spreadsheet…	Unificare fișiere de date în foaie de calcul…
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Modify page	Modificare pagină
+	Multiple files	Mai multe fișiere
+	New bookmarks from structure	Semne de carte noi din structură
+	Open accessibility report	Deschidere raport de accesibilitate
+	Optimize scanned documents	Optimizare documente scanate
+	Optimize scanned documents…	Optimizare documente scanate…
+	Output preview	Previzualizare ieșire
+	Oval	Oval
+	PDF/A…	PDF/A…
+	Page grid	Grilă pagină
+	Page labels	Etichete pagini
+	Page options	Opțiuni pagină
+	Page transitions	Tranziții pagini
+	Paste pages	Lipire pagini
+	PdfCraft on GitHub	PdfCraft pe GitHub
+	PdfCraft web page	Pagina web PdfCraft
+	Perimeter	Perimetru
+	Pin folder to Home…	Fixare folder în Acasă…
+	PostScript / EPS	PostScript / EPS
+	Preflight	Preflight
+	Prepare for accessibility	Pregătire pentru accesibilitate
+	Prepare for distribution	Pregătire pentru distribuire
+	Prepare for distribution…	Pregătire pentru distribuire…
+	Presentation (.pptx)	Prezentare (.pptx)
+	Print production	Producție tipografică
+	Protect a PDF	Protejare PDF
+	Protect with password	Protejare cu parolă
+	Radio button	Buton radio
+	Recognize text	Recunoaștere text
+	Recognize text in multiple files…	Recunoaștere text în mai multe fișiere…
+	Recognize text…	Recunoaștere text…
+	Rectangle	Dreptunghi
+	Redact a PDF	Anonimizare PDF
+	Redact pages	Anonimizare pagini
+	Redact pages…	Anonimizare pagini…
+	Redact text and images	Anonimizare text și imagini
+	Redaction properties…	Proprietăți anonimizare…
+	Reduce file size	Reducere dimensiune fișier
+	Remove all links	Eliminare toate linkurile
+	Remove background	Eliminare fundal
+	Remove header & footer	Eliminare antet și subsol
+	Remove hidden information	Eliminare informații ascunse
+	Remove hidden information…	Eliminare informații ascunse…
+	Remove watermark	Eliminare filigran
+	Replace	Înlocuire
+	Replace text	Înlocuire text
+	Reset panel layout	Resetare aranjare panouri
+	Review	Revizuire
+	Rich Text Format (.rtf)	Rich Text Format (.rtf)
+	Rotate	Rotire
+	Rotate pages	Rotire pagini
+	Rotate pages clockwise	Rotire pagini în sensul acelor de ceasornic
+	Rotate pages counterclockwise	Rotire pagini în sens invers acelor de ceasornic
+	Sanitize document	Igienizare document
+	Sanitize document…	Igienizare document…
+	Save as PDF/A	Salvare ca PDF/A
+	Save as PDF/UA	Salvare ca PDF/UA
+	Save as PDF/X	Salvare ca PDF/X
+	Scan & OCR	Scanare și OCR
+	Security properties	Proprietăți de securitate
+	Select files to compare	Selectați fișierele de comparat
+	Separate PDFs	PDF-uri separate
+	Set measurement scale	Setare scară de măsurare
+	Set page boxes	Setare casete pagină
+	Set page boxes…	Setare casete pagină…
+	Set properties	Setare proprietăți
+	Show cover page in two-page view	Afișare pagină de copertă în vizualizarea pe două pagini
+	Signature	Semnătură
+	Signatures panel	Panou semnături
+	Single file	Un singur fișier
+	Snapping	Aliniere
+	Split	Împărțire
+	Spreadsheet (.xlsx)	Foaie de calcul (.xlsx)
+	Squiggly underline	Subliniere ondulată
+	Squiggly underline text	Subliniere ondulată text
+	Stamp	Ștampilă
+	Stamp palette	Paletă ștampile
+	Stamps	Ștampile
+	Standards	Standarde
+	Sticky note	Notă
+	Strikethrough text	Tăiere text cu o linie
+	Summarize	Rezumat
+	Summarize comments	Rezumat comentarii
+	Switch light / dark theme	Comutare temă luminoasă / întunecată
+	Tab order by columns	Ordine de tabulare pe coloane
+	Tab order by rows	Ordine de tabulare pe rânduri
+	Tab order: by columns	Ordine de tabulare: pe coloane
+	Tab order: by document structure	Ordine de tabulare: după structura documentului
+	Tab order: by rows	Ordine de tabulare: pe rânduri
+	Tags panel	Panou etichete
+	Text (plain)	Text (simplu)
+	Text box	Casetă text
+	Text field	Câmp text
+	Timestamp	Marcaj temporal
+	Translate	Traducere
+	Underline text	Subliniere text
+	Update background…	Actualizare fundal…
+	Update header & footer…	Actualizare antet și subsol…
+	Update watermark…	Actualizare filigran…
+	Use JavaScript	Folosire JavaScript
+	Use a certificate	Folosire certificat
+	Use guided actions	Folosire acțiuni ghidate
+	Use print production	Folosire producție tipografică
+	Use system setting	Folosire setarea sistemului
+	Validate all signatures	Validare toate semnăturile
+	Watermark	Filigran
+	Move object	Mutare obiect
+	Move objects	Mutare obiecte
+	All tools	Toate instrumentele
+	Read	Citire
+	E-Sign	Semnătură electronică
+	Tools	Instrumente
+	Inspector	Inspector
+	 on page {label}	 pe pagina {label}
+	A font isn't embedded	Un font nu este încorporat
+	A {} action isn't allowed	O acțiune {} nu este permisă
+	A {} annotation has additional actions	O adnotare {} are acțiuni suplimentare
+	A {} annotation has no appearance stream	O adnotare {} nu are flux de aspect
+	A {} annotation isn't set to print, or is hidden	O adnotare {} nu este setată pentru imprimare sau este ascunsă
+	Accessibility Report	Raport de accesibilitate
+	Add the PDFs to combine	Adăugați PDF-urile de combinat
+	Added the first {n} PDFs in {folder}	Au fost adăugate primele {n} PDF-uri din {folder}
+	CRL Signing	Semnare CRL
+	Certificate Signing	Semnare certificate
+	Change Author	Schimbare autor
+	Change Keywords	Schimbare cuvinte cheie
+	Change Subject	Schimbare subiect
+	Change Title	Schimbare titlu
+	Choose a digital ID.	Alegeți un ID digital.
+	Create links	Creare linkuri
+	Creator	Creator
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Taie și stivuiește necesită Față-verso: Dezactivat. Imprimați foi pe o singură față.
+	Data Encipherment	Cifrare date
+	Decipher Only	Doar descifrare
+	Detailed Report	Raport detaliat
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Se folosește DeviceCMYK, dar intenția de ieșire PDF/A nu este un profil CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Se folosește DeviceRGB, dar intenția de ieșire PDF/A nu este un profil RGB
+	Digital Signature	Semnătură digitală
+	Document properties (⌘D)	Proprietăți document (⌘D)
+	Drop PDFs or folders here, or choose them.	Plasați aici PDF-uri sau foldere, sau alegeți-le.
+	Encipher Only	Doar cifrare
+	English	Engleză
+	Enter a URL	Introduceți un URL
+	Enter a name.	Introduceți un nume.
+	Enter a page number	Introduceți un număr de pagină
+	Enter the field names	Introduceți numele câmpurilor
+	Every PDF in the folder	Toate PDF-urile din folder
+	Every PDF in the folder and the folders inside it	Toate PDF-urile din folder și din folderele din interiorul lui
+	Field "{}" on page {p} has no description (tooltip)	Câmpul „{}” de pe pagina {p} nu are descriere (sfat ecran)
+	Filename	Nume fișier
+	Flatten Fill & Sign	Aplatizare Completare și semnare
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Un font (fără nume) de pe pagina {p} nu își asociază caracterele cu Unicode
+	Font {} on page {p} doesn't map its characters to Unicode	Fontul {} de pe pagina {p} nu își asociază caracterele cu Unicode
+	Form field on page {p} isn't tagged	Câmpul de formular de pe pagina {p} nu este etichetat
+	H{n} follows an H{d}; headings should not skip levels	H{n} urmează după un H{d}; titlurile nu ar trebui să sară niveluri
+	Inserted text	Text inserat
+	Key Agreement	Acord de chei
+	Key Encipherment	Cifrare chei
+	Margins (in)	Margini (inch)
+	New bookmark (⌘B)	Semn de carte nou (⌘B)
+	Next (⌘G)	Următorul (⌘G)
+	No PDFs found in {folder}	Nu s-au găsit PDF-uri în {folder}
+	No document language is set	Nu este setată limba documentului
+	No page has text: the document appears to be images of pages	Nicio pagină nu are text: documentul pare să fie format din imagini ale paginilor
+	Non-Repudiation	Nerepudiere
+	Only the document's owner can change its security (open it with the permissions password)	Doar proprietarul documentului îi poate modifica securitatea (deschideți-l cu parola de permisiuni)
+	Open a PDF (⌘O)	Deschideți un PDF (⌘O)
+	Page {p} doesn't tab in structure order	Pagina {p} nu are ordinea de tabulare după structură
+	Page {p}: {n} untagged content item	Pagina {p}: {n} element de conținut neetichetat
+	Page {p}: {n} untagged content items	Pagina {p}: {n} elemente de conținut neetichetate
+	Page {} has additional actions	Pagina {} are acțiuni suplimentare
+	Panel layout could not be restored: {error}	Aranjarea panourilor nu a putut fi restabilită: {error}
+	Panel move was not applied: {error}	Mutarea panoului nu a fost aplicată: {error}
+	PdfCraft can't check this signature yet: {}.	PdfCraft nu poate verifica încă această semnătură: {}.
+	Previous (⇧⌘G)	Anteriorul (⇧⌘G)
+	Print (⌘P)	Imprimare (⌘P)
+	Producer	Producător
+	Redo {action}	Refacere {action}
+	Rendering…	Se randează…
+	Report created	Raport creat
+	Rev. {rev}: Certified by an unknown signer	Rev. {rev}: certificat de un semnatar necunoscut
+	Rev. {rev}: Certified by {name}	Rev. {rev}: certificat de {name}
+	Rev. {rev}: Signed by an unknown signer	Rev. {rev}: semnat de un semnatar necunoscut
+	Rev. {rev}: Signed by {name}	Rev. {rev}: semnat de {name}
+	Rotate view clockwise (⇧⌘+)	Rotire vizualizare în sensul acelor de ceasornic (⇧⌘+)
+	Rule Name	Nume regulă
+	Save (M4)	Salvare (M4)
+	Save as {level}	Salvare ca {level}
+	Signature is invalid	Semnătura este nevalidă
+	Signature is valid	Semnătura este validă
+	Signature validity is unknown	Valabilitatea semnăturii este necunoscută
+	Signing time is from the clock on the signer's computer.	Ora semnării provine de la ceasul calculatorului semnatarului.
+	Still rendering — this page is unusually complex…	Se randează încă: această pagină este neobișnuit de complexă…
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	Semnătura ECDSA nu este în DER canonic (octeți în plus, completare sau un octet de semn lipsă); a fost citită oricum.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	Semnătura ECDSA conține valorile brute r și s în loc de o secvență DER; a fost citită oricum.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	Valoarea semnăturii RSA nu are lungimea modulului cheii (octeți zero de început eliminați sau adăugați); a fost citită oricum.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo din semnătura RSA nu are parametrul NULL (semnatarii mai vechi îl scriu așa); a fost citită oricum.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Certificatul lui {} nu permite atâtea certificate CA sub el (lungimea căii), așa că nu este folosit pentru a garanta pentru {}.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Certificatul lui {} nu este un certificat CA care poate emite certificate, așa că nu este folosit pentru a garanta pentru {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certificatul lui {} nu era valabil în momentul semnării, așa că nu este folosit pentru a garanta pentru {}.
+	The checker found problems which may prevent the document from being fully accessible.	Verificatorul a găsit probleme care pot împiedica accesibilitatea completă a documentului.
+	The document has been altered or corrupted since the signature was applied.	Documentul a fost modificat sau deteriorat după aplicarea semnăturii.
+	The document has been altered or corrupted since the timestamp was applied.	Documentul a fost modificat sau deteriorat după aplicarea marcajului temporal.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	Documentul a fost modificat după aplicarea acestei semnături în moduri pe care nu le permite ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Documentul a fost modificat după aplicarea acestui marcaj temporal în moduri pe care nu le permite ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	Documentul a fost modificat după aplicarea acestei semnături, dar modificările sunt permise ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Documentul a fost modificat după aplicarea acestui marcaj temporal, dar modificările sunt permise ({}).
+	The document has no tags (structure tree)	Documentul nu are etichete (arbore de structură)
+	The document has no title	Documentul nu are titlu
+	The document isn't marked as tagged (MarkInfo Marked)	Documentul nu este marcat ca etichetat (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	Documentul nu este etichetat, deci niciun conținut al său nu este
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	Informațiile de revocare încorporate în document arată că certificatul semnatarului nu a fost revocat.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Tokenul de marcaj temporal încorporat este valid și autoritatea lui este de încredere; ora de încredere este {}.
+	The font {} isn't embedded	Fontul {} nu este încorporat
+	The metadata doesn't identify the file as {}	Metadatele nu identifică fișierul ca {}
+	The password is incorrect.	Parola este incorectă.
+	The password must have at least 6 characters.	Parola trebuie să aibă cel puțin 6 caractere.
+	The passwords do not match.	Parolele nu se potrivesc.
+	The security settings don't allow screen readers to read the text	Setările de securitate nu permit cititoarelor de ecran să citească textul
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Algoritmul semnăturii și algoritmul de rezumat din SignerInfo indică funcții hash diferite; semnătura a fost făcută cu cel din SignerInfo.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	Semnătura conține un marcaj temporal neverificat ({}): autoritatea de marcare temporală nu se află în lista certificatelor de încredere, așa că se folosește ora de semnare declarată de semnatar.
+	The signature contents are not hexadecimal.	Conținutul semnăturii nu este hexazecimal.
+	The signature could not be checked ({}).	Semnătura nu a putut fi verificată ({}).
+	The signature could not be read ({}).	Semnătura nu a putut fi citită ({}).
+	The signature could not be verified ({}).	Semnătura nu a putut fi validată ({}).
+	The signature has no valid byte range.	Semnătura nu are un interval de octeți valid.
+	The signature includes an embedded timestamp.	Semnătura include un marcaj temporal încorporat.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	Semnătura este codată BER (lungimi nedefinite) în loc de DER; a fost citită tolerant.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	Semnătura folosește formatul vechi adbe.x509.rsa_sha1.
+	The signature value does not match the signer's certificate: the signature is corrupt.	Valoarea semnăturii nu se potrivește cu certificatul semnatarului: semnătura este coruptă.
+	The signature's byte range does not exclude exactly its contents.	Intervalul de octeți al semnăturii nu exclude exact conținutul ei.
+	The signature's byte range does not match the file.	Intervalul de octeți al semnăturii nu se potrivește cu fișierul.
+	The signature's timestamp token could not be verified ({}).	Tokenul de marcaj temporal al semnăturii nu a putut fi verificat ({}).
+	The signature's timestamp token does not cover the signature value.	Tokenul de marcaj temporal al semnăturii nu acoperă valoarea semnăturii.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Conținutul semnat este un OCTET STRING construit (segmentat), cum permite BER; a fost citit oricum.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	Certificatul semnatarului nu permite semnături digitale (utilizarea cheii nu include nici semnătură digitală, nici nerepudiere).
+	The signer's certificate has been revoked ({}).	Certificatul semnatarului a fost revocat ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Certificatul semnatarului are extensii critice pe care PdfCraft nu le recunoaște ({}).
+	The signer's certificate is not in the signature.	Certificatul semnatarului nu se află în semnătură.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Certificatul semnatarului nu este emis pentru semnarea documentelor (utilizarea extinsă a cheii nu are scopul de semnare a documentelor).
+	The signer's certificate was not valid at the time of signing.	Certificatul semnatarului nu era valabil în momentul semnării.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identitatea semnatarului este necunoscută, deoarece nu a fost inclusă în lista certificatelor de încredere și niciunul dintre certificatele părinte nu este de încredere.
+	The signer's identity is valid.	Identitatea semnatarului este validă.
+	The timestamp authority's certificate was not valid at the time of timestamping.	Certificatul autorității de marcare temporală nu era valabil în momentul marcării.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
+	The timestamp contents are not hexadecimal.	Conținutul marcajului temporal nu este hexazecimal.
+	The timestamp has no valid byte range.	Marcajul temporal nu are un interval de octeți valid.
+	The timestamp token could not be read ({}).	Tokenul de marcaj temporal nu a putut fi citit ({}).
+	The timestamp token is valid and its authority is trusted.	Tokenul de marcaj temporal este valid și autoritatea lui este de încredere.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Tokenul de marcaj temporal este valid, dar autoritatea de marcare temporală nu se află în lista certificatelor de încredere.
+	The timestamp's byte range does not exclude exactly its contents.	Intervalul de octeți al marcajului temporal nu exclude exact conținutul lui.
+	The timestamp's byte range does not match the file.	Intervalul de octeți al marcajului temporal nu se potrivește cu fișierul.
+	The window shows the file name, not the title (Initial View > Show)	Fereastra afișează numele fișierului, nu titlul (Vizualizare inițială > Afișare)
+	There is no folder to save the digital ID in.	Nu există niciun folder în care să se salveze ID-ul digital.
+	This document has not been modified since this signature was applied.	Acest document nu a fost modificat de la aplicarea acestei semnături.
+	This document has not been modified since this timestamp was applied.	Acest document nu a fost modificat de la aplicarea acestui marcaj temporal.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Această semnătură folosește RIPEMD-160, un algoritm hash vechi de 160 de biți, care nu mai este recomandat pentru semnături. Se validează în continuare, dar nu ar trebui să vă bazați pe ea.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Această semnătură folosește SHA-1, un algoritm hash slab, pentru care s-au demonstrat coliziuni. Se validează în continuare pentru că multe documente semnate acum ani îl folosesc, dar nu ar trebui să vă bazați pe ea.
+	Undo {action}	Anulare {action}
+	Unsigned signature field	Câmp de semnătură nesemnat
+	Unsigned signature field: {name}	Câmp de semnătură nesemnat: {name}
+	Zoom in (⌘+)	Mărire (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Mărire / micșorare (și prin ciupire sau ⌘-derulare)
+	Zoom out (⌘−)	Micșorare (⌘−)
+	alternate text hides an annotation inside it	textul alternativ ascunde o adnotare din interiorul său
+	alternate text on an element with no page content	text alternativ pe un element fără conținut de pagină
+	comments	comentarii
+	document security store	depozitul de securitate al documentului
+	document structure	structura documentului
+	form fill	completare formular
+	its alternate text is inside another element's and will never be read	textul său alternativ se află în interiorul altui element și nu va fi citit niciodată
+	links	linkuri
+	metadata	metadate
+	no alternate text	fără text alternativ
+	no header cells (TH)	fără celule de antet (TH)
+	no summary	fără rezumat
+	not in a TR	nu se află într-un TR
+	not in a Table, THead, TBody or TFoot	nu se află într-un Table, THead, TBody sau TFoot
+	not in an L (list)	nu se află într-un L (listă)
+	not in an LI (list item)	nu se află într-un LI (element de listă)
+	other changes	alte modificări
+	page content	conținutul paginii
+	page {n} is out of range (1–{count})	pagina {n} este în afara intervalului (1–{count})
+	pages added or removed	pagini adăugate sau eliminate
+	rows have between {min} and {max} columns	rândurile au între {min} și {max} coloane
+	the first heading is an H{n}; headings should not skip levels	primul titlu este un H{n}; titlurile nu ar trebui să sară niveluri
+	the signed version could not be read	versiunea semnată nu a putut fi citită
+	{n} pages and no bookmarks	{n} pagini și niciun semn de carte
+	{page} is not a page number or label	{page} nu este un număr sau o etichetă de pagină
+	{ty} element on page {p}: {what}	Element {ty} pe pagina {p}: {what}
+	{ty} element: {what}	Element {ty}: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, certificat emis de un emitent necunoscut.
+	{who}, certificate issued by {issuer}.	{who}, certificat emis de {issuer}.
+	{} annotation on page {p} isn't tagged	Adnotarea {} de pe pagina {p} nu este etichetată
+	{} annotations aren't allowed	Adnotările {} nu sunt permise
+	… and {n} more	… și încă {n}
+@plural	Delete {n} field|Delete {n} fields	Ștergere {n} câmp|Ștergere {n} câmpuri|Ștergere {n} de câmpuri
+@plural	{n} byte|{n} bytes	{n} octet|{n} octeți|{n} de octeți
+@plural	{n} image optimized|{n} images optimized	{n} imagine optimizată|{n} imagini optimizate|{n} de imagini optimizate
+@plural	{n} item discarded|{n} items discarded	{n} element eliminat|{n} elemente eliminate|{n} de elemente eliminate
+@plural	{n} pixel|{n} pixels	{n} pixel|{n} pixeli|{n} de pixeli
+action wizard	Start	Pornire
+comment menu	Edit	Editare
+	A button	Un buton
+	A diagonal CONFIDENTIAL watermark on every page.	Un filigran diagonal CONFIDENȚIAL pe fiecare pagină.
+	A document needs at least one page: copy instead	Un document are nevoie de cel puțin o pagină: copiați în schimb
+	A form field has additional actions	Un câmp de formular are acțiuni suplimentare
+	A link	Un link
+	A script	Un script
+	A selected field has no widget on any page, so the fields can't be edited together.	Un câmp selectat nu are widget pe nicio pagină, așa că acele câmpuri nu pot fi editate împreună.
+	A stream refers to an external file	Un flux face referire la un fișier extern
+	A stream uses LZW compression	Un flux folosește comprimare LZW
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Un rezumat descrie scopul și structura tabelului. Adăugați un atribut Summary fiecărui tabel.
+	About	Despre
+	Accepted	Acceptat
+	Accessibility permission flag	Indicator de permisiune pentru accesibilitate
+	Accessibility permission flag is set	Indicatorul de permisiune pentru accesibilitate este setat
+	Add Page Numbers	Adăugare numere de pagină
+	Add arrow	Adăugare săgeată
+	Add background	Adăugare fundal
+	Add bookmark	Adăugare semn de carte
+	Add callout	Adăugare casetă explicativă
+	Add checkmark	Adăugare bifă
+	Add cloud	Adăugare nor
+	Add connected lines	Adăugare linii conectate
+	Add cross	Adăugare cruce
+	Add dot	Adăugare punct
+	Add drawing	Adăugare desen
+	Add field	Adăugare câmp
+	Add file attachment	Adăugare fișier atașat
+	Add footer	Adăugare subsol
+	Add header	Adăugare antet
+	Add header & footer	Adăugare antet și subsol
+	Add highlight	Adăugare evidențiere
+	Add image	Adăugare imagine
+	Add inserted text	Adăugare text inserat
+	Add line	Adăugare linie
+	Add link	Adăugare link
+	Add oval	Adăugare oval
+	Add polygon	Adăugare poligon
+	Add rectangle	Adăugare dreptunghi
+	Add redaction mark	Adăugare marcaj de anonimizare
+	Add signature	Adăugare semnătură
+	Add squiggly underline	Adăugare subliniere ondulată
+	Add stamp	Adăugare ștampilă
+	Add sticky note	Adăugare notă
+	Add strikethrough	Adăugare tăiere cu o linie
+	Add text box	Adăugare casetă text
+	Add underline	Adăugare subliniere
+	Add watermark	Adăugare filigran
+	Add {what}	Adăugare {what}
+	Added the first {n} files in {folder}	Au fost adăugate primele {n} fișiere din {folder}
+	Adding images arrives on the web with file pickers for images	Adăugarea de imagini vine pe web odată cu selectoarele de fișiere pentru imagini
+	Algorithm	Algoritm
+	Align fields	Aliniere câmpuri
+	All annotations are tagged	Toate adnotările sunt etichetate
+	All form fields are tagged	Toate câmpurile de formular sunt etichetate
+	All form fields have description	Toate câmpurile de formular au descriere
+	All multimedia objects are tagged	Toate obiectele multimedia sunt etichetate
+	All page content is tagged	Tot conținutul paginilor este etichetat
+	Allowed	Permis
+	Alternate Text	Text alternativ
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	Textul alternativ din interiorul unui element care are deja text alternativ nu este citit niciodată. Eliminați textul alternativ interior.
+	Alternate text must be associated with some content	Textul alternativ trebuie asociat cu un conținut
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	Textul alternativ pe un element care conține un link sau un câmp ascunde acea adnotare de tehnologiile de asistare. Mutați textul alternativ.
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	Textul alternativ pe un element fără conținut de pagină nu este atins niciodată. Eliminați-l sau atașați elementul unui conținut.
+	Alternate text should not hide annotation	Textul alternativ nu ar trebui să ascundă adnotări
+	Alternate text that will never be read	Text alternativ care nu va fi citit niciodată
+	An action is already running	O acțiune rulează deja
+	An embedded file has no AFRelationship	Un fișier încorporat nu are AFRelationship
+	An image asks to be interpolated	O imagine cere interpolare
+	An image has alternates or OPI information	O imagine are alternative sau informații OPI
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Animațiile care clipesc pot provoca crize. Verificați scripturile și conținutul media pentru pâlpâiri.
+	Another file dialog is still open. Finish with it first.	Un alt dialog de fișiere este încă deschis. Terminați întâi cu el.
+	Application	Aplicație
+	Applied 1 redaction mark. Save to remove the content from the file.	A fost aplicat 1 marcaj de anonimizare. Salvați pentru a elimina conținutul din fișier.
+	Applied {n} redaction marks. Save to remove the content from the file.	Au fost aplicate {n} marcaje de anonimizare. Salvați pentru a elimina conținutul din fișier.
+	Appropriate nesting	Imbricare corectă
+	Arbitrary Mask	Mască arbitrară
+	Associated with content	Asociat cu conținut
+	At least one signature has problems.	Cel puțin o semnătură are probleme.
+	At least one signature is invalid.	Cel puțin o semnătură este nevalidă.
+	Attachment	Atașament
+	Basic constraints	Constrângeri de bază
+	Beveled	Teșit
+	Black	Negru
+	Black on white	Negru pe alb
+	Blue	Albastru
+	Bookmarks are present in large documents	Documentele mari au semne de carte
+	Both	Ambele
+	Button Properties	Proprietăți buton
+	Button Style:	Stil buton:
+	Calculate	Calcul
+	Callout	Casetă explicativă
+	Cancelled	Anulat
+	Center Footer Text	Text subsol centru
+	Center Header Text	Text antet centru
+	Center horizontally	Centrare pe orizontală
+	Center vertically	Centrare pe verticală
+	Certificate Viewer	Vizualizator certificate
+	Certified by {by}	Certificat de {by}
+	Change comment properties	Modificare proprietăți comentariu
+	Change document properties	Modificare proprietăți document
+	Change field properties	Modificare proprietăți câmp
+	Change initial view	Modificare vizualizare inițială
+	Change link properties	Modificare proprietăți link
+	Change tag properties	Modificare proprietăți etichetă
+	Change {key}	Modificare {key}
+	Changing the document	Modificarea documentului
+	Character encoding	Codificare caractere
+	Character limit:	Limită caractere:
+	Check	Bifă
+	Check Box Properties	Proprietăți casetă de selectare
+	Check Box Style:	Stil casetă de selectare:
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Verificați ca etichetele să se citească în ordinea în care ar citi un cititor văzător. Folosiți instrumentul Ordine de citire sau panoul Etichete pentru a corecta.
+	CheckBox	Casetă de selectare
+	Checked	Bifat
+	Choose a folder for the split files	Alegeți un folder pentru fișierele împărțite
+	Choose a folder on this computer to pin	Alegeți un folder de pe acest calculator pentru fixare
+	Click on the page to add a {tool}, or drag to set its size	Faceți clic pe pagină pentru a adăuga {tool} sau trageți pentru a-i stabili dimensiunea
+	Click text or an image to edit it	Faceți clic pe un text sau o imagine pentru a le edita
+	Color Images	Imagini color
+	Color Spaces	Spații de culoare
+	Color contrast	Contrast de culoare
+	Comb of characters	Pieptene de caractere
+	Combo	Combo
+	Coming in milestone {m}. Items marked Ready work today.	Urmează în etapa {m}. Elementele marcate Gata funcționează deja.
+	Command	Comandă
+	Commenting	Comentare
+	Comments and markups	Comentarii și marcaje
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Comentariile, linkurile și câmpurile trebuie să fie în arborele de etichete pentru a fi anunțate. Etichetați adnotările.
+	Completed	Finalizat
+	Configure a Digital ID for Signing	Configurare ID digital pentru semnare
+	Connected lines	Linii conectate
+	Content Streams	Fluxuri de conținut
+	Content copying	Copierea conținutului
+	Content copying for accessibility	Copierea conținutului pentru accesibilitate
+	Contributors	Contribuitori
+	Copied {what}	Copiat: {what}
+	Copy or cut pages first	Copiați sau decupați întâi pagini
+	Could not save: {e}	Nu s-a putut salva: {e}
+	Couldn't add {name}: {e}	Nu s-a putut adăuga {name}: {e}
+	Couldn't combine files: {e}	Nu s-au putut combina fișierele: {e}
+	Couldn't create a PDF: {e}	Nu s-a putut crea PDF-ul: {e}
+	Couldn't download {name}: {e}	Nu s-a putut descărca {name}: {e}
+	Couldn't extract pages: {e}	Nu s-au putut extrage paginile: {e}
+	Couldn't fit the visible content: {e}	Nu s-a putut potrivi conținutul vizibil: {e}
+	Couldn't follow linked PDF: {reason}	Nu s-a putut urma PDF-ul legat: {reason}
+	Couldn't import the signature image: {e}	Nu s-a putut importa imaginea semnăturii: {e}
+	Couldn't open revision {n}: {e}	Nu s-a putut deschide revizia {n}: {e}
+	Couldn't open the result: {e}	Nu s-a putut deschide rezultatul: {e}
+	Couldn't open the signed version: {e}	Nu s-a putut deschide versiunea semnată: {e}
+	Couldn't open {name}: {e}	Nu s-a putut deschide {name}: {e}
+	Couldn't optimize the file	Nu s-a putut optimiza fișierul
+	Couldn't optimize the file: {e}	Nu s-a putut optimiza fișierul: {e}
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	Nu s-a putut imprima din browser ({e}); s-a descărcat {name} pentru imprimare
+	Couldn't read {name}: {e}	Nu s-a putut citi {name}: {e}
+	Couldn't recover {name}: {e}	Nu s-a putut recupera {name}: {e}
+	Couldn't reload {name}: {e}	Nu s-a putut reîncărca {name}: {e}
+	Couldn't save the image: {e}	Nu s-a putut salva imaginea: {e}
+	Couldn't save {name}: {e}	Nu s-a putut salva {name}: {e}
+	Couldn't save: {e}	Nu s-a putut salva: {e}
+	Couldn't show the file picker. Please try again.	Nu s-a putut afișa selectorul de fișiere. Încercați din nou.
+	Couldn't split: {e}	Nu s-a putut împărți: {e}
+	Couldn't summarize comments: {e}	Nu s-a putut crea rezumatul comentariilor: {e}
+	Couldn't take the snapshot: {e}	Nu s-a putut face captura: {e}
+	Couldn't unlock {name}: {e}	Nu s-a putut debloca {name}: {e}
+	Couldn't use the photo: {e}	Nu s-a putut folosi fotografia: {e}
+	Couldn't use {name}: {e}	Nu s-a putut folosi {name}: {e}
+	Couldn't write {name}: {e}	Nu s-a putut scrie {name}: {e}
+	Couldn't write {path}: {e}	Nu s-a putut scrie {path}: {e}
+	Create link	Creare link
+	Created 1 link	A fost creat 1 link
+	Created a PDF from the first {n} files	A fost creat un PDF din primele {n} fișiere
+	Created a comment summary	A fost creat un rezumat al comentariilor
+	Created {n} links	Au fost create {n} linkuri
+	Credit Cards	Carduri bancare
+	Crop page	Decupare pagină
+	Custom font	Font personalizat
+	Custom stamps arrive on the web with file pickers for images	Ștampilele personalizate vin pe web odată cu selectoarele de fișiere pentru imagini
+	Cut {what}	Decupat: {what}
+	Dark gray theme	Temă gri închis
+	Dashed	Întreruptă
+	Dates	Date
+	Delete bookmark	Ștergere semn de carte
+	Delete content	Ștergere conținut
+	Delete document JavaScript	Ștergere JavaScript document
+	Delete field	Ștergere câmp
+	Delete image	Ștergere imagine
+	Delete link	Ștergere link
+	Delete page	Ștergere pagină
+	Delete selected fields	Ștergere câmpuri selectate
+	Deleted	Șters
+	Detected 1 form field	A fost detectat 1 câmp de formular
+	Detected {n} form fields	Au fost detectate {n} câmpuri de formular
+	Device colour is used, but there is no PDF/A output intent	Se folosește culoare de dispozitiv, dar nu există intenție de ieșire PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Se folosește DeviceCMYK: necesită o intenție de ieșire CMYK (nu se adaugă automat)
+	Diagnostic details	Detalii de diagnosticare
+	Digital Signature Properties	Proprietăți semnătură digitală
+	Discard all comments, forms and multimedia	Eliminare toate comentariile, formularele și conținutul multimedia
+	Discard all links, actions and JavaScript	Eliminare toate linkurile, acțiunile și JavaScript
+	Discard all object data (file attachments)	Eliminare toate datele obiectelor (fișiere atașate)
+	Discard bookmarks	Eliminare semne de carte
+	Discard document information and metadata	Eliminare informații document și metadate
+	Discard hidden layer content	Eliminare conținut din straturile ascunse
+	Discard hidden text	Eliminare text ascuns
+	Discard private data of other applications	Eliminare date private ale altor aplicații
+	Distribute fields	Distribuire câmpuri
+	Document Overhead	Spațiu de bază al documentului
+	Document assembly	Asamblare document
+	Document has appropriate color contrast	Documentul are un contrast de culoare adecvat
+	Document is not image-only PDF	Documentul nu este un PDF format doar din imagini
+	Document is tagged PDF	Documentul este PDF etichetat
+	Document sanitized. Save to finish: saving rewrites the whole file.	Document igienizat. Salvați pentru a finaliza: salvarea rescrie tot fișierul.
+	Document structure provides a logical reading order	Structura documentului oferă o ordine logică de citire
+	Document title is showing in title bar	Titlul documentului apare în bara de titlu
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Documentele de peste 20 de pagini au nevoie de semne de carte pentru navigare. Adăugați semne de carte pentru secțiunile principale.
+	Double-click	Dublu clic
+	Downloaded {name}	S-a descărcat {name}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Descărcarea atașamentelor pe web vine cu M3.10 ({n} octeți pregătiți)
+	Drag a rectangle around the area to copy	Trageți un dreptunghi în jurul zonei de copiat
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Trageți un dreptunghi pe o pagină pentru a o decupa; dublu clic pe o pagină pentru Setare casete pagină
+	Drag a rectangle to create a link; double-click a link to edit it	Trageți un dreptunghi pentru a crea un link; dublu clic pe un link pentru a-l edita
+	Drag the corners onto the document's edges, then choose Enhance page.	Trageți colțurile pe marginile documentului, apoi alegeți Îmbunătățire pagină.
+	Drag to draw the area where the signature should appear.	Trageți pentru a desena zona în care trebuie să apară semnătura.
+	Dropdown Properties	Proprietăți listă derulantă
+	Duplicate field	Duplicare câmp
+	Duplicate page	Duplicare pagină
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Fiecare câmp are nevoie de un sfat ecran care spune ce trebuie introdus. Adăugați-l în Proprietăți câmp > General > Sfat ecran.
+	Edit comment	Editare comentariu
+	Edit content	Editare conținut
+	Edit document JavaScript	Editare JavaScript document
+	Edit fields	Editare câmpuri
+	Edit script of {name}	Editare script pentru {name}
+	Edit text	Editare text
+	Editing	Editare
+	Email Addresses	Adrese de e-mail
+	Embedded Files	Fișiere încorporate
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Fișierele încorporate trebuie să fie ele însele fișiere PDF/A (folosiți PDF/A-3 pentru altele)
+	Encryption	Criptare
+	Endpoint	Capăt
+	Erase	Ștergere
+	Eraser	Radieră
+	Even pages	Pagini pare
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Tot ce se află pe o pagină trebuie etichetat sau marcat ca artefact (decor, antete, subsoluri). Etichetați conținutul neetichetat.
+	Execute a menu item	Executare element de meniu
+	Export certificate	Exportare certificat
+	Exported to {path}	Exportat în {path}
+	Extended Graphics States	Stări grafice extinse
+	Field	Câmp
+	Field descriptions	Descrieri câmpuri
+	Figures alternate text	Text alternativ pentru figuri
+	Figures require alternate text	Figurile necesită text alternativ
+	File attachments	Fișiere atașate
+	Files are combined in this order. Leave Pages empty to take every page.	Fișierele se combină în această ordine. Lăsați Pagini gol pentru a lua toate paginile.
+	Fill in {name}	Completare {name}
+	Filling of form fields	Completarea câmpurilor de formular
+	Flatten	Aplatizare
+	Flip image	Răsturnare imagine
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Fonturile trebuie să își asocieze caracterele cu Unicode pentru ca textul să poată fi citit și copiat. Corectați fonturile sau recreați PDF-ul.
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Câmpurile de formular trebuie să fie în arborele de etichete (etichete Form) pentru a fi anunțate. Etichetați câmpurile de formular.
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formulele și alte elemente non-text similare au nevoie de text alternativ. Adăugați-le text alternativ.
+	Gray	Gri
+	Grayscale Images	Imagini în tonuri de gri
+	Green	Verde
+	Green on black	Verde pe negru
+	H / Space (hold)	H / Spațiu (ținut apăsat)
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Celulele de antet (TH) le spun ascultătorilor ce conține fiecare coloană sau rând. Marcați celulele de antet.
+	Headers	Anteturi
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Nivelurile de titlu nu ar trebui să sară (un H1 urmat de un H3). Reetichetați titlurile.
+	Headings	Titluri
+	Hidden layers	Straturi ascunse
+	Hidden text	Text ascuns
+	Hide a field	Ascundere câmp
+	Hides annotation	Ascunde adnotarea
+	High	Ridicată
+	Home / End	Home / End
+	Horizontally	Pe orizontală
+	Image-only PDF	PDF doar din imagini
+	Import {name}	Importare {name}
+	Importing data arrives on the web with file pickers for data files	Importarea datelor vine pe web odată cu selectoarele de fișiere pentru fișiere de date
+	Incorrect password. Try again.	Parolă incorectă. Încercați din nou.
+	Insert pages from {name}	Inserare pagini din {name}
+	Insert pages from {name} — 1 field renamed	Inserare pagini din {name}: 1 câmp redenumit
+	Insert pages from {name} — fields renamed	Inserare pagini din {name}: câmpuri redenumite
+	Inserted	Inserat
+	Inset	Încastrat
+	Intended usage	Utilizare prevăzută
+	Intersection	Intersecție
+	Invert	Inversare
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Tabelele neregulate încurcă navigarea între celule. Dați fiecărui rând același număr de celule (inclusiv celulele îmbinate).
+	Issued by	Emis de
+	Issued to	Emis pentru
+	Issuer	Emitent
+	Key usage	Utilizare cheie
+	Keywords	Cuvinte cheie
+	LI must be a child of L	LI trebuie să fie copil al L
+	Landscape pages	Pagini peisaj
+	Lbl and LBody	Lbl și LBody
+	Lbl and LBody must be children of LI	Lbl și LBody trebuie să fie copii ai LI
+	Left Footer Text	Text subsol stânga
+	Left Header Text	Text antet stânga
+	Light blue	Albastru deschis
+	Links, actions and JavaScripts	Linkuri, acțiuni și scripturi JavaScript
+	List	Listă
+	List Box Properties	Proprietăți casetă listă
+	List items	Elemente de listă
+	List items belong in a list. Fix the list's tags.	Elementele de listă trebuie să fie într-o listă. Corectați etichetele listei.
+	List labels and bodies belong in a list item. Fix the list's tags.	Etichetele și corpurile listei trebuie să fie într-un element de listă. Corectați etichetele listei.
+	Lists	Liste
+	Load document font	Încărcare font document
+	Local cross-PDF links require the desktop app	Linkurile locale între PDF-uri necesită aplicația desktop
+	Lock comment	Blocare comentariu
+	Logical Reading Order	Ordine logică de citire
+	Low	Scăzută
+	Make scans searchable, then make them smaller.	Faceți scanările căutabile, apoi micșorați-le.
+	Mark all	Marcare toate
+	Mark as Confidential	Marcare ca Confidențial
+	Mark differences	Marcare diferențe
+	Mark figure as decorative	Marcare figură ca decorativă
+	Mark for redaction	Marcare pentru anonimizare
+	Mark pages for redaction	Marcare pagini pentru anonimizare
+	Match field sizes	Potrivire dimensiuni câmpuri
+	Maximum	Maxim
+	Measuring tool	Instrument de măsurare
+	Merged 1 file into {path}	1 fișier unificat în {path}
+	Merged {n} files into {path}	{n} fișiere unificate în {path}
+	Merging data files needs the desktop app	Unificarea fișierelor de date necesită aplicația desktop
+	Metadata	Metadate
+	Midpoint	Mijloc
+	Minimum	Minim
+	Models	Modele
+	Mouse Down	Apăsare buton mouse
+	Mouse Enter	Intrare mouse
+	Mouse Exit	Ieșire mouse
+	Mouse Up	Eliberare buton mouse
+	Move bookmark	Mutare semn de carte
+	Move comment	Mutare comentariu
+	Move image	Mutare imagine
+	Move page	Mutare pagină
+	Move pages	Mutare pagini
+	Named Destinations	Destinații denumite
+	Navigation links	Linkuri de navigare
+	Navigation links are not repetitive	Linkurile de navigare nu se repetă
+	Nested alternate text	Text alternativ imbricat
+	New {tool} comments will look like this one	Noile comentarii de tip {tool} vor arăta ca acesta
+	No PDFs, images or text files found in {folder}	Nu s-au găsit PDF-uri, imagini sau fișiere text în {folder}
+	No form fields were detected	Nu s-a detectat niciun câmp de formular
+	No inaccessible scripts	Nu există scripturi inaccesibile
+	No links to remove	Nu există linkuri de eliminat
+	No pages match those choices	Nicio pagină nu se potrivește cu aceste opțiuni
+	No unlinked web addresses were found in the text	Nu s-au găsit adrese web fără link în text
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Niciunul dintre aceste fișiere nu poate fi transformat în PDF; folosiți PDF-uri, imagini sau fișiere .txt
+	Note	Notă
+	Number every page in the footer.	Numerotează fiecare pagină în subsol.
+	Odd pages	Pagini impare
+	On Blur	La pierderea focalizării
+	On Focus	La focalizare
+	On the web, open or drop an image to convert it	Pe web, deschideți sau plasați o imagine pentru a o converti
+	Open a web link	Deschidere link web
+	Opened with	Deschis cu
+	Opening the browser's print dialog…	Se deschide dialogul de imprimare al browserului…
+	Optimization cancelled	Optimizare anulată
+	Optimization is already running	Optimizarea rulează deja
+	Optimize Scanned Documents	Optimizare documente scanate
+	Options	Opțiuni
+	Orange	Portocaliu
+	Other elements alternate text	Text alternativ pentru alte elemente
+	Other elements that require alternate text	Alte elemente care necesită text alternativ
+	Outline	Contur
+	PDF producer	Producător PDF
+	PDF version	Versiune PDF
+	Page Content	Conținut pagină
+	Page Range	Interval de pagini
+	Page does not require timed responses	Pagina nu necesită răspunsuri temporizate
+	Page thumbnails	Miniaturi pagini
+	Page will not cause screen flicker	Pagina nu va provoca pâlpâirea ecranului
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Paginile care sunt doar imagini ale textului nu pot fi citite cu voce tare sau căutate. Rulați recunoașterea textului (OCR) pentru a adăuga un strat de text.
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Paginile cu linkuri, comentarii sau câmpuri ar trebui să aibă ordinea de tabulare după structură. Corectarea setează ordinea de tabulare a fiecărei pagini la Folosire structură document.
+	Passed	Reușit
+	Password protection will be applied when you save	Protecția prin parolă se va aplica la salvare
+	Path	Traseu
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft desenează fără procesor grafic, așa că poate fi lent. Actualizarea driverului plăcii video poate ajuta.
+	People may need more time to respond. Check that nothing has a time limit.	Unele persoane pot avea nevoie de mai mult timp pentru a răspunde. Verificați ca nimic să nu aibă o limită de timp.
+	Phone Number	Număr de telefon
+	Phone Numbers	Numere de telefon
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Imaginile au nevoie de un text alternativ care să le descrie sau trebuie marcate ca decorative. Adăugați text alternativ fiecărei figuri.
+	Pink	Roz
+	Pinned folders need the desktop app	Folderele fixate necesită aplicația desktop
+	Pinned {folder} to Home	{folder} a fost fixat în Acasă
+	Place saved {what}	Plasare {what} salvat
+	Planned for milestone {m} — open to see what it will include	Planificat pentru etapa {m}: deschideți pentru a vedea ce va include
+	Planned · {m}	Planificat · {m}
+	Polygon	Poligon
+	Polyline	Linie frântă
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Modul portabil este dezactivat: {folder} nu poate fi scris ({error}). Setările se păstrează în schimb în folderul utilizatorului.
+	Portrait pages	Pagini portret
+	Position	Poziție
+	PostScript XObjects aren't allowed	Obiectele XObject PostScript nu sunt permise
+	Prepare for Distribution	Pregătire pentru distribuire
+	Preparing sheet {done} of {total} for printing…	Se pregătește foaia {done} din {total} pentru imprimare…
+	Preparing {n} sheets for printing…	Se pregătesc {n} foi pentru imprimare…
+	Primary language	Limba principală
+	Printing	Imprimare
+	Private data of other applications	Date private ale altor aplicații
+	Public key	Cheie publică
+	Purple	Mov
+	PushButton	Buton de comandă
+	Radio	Radio
+	Radio Button Properties	Proprietăți buton radio
+	Re-type Password	Reintroduceți parola
+	Red	Roșu
+	Redid {label}	Refăcut: {label}
+	Regularity	Regularitate
+	Rejected	Respins
+	Reliable character encoding is provided	Este furnizată o codificare a caracterelor fiabilă
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Elimină informațiile ascunse și aplatizează comentariile și câmpurile de formular, astfel încât destinatarii să vadă doar paginile.
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Elimină informațiile ascunse, metadatele, scripturile și conținutul încorporat și rescrie fișierele.
+	Remove redaction marks	Eliminare marcaje de anonimizare
+	Remove saved {what}	Eliminare {what} salvat
+	Removed 1 hidden item. Save to remove them from the file.	A fost eliminat 1 element ascuns. Salvați pentru a-l elimina din fișier.
+	Removed 1 link	A fost eliminat 1 link
+	Removed {n} hidden items. Save to remove them from the file.	Au fost eliminate {n} elemente ascunse. Salvați pentru a le elimina din fișier.
+	Removed {n} links	Au fost eliminate {n} linkuri
+	Rename bookmark	Redenumire semn de carte
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Randare: hayro (bootstrap) · Interfață: egui · Pictograme: Lucide (ISC) · Fonturi: Inter, JetBrains Mono, Dancing Script (OFL)
+	Repairs	Reparații
+	Repeated navigation links should be skippable. Check links that appear on every page.	Linkurile de navigare repetate ar trebui să poată fi sărite. Verificați linkurile care apar pe fiecare pagină.
+	Replace page	Înlocuire pagină
+	Replace pages	Înlocuire pagini
+	Replaced	Înlocuit
+	Replacing images arrives on the web with image file pickers	Înlocuirea imaginilor vine pe web odată cu selectoarele de fișiere imagine
+	Replacing images on page {p} arrives on the web with image pickers ({i})	Înlocuirea imaginilor de pe pagina {p} vine pe web odată cu selectoarele de imagini ({i})
+	Report Options	Opțiuni raport
+	Reset a form	Resetare formular
+	Resize comment	Redimensionare comentariu
+	Restrictions	Restricții
+	Restrictions lifted	Restricții eliminate
+	Reverted to the last saved version	S-a revenit la ultima versiune salvată
+	Right Footer Text	Text subsol dreapta
+	Right Header Text	Text antet dreapta
+	Rotate image	Rotire imagine
+	Rotate page	Rotire pagină
+	Rotate page {label} clockwise	Rotire pagina {label} în sensul acelor de ceasornic
+	Rotate page {label} counterclockwise	Rotire pagina {label} în sens invers acelor de ceasornic
+	Rows	Rânduri
+	Run	Rulare
+	Run JavaScript	Rulare JavaScript
+	Run a JavaScript	Rulare JavaScript
+	Run form script	Rulare script formular
+	SHA-1 digest	Rezumat SHA-1
+	SHA-256 digest	Rezumat SHA-256
+	Sanitize	Igienizare
+	Sanitize Documents	Igienizare documente
+	Save as PDF/A-1b	Salvare ca PDF/A-1b
+	Save as PDF/A-2b	Salvare ca PDF/A-2b
+	Save as PDF/A-3b	Salvare ca PDF/A-3b
+	Save image	Salvare imagine
+	Save or revert changes before selecting another tag.	Salvați sau anulați modificările înainte de a selecta altă etichetă.
+	Saved the print-ready PDF to {path}	PDF-ul pregătit pentru imprimare a fost salvat în {path}
+	Saved {name}	S-a salvat {name}
+	Saved {place}: {before} → {after} (not smaller){detail}	S-a salvat {place}: {before} → {after} (nu e mai mic){detail}
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	S-a salvat {place}: {before} → {after} (cu {pct}% mai mic){detail}
+	Saved, but reopening failed: {e}	Salvat, dar redeschiderea a eșuat: {e}
+	Screen flicker	Pâlpâirea ecranului
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Cititoarele de ecran își aleg vocea după limba documentului. Setați-o în Proprietăți document > Avansat > Limbă.
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Conținutul cu scripturi trebuie să poată fi folosit cu tastatura și cu tehnologiile de asistare. Verificați scripturile documentului.
+	Scripts	Scripturi
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Scripturile rulează într-un mediu izolat, fără acces la fișiere sau la rețea. Cu JavaScript dezactivat, funcțiile standard Acrobat de formatare, validare și calcul funcționează în continuare.
+	Security method	Metodă de securitate
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Setările de securitate trebuie să permită tehnologiilor de asistare să citească conținutul („Permite accesul la text pentru cititoarele de ecran”). Modificați securitatea documentului pentru a permite acest lucru.
+	Security will be removed when you save	Securitatea va fi eliminată la salvare
+	Self-signed	Autosemnat
+	Serial number	Număr de serie
+	Set alternate text	Setare text alternativ
+	Set bookmark destination	Setare destinație semn de carte
+	Set document title	Setare titlu document
+	Set status Accepted	Setare stare Acceptat
+	Set status Cancelled	Setare stare Anulat
+	Set status Completed	Setare stare Finalizat
+	Set status None	Setare stare Niciuna
+	Set status Rejected	Setare stare Respins
+	Set status Unmarked	Setare stare Nemarcat
+	Set tab order	Setare ordine de tabulare
+	Set the image of {name}	Setare imagine pentru {name}
+	Shadings	Umbriri
+	Show a field	Afișare câmp
+	Sign with a Digital ID	Semnare cu ID digital
+	Signed and all signatures are valid.	Semnat și toate semnăturile sunt valide.
+	Signed and saved to {path}	Semnat și salvat în {path}
+	Signer	Semnatar
+	Signing time	Ora semnării
+	Social Security Number	Număr de securitate socială (SUA)
+	Social Security Numbers	Numere de securitate socială (SUA)
+	Solid	Continuă
+	Squiggly	Ondulată
+	Star	Stea
+	Strong	Puternic
+	Structure Info	Informații structură
+	Submit a form	Trimitere formular
+	TH and TD	TH și TD
+	TH and TD must be children of TR	TH și TD trebuie să fie copii ai TR
+	TR must be a child of Table, THead, TBody, or TFoot	TR trebuie să fie copil al Table, THead, TBody sau TFoot
+	Tab order	Ordine de tabulare
+	Tab order is consistent with structure order	Ordinea de tabulare corespunde ordinii structurii
+	Table cells belong in a row. Fix the table's tags.	Celulele de tabel trebuie să fie într-un rând. Corectați etichetele tabelului.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Rândurile de tabel trebuie să fie direct într-un tabel sau în antetul, corpul ori subsolul lui. Corectați etichetele tabelului.
+	Tables	Tabele
+	Tables must contain the same number of columns in each row and rows in each column	Tabelele trebuie să aibă același număr de coloane pe fiecare rând și de rânduri pe fiecare coloană
+	Tables must have a summary	Tabelele trebuie să aibă un rezumat
+	Tables should have headers	Tabelele ar trebui să aibă anteturi
+	Tagged PDF	PDF etichetat
+	Tagged annotations	Adnotări etichetate
+	Tagged content	Conținut etichetat
+	Tagged form fields	Câmpuri de formular etichetate
+	Tagged multimedia	Multimedia etichetat
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Etichetele dau documentului o structură logică pe care o urmează tehnologiile de asistare. Etichetați documentul (Etichetare automată PDF).
+	Text Field Properties	Proprietăți câmp text
+	Text language is specified	Limba textului este specificată
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	Textul trebuie să contrasteze suficient cu fundalul pentru persoanele cu vedere slabă. Verificați culorile cu ochiul liber sau cu un instrument de contrast.
+	Text recognition is already running	Recunoașterea textului rulează deja
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Recunoașterea textului nu este instalată: lipsesc modelele (rulați `cargo xtask models` sau setați PDFCRAFT_MODELS).
+	That didn't work: an internal error stopped it ({m}).	Nu a funcționat: o eroare internă a oprit operația ({m}).
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Nu a funcționat: o eroare internă a oprit operația ({m}). Documentele dvs. nu s-au modificat.
+	The Keychain's digital IDs couldn't be listed: {e}	ID-urile digitale din Keychain nu au putut fi listate: {e}
+	The Windows store's digital IDs couldn't be listed: {e}	ID-urile digitale din depozitul Windows nu au putut fi listate: {e}
+	The clipboard has no image or text	Clipboardul nu conține imagine sau text
+	The document changed while you were choosing a file, so nothing was changed.	Documentul s-a modificat în timp ce alegeați un fișier, așa că nu s-a schimbat nimic.
+	The document changed while you were editing field properties.	Documentul s-a modificat în timp ce editați proprietățile câmpului.
+	The document has additional actions (/AA)	Documentul are acțiuni suplimentare (/AA)
+	The document has document-level JavaScript	Documentul are JavaScript la nivel de document
+	The document has no XMP metadata	Documentul nu are metadate XMP
+	The document is encrypted	Documentul este criptat
+	The document is no longer open.	Documentul nu mai este deschis.
+	The document was closed before it could be saved.	Documentul a fost închis înainte de a putea fi salvat.
+	The document's security settings don't allow filling in form fields	Setările de securitate ale documentului nu permit completarea câmpurilor de formular
+	The field properties could not be changed.	Proprietățile câmpului nu au putut fi modificate.
+	The field properties dialog is no longer open.	Dialogul de proprietăți ale câmpului nu mai este deschis.
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Formularul cere să fie trimis la {u}; PdfCraft nu trimite date de formular. Salvați documentul pentru a păstra ce ați completat.
+	The form asks viewers to make appearances (NeedAppearances)	Formularul cere vizualizatoarelor să creeze aspectele (NeedAppearances)
+	The linked PDF opened, but its named destination was not applied.	PDF-ul legat s-a deschis, dar destinația sa denumită nu a fost aplicată.
+	The linked PDF opened, but its page destination was out of range.	PDF-ul legat s-a deschis, dar destinația de pagină era în afara intervalului.
+	The operation failed.	Operația a eșuat.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Paginile au fost extrase, dar nu șterse, deoarece documentul s-a modificat în timp ce alegeați un folder.
+	The passwords don't match.	Parolele nu se potrivesc.
+	The selected area has been copied ({w} × {h} pixels)	Zona selectată a fost copiată ({w} × {h} pixeli)
+	The selected fields could not be found. Select them again.	Câmpurile selectate nu au putut fi găsite. Selectați-le din nou.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Fonturile standard nu pot desena „{c}” ({code}). Deocamdată se pot adăuga ca text doar caractere vest-europene.
+	The title in the metadata and the document information differ	Titlul din metadate diferă de cel din informațiile documentului
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	Fereastra ar trebui să afișeze un titlu cu sens, nu numele fișierului. Setați un titlu și Vizualizare inițială > Afișare: Titlul documentului.
+	There are no redaction marks to apply	Nu există marcaje de anonimizare de aplicat
+	This PDF uses the unsupported {s} action.	Acest PDF folosește acțiunea neacceptată {s}.
+	This compatibility level supports only plain ASCII passwords.	Acest nivel de compatibilitate acceptă doar parole ASCII simple.
+	This document can't be checked: it couldn't be read for editing	Acest document nu poate fi verificat: nu a putut fi citit pentru editare
+	This document has no attachments.	Acest document nu are atașamente.
+	This document has no bookmarks.	Acest document nu are semne de carte.
+	This document has no form fields.	Acest document nu are câmpuri de formular.
+	This document has no layers.	Acest document nu are straturi.
+	This file is already as small as it can be made ({size}). No copy was saved.	Acest fișier este deja cât de mic poate fi ({size}). Nu s-a salvat nicio copie.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Acest formular conține și date XFA, pe care PdfCraft nu le citește încă. Puteți completa câmpurile, dar Acrobat poate afișa în schimb valorile XFA.
+	Thumbnails	Miniaturi
+	Timed responses	Răspunsuri temporizate
+	Type Password	Introduceți parola
+	Type a password.	Introduceți o parolă.
+	Typewriter	Mașină de scris
+	Unchecked	Nebifat
+	Undid {label}	Anulat: {label}
+	Unlock comment	Deblocare comentariu
+	Unlocked {n} of {m} files	Au fost deblocate {n} din {m} fișiere
+	Update background	Actualizare fundal
+	Update header & footer	Actualizare antet și subsol
+	Update watermark	Actualizare filigran
+	Use {what}	Folosire {what}
+	Valid	Valid
+	Valid from	Valabil de la
+	Valid to	Valabil până la
+	Validate	Validare
+	Validity ends	Sfârșitul valabilității
+	Validity starts	Începutul valabilității
+	Vertically	Pe verticală
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Videoclipurile, sunetele și conținutul media îmbogățit trebuie etichetate pentru a fi anunțate. Etichetați adnotările multimedia.
+	Viewing	Vizualizare
+	Weak	Slab
+	White on black	Alb pe negru
+	Wrote 1 file to {dir}	A fost scris 1 fișier în {dir}
+	Wrote {n} files to {dir}	Au fost scrise {n} fișiere în {dir}
+	X Object Forms	Formulare XObject
+	Yellow	Galben
+	Yellow on black	Galben pe negru
+	You can pin up to {n} folders. Unpin one first.	Puteți fixa cel mult {n} foldere. Anulați întâi fixarea unuia.
+	Your name	Numele dvs.
+	Zip Code	Cod poștal (SUA)
+	Zip Code + 4	Cod poștal + 4 (SUA)
+	`{command}` {when}	`{command}` {when}
+	a bookmark cannot be moved inside itself	un semn de carte nu poate fi mutat în interiorul său
+	a document must keep at least one page	un document trebuie să păstreze cel puțin o pagină
+	average	medie
+	maximum	maxim
+	minimum	minim
+	no such document	documentul nu există
+	nothing in the file matches this document	nimic din fișier nu se potrivește cu acest document
+	nothing to redo	nimic de refăcut
+	nothing to undo	nimic de anulat
+	pages	pagini
+	product (x)	produs (x)
+	sum (+)	sumă (+)
+	the document has no form fields	documentul nu are câmpuri de formular
+	the document has no page tree	documentul nu are arbore de pagini
+	the document has no tags	documentul nu are etichete
+	the document is protected by a password	documentul este protejat cu parolă
+	the image is empty	imaginea este goală
+	the password is incorrect	parola este incorectă
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	modelele de recunoaștere a textului nu sunt instalate (reinstalați PdfCraft sau setați PDFCRAFT_MODELS la folderul care le conține)
+	the title must not be empty	titlul nu poate fi gol
+	there are no pages to print	nu există pagini de imprimat
+	there are no redaction marks to apply	nu există marcaje de anonimizare de aplicat
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	acest document este semnat: rescrierea lui i-ar invalida semnăturile (salvați-l incremental)
+	this file isn't XFDF, FDF, XML or text form data	acest fișier nu conține date de formular XFDF, FDF, XML sau text
+	{0}: {1}	{0}: {1}
+	{field}: {e}	{field}: {e}
+	{file} is too large for a stamp (at most {n} MB)	{file} este prea mare pentru o ștampilă (cel mult {n} MB)
+	{folder} is already pinned to Home	{folder} este deja fixat în Acasă
+	{label} failed: {e}	{label} a eșuat: {e}
+	{name} has no action	{name} nu are nicio acțiune
+	{name} is too large for a word list (at most 1 MB).	{name} este prea mare pentru o listă de cuvinte (cel mult 1 MB).
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} trimite formularul la {url}; PdfCraft nu trimite date de formular. Salvați documentul pentru a păstra ce ați completat.
+	{name}: choosing images arrives on the web with file pickers for images	{name}: alegerea imaginilor vine pe web odată cu selectoarele de fișiere pentru imagini
+	{name}: the {other} action isn't supported yet	{name}: acțiunea {other} nu este acceptată încă
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} din acest document a încercat să deschidă o adresă pe care PdfCraft nu o deschide: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} din acest document a încercat să deschidă o adresă pe care PdfCraft nu o deschide: {e}. Din documente se deschid doar linkuri web (http, https) și de e-mail (mailto).
+animation effects	Off	Dezactivate
+animation effects	On	Activate
+	View more	Afișare mai mult
+	View less	Afișare mai puțin
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continuați doar dacă aveți încredere în acest document. O adresă poate transmite informații din document, de exemplu ce ați scris în formularul lui.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Imprimați pe o singură față. Păstrați foile în ordine, tăiați la semne, apoi stivuiți teancurile de la stânga la dreapta, de sus în jos.
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Semnați o foaie de hârtie albă și fotografiați-o în lumină puternică și uniformă (folosiți blițul). Alegeți fotografia sau plasați-o aici: PdfCraft găsește semnătura și elimină hârtia.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Fontul acestui câmp nu poate desena „{c}” ({code}), așa că PdfCraft afișează ? în locul lui. Valoarea se salvează, iar alte vizualizatoare PDF redesenează câmpul pe baza ei.
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} nu pot fi scrise încă în PDF: textul Completare și semnare acceptă doar caractere vest-europene. Alegeți un format numeric, de exemplu zz.ll.aaaa.
+	January	Ianuarie
+	February	Februarie
+	March	Martie
+	April	Aprilie
+	May	Mai
+	June	Iunie
+	July	Iulie
+	August	August
+	September	Septembrie
+	October	Octombrie
+	November	Noiembrie
+	December	Decembrie
+calendar date	January	ianuarie
+calendar date	February	februarie
+calendar date	March	martie
+calendar date	April	aprilie
+calendar date	May	mai
+calendar date	June	iunie
+calendar date	July	iulie
+calendar date	August	august
+calendar date	September	septembrie
+calendar date	October	octombrie
+calendar date	November	noiembrie
+calendar date	December	decembrie
+calendar weekday	Su	Du
+calendar weekday	Mo	Lu
+calendar weekday	Tu	Ma
+calendar weekday	We	Mi
+calendar weekday	Th	Jo
+calendar weekday	Fr	Vi
+calendar weekday	Sa	Sâ
+signature pad	Type	Scriere
+scroll speed	Slow	Lentă
+scroll speed	Normal	Normală
+scroll speed	Fast	Rapidă
+certificate	Subject	Subiect
+certificate	Issued to	Emis pentru
+certificate	Issued by	Emis de
+certificate	Valid from	Valabil de la
+certificate	Valid to	Valabil până la
+certificate	Intended usage	Utilizare prevăzută
+certificate	Version	Versiune
+certificate	Serial number	Număr de serie
+certificate	Issuer	Emitent
+certificate	Validity starts	Începutul valabilității
+certificate	Validity ends	Sfârșitul valabilității
+certificate	Public key	Cheie publică
+certificate	Basic constraints	Constrângeri de bază
+certificate	Key usage	Utilizare cheie
+certificate	Self-signed	Autosemnat
+certificate	SHA-1 digest	Rezumat SHA-1
+certificate	SHA-256 digest	Rezumat SHA-256
+	Certificate authority	Autoritate de certificare
+	End entity	Entitate finală
+	Float panel	Panou flotant
+	Move to group	Mutare în grup
+	Panels	Panouri
+	Resize panel window	Redimensionare fereastră panou
+	Resize panels	Redimensionare panouri
+	Grab bag	Diverse
+	No contributor data was built into this copy.	Această copie nu include date despre contribuitori.
+	No model credits were built into this copy.	Această copie nu include mențiuni despre modele.
+	Reverse the order	Inversare ordine
+	Show	Afișare
+	Sort	Sortare
+	Table	Tabel
+	The field {name} no longer exists.	Câmpul {name} nu mai există.
+	{n} contributors · {c} commits	{n} contribuitori · {c} commit-uri
+	Username	Nume utilizator
+	Display name	Nume afișat
+	Real name	Nume real
+	Name (A–Z)	Nume (A–Z)
+	Merged PRs	PR-uri integrate
+	PRs	PR-uri
+	Commits	Commit-uri
+	Lines added	Linii adăugate
+	+LOC	+LOC
+	Lines deleted	Linii șterse
+	−LOC	−LOC
+	Line delta	Diferență linii
+	ΔLOC	ΔLOC
+	Binary assets added	Resurse binare adăugate
+	+Bin	+Bin
+	Binary assets removed	Resurse binare eliminate
+	−Bin	−Bin
+	First commit	Primul commit
+	First	Primul
+	Last commit	Ultimul commit
+	Last	Ultimul
+	Company	Companie
+	Model	Model
+	Version	Versiune
+	% of all commits	% din toate commit-urile
+	Lines +/−	Linii +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR-uri, {commits} commit-uri, +{added} / −{deleted} linii (Δ {delta}), +{bin_added} / −{bin_deleted} resurse binare, {first} – {last}
+	of {name}	din {name}
+	of {pages}	din {pages}
+	on page {label}	pe pagina {label}
+	open to see what it will include	deschideți pentru a vedea ce va include
+	ships in milestone {m}	vine în etapa {m}
+	signature	semnătura
+	sorted ascending	sortat crescător
+	sorted descending	sortat descrescător
+	to	până la
+	to {n}	până la {n}
+	watermark	filigran
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy sau yy an · m sau mm lună · mmm sau mmmm numele lunii · d sau dd zi · ddd sau dddd ziua săptămânii. H, h, M, s și t sunt litere de timp și nu pot fi folosite singure: puneți {escape} înaintea unei litere pentru a o afișa ca atare.
+	{c} of {n}{more}	{c} din {n}{more}
+	{dpi} pixels/inch	{dpi} pixeli/inch
+	{kind} Properties	Proprietăți {kind}
+	{kind} field	Câmp {kind}
+	{kind} · page {p}	{kind} · pagina {p}
+	{kind} — click to show it on the page	{kind}: faceți clic pentru a-l afișa pe pagină
+	{k} of {n}	{k} din {n}
+	{label} (1 issue)	{label} (1 problemă)
+	{label} ({n} issues)	{label} ({n} probleme)
+	{month} {day}, {y}	{day} {month} {y}
+	{month} {y}	{month} {y}
+	{msg} to {dir}	{msg} în {dir}
+	{name} (default)	{name} (implicit)
+	{name} can't be combined: {why}	{name} nu poate fi combinat: {why}
+	{name} is read-only	{name} este doar pentru citire
+	{name} — unsaved changes	{name}: modificări nesalvate
+	{n} days ago	acum {n} zile
+	{n} differences found	{n} diferențe găsite
+	{n} fields selected	{n} câmpuri selectate
+	{n} files	{n} fișiere
+	{n} files done	{n} fișiere finalizate
+	{n} files need attention	{n} fișiere necesită atenție
+	{n} h ago	acum {n} h
+	{n} instances	{n} apariții
+	{n} issues	{n} probleme
+	{n} marks	{n} marcaje
+	{n} match(es) marked for redaction.	{n} potriviri marcate pentru anonimizare.
+	{n} measurements use an unsupported format and are left out.	{n} măsurători folosesc un format neacceptat și sunt omise.
+	{n} min ago	acum {n} min
+	{n} pages	{n} pagini
+	{n} pages selected.	{n} pagini selectate.
+	{n} selected	{n} selectate
+	{n} tags	{n} etichete
+	{n} word(s) or phrase(s)	{n} cuvinte sau expresii
+	{n} {kind}	{n} {kind}
+	{rule} - {status}	{rule} - {status}
+	{s} action	acțiunea {s}
+	{verb} Background	{verb} fundal
+	{verb} Header and Footer	{verb} antet și subsol
+	{verb} Watermark	{verb} filigran
+	{verb} as "{name}"	{verb} ca „{name}”
+	{who} in this document wants to open this address in your browser:	{who} din acest document vrea să deschidă această adresă în browser:
+	{who} in this document wants to open your email app with this address:	{who} din acest document vrea să deschidă aplicația de e-mail cu această adresă:
+	{words} on {pages}	{words} pe {pages}
+	— (protection is applied when you save)	— (protecția se aplică la salvare)
+	“{name}” has security restrictions. Enter its permissions password to lift them.	„{name}” are restricții de securitate. Introduceți parola de permisiuni pentru a le elimina.
+	“{name}” is protected. Enter a password to open it.	„{name}” este protejat. Introduceți o parolă pentru a-l deschide.
+@plural	{n} page|{n} pages	{n} pagină|{n} pagini|{n} de pagini
+@plural	{n} file|{n} files	{n} fișier|{n} fișiere|{n} de fișiere
+@plural	{n} field|{n} fields	{n} câmp|{n} câmpuri|{n} de câmpuri
+@plural	{n} comment|{n} comments	{n} comentariu|{n} comentarii|{n} de comentarii
+@plural	{n} result|{n} results	{n} rezultat|{n} rezultate|{n} de rezultate
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nume de câmp intră în conflict cu fișierele anterioare și va fi redenumit: {list}|{n} nume de câmpuri intră în conflict cu fișierele anterioare și vor fi redenumite: {list}|{n} de nume de câmpuri intră în conflict cu fișierele anterioare și vor fi redenumite: {list}
+@plural	{n} object selected|{n} objects selected	{n} obiect selectat|{n} obiecte selectate|{n} de obiecte selectate
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	S-a descărcat {n} PDF|S-au descărcat {n} PDF-uri|S-au descărcat {n} de PDF-uri
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Spațiu
+	Minimize	Minimizare
+	Maximize	Maximizare
+	Restore	Restabilire
+	Use system title bar	Folosire bară de titlu a sistemului
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Afișează o bară de titlu simplă pentru butoanele ferestrei în locul barei de file. GNOME nu desenează bare de titlu pentru aplicații, așa că aceasta nu urmează tema sa.
+	Allow	Permitere
+	Only allow this if you trust the source document.	Permiteți acest lucru doar dacă aveți încredere în documentul sursă.
+	Open this local PDF?	Deschideți acest PDF local?
+	This document is trying to open a local file:	Acest document încearcă să deschidă un fișier local:
+	Move tag earlier	Mutare etichetă mai devreme
+	Move tag later	Mutare etichetă mai târziu
+	4 x 6 in label (101.6 x 152.4 mm)	Etichetă 4 x 6 inch (101,6 x 152,4 mm)
+	Characters	Caractere
+	Characters without spaces	Caractere fără spații
+	Collapse all pages	Restrângere toate paginile
+	Counting words… {n} pages read	Se numără cuvintele… {n} pagini citite
+	Create Link…	Creare link…
+	Crop Image	Decupare imagine
+	Current page only	Doar pagina curentă
+	Cut Image	Decupare imagine (tăiere)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Taie fiecare pagină la zona imprimată, o îndreaptă și o potrivește pe foaie fără a o întinde. O etichetă pe foaie.
+	DN: 	DN: 
+	Date: 	Data: 
+	Digitally signed by	Semnat digital de
+	Exclude image/OCR text	Exclude textul din imagini/OCR
+	Exclude tagged code blocks	Exclude blocurile de cod etichetate
+	Exclude tagged tables	Exclude tabelele etichetate
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Excluderile folosesc etichetele PDF. Tabelele și codul neetichetate rămân incluse. Excluderea imaginilor elimină și textul invizibil.
+	Expand all pages	Extindere toate paginile
+	Fill colour:	Culoare umplere:
+	Find untagged content	Găsire conținut neetichetat
+	Font size	Dimensiune font
+	Found {n} untagged content problems.	Au fost găsite {n} probleme de conținut neetichetat.
+	Full Screen	Ecran complet
+	Hide hover previews for highlights without comment text	Ascunde previzualizările la trecerea mouse-ului pentru evidențierile fără text de comentariu
+	Location: 	Locație: 
+	Make Properties Default	Proprietățile devin implicite
+	Make properties default	Proprietățile devin implicite
+	Mark as artifact	Marcare ca artefact
+	Mark content as artifact	Marcare conținut ca artefact
+	Merge image fragments	Unificare fragmente de imagine
+	Mobile	Mobil
+	New file only	Doar fișierul nou
+	New file: {name}	Fișier nou: {name}
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nu s-a găsit nicio imprimantă. Verificați că imprimanta este instalată și că serviciul de imprimare (print spooler) rulează, apoi deschideți din nou Imprimare.
+	No untagged content was found.	Nu s-a găsit conținut neetichetat.
+	Not now	Nu acum
+	Old file: {name}	Fișier vechi: {name}
+	Opacity:	Opacitate:
+	Open in Full Screen mode?	Deschideți în modul Ecran complet?
+	Optimizing… merging image fragments	Se optimizează… unificare fragmente de imagine
+	Outline colour:	Culoare contur:
+	Page properties	Proprietăți pagină
+	Create & Edit	Creare și editare
+	Review & Compare	Revizuire și comparare
+	Forms & Signatures	Formulare și semnături
+	Protect & Standardize	Protejare și standardizare
+	Customize & Automate	Personalizare și automatizare
+	No tools match your search.	Niciun instrument nu corespunde căutării.
+	Expand all tools	Extinderea tuturor instrumentelor
+	Collapse all tools	Restrângerea tuturor instrumentelor
+	Pages counted	Pagini numărate
+	Pages selected	Pagini selectate
+	Print as image	Imprimare ca imagine
+	Reason: 	Motiv: 
+	Recognize Text…	Recunoaștere text…
+	Redact Image	Anonimizare imagine
+	Redaction mark appearance	Aspectul marcajului de anonimizare
+	Remove Crop	Eliminare decupare
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Elimină această etichetă terminală din ordinea de citire și marchează conținutul ei direct ca artefact
+	Resolution:	Rezoluție:
+	Save anyway	Salvare oricum
+	Save over the changed file?	Salvați peste fișierul modificat?
+	Scroll speed (mouse wheel and arrow keys)	Viteza de derulare (rotița mouse-ului și tastele săgeți)
+	Sending sheet {s} of {n} to {printer}…	Se trimite foaia {s} din {n} la {printer}…
+	Set page transitions	Setare tranziții pagini
+	Shown while the pointer is over a mark.	Se afișează cât timp cursorul este deasupra unui marcaj.
+	Side by side	Una lângă alta
+	Some content could not be classified safely and was kept in the count.	O parte din conținut nu a putut fi clasificat sigur și a fost păstrat în numărătoare.
+	Some pages contain no countable text. Scanned images need OCR first.	Unele pagini nu conțin text care poate fi numărat. Imaginile scanate au nevoie întâi de OCR.
+	Standard	Standard
+	Tag form fields	Etichetare câmpuri de formular
+	The labels are in English: the signature's font can't draw them in this language.	Etichetele sunt în engleză: fontul semnăturii nu le poate desena în această limbă.
+	The password must have at least 8 characters.	Parola trebuie să aibă cel puțin 8 caractere.
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Acest document cere să se deschidă în modul Ecran complet: pagina umple ecranul și nu se mai afișează nimic altceva. Apăsați Esc oricând pentru a ieși.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Acest fișier s-a modificat pe disc. Reîncărcare afișează noua versiune și renunță la modificările nesalvate; Salvare o înlocuiește cu această versiune.
+	Trim the picture with its handles; Enter or Done applies	Tăiați imaginea cu mânerele ei; Enter sau Gata aplică
+	Turn upside down (180°)	Întoarcere cu susul în jos (180°)
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Folosiți-o când o imprimantă omite text, umbriri sau transparență. Imprimarea nu mai conține text în care se poate căuta; cu Imprimare în tonuri de gri, imaginile sunt gri.
+	What takes up the space in this file, by kind of content.	Ce ocupă spațiul în acest fișier, pe tipuri de conținut.
+	Word count	Număr de cuvinte
+	Word counting stopped unexpectedly.	Numărarea cuvintelor s-a oprit neașteptat.
+	Word count…	Număr de cuvinte…
+	Words	Cuvinte
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	„{name}” s-a modificat pe disc după ce a fost deschis sau salvat ultima dată. Salvarea acum înlocuiește acea versiune mai nouă cu aceasta.
+@id	file.word_count	Număr de cuvinte…
+theme	Appearance	Aspect
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Vizualizați revizia {rev} a „{from}”. Este o copie instantanee: modificările făcute aici nu afectează originalul.
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Vizualizați versiunea semnată a „{from}” (revizia {rev}). Este o copie instantanee: modificările făcute aici nu afectează originalul.
+	the name is not a plain file name	numele nu este un nume simplu de fișier
+# Untranslated: English text until a translator fills these in.
+	Zoom — type a percentage and press Enter	Zoom — tastați un procent și apăsați Enter
+	Calculation order	Ordine de calcul
+	Fix order	Corectare ordine
+	Move only what must move, so every field calculates after the fields it reads.	Mută doar ce trebuie mutat, astfel încât fiecare câmp să se calculeze după câmpurile pe care le citește.
+	Earlier in calculation order	Mai devreme în ordinea de calcul
+	Later in calculation order	Mai târziu în ordinea de calcul
+	Too early	Prea devreme
+	Reads {name}, which calculates later, so it shows an old value.	Citește {name}, care se calculează mai târziu, deci afișează o valoare veche.
+	Loop	Buclă
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Citește {names}, care îl citesc la rândul lor. Nicio ordine nu poate rezolva o buclă: modificați una dintre formule.
+	Not in order	În afara ordinii
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Lipsește din ordinea de calcul salvată în PDF: alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.
+	Back to Prepare a form	Înapoi la Pregătire formular
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Niciun câmp din acest formular nu își calculează încă valoarea. Adăugați un calcul unui câmp în fila Calcul din proprietățile lui și va apărea aici.
+	{names} and {last}	{names} și {last}
+	{field} reads no other field	{field} nu citește niciun alt câmp
+	{field} reads {fields}	{field} citește {fields}
+	No field reads it	Niciun câmp nu îl citește
+	The order saved in the PDF needs tidying	Ordinea salvată în PDF trebuie corectată
+	Moves only what must move	Mută doar ce trebuie mutat
+	Every field calculates after the fields it reads.	Fiecare câmp se calculează după câmpurile pe care le citește.
+	Every field outside a loop calculates after the fields it reads.	Fiecare câmp din afara unei bucle se calculează după câmpurile pe care le citește.
+	{field} reads its own value	{field} își citește propria valoare
+	{fields} read each other	{fields} se citesc reciproc
+	No order can fix a loop. Change one of the formulas.	Nicio ordine nu poate rezolva o buclă. Modificați una dintre formule.
+	Edit {field}'s formula	Editare formulă {field}
+	Order · top calculates first	Ordine · cel de sus se calculează primul
+	Script	Script
+	Links on page	Legături pe pagină
+	Show on the page which fields each field reads	Arată pe pagină ce câmpuri citește fiecare câmp
+	Drag a field to move it, or select it and press {up} or {down}.	Trageți un câmp pentru a-l muta sau selectați-l și apăsați {up} sau {down}.
+	Set calculation order	Setare ordine de calcul
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calcul folosește acum noul nume.|{n} calcule folosesc acum noul nume.|{n} de calcule folosesc acum noul nume.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Ordinea de calcul are {n} intrare care nu calculează nimic. Corectare ordine o elimină.|Ordinea de calcul are {n} intrări care nu calculează nimic. Corectare ordine le elimină.|Ordinea de calcul are {n} de intrări care nu calculează nimic. Corectare ordine le elimină.
+@plural	{fields} reads it|{fields} read it	{fields} îl citește|{fields} îl citesc|{fields} îl citesc
+@plural	{n} field shows an old value|{n} fields show old values	{n} câmp afișează o valoare veche|{n} câmpuri afișează valori vechi|{n} de câmpuri afișează valori vechi
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calculează înaintea câmpului {fields}, pe care îl citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Încă {n} câmp se calculează prea devreme.|Încă {n} câmpuri se calculează prea devreme.|Încă {n} de câmpuri se calculează prea devreme.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} lipsește din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.
+	Bulleted list	Listă cu marcatori
+	Numbered list	Listă numerotată
+	Alignment	Aliniere
+	Superscript	Exponent
+	Subscript	Indice
+	Paragraph spacing	Spațiere între paragrafe
+	Less	Mai puțin
+	Other options	Alte opțiuni
+	Shrink the page content to make room for the header and footer	Micșorează conținutul paginii pentru a face loc antetului și subsolului
+	Printer default	Implicit pentru imprimantă
+	Layer options	Opțiuni straturi
+	Reset to Initial Visibility	Revenire la vizibilitatea inițială
+	Reading the printer's settings…	Se citesc setările imprimantei…
+	The document's security settings don't allow printing	Setările de securitate ale documentului nu permit imprimarea
+	Always use my default zoom and page layout	Folosește întotdeauna zoomul și aspectul de pagină implicite
+	Thumbnail size	Dimensiunea miniaturilor
+	Smaller thumbnails	Miniaturi mai mici
+	Larger thumbnails	Miniaturi mai mari
+	Reshape comment	Remodelare comentariu
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Atributele semnate ale semnăturii nu au tipul de conținut cerut de CMS; au fost citite oricum.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Această semnătură folosește o cheie RSA mai scurtă de 2048 de biți, care nu mai este considerată suficient de puternică pentru semnături. Se validează în continuare, dar nu ar trebui să vă bazați pe ea.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Atributele semnate ale semnăturii nu au rezumatul mesajului, deci semnătura nu acoperă documentul.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Atributele semnate ale semnăturii indică alt tip de conținut decât „data”, deci nu este o semnătură a documentului.
+	Remove {standard} identification	Eliminare identificare {standard}
+
+# Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
+	Add text field table	Adăugare tabel de câmpuri text
+	Text field table	Tabel de câmpuri text
+	Text Field Table	Tabel de câmpuri text
+	Columns	Coloane
+	Row spacing	Spațiere între rânduri
+	Column spacing	Spațiere între coloane
+	First row number	Numărul primului rând
+	Column widths	Lățimile coloanelor
+	Distribute evenly	Distribuire uniformă
+	Field names	Numele câmpurilor
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N sau {row} este numărul rândului, {col} numărul coloanei, {seq} numărul celulei. Dacă nu apare niciunul, numărul rândului se pune la sfârșit.
+	Column {n}	Coloana {n}
+	Add fields	Adăugare câmpuri
+	a table has 1 to {max} rows	un tabel are între 1 și {max} rânduri
+	a table has 1 to {max} columns	un tabel are între 1 și {max} coloane
+	the first row number can be at most {max}	numărul primului rând poate fi cel mult {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	zona, spațierea și lățimile coloanelor trebuie să fie numere, spațierea 0 sau mai mult și fiecare lățime mai mare decât 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	rândurile sunt prea joase: măriți înălțimea zonei sau folosiți mai puține rânduri ori o spațiere mai mică între rânduri
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	o coloană este prea îngustă: măriți lățimea zonei, dați coloanei o parte mai mare din ea sau folosiți mai puține coloane ori o spațiere mai mică între coloane
+	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
+	two cells would both be named {name}	două celule s-ar numi amândouă {name}
+	a field named {name} already exists	există deja un câmp numit {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Astăzi
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Restabilește ultima vizualizare (pagina, zoomul și afișarea paginilor) când un document este redeschis
+	Attach a file…	Atașare fișier…
+	Attach {name}	Atașare {name}
+	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
+	Delete attachment	Ștergere atașament
+	Delete attachment {key}	Ștergere atașament {key}
+@plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Instrumente pentru pagini
+	Insert pages from a file after the selection…	Inserează pagini dintr-un fișier după selecție…
+	Rotate the selected pages counterclockwise	Rotește paginile selectate în sens antiorar
+	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
+	Extract the selected pages…	Extrage paginile selectate…
+	Delete the selected pages	Șterge paginile selectate

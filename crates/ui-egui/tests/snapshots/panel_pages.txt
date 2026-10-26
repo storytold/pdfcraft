@@ -1,0 +1,13 @@
+Label = "Pages"
+Label = "2"
+Button "Close" [off]
+Button "Page tools" [off]
+Label = "Thumbnail size"
+Label = "100%"
+Button "Smaller thumbnails" [off]
+Slider "Thumbnail size"
+Button "Larger thumbnails" [off]
+Button "Page 1" [off]
+Label = "1"
+Button "Page 2" [off]
+Label = "2"

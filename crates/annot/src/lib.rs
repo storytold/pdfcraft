@@ -14,6 +14,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::collections::{HashMap, HashSet};
+
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 pub mod appearance;
@@ -66,7 +68,9 @@ impl Markup {
     }
 }
 
-/// The standard text-annotation icon names (§12.5.6.4, Table 175).
+/// Text-annotation icon names (`/Name`). The first seven are the standard names ISO 32000-2
+/// §12.5.6.4, Table 175 asks every viewer to draw; the rest are further names in common use, which
+/// the same table allows ("Additional names may be supported as well").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NoteIcon {
     #[default]
@@ -77,6 +81,13 @@ pub enum NoteIcon {
     Key,
     NewParagraph,
     Paragraph,
+    Check,
+    Circle,
+    Cross,
+    CrossHairs,
+    Star,
+    RightArrow,
+    UpArrow,
 }
 
 impl NoteIcon {
@@ -89,11 +100,36 @@ impl NoteIcon {
             NoteIcon::Key => "Key",
             NoteIcon::NewParagraph => "NewParagraph",
             NoteIcon::Paragraph => "Paragraph",
+            NoteIcon::Check => "Check",
+            NoteIcon::Circle => "Circle",
+            NoteIcon::Cross => "Cross",
+            NoteIcon::CrossHairs => "CrossHairs",
+            NoteIcon::Star => "Star",
+            NoteIcon::RightArrow => "RightArrow",
+            NoteIcon::UpArrow => "UpArrow",
         }
     }
 
+    /// Every icon, the standard names first.
+    pub const ALL: [NoteIcon; 14] = [
+        Self::Comment,
+        Self::Note,
+        Self::Help,
+        Self::Insert,
+        Self::Key,
+        Self::NewParagraph,
+        Self::Paragraph,
+        Self::Check,
+        Self::Circle,
+        Self::Cross,
+        Self::CrossHairs,
+        Self::Star,
+        Self::RightArrow,
+        Self::UpArrow,
+    ];
+
     pub fn from_name(n: &str) -> Option<Self> {
-        [Self::Comment, Self::Note, Self::Help, Self::Insert, Self::Key, Self::NewParagraph, Self::Paragraph].into_iter().find(|i| i.name() == n)
+        Self::ALL.into_iter().find(|i| i.name() == n)
     }
 }
 
@@ -124,6 +160,14 @@ impl FillMark {
             FillMark::Dot => "Dot",
             FillMark::Line => "Line",
         }
+    }
+
+    /// The user-space box of the mark placed at `at` on a page turned by `rotation`: centred
+    /// there and sized in displayed axes, so a line runs across the page as displayed (#2392).
+    pub fn rect_at(self, at: [f64; 2], rotation: i64) -> [f64; 4] {
+        let (w, h) = if self == FillMark::Line { (36.0, 4.0) } else { (12.0, 12.0) };
+        let (w, h) = if matches!(rotation.rem_euclid(360), 90 | 270) { (h, w) } else { (w, h) };
+        [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
     }
 }
 
@@ -386,7 +430,7 @@ pub enum Shape {
         by: Option<String>,
     },
     /// A typed signature or initials: filled outlines (each contour as points normalised to
-    /// `rect`, 0–1, y up), drawn with the even-odd rule.
+    /// `rect`, 0–1, y up), drawn with the non-zero winding rule.
     TypedSignature {
         rect: [f64; 4],
         contours: Vec<Vec<[f64; 2]>>,
@@ -651,25 +695,65 @@ impl ReviewState {
 pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
     let root = doc.root().ok_or(AnnotError::NoPageTree)?;
     let pages = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).ok_or(AnnotError::NoPageTree)?;
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut stack = vec![pages];
-    while let Some(node) = stack.pop() {
-        if !seen.insert(node) || seen.len() > 1_000_000 {
-            continue;
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        match d.get(b"Kids").map(|k| doc.resolve(k)) {
-            Some(kids) if d.name(b"Type") != Some(b"Page") => {
-                if let Some(a) = kids.as_array() {
-                    stack.extend(a.iter().rev().filter_map(|k| k.as_ref()));
-                }
-            }
-            _ => out.push(node),
-        }
+    Ok(PageWalk::new(doc, pages).collect())
+}
+
+/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
+/// never one entry per child, so a child listed many times or shared between nodes is skipped by
+/// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
+/// Cycles end at the seen check, a `/Kids` array object shared by several nodes is read once,
+/// and at most a million nodes and four million `/Kids` entries are read.
+struct PageWalk<'a> {
+    doc: &'a Document,
+    seen: std::collections::HashSet<ObjRef>,
+    pending: Vec<(std::sync::Arc<Object>, usize)>,
+    /// `/Kids` entries read so far.
+    examined: usize,
+}
+
+impl<'a> PageWalk<'a> {
+    fn new(doc: &'a Document, top: ObjRef) -> Self {
+        let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
+        Self { doc, seen: Default::default(), pending: vec![(top, 0)], examined: 0 }
     }
-    Ok(out)
+}
+
+impl Iterator for PageWalk<'_> {
+    type Item = ObjRef;
+
+    fn next(&mut self) -> Option<ObjRef> {
+        while let Some((kids, next)) = self.pending.last_mut() {
+            let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
+                self.pending.pop();
+                continue;
+            };
+            let node = kid.as_ref();
+            *next += 1;
+            self.examined += 1;
+            let Some(node) = node else { continue };
+            if self.seen.len() >= 1_000_000 || self.examined > 4_000_000 {
+                self.pending.clear();
+                return None;
+            }
+            if !self.seen.insert(node) {
+                continue;
+            }
+            let obj = self.doc.get(node);
+            let Some(d) = obj.as_dict() else { continue };
+            match d.get(b"Kids") {
+                // A `/Kids` array object shared by several nodes is read under the first: under
+                // the others it would only list nodes already seen.
+                Some(Object::Ref(array)) if d.name(b"Type") != Some(b"Page") => {
+                    if self.seen.insert(*array) {
+                        self.pending.push((self.doc.get(*array), 0));
+                    }
+                }
+                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((self.doc.resolve(kids), 0)),
+                _ => return Some(node),
+            }
+        }
+        None
+    }
 }
 
 fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {
@@ -680,11 +764,21 @@ fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {
 fn annots(doc: &Document, page: ObjRef) -> Vec<Object> {
     let obj = doc.get(page);
     let Some(a) = obj.as_dict().and_then(|d| d.get(b"Annots")) else { return Vec::new() };
-    doc.resolve(a).as_array().cloned().unwrap_or_default()
+    let list = doc.resolve(a).as_array().cloned().unwrap_or_default();
+    #[cfg(test)]
+    ANNOTS_ENTRIES_COPIED.with(|n| n.set(n.get() + list.len()));
+    list
 }
 
-/// Replace a page's `/Annots`, writing into the shared array object when it is indirect.
-fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), AnnotError> {
+#[cfg(test)]
+thread_local! {
+    /// Entries copied out of pages' `/Annots` arrays.
+    static ANNOTS_ENTRIES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Replace a page's `/Annots`, writing into the shared array object when it is indirect. An empty
+/// list removes a direct `/Annots`.
+pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {
     let existing = doc.get(page).as_dict().and_then(|d| d.reference(b"Annots"));
     match existing {
         Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(list)),
@@ -751,6 +845,17 @@ fn annotation_flags(doc: &Document, d: &Dict) -> i64 {
     d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0)
 }
 
+/// Whether the renderer keeps the annotation upright on a turned page: the NoRotate flag, with
+/// `/F` read as the renderer reads it (a real truncated, a value that isn't a `u32` no flags).
+fn drawn_upright(doc: &Document, d: &Dict) -> bool {
+    let f = match d.get(b"F").map(|f| doc.resolve(f)).as_deref() {
+        Some(Object::Int(i)) => *i,
+        Some(Object::Real(r)) => *r as i64,
+        _ => 0,
+    };
+    u32::try_from(f).is_ok_and(|f| i64::from(f) & FLAG_NO_ROTATE != 0)
+}
+
 /// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
 pub fn has_visible_fill_sign(doc: &Document) -> bool {
     let Ok(pages) = page_refs(doc) else { return false };
@@ -801,6 +906,27 @@ pub fn picture_rotation(doc: &Document, page: usize, index: usize) -> Result<i64
     let list = annots(doc, p);
     let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     Ok(doc.resolve(entry).as_dict().map_or(0, appearance::picture_turn))
+}
+
+/// Leave page `page` of (a copy of) a document showing only its annotation at `index`, without
+/// the page's content or other annotations, so a render draws that annotation alone: to lay it
+/// over the page while it is dragged. `false`, with `doc` unchanged, when the annotation has no
+/// normal appearance (`/AP /N`) for that render to draw.
+pub fn isolate_annotation(doc: &mut Document, page: usize, index: usize) -> Result<bool, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let entry = annots(doc, p).get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let has_normal = {
+        let obj = doc.resolve(&entry);
+        obj.as_dict().and_then(|d| d.get(b"AP")).is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N")))
+    };
+    if !has_normal {
+        return Ok(false);
+    }
+    set_annots(doc, p, vec![entry])?;
+    doc.update_dict(p, |d| {
+        d.remove(b"Contents");
+    })?;
+    Ok(true)
 }
 
 // ── building ────────────────────────────────────────────────────────────────────────────────
@@ -898,7 +1024,7 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
             grow(bounds([*from, *to].into_iter()).unwrap_or_default(), pad + 1.0)
         }
         Shape::Ink { strokes } | Shape::Signature { strokes } => {
-            if strokes.iter().all(|s| s.is_empty()) || !strokes.iter().flatten().all(|p| finite(p)) {
+            if strokes.iter().all(Vec::is_empty) || !strokes.iter().flatten().all(|p| finite(p)) {
                 return Err(bad("drawing (no points)"));
             }
             // Strokes of three or more points are drawn as curves, which stay within their
@@ -1081,6 +1207,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"Name".to_vec(), Object::name(mark.name()));
             border(&mut d);
+            // Drawn upright for the page as displayed, as a stamp is (#2392).
+            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            if matches!(turn, 90 | 180 | 270) {
+                d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
+            }
         }
         Shape::Stamp { stamp, by, .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
@@ -1104,7 +1235,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
         Shape::CustomStamp { name, picture, image, size, .. } => {
-            let clean: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+            let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
             d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
@@ -1355,8 +1486,22 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
     apd.remove(b"D");
     apd.remove(b"R");
     apd.set(b"N".to_vec(), Object::Ref(ap));
+    // A note icon has a fixed size (`NOTE_SIZE`); viewers draw it at the upper-left corner of `/Rect`.
+    // The appearance's box is mapped onto `/Rect`, so any other `/Rect` (a large one, or one with
+    // no width, as LaTeX `pdfcomment` writes) would stretch the icon or shrink it to nothing.
+    let icon_rect = matches!(d.name(b"Subtype"), Some(b"Text" | b"FileAttachment"))
+        .then(|| d.get(b"Rect")?.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>())
+        .flatten()
+        .filter(|q| q.len() == 4 && finite(q))
+        .map(|q| {
+            let (x, top) = (q[0].min(q[2]), q[1].max(q[3]));
+            [x, top - NOTE_SIZE, x + NOTE_SIZE, top]
+        });
     doc.update_dict(r, |d| {
         d.set(b"AP".to_vec(), Object::Dict(apd));
+        if let Some(rect) = icon_rect {
+            d.set(b"Rect".to_vec(), num_array(&rect));
+        }
         d.remove(b"AS");
         pdfcraft_fonts::set_undrawn_mark(d, missing);
     })?;
@@ -1433,8 +1578,15 @@ pub fn with_missing_appearances(doc: &Document) -> Option<Document> {
 /// redrawing it. See [`AppearanceCache`] for when entries stay valid.
 pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCache) -> Option<Document> {
     let mut copy: Option<Document> = None;
+    // An annotation listed more than once, on one page or several, is drawn once. `has_normal`
+    // reads `doc`, which never gets the appearance, so every repeat used to add another stream to
+    // the copy, and the display bytes grew with the number of listings.
+    let mut seen = std::collections::HashSet::new();
     for page in page_refs(doc).ok()? {
         for r in annots(doc, page).iter().filter_map(Object::as_ref) {
+            if !seen.insert(r) {
+                continue;
+            }
             let d = annot_dict(doc, r);
             if matches!(d.name(b"Subtype"), None | Some(b"Link" | b"Widget" | b"Popup")) {
                 continue;
@@ -1448,7 +1600,14 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
                 continue;
             }
-            let Some(stream) = build_appearance(doc, &d) else { continue };
+            // Another program's stamp gets a drawing for display only (ISO 32000-2 Table 184). Its
+            // `/AP`, if any, has no `/N` to keep here.
+            let other_stamp = || {
+                let mut bare = d.clone();
+                bare.remove(b"AP");
+                appearance::display_stamp(&bare)
+            };
+            let Some(stream) = build_appearance(doc, &d).or_else(other_stamp) else { continue };
             cache.insert(r, &stream);
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
             apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
@@ -1509,36 +1668,52 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
-    let mut doomed: Vec<ObjRef> = target.as_ref().into_iter().collect();
-    // Replies (`/IRT`) and pop-ups (`/Parent`) of anything doomed, to a fixpoint.
-    loop {
-        let before = doomed.len();
-        for e in &list {
-            let Some(r) = e.as_ref() else { continue };
-            if doomed.contains(&r) {
-                continue;
-            }
-            let obj = doc.get(r);
-            let Some(d) = obj.as_dict() else { continue };
-            let points_at = |k: &[u8]| d.reference(k).is_some_and(|t| doomed.contains(&t));
-            if points_at(b"IRT") || points_at(b"Parent") {
-                doomed.push(r);
-            }
-        }
-        for r in doomed.clone() {
-            if let Some(pop) = doc.get(r).as_dict().and_then(|d| d.reference(b"Popup"))
-                && !doomed.contains(&pop)
-            {
-                doomed.push(pop);
-            }
-        }
-        if doomed.len() == before {
-            break;
+    // An inline comment has no reference to collect; the pop-up it names still goes.
+    let seed = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
+    let doomed = with_replies_and_popups(doc, &list, seed);
+    let kept: Vec<Object> = list.into_iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e).collect();
+    Ok(set_annots(doc, p, kept)?)
+}
+
+/// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
+/// one of them, or it is written inline (a file can, though the standard asks for references) and
+/// replies to (`/IRT`) or pops up for (`/Parent`) one of them. An inline entry has no reference
+/// for the walk to collect, so it is matched here.
+pub fn goes_with(entry: &Object, going: &HashSet<ObjRef>) -> bool {
+    match entry.as_ref() {
+        Some(r) => going.contains(&r),
+        None => entry.as_dict().is_some_and(|d| [d.reference(b"IRT"), d.reference(b"Parent")].into_iter().flatten().any(|r| going.contains(&r))),
+    }
+}
+
+/// `doomed` and what goes with it, as Acrobat deletes a comment: the entries of `list` (one or
+/// more pages' `/Annots`) that reply to (`/IRT`) or pop up for (`/Parent`) anything going, their
+/// own replies, and the pop-ups going annotations name (`/Popup`). An inline reply has no
+/// reference to collect, but the pop-up it names is. Each annotation is visited once, so a long or
+/// cyclic chain costs no more than its length. Filter a list with [`goes_with`], which also
+/// matches inline entries.
+pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl IntoIterator<Item = ObjRef>) -> HashSet<ObjRef> {
+    let mut hanging: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    for e in list {
+        let obj = doc.resolve(e);
+        let Some(d) = obj.as_dict() else { continue };
+        // What goes with the annotation this entry hangs off: the entry, or for an inline one the
+        // pop-up it names.
+        let Some(goes) = e.as_ref().or_else(|| d.reference(b"Popup")) else { continue };
+        for on in [d.reference(b"IRT"), d.reference(b"Parent")].into_iter().flatten() {
+            hanging.entry(on).or_default().push(goes);
         }
     }
-    let kept: Vec<Object> =
-        list.into_iter().enumerate().filter(|(i, e)| *i != index && !e.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(_, e)| e).collect();
-    set_annots(doc, p, kept)
+    let mut going = HashSet::new();
+    let mut todo: Vec<ObjRef> = doomed.into_iter().collect();
+    while let Some(r) = todo.pop() {
+        if !going.insert(r) {
+            continue;
+        }
+        todo.extend(hanging.get(&r).into_iter().flatten());
+        todo.extend(doc.get(r).as_dict().and_then(|d| d.reference(b"Popup")));
+    }
+    going
 }
 
 /// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
@@ -1772,6 +1947,48 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
         return Err(AnnotError::Invalid(format!("{subtype} comments can't be resized")));
     }
     apply_text_box(doc, r, rect, meta, false)
+}
+
+/// At most this many points reshape a comment (a drawn polygon has a handful).
+const MAX_POINTS: usize = 100_000;
+
+/// Reshape a line, connected lines, a polygon or a cloud: its points in user space (a line's two
+/// ends, the others' corners), as dragging the comment's handles sets them. `/Rect` follows the
+/// points with room for the line's width and endings, as when the comment was drawn, and the
+/// appearance is redrawn. A measurement keeps the points it measured.
+pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64; 2]], meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.contains(b"Measure") {
+        return Err(AnnotError::Invalid("a measurement's points are where it measured".into()));
+    }
+    if points.len() > MAX_POINTS {
+        return Err(AnnotError::Invalid(format!("at most {MAX_POINTS} points")));
+    }
+    let style = Style { width: border_width_of(&d), ..Style::default() };
+    let ends = line_endings_of(&d).unwrap_or_default();
+    let (start, end) = (ends.first().copied().unwrap_or(LineEnding::None), ends.get(1).copied().unwrap_or(LineEnding::None));
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    let (shape, key): (Shape, &[u8]) = match (subtype.as_str(), points) {
+        ("Line", [from, to]) => (Shape::Line { from: *from, to: *to, start, end }, b"L"),
+        ("Line", _) => return Err(AnnotError::Invalid("a line has two ends".into())),
+        ("PolyLine", _) => (Shape::PolyLine { vertices: points.to_vec(), start, end }, b"Vertices"),
+        ("Polygon", _) => {
+            let cloud = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
+            (Shape::Polygon { vertices: points.to_vec(), cloud }, b"Vertices")
+        }
+        (other, _) => return Err(AnnotError::Invalid(format!("{other} comments have no points to move"))),
+    };
+    // Checks the points too: finite, and far enough apart to draw.
+    let rect = rect_for(&shape, &style)?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        d.set(key.to_vec(), num_array(&points.concat()));
+        d.set(b"Rect".to_vec(), num_array(&rect));
+        touch(d, meta);
+    })?;
+    redraw_or_restore(doc, r, before)
 }
 
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
@@ -2074,6 +2291,10 @@ pub struct Summary {
     pub modified: Option<String>,
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// The page and `/Annots` position `/IRT` points at, by reference (`/NM` need not be unique).
+    pub parent: Option<(usize, usize)>,
+    /// `/RT /Group`: grouped with the `/IRT` annotation (Replace Text's caret), not a reply to it.
+    pub grouped: bool,
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
     pub state: Option<String>,
@@ -2082,6 +2303,11 @@ pub struct Summary {
     pub intent: Option<String>,
     /// A Fill & Sign mark ([`is_fill_sign`]).
     pub fill_sign: bool,
+    /// The NoRotate flag (`/F` bit 5), as `pdfcraft_render::Annotation::no_rotate`.
+    pub no_rotate: bool,
+    /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
+    /// (`/Vertices`), in user space; empty for other comments.
+    pub points: Vec<[f32; 2]>,
 }
 
 fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -2102,13 +2328,35 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
     !matches!(subtype, "Link" | "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
 }
 
+/// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`
+/// follows it, within a few steps (a cycle stops there).
+fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..8 {
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => break,
+        }
+    }
+    r
+}
+
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
-    for (page, p) in pages.iter().enumerate() {
-        for (index, entry) in annots(doc, *p).iter().enumerate() {
-            let obj = doc.resolve(entry);
+    let lists: Vec<Vec<Object>> = pages.iter().map(|p| annots(doc, *p)).collect();
+    // Where each annotation is first listed, so a reply's `/IRT` finds its parent by reference.
+    let mut slots: std::collections::HashMap<ObjRef, (usize, usize)> = std::collections::HashMap::new();
+    for (page, list) in lists.iter().enumerate() {
+        for (index, entry) in list.iter().enumerate() {
+            if let Some(r) = entry.as_ref() {
+                slots.entry(final_ref(doc, r)).or_insert((page, index));
+            }
+        }
+    }
+    for (page, list) in lists.iter().enumerate() {
+        for (index, entry) in list.iter().enumerate() {
+            let obj = entry.as_ref().map_or_else(|| doc.resolve(entry), |r| doc.get(final_ref(doc, r)));
             let Some(d) = obj.as_dict() else { continue };
             let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
             if !is_comment_subtype(&subtype) {
@@ -2136,7 +2384,15 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 }
             }
             let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
-            let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            // Keep in step with `pdfcraft_render::inspect`.
+            let points = match subtype.as_str() {
+                "Line" => Some(nums(b"L")).filter(|l| l.len() == 4).map(|l| l.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
+                "PolyLine" | "Polygon" => nums(b"Vertices").as_chunks::<2>().0.to_vec(),
+                _ => Vec::new(),
+            };
+            let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
+            let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
             out.push(Summary {
                 page,
                 index,
@@ -2148,6 +2404,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 modified: text_value(doc, d, b"M"),
                 name: text_value(doc, d, b"NM"),
                 in_reply_to,
+                parent,
+                grouped: d.name(b"RT") == Some(b"Group"),
                 rect,
                 color,
                 state: text_value(doc, d, b"State"),
@@ -2155,6 +2413,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 fill_sign: is_fill_sign(doc, d),
+                no_rotate: drawn_upright(doc, d),
+                points,
             });
         }
     }

@@ -20,7 +20,7 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
-fn source(name: &str) -> egui::ImageSource<'static> {
+pub(crate) fn source(name: &str) -> egui::ImageSource<'static> {
     // PdfCraft caches an unknown name under the resolved fallback name.
     white_icons().source(white_icons().canonical_name(name).unwrap_or("square"))
 }
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn shared_catalog_preserves_existing_icons_and_fallback_uri() {
-        assert_eq!(ICONS.len(), 186);
+        assert_eq!(ICONS.len(), 190);
         assert!(exists("minimize-2"));
         for (name, original) in ICONS {
             let expected =

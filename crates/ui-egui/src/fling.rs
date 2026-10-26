@@ -64,7 +64,7 @@ impl Fling {
     /// (animations off, single-page paging, a zoom, a dialog).
     pub(crate) fn read(&mut self, events: &[Event], now: f64, glide: bool) {
         for event in events {
-            let Event::MouseWheel { unit, delta, phase, modifiers } = event else { continue };
+            let Event::MouseWheel { unit, delta, phase, modifiers, .. } = event else { continue };
             self.stop();
             // Zooming, a mouse wheel and sideways Shift scrolling never glide.
             if *unit != MouseWheelUnit::Point || modifiers.command || modifiers.ctrl || modifiers.shift {
@@ -160,7 +160,13 @@ mod tests {
     use egui::{Modifiers, vec2};
 
     fn wheel(dy: f32, phase: TouchPhase) -> Event {
-        Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, dy), phase, modifiers: Modifiers::NONE }
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, dy),
+            phase,
+            modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        }
     }
 
     /// A swipe of `moves` passes of `dy` each, 60 per second, lifted the pass after the last.
@@ -213,6 +219,7 @@ mod tests {
         assert!(!fling.gliding(), "the finger rested before it lifted");
     }
 
+    /// Check that new finger or wheel input stops an in-progress glide.
     #[test]
     fn new_input_stops_a_glide() {
         let mut fling = Fling::new(true);
@@ -222,11 +229,18 @@ mod tests {
 
         let mut fling = Fling::new(true);
         let now = swipe(&mut fling, -25.0, 6);
-        let notch = Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, -1.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE };
+        let notch = Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        };
         fling.read(&[notch], now + 0.1, true);
         assert!(!fling.gliding(), "a wheel notch");
     }
 
+    /// Check that disabled flinging, a false glide flag, and a command-modified zoom gesture prevent glide.
     #[test]
     fn no_glide_where_it_is_off_or_not_wanted() {
         let mut off = Fling::new(false);
@@ -242,7 +256,13 @@ mod tests {
         assert!(!fling.gliding(), "animations off, paging or a dialog");
 
         let mut zoom = Fling::new(true);
-        let ctrl = |phase| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, -25.0), phase, modifiers: Modifiers::COMMAND };
+        let ctrl = |phase| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, -25.0),
+            phase,
+            modifiers: Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Unknown,
+        };
         zoom.read(&[ctrl(TouchPhase::Start)], 0.0, true);
         zoom.read(&[ctrl(TouchPhase::Move)], dt, true);
         zoom.read(&[ctrl(TouchPhase::Move)], 2.0 * dt, true);

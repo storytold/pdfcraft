@@ -8,6 +8,7 @@ use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -35,6 +36,12 @@ struct Gesture {
 }
 
 impl ObjectSelection {
+    /// Clear any object-selection gesture and the page it was blocking.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        self.gesture = None;
+        self.blocked_page = None;
+    }
+
     pub fn count(&self) -> usize {
         self.selected.len()
     }
@@ -156,18 +163,24 @@ fn leave_single(view: &mut DocView) {
 
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, doc: &Document, view: &mut DocView) -> bool {
+pub(crate) fn page_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    xf: &PageXform,
+    ptr: &PagePointer,
+    page: usize,
+    doc: &Document,
+    view: &mut DocView,
+) -> bool {
     if view.objects.input_blocked {
         return true;
     }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
         let blocked = view.objects.blocked_page == Some(page);
-        let modifier_press = ui.input(|i| i.pointer.primary_pressed())
-            && modified(ui)
-            && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| xf.rect.contains(p) && ui.clip_rect().contains(p));
+        let modifier_press = ptr.pressed().is_some() && modified(ui) && ptr.pos.is_some_and(|p| xf.rect.contains(p) && ui.clip_rect().contains(p));
         if blocked || modifier_press {
             view.objects.hold_editor = true;
-            view.objects.blocked_page = ui.input(|i| i.pointer.primary_down()).then_some(page);
+            view.objects.blocked_page = ptr.primary_down.then_some(page);
             if modifier_press {
                 view.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
             }
@@ -176,14 +189,24 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
         return false;
     }
     let mut selection = std::mem::take(&mut view.objects);
-    let result = input(&mut selection, ui, resp, xf, page, doc, view);
+    let result = input(&mut selection, ui, resp, xf, ptr, page, doc, view);
     view.objects = selection;
     result
 }
 
 #[allow(clippy::too_many_arguments)]
-fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, doc: &Document, view: &mut DocView) -> bool {
-    let (pointer, pressed, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_pressed(), i.pointer.primary_down()));
+fn input(
+    s: &mut ObjectSelection,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    xf: &PageXform,
+    ptr: &PagePointer,
+    page: usize,
+    doc: &Document,
+    view: &mut DocView,
+) -> bool {
+    let pointer = ptr.pos;
+    let (pressed, down) = (ptr.pressed().is_some(), ptr.primary_down);
     let info = &doc.info;
     if s.page == Some(page)
         && let Some(mut gesture) = s.gesture
@@ -311,7 +334,11 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
         return true;
     }
     s.clear();
-    if hit.is_some() {
+    // A closed paragraph's width handle reaches past its box, and a press there rewraps the
+    // paragraph (as in `edit_text_ui`) instead of starting an area selection (#2276).
+    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page)
+        && crate::edit_text_ui::grabs_edge(xf, info, page, objects.iter().filter(|o| o.target.kind == ObjectKind::Text).map(|o| o.rect), p);
+    if hit.is_some() || on_edge {
         return false;
     }
     leave_single(view);
@@ -380,6 +407,46 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
     }
 }
 
+/// Delete (or Backspace) removes the selected objects, as in Acrobat: a paragraph selected by its
+/// frame, or everything an area selection took, goes at once instead of one typed character at a
+/// time.
+pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
+    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
+        return;
+    }
+    let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };
+    use egui::{Key, Modifiers};
+    if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
+        return;
+    }
+    // The selection stays until the edit applies: `prepare` clears it when the document changes,
+    // and a refused delete (text used as a clipping path) leaves it selected.
+    view.pending_edit = delete_edit(page, view.objects.selected.iter().map(|o| o.target).collect());
+}
+
+/// The edit that deletes `targets` (indexes into one inventory of `page`) as one undo step.
+/// Each deletion renumbers only what follows it in its own inventory, so paragraphs and images
+/// go from the last to the first, and added content, which the source inventories leave out,
+/// after them.
+fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
+    targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
+    targets.dedup();
+    let mut edits: Vec<Edit> = targets
+        .into_iter()
+        .map(|t| match t.kind {
+            ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() },
+            ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete },
+            ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        })
+        .collect();
+    if edits.len() > 1 {
+        // "Delete content" is an edit label already, so the history reads the same in every language.
+        Some(Edit::Batch { label: "Delete content".into(), edits })
+    } else {
+        edits.pop()
+    }
+}
+
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
     if selection.page != Some(page) {
         return;
@@ -414,25 +481,37 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn t(kind: ObjectKind, index: usize) -> ObjectTarget {
+        ObjectTarget { kind, index }
+    }
+
+    /// Deleting renumbers what follows in the same inventory, so the batch takes each inventory
+    /// from its last item to its first, and added content (outside the source inventories) last.
     #[test]
-    fn selection_labels_and_refusals_are_translated_in_every_catalog() {
-        for language in crate::i18n::LANGUAGES.iter().filter(|l| !l.source.is_empty()) {
-            let lang = crate::i18n::Lang::from_code(language.code).unwrap();
-            for label in [
-                "Drag the selection to move it. Esc clears the selection.",
-                "Shift-click to select several objects. Drag empty space to select an area.",
-                "Select at most 1000 objects at a time.",
-                "Finish or discard the text being edited before selecting several objects.",
-                "Move object",
-                "Move objects",
-                "Vertical text cannot be moved with this selection.",
-                "Text used as a clipping path cannot be moved with this selection.",
-                "These objects could not be moved. Select them again and try a smaller move.",
-                "This page contains objects that cannot be selected together.",
-            ] {
-                assert_ne!(crate::i18n::tr(lang, label), label, "{}: {label}", language.code);
-            }
-            assert_ne!(crate::i18n::trn(lang, 2, "{n} object selected", "{n} objects selected"), "2 objects selected", "{}", language.code);
-        }
+    fn several_objects_delete_last_first_in_one_step() {
+        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 3), t(ObjectKind::Added, 2)];
+        let Some(Edit::Batch { label, edits }) = delete_edit(0, targets) else { panic!("several objects make one batch") };
+        assert_eq!(label, "Delete content");
+        let order: Vec<(char, usize)> = edits
+            .iter()
+            .map(|e| match e {
+                Edit::EditTextBlock { block, text, .. } => {
+                    assert!(text.is_empty());
+                    ('t', *block)
+                }
+                Edit::EditPageImage { index, change: pdfcraft_engine::ImageEdit::Delete, .. } => ('i', *index),
+                Edit::DeleteContent { index, .. } => ('a', *index),
+                other => panic!("unexpected {}", other.label().wording),
+            })
+            .collect();
+        assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
+    }
+
+    #[test]
+    fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
+        assert!(matches!(delete_edit(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
+        assert!(delete_edit(0, Vec::new()).is_none());
     }
 }

@@ -56,8 +56,8 @@ impl ProtectDraft {
 /// A rough password strength, as Acrobat's meter shows (Weak / Medium / Strong).
 pub fn strength(pw: &str) -> (&'static str, Color32) {
     let classes = [
-        pw.chars().any(|c| c.is_lowercase()),
-        pw.chars().any(|c| c.is_uppercase()),
+        pw.chars().any(char::is_lowercase),
+        pw.chars().any(char::is_uppercase),
         pw.chars().any(|c| c.is_ascii_digit()),
         pw.chars().any(|c| !c.is_alphanumeric()),
     ]
@@ -86,7 +86,7 @@ fn radio(ui: &mut egui::Ui, t: &Tokens, on: bool, label: &str) -> egui::Response
     }
     ui.painter().text(egui::pos2(rect.left() + 26.0, rect.center().y), egui::Align2::LEFT_CENTER, tl!(label), theme::regular(14.0), t.text);
     let info = tl!(label).to_string();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, info.clone()));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, info.clone()));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

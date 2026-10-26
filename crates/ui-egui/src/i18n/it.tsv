@@ -135,6 +135,8 @@
 	Next view	Vista successiva
 	Page display	Visualizzazione pagina
 	Continuous scrolling	Scorrimento continuo
+	Show gaps between pages	Mostra spazi tra le pagine
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Nascondi gli spazi per unire i bordi delle pagine. I margini all’interno del PDF rimangono invariati.
 	Two-page view	Visualizzazione doppia
 	Single page	Pagina singola
 	Show cover page in two-page view	Mostra la copertina in visualizzazione doppia
@@ -179,6 +181,15 @@
 	Available	Disponibile
 	Ready	Pronto
 	Search tools and commands…	Cerca strumenti e comandi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Testo aggiunto
+	Link URL	URL del collegamento
+	Search tools and commands	Cerca strumenti e comandi
+	Text editing line	Riga di modifica del testo
+	Text to place	Testo da posizionare
+	Tooltip	Descrizione comando
+	Words or phrases to redact	Parole o frasi da oscurare
 	No matching tools	Nessuno strumento corrispondente
 	Tool	Strumento
 	Command	Comando
@@ -516,6 +527,36 @@
 	Could not save: {e}	Impossibile salvare: {e}
 	Earlier in tab order	Prima nell'ordine di tabulazione
 	Later in tab order	Dopo nell'ordine di tabulazione
+	Calculation order	Ordine di calcolo
+	Fix order	Correggi ordine
+	Move only what must move, so every field calculates after the fields it reads.	Sposta solo ciò che deve spostarsi, così ogni campo viene calcolato dopo i campi che legge.
+	Earlier in calculation order	Prima nell'ordine di calcolo
+	Later in calculation order	Dopo nell'ordine di calcolo
+	Too early	Troppo presto
+	Reads {name}, which calculates later, so it shows an old value.	Legge {name}, che viene calcolato dopo, quindi mostra un valore vecchio.
+	Loop	Ciclo
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Legge {names}, che a loro volta lo leggono. Nessun ordine può correggere un ciclo: modifica una delle formule.
+	Not in order	Fuori ordine
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Manca nell'ordine di calcolo salvato nel PDF: altri visualizzatori PDF potrebbero non calcolarlo.
+	Back to Prepare a form	Torna a Prepara un modulo
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nessun campo di questo modulo calcola ancora il proprio valore. Assegna un calcolo a un campo nella scheda Calcolo delle sue proprietà e comparirà qui.
+	{names} and {last}	{names} e {last}
+	{field} reads no other field	{field} non legge nessun altro campo
+	{field} reads {fields}	{field} legge {fields}
+	No field reads it	Nessun campo lo legge
+	The order saved in the PDF needs tidying	L'ordine salvato nel PDF va riordinato
+	Moves only what must move	Sposta solo ciò che va spostato
+	Every field calculates after the fields it reads.	Ogni campo viene calcolato dopo i campi che legge.
+	Every field outside a loop calculates after the fields it reads.	Ogni campo fuori da un ciclo viene calcolato dopo i campi che legge.
+	{field} reads its own value	{field} legge il proprio valore
+	{fields} read each other	{fields} si leggono a vicenda
+	No order can fix a loop. Change one of the formulas.	Nessun ordine può correggere un ciclo. Modifica una delle formule.
+	Edit {field}'s formula	Modifica la formula di {field}
+	Order · top calculates first	Ordine · in alto si calcola per primo
+	Script	Script
+	Links on page	Collegamenti sulla pagina
+	Show on the page which fields each field reads	Mostra sulla pagina quali campi legge ogni campo
+	Drag a field to move it, or select it and press {up} or {down}.	Trascina un campo per spostarlo, oppure selezionalo e premi {up} o {down}.
 	From:	Da:
 	To:	A:
 	High Resolution	Alta risoluzione
@@ -576,6 +617,7 @@
 	Discard private data of other applications	Elimina dati privati di altre applicazioni
 	Discard hidden text	Elimina testo nascosto
 	Use Flate to encode streams that are not encoded	Usa Flate per codificare i flussi non codificati
+	In streams that use LZW encoding, use Flate instead	Nei flussi con codifica LZW, usa Flate
 	Remove invalid links and bookmarks	Rimuovi collegamenti e segnalibri non validi
 	Remove unreferenced named destinations	Rimuovi destinazioni con nome non referenziate
 	Compress document structure (object streams)	Comprimi struttura del documento (flussi di oggetti)
@@ -808,6 +850,7 @@
 	Insert Page Number	Inserisci numero di pagina
 	Insert Date	Inserisci data
 	Start page number	Numero di pagina iniziale
+	Shrink the page content to make room for the header and footer	Riduci il contenuto della pagina per fare spazio a intestazione e piè di pagina
 	Source	Origine
 	Fit to page	Adatta alla pagina
 	Rotation	Rotazione
@@ -1186,6 +1229,7 @@
 	Off	Disattivato
 	Flip on long edge	Rilegatura sul lato lungo
 	Flip on short edge	Rilegatura sul lato corto
+	Printer default	Come da stampante
 	Paper:	Carta:
 	Pages to Print	Pagine da stampare
 	More options:	Altre opzioni:
@@ -1328,6 +1372,8 @@
 	This document has no layers.	Questo documento non ha livelli.
 	This document has no attachments.	Questo documento non ha allegati.
 	Hide layer	Nascondi livello
+	Layer options	Opzioni livelli
+	Reset to Initial Visibility	Ripristina visibilità iniziale
 	Show layer	Mostra livello
 	Set layer visibility	Imposta visibilità livello
 	on page {label}	a pagina {label}
@@ -1625,6 +1671,7 @@
 	Looking for printers…	Ricerca delle stampanti…
 	Sending sheet {s} of {n} to {printer}…	Invio del foglio {s} di {n} a {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nessuna stampante trovata. Verifica che la stampante sia installata e che lo spooler di stampa sia in esecuzione, quindi riapri Stampa.
+	Reading the printer's settings…	Lettura delle impostazioni della stampante…
 	Sending to {printer}…	Invio a {printer}…
 	Choose a folder for the searchable files	Scegli una cartella per i file ricercabili
 	Files are combined from top to bottom. Leave Pages empty to take every page.	I file vengono combinati dall'alto verso il basso. Lascia vuoto Pagine per prendere tutte le pagine.
@@ -1771,6 +1818,7 @@
 	This document has no restrictions to lift	Questo documento non ha restrizioni da rimuovere
 	The document's security settings don't allow this change	Le impostazioni di sicurezza del documento non consentono questa modifica
 	The document's security settings don't allow copying text and images	Le impostazioni di sicurezza del documento non consentono di copiare testo e immagini
+	The document's security settings don't allow printing	Le impostazioni di sicurezza del documento non consentono la stampa
 	Open a document first	Apri prima un documento
 	Security will be removed when you save	La protezione verrà rimossa al salvataggio
 	Click text or an image to edit it	Fai clic su un testo o un'immagine per modificarlo
@@ -1933,6 +1981,7 @@
 	Delete field	Elimina campo
 	Duplicate field	Duplica campo
 	Set tab order	Imposta ordine di tabulazione
+	Set calculation order	Imposta ordine di calcolo
 	Change initial view	Modifica vista iniziale
 	Set alternate text	Imposta testo alternativo
 	Mark figure as decorative	Contrassegna figura come decorativa
@@ -2008,6 +2057,10 @@
 	Perimeter	Perimetro
 	Area	Area
 	Drawing scale	Scala del disegno
+	Scale	Scala
+	Common scales	Scale comuni
+	Enter a scale such as 1:50.	Inserisci una scala come 1:50.
+	Applying a scale switches units to m / mm.	Applicando una scala le unità passano a m / mm.
 	Snapping	Aggancio
 	Export measurements	Esporta misure
 	Open a PDF to measure it.	Apri un PDF per misurarlo.
@@ -2169,6 +2222,7 @@
 	Remove saved {what}	Rimuovi l'elemento salvato: {what}
 	Remove {name} from Recent	Rimuovi {name} dai recenti
 	Reopen the files that were open when PdfCraft last closed	Riapri i file aperti alla chiusura precedente di PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Ripristina l’ultima vista (pagina, zoom e visualizzazione delle pagine) quando un documento viene riaperto
 	Reset page size	Ripristina dimensione pagine
 	Reset to printer defaults	Ripristina le impostazioni predefinite della stampante
 	Reverse closed arrow	Freccia chiusa inversa
@@ -2289,6 +2343,9 @@ key	Space	Spazio
 	Printer paper and scaling may differ. Check driver settings.	Carta e scala della stampante possono differire. Controlla le impostazioni del driver.
 	Drawing scale changes. Use Actual size for full-scale plans.	La scala del disegno cambia. Usa Dimensioni effettive per le planimetrie in scala.
 	Reload documents when their files change on disk	Ricarica i documenti quando i loro file cambiano sul disco
+	Don't show again	Non mostrare più
+	Show a notice when a document is secured	Mostra un avviso quando un documento è protetto
+	Always use my default zoom and page layout	Usa sempre il mio ingrandimento e layout di pagina predefiniti
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Questo file è cambiato sul disco. Ricarica mostra la nuova versione e scarta le modifiche non salvate; Salva la sostituisce con questa versione.
 	Reload	Ricarica
 	Couldn't reload {name}: {e}	Impossibile ricaricare {name}: {e}
@@ -2350,6 +2407,13 @@ animation effects	Off	Disattivati
 	no unused output name	nessun nome di output libero
 	no output folder was chosen	nessuna cartella di output scelta
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Scaricato {n} PDF|Scaricati {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calcolo ora usa il nuovo nome.|{n} calcoli ora usano il nuovo nome.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	L'ordine di calcolo ha {n} voce che non calcola nulla. «Correggi ordine» la rimuove.|L'ordine di calcolo ha {n} voci che non calcolano nulla. «Correggi ordine» le rimuove.
+@plural	{fields} reads it|{fields} read it	{fields} lo legge|{fields} lo leggono
+@plural	{n} field shows an old value|{n} fields show old values	{n} campo mostra un valore vecchio|{n} campi mostrano valori vecchi
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} viene calcolato prima di {fields}, che legge.|{field} viene calcolato prima di {fields}, che legge.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ancora {n} campo viene calcolato troppo presto.|Altri {n} campi vengono calcolati troppo presto.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manca nell'ordine salvato nel PDF, quindi altri visualizzatori PDF potrebbero non calcolarlo.|{fields} mancano nell'ordine salvato nel PDF, quindi altri visualizzatori PDF potrebbero non calcolarli.
 	Scan	Scansiona
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Firma un foglio di carta bianca e fotografalo con una luce intensa e uniforme (usa il flash). Scegli la foto o trascinala qui: PdfCraft trova la firma e rimuove la carta.
 	Choose photo…	Scegli foto…
@@ -2646,3 +2710,82 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Create & Edit	Crea e modifica
+	Review & Compare	Revisione e confronto
+	Forms & Signatures	Moduli e firme
+	Protect & Standardize	Proteggi e standardizza
+	Customize & Automate	Personalizza e automatizza
+	No tools match your search.	Nessuno strumento corrisponde alla ricerca.
+	Expand all tools	Espandi tutti gli strumenti
+	Collapse all tools	Comprimi tutti gli strumenti
+	Attach a file…	Allega un file…
+	Delete attachment	Elimina allegato
+	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web
+	Attach {name}	Allega {name}
+	Delete attachment {key}	Elimina allegato {key}
+	Font	Carattere
+	Bulleted list	Elenco puntato
+	Numbered list	Elenco numerato
+	Alignment	Allineamento
+	Superscript	Apice
+	Subscript	Pedice
+	Paragraph spacing	Spaziatura paragrafi
+	Less	Meno
+	Other options	Altre opzioni
+	Thumbnail size	Dimensione miniature
+	Smaller thumbnails	Miniature più piccole
+	Larger thumbnails	Miniature più grandi
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Modifica la forma del commento
+
+# Entries the other catalogs had and Italian lacked (2026-10-21)
+	The password must have at least 8 characters.	La password deve contenere almeno 8 caratteri.
+
+# Entries from #1523 that the catalog lacked.
+	Color	Colore
+	Comment	Commento
+	Error	Errore
+	Next	Avanti
+	On	Attivo
+	Rotate view clockwise (⇧⌘+)	Ruota la vista in senso orario (⇧⌘+)
+	Save (M4)	Salva (M4)
+	Save changes?	Salvare le modifiche?
+	System	Sistema
+	Zoom in / out (also pinch or ⌘-scroll)	Ingrandisci / riduci (anche con il pizzico o ⌘+scorrimento)
+	of	di
+
+# Prepare a form ▸ Text field table
+	Add text field table	Aggiungi tabella di campi di testo
+	Text field table	Tabella di campi di testo
+	Text Field Table	Tabella di campi di testo
+	Columns	Colonne
+	Row spacing	Spaziatura tra le righe
+	Column spacing	Spaziatura tra le colonne
+	First row number	Numero della prima riga
+	Column widths	Larghezze delle colonne
+	Distribute evenly	Distribuisci uniformemente
+	Field names	Nomi dei campi
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N o {row} è il numero di riga, {col} quello di colonna, {seq} quello di cella. Senza nessuno di essi, il numero di riga va alla fine.
+	Column {n}	Colonna {n}
+	Add fields	Aggiungi campi
+	a table has 1 to {max} rows	una tabella ha da 1 a {max} righe
+	a table has 1 to {max} columns	una tabella ha da 1 a {max} colonne
+	the first row number can be at most {max}	il numero della prima riga può essere al massimo {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	l'area, la spaziatura e le larghezze delle colonne devono essere numeri, la spaziatura 0 o più e ogni larghezza maggiore di 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	le righe sono troppo basse: rendi l'area più alta oppure usa meno righe o meno spaziatura tra le righe
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	una colonna è troppo stretta: rendi l'area più larga, dai più spazio alla colonna oppure usa meno colonne o meno spaziatura tra le colonne
+	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
+	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
+	a field named {name} already exists	esiste già un campo chiamato {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Oggi
+@plural	{n} reply|{n} replies	{n} risposta|{n} risposte
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Strumenti pagina
+	Insert pages from a file after the selection…	Inserisci pagine da un file dopo la selezione…
+	Rotate the selected pages counterclockwise	Ruota le pagine selezionate in senso antiorario
+	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
+	Extract the selected pages…	Estrai le pagine selezionate…
+	Delete the selected pages	Elimina le pagine selezionate

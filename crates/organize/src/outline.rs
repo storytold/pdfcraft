@@ -41,6 +41,13 @@ pub struct Bookmark {
     /// Where on that page it goes: the destination's type (`XYZ`, `Fit`, `FitH`…) and the numbers
     /// after it, in PDF user space (`None` for `null` or anything that isn't a number).
     pub view: Option<(Vec<u8>, Vec<Option<f64>>)>,
+    /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), each component kept
+    /// within 0–1; `None` for the default black or a value that isn't three numbers. The
+    /// inspector's `OutlineItem::color` reads it the same way.
+    pub color: Option<[f32; 3]>,
+    /// The title's style (`/F`, Table 152): bit 1 italic, bit 2 bold.
+    pub italic: bool,
+    pub bold: bool,
 }
 
 /// One page of the outline listing (see [`bookmark_page`]).
@@ -59,6 +66,10 @@ pub enum OutlineError {
     IntoItself,
     #[error("the title must not be empty")]
     EmptyTitle,
+    #[error("a bookmark's position must be a finite number")]
+    BadPosition,
+    #[error("a bookmark's colour must be three numbers from 0 to 1")]
+    BadColor,
     #[error("this document has no tagged headings to make bookmarks from")]
     NoEntries,
     #[error("{0}")]
@@ -254,6 +265,15 @@ fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8
     }
 }
 
+/// The explicit destination array `dest` stands for: itself, a dictionary whose `/D` is one, or a
+/// named destination (a name or string, ISO 32000-2 §12.3.2.4) looked up in the `/Names /Dests`
+/// tree, then the catalog `/Dests`. `None` when a name names nothing.
+pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>> {
+    // Names only: the page map is not needed to look one up.
+    let mut targets = Targets { pages: HashMap::new(), names: None };
+    explicit_dest(doc, &mut targets, dest, 0)
+}
+
 /// The page index an explicit destination array names.
 fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
@@ -304,7 +324,19 @@ fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>
     };
     let page = dest.as_deref().and_then(|d| page_of_explicit(targets, d));
     let view = dest.as_deref().filter(|_| page.is_some()).and_then(|d| view_of_explicit(doc, d));
-    Bookmark { obj, path, title, open, page, view }
+    let color = item.as_dict().and_then(|d| d.get(b"C").map(|c| doc.resolve(c))).and_then(|c| title_color(doc, &c));
+    let flags = item.as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);
+    Bookmark { obj, path, title, open, page, view, color, italic: flags & 1 != 0, bold: flags & 2 != 0 }
+}
+
+/// A bookmark title's `/C` as a colour: three numbers, each kept within 0–1 (ISO 32000-2
+/// §12.3.3, Table 151: "An array of three numbers in the range 0.0 to 1.0"); a number past the
+/// range, however large, is kept at its edge. Black, the default, and anything else give `None`.
+fn title_color(doc: &Document, c: &Object) -> Option<[f32; 3]> {
+    let [r, g, b] = c.as_array()?.as_slice() else { return None };
+    let channel = |v: &Object| doc.resolve(v).as_f64().map(|v| v.clamp(0.0, 1.0) as f32);
+    let rgb = [channel(r)?, channel(g)?, channel(b)?];
+    (rgb != [0.0; 3]).then_some(rgb)
 }
 
 /// Lists up to `limit` bookmarks from position `offset`, entering no level deeper than `max_depth`.
@@ -472,24 +504,55 @@ fn recount(doc: &mut Document) -> Result<()> {
 }
 
 fn destination(doc: &Document, page: usize) -> Result<Object> {
+    destination_at(doc, page, None, None)
+}
+
+/// A destination on `page` (0-based) at the user-space point (`left`, `top`), either of which
+/// may be left out to keep the reader's position in that direction.
+fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f64>) -> Result<Object> {
+    if ![left, top].iter().flatten().all(|v| v.is_finite()) {
+        return Err(OutlineError::BadPosition);
+    }
     let pages = walk(doc)?;
     let (p, _) = pages.get(page).ok_or(OrganizeError::NoSuchPage(page))?;
-    Ok(go_to(*p))
+    Ok(go_to_at(*p, left, top))
 }
 
 /// `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for a
 /// new bookmark when the view has no specific position).
 fn go_to(page: ObjRef) -> Object {
-    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), Object::Null, Object::Null, Object::Null])
+    go_to_at(page, None, None)
+}
+
+/// `/XYZ left top null`: the point (`left`, `top`) at the window's upper-left corner, at the
+/// reader's zoom; a coordinate that is left out keeps the reader's position.
+fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
+    let coordinate = |v: Option<f64>| v.map_or(Object::Null, Object::Real);
+    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), coordinate(left), coordinate(top), Object::Null])
 }
 
 /// Add a bookmark titled `title` that goes to `page` (0-based), as child `index` of
 /// `parent_path` (`[]` = top level; an index past the end appends). Returns its path.
 pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, title: &str, page: usize) -> Result<Vec<usize>> {
+    add_bookmark_at(doc, parent_path, index, title, page, None, None)
+}
+
+/// [`add_bookmark`] going to the user-space point (`left`, `top`) of `page`, as `/XYZ left top null`
+/// (zoom kept). Either coordinate may be left out to keep the reader's position in that
+/// direction; one that is not finite is refused.
+pub fn add_bookmark_at(
+    doc: &mut Document,
+    parent_path: &[usize],
+    index: usize,
+    title: &str,
+    page: usize,
+    left: Option<f64>,
+    top: Option<f64>,
+) -> Result<Vec<usize>> {
     if title.trim().is_empty() {
         return Err(OutlineError::EmptyTitle);
     }
-    let dest = destination(doc, page)?;
+    let dest = destination_at(doc, page, left, top)?;
     let parent = container(doc, parent_path)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     let mut d = Dict::new();
@@ -499,10 +562,7 @@ pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, tit
     let at = index.min(kids.len());
     kids.insert(at, item);
     relink(doc, parent, &kids)?;
-    // Show the new bookmark: open its parent (the root is always open).
-    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
-        put(doc, parent, b"Count", Some(Object::Int(1)))?;
-    }
+    show_children(doc, parent, parent_path)?;
     recount(doc)?;
     let mut path = parent_path.to_vec();
     path.push(at);
@@ -579,6 +639,33 @@ pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Resul
     put(doc, r, b"Title", Some(Object::String(PdfString::text(title))))
 }
 
+/// Set the colour of a bookmark's title (`/C`, ISO 32000-2 §12.3.3, Table 151: "An array of three
+/// numbers in the range 0.0 to 1.0, representing the components in the DeviceRGB colour space").
+/// Black, the default, and `None` remove `/C`; a component outside 0–1 is refused.
+pub fn set_bookmark_color(doc: &mut Document, path: &[usize], color: Option<[f64; 3]>) -> Result<()> {
+    if color.is_some_and(|c| !c.iter().all(|v| (0.0..=1.0).contains(v))) {
+        return Err(OutlineError::BadColor);
+    }
+    let (r, _) = resolve_path(doc, path)?;
+    let value = color.filter(|c| *c != [0.0; 3]).map(|c| Object::Array(c.iter().map(|v| Object::Real(*v)).collect()));
+    put(doc, r, b"C", value)
+}
+
+/// Make a bookmark's title bold or italic or not (`/F`, ISO 32000-2 §12.3.3, Table 152: bit 1
+/// italic, bit 2 bold); `None` keeps that one as it is, and so are the other bits. When no bit is
+/// left, `/F` is removed, its default being 0.
+pub fn set_bookmark_style(doc: &mut Document, path: &[usize], bold: Option<bool>, italic: Option<bool>) -> Result<()> {
+    let (r, _) = resolve_path(doc, path)?;
+    let old = doc.get(r).as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);
+    let bit = |flags: i64, mask: i64, on: Option<bool>| match on {
+        Some(true) => flags | mask,
+        Some(false) => flags & !mask,
+        None => flags,
+    };
+    let flags = bit(bit(old, 1, italic), 2, bold);
+    put(doc, r, b"F", (flags != 0).then_some(Object::Int(flags)))
+}
+
 /// Point a bookmark at `page` (0-based), replacing its destination or GoTo action.
 pub fn set_bookmark_page(doc: &mut Document, path: &[usize], page: usize) -> Result<()> {
     let dest = destination(doc, page)?;
@@ -618,9 +705,21 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
     let at = index.min(kids.len());
     kids.insert(at, r);
     relink(doc, parent, &kids)?;
+    if parent != old_parent {
+        show_children(doc, parent, &to_parent)?;
+    }
     recount(doc)?;
     to_parent.push(at);
     Ok(to_parent)
+}
+
+/// Open `parent` so a bookmark just added or moved into it shows (the root is always open).
+/// Only the sign of `/Count` matters here: [`recount`] sets its value.
+fn show_children(doc: &mut Document, parent: ObjRef, parent_path: &[usize]) -> Result<()> {
+    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
+        put(doc, parent, b"Count", Some(Object::Int(1)))?;
+    }
+    Ok(())
 }
 
 /// Expand or collapse a bookmark that has children.

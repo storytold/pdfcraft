@@ -8,6 +8,10 @@
 </p>
 
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png" width="128" height="128" alt="PdfCraft icon: an engraved lion on a teal tile">
+</p>
+
 <h1 align="center">PdfCraft</h1>
 
 <p align="center">
@@ -139,6 +143,8 @@ Search the whole document as you type, step through matches with <kbd>⌘G</kbd>
 Right-click a PDF tab to close it, reopen the last closed file-backed tab, or reveal its file. Closing still asks about unsaved changes. Reopening reads the saved file from disk; it does not restore discarded edits. Reveal selects the file in Explorer or Finder. On Linux and FreeBSD it requests `org.freedesktop.FileManager1.ShowItems`, falling back to opening the containing directory with `xdg-open` when that service is unavailable. Reopen and Reveal are unavailable on the web; Reveal is also unavailable for pathless documents.
 
 Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents. Search bookmark titles in the Bookmarks panel to find nested entries even when their parents are collapsed. Matches keep their ancestors for context; Clear restores the unfiltered tree without changing its expansion state.
+
+In **Inspector > Pages**, use **Thumbnail size** and the smaller/larger buttons to show more pages or inspect larger previews (50–150%). This changes only the thumbnails, keeping multi-page selection and the current page in view. The size belongs to the open document view and survives reloading its file; it is not remembered after restarting. Agents can set it with `ui.set {"key":"thumbnail-zoom","value":"75"}` and read `active.thumbnail_zoom` from `ui.state`.
 
 <table>
 <tr>
@@ -326,15 +332,13 @@ pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect focused=true
 pdfcraft-cli ui --control ~/.pdfcraft-control.json quit
 ```
 
-`ui.dock` arranges the `tools` and `inspector` panels; `canvas` is the protected document view.
-Each per-panel request requires a `panel` ID and an `operation`: `open`, `close`,
-`activate`, `float` with `rect: [x, y, width, height]`, or `move` with `target` and
-`zone: center|left|right|top|bottom`. For example,
-`{"operation":"float","panel":"tools","rect":[100,100,320,440]}` floats Tools.
-`ui.dock.reset` restores the default
-arrangement. The control channel accepts these methods directly; `ui.command` also accepts
-`{"id":"ui.dock","params":{...}}`. Saved preferences retain groups, active tabs, visibility
-and floating geometry. Invalid requests return an error without changing the document or layout.
+`ui.panel` opens, closes or sizes a side panel: `{"panel":"tools"|"side","open":true|false,"width":320}`.
+`tools` is the Tools panel and `side` the panel the rail opens (reopening it shows the one open last).
+`width` is clamped to the panel's limits (Tools 240–520, side panel 260–520 points). `ui.dock.reset`
+resets the side panels: Tools open on the left, default widths. The control channel accepts these
+methods directly; `ui.command` also accepts `{"id":"ui.panel","params":{...}}`. Saved preferences keep
+the Tools side, the open panels and their widths. Invalid requests return an error without changing
+the document or the panels.
 
 
 `resize` requests a native inner-window size in logical points (each dimension must be between 320 and 8192); the window manager may constrain it. `state` reports the observed `window.width`, `window.height` and `window.pixels_per_point`. `focus` accepts exactly one widget `id` or unique enabled, focusable `label`; subsequent `key` requests traverse or activate the actual widgets. `inspect` includes focusability and accepts a `focused` filter. `quit` takes no parameters: clean documents exit normally, while unsaved edits or typing open the existing Save/Don't save/Cancel prompt and return `quitting: false, needs_confirmation: true`. It never silently discards work. Window resizing and application quit are native-only.
@@ -589,13 +593,4 @@ Forks and modified versions must remove them.
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
 
-Tools and Inspector panels can be dragged into tab groups, split beside the PDF, or floated within the app window. Read and full-screen modes keep their existing focused document view. Drag a panel header to a target edge or another header. Its context menu offers Float panel, Move to group, and Close panel. Existing panel toggles reopen panels at their saved location; Reset Panel Layout restores the app layout. Floating panels remain inside the current app window.
-
-Advanced `ui.dock` operations use the same validated transaction as pointer gestures:
-`moveFloating` updates `rect`, `resizeSplit` accepts a boolean child `path` and
-`size` (`{"Ratio":0.5}`, `{"FixedFirst":280}`, or `{"FixedSecond":280}`),
-`setStackOpen` takes `open`, and `resizeStack` takes a point `height` or null.
-A center `move` can include `before` (panel ID or null to append) for tab order.
-The equivalent `{"action": ...}` form accepts a serialized shared docking action;
-this is also the form emitted by the renderer. Protected-canvas and app-specific panel
-rules apply equally to both forms.
+The Tools panel sits on the left, or on the right with Preferences ▸ Tools panel side. The rail stays at the right edge and opens one side panel beside it. Drag a panel's inner edge to resize it; widths are remembered. F4 shows or hides the side panel and Shift+F4 the Tools panel (also in the View menu); View ▸ Reset side panels restores the default arrangement.

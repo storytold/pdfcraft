@@ -6,6 +6,7 @@
 //! are empty and `warnings` says why.
 
 use std::cell::OnceCell;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -30,9 +31,38 @@ const LOAD_STREAM_LIMIT: usize = 256 << 20;
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
+/// Decoded bytes read from an XFA form's configuration packet (or a whole-XDP `/XFA` stream) to
+/// find `dynamicRender`. Designer's packets are a few kilobytes; a whole XDP can hold the template.
+const MAX_XFA_CONFIG_BYTES: usize = 16 << 20;
+
 /// File specifications retained from a remote-Go-To action are deliberately small.
 const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
 const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
+
+/// Text and geometry `DocInfo::annotations` keeps, as counted by [`retained`]. Past it the rest
+/// are not listed: real comments stay far below, many small ones sharing one long string do not.
+const MAX_ANNOTATION_BYTES: usize = 64 << 20;
+
+/// Web-address text the link listing, and name, description and embedded-file key text the
+/// attachment listing, keep together. Many links or attachments can share one long string, which
+/// each would otherwise copy. Past it, a link to a web address lists as a URI action without its
+/// address, an attachment under its generic name without a description, and an embedded file whose
+/// key does not fit is not listed.
+const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
+
+/// The bytes a listed annotation keeps.
+fn retained(a: &Annotation) -> usize {
+    let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
+    text.into_iter()
+        .map(|t| t.as_ref().map_or(0, String::len))
+        .chain([
+            a.subtype.len(),
+            std::mem::size_of_val(a.quads.as_slice()),
+            std::mem::size_of_val(a.points.as_slice()),
+            std::mem::size_of::<Annotation>(),
+        ])
+        .fold(0, usize::saturating_add)
+}
 
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
@@ -81,6 +111,10 @@ pub struct DocInfo {
     pub attachments: Vec<Attachment>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
+    /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
+    /// named destinations resolved. `None` without one, for an action that goes nowhere in this
+    /// document (a script, say), or for one that doesn't resolve to a page of it.
+    pub open_dest: Option<(usize, DestView)>,
     pub warnings: Vec<String>,
 }
 
@@ -90,8 +124,8 @@ pub enum Xfa {
     /// The pages and fields are ordinary PDF; the XFA packets describe the same form (and hold
     /// its data, which Acrobat shows in preference to the fields).
     Static,
-    /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields): the
-    /// PDF pages are only a placeholder.
+    /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields and a
+    /// configuration that doesn't forbid dynamic rendering): the PDF pages are only a placeholder.
     Dynamic,
 }
 
@@ -219,6 +253,18 @@ impl PageInfo {
         [a * self.width, b * self.height]
     }
 
+    /// A point as displayed (points from the page's top-left, y down, before any view rotation)
+    /// → the `/XYZ` position `[left, top]` in user space that puts it at the window's top-left.
+    /// Only a coordinate that is given is pinned: a bookmark made at the top of the window
+    /// leaves the horizontal position alone. On a page turned a quarter, the displayed `y` decides
+    /// the user `left` and the displayed `x` the user `top` (the inverse of [`Self::dest_fraction`]).
+    /// A value that is not finite counts as not given.
+    pub fn xyz_for_view(&self, x: Option<f32>, y: Option<f32>) -> [Option<f32>; 2] {
+        let (x, y) = (x.filter(|v| v.is_finite()), y.filter(|v| v.is_finite()));
+        let [ux, uy] = self.view_to_user(x.unwrap_or(0.0), y.unwrap_or(0.0));
+        if self.rotation.is_multiple_of(180) { [x.map(|_| ux), y.map(|_| uy)] } else { [y.map(|_| ux), x.map(|_| uy)] }
+    }
+
     /// A destination's user-space point (each coordinate possibly unspecified) → the same point
     /// as a fraction of the displayed page `[x, y]` (0..1 from its top-left corner, y down),
     /// after `/Rotate` and a further clockwise `view_rotation` (0, 90, 180 or 270). On a page
@@ -284,7 +330,10 @@ pub enum LinkTarget {
         preserve_rb: bool,
     },
     /// A local-file remote Go-To action. The caller resolves `file` relative to the source path.
+    /// `launch` marks a Launch action that names a PDF file (see `launch_pdf`), opened the same
+    /// way: as a document in PdfCraft, never by the operating system.
     RemoteGoTo {
+        launch: bool,
         file: String,
         destination: RemoteDestination,
         new_window: Option<bool>,
@@ -357,7 +406,16 @@ pub struct OutlineItem {
     /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
     pub view: DestView,
     pub children: Vec<OutlineItem>,
+    /// Whether the bookmark starts open: only a positive `/Count` says so (ISO 32000-2 §12.3.3,
+    /// Table 151). A negative one is closed, and so is a missing one, which a bookmark with
+    /// children should not have.
     pub open: bool,
+    /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), or `None` for the
+    /// default black or a value that isn't three numbers.
+    pub color: Option<[f32; 3]>,
+    /// The title's style (`/F`, Table 152): bit 1 italic, bit 2 bold.
+    pub italic: bool,
+    pub bold: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -367,9 +425,17 @@ pub struct Annotation {
     pub author: Option<String>,
     pub contents: Option<String>,
     pub modified: Option<String>,
-    /// `/NM` of this annotation, and of the one it replies to (`/IRT`), for threading.
+    /// `/NM` of this annotation, and of the one it replies to (`/IRT`).
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// The page and `/Annots` position of the comment `/IRT` points at, found by object
+    /// reference. Threads follow this rather than `/NM`, which need not be unique: PyMuPDF
+    /// names the first comment on every page `fitz-A0`. `None` when `/IRT` leads to no listed
+    /// comment ([`link_replies`]).
+    pub parent: Option<(usize, usize)>,
+    /// `/RT /Group`: grouped with the annotation `/IRT` points at (Replace Text's caret with its
+    /// strikeout) rather than a reply to it.
+    pub grouped: bool,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -386,6 +452,13 @@ pub struct Annotation {
     /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
     /// signature or initials (the rules of `pdfcraft_annot::is_fill_sign`).
     pub fill_sign: bool,
+    /// The NoRotate flag (`/F` bit 5), set on sticky notes and attachments: on a turned page the
+    /// appearance stays upright, turned about the upper-left corner of `rect`
+    /// ([`Self::shown_rect`]).
+    pub no_rotate: bool,
+    /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
+    /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
+    pub points: Vec<[f32; 2]>,
 }
 
 impl Annotation {
@@ -393,6 +466,124 @@ impl Annotation {
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
     }
+
+    /// A reply (or status reply) to another comment rather than a comment of its own.
+    pub fn is_reply(&self) -> bool {
+        self.parent.is_some()
+    }
+
+    /// A comment of its own: not a reply, and not a status or checkmark. One whose comment can't
+    /// be found (deleted from another page, or never listed) has nothing to show, so it is listed
+    /// nowhere: not as a card, on the page or in a count.
+    pub fn is_comment(&self) -> bool {
+        !self.is_reply() && self.state.is_none()
+    }
+
+    /// Whether this annotation's `/IRT` points at `other`.
+    pub fn replies_to(&self, other: &Annotation) -> bool {
+        self.parent == Some((other.page, other.index))
+    }
+
+    /// Where the comment is drawn on a page turned by `rotation` (`PageInfo::rotation`), in user
+    /// space: `rect`, or for a NoRotate comment `rect` turned upright about its upper-left corner
+    /// (see [`Self::no_rotate`]). Hit-testing, selection and anything placed beside the comment
+    /// use this, so they match the drawing.
+    pub fn shown_rect(&self, rotation: u16) -> [f32; 4] {
+        self.shown(self.rect.map(f64::from), rotation).map(|v| v as f32)
+    }
+
+    /// [`Self::shown_rect`] for this comment with its `/Rect` at `rect` (one being moved or
+    /// resized).
+    pub fn shown(&self, rect: [f64; 4], rotation: u16) -> [f64; 4] {
+        if self.no_rotate { upright_rect(rect, rotation) } else { rect }
+    }
+
+    /// The `/Rect` that shows this comment in the user-space box `shown`: the inverse of
+    /// [`Self::shown`], for a box resized as drawn.
+    pub fn rect_for_shown(&self, shown: [f64; 4], rotation: u16) -> [f64; 4] {
+        if self.no_rotate { rect_from_upright(shown, rotation) } else { shown }
+    }
+}
+
+/// The user-space box a NoRotate annotation with `/Rect` `rect` is drawn in on a page turned
+/// clockwise by `rotation` (ISO 32000-2 §12.5.3): `rect` turned as far counterclockwise about its
+/// upper-left corner `(x0, y1)`, which stays where it is on the page. As displayed, the box's
+/// top-left is that corner, the rectangle's width runs across and its height down, as on an
+/// unturned page. `rect` itself for 0 or anything that isn't a quarter turn. The vendored
+/// renderer draws the appearance there (hayro-interpret patch 37).
+fn upright_rect(rect: [f64; 4], rotation: u16) -> [f64; 4] {
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let (w, h) = (x1 - x0, y1 - y0);
+    match rotation {
+        90 => [x0, y1, x0 + h, y1 + w],
+        180 => [x0 - w, y1, x0, y1 + h],
+        270 => [x0 - h, y1 - w, x0, y1],
+        _ => [x0, y0, x1, y1],
+    }
+}
+
+/// The `/Rect` whose [`upright_rect`] is `shown`: `shown` turned back about the corner that
+/// stays put.
+fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
+    let [s0, s1, s2, s3] = [shown[0].min(shown[2]), shown[1].min(shown[3]), shown[0].max(shown[2]), shown[1].max(shown[3])];
+    let (sw, sh) = (s2 - s0, s3 - s1);
+    // The upper-left corner of `/Rect` and the rectangle's width and height.
+    let ((x0, y1), w, h) = match rotation {
+        90 => ((s0, s1), sh, sw),
+        180 => ((s2, s1), sw, sh),
+        270 => ((s2, s3), sh, sw),
+        _ => return [s0, s1, s2, s3],
+    };
+    [x0, y1 - h, x0 + w, y1]
+}
+
+/// Settle the reply links of a document's annotations: a reply keeps its `parent` only when
+/// following the links reaches a comment of its own within 64 steps. An `/IRT` to an unlisted
+/// object, a pop-up, the annotation itself or a loop leaves it a comment of its own, so it stays
+/// in view instead of hanging off nothing. Both comment readers (inspect, and the engine's list
+/// after an edit) run this.
+///
+/// Only comments can be parents: both readers leave links, form widgets, pop-ups and other
+/// non-markup annotations out of `annotations` (`pdfcraft_annot::is_comment_subtype`), so an
+/// `/IRT` to one of those finds no parent here. Pop-ups are skipped again in case a caller's list
+/// has them.
+pub fn link_replies(annotations: &mut [Annotation]) {
+    let at: HashMap<(usize, usize), usize> =
+        annotations.iter().enumerate().filter(|(_, a)| a.subtype != "Popup").map(|(i, a)| ((a.page, a.index), i)).collect();
+    let links: Vec<Option<usize>> =
+        annotations.iter().enumerate().map(|(i, a)| a.parent.and_then(|p| at.get(&p).copied()).filter(|&j| j != i)).collect();
+    for (i, a) in annotations.iter_mut().enumerate() {
+        let mut up = links.get(i).copied().flatten();
+        let mut settled = false;
+        for _ in 0..64 {
+            let Some(j) = up else { break };
+            up = links.get(j).copied().flatten();
+            if up.is_none() {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            a.parent = None;
+        }
+    }
+}
+
+/// The comment each reply's thread starts from, by the reply's page and `/Annots` position: a
+/// reply to a reply files under that comment too. Expects links [`link_replies`] settled.
+pub fn thread_tops(annotations: &[Annotation]) -> HashMap<(usize, usize), (usize, usize)> {
+    let parents: HashMap<(usize, usize), (usize, usize)> = annotations.iter().filter_map(|a| Some(((a.page, a.index), a.parent?))).collect();
+    parents
+        .iter()
+        .map(|(&reply, &first)| {
+            let mut top = first;
+            for _ in 0..64 {
+                let Some(&up) = parents.get(&top) else { break };
+                top = up;
+            }
+            (reply, top)
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -425,6 +616,8 @@ pub struct Layer {
     pub id: (u32, u16),
     pub name: String,
     pub visible: bool,
+    /// Shown as the file opens: the default configuration (`/OCProperties /D`).
+    pub initial: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -643,6 +836,9 @@ impl<'a> Inspector<'a> {
             .ok()
             .and_then(|o| self.dict(o))
             .and_then(|m| m.get(b"Marked").ok())
+            // Any value may be written as an indirect reference, `/Marked 9 0 R` included, so the
+            // flag is resolved before it is read as a boolean (#3671).
+            .map(|o| self.resolve(o))
             .and_then(|o| o.as_bool().ok())
             .unwrap_or(false);
         match self.page_labels(catalog, &mut info.pages) {
@@ -652,7 +848,8 @@ impl<'a> Inspector<'a> {
         if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
             (info.outline, info.outline_more) = self.outline_window(first);
         }
-        self.annotations(info);
+        let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+        self.annotations(info, &mut text_budget);
         self.transitions(info);
         let mut field_seen = HashSet::new();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
@@ -683,8 +880,12 @@ impl<'a> Inspector<'a> {
         }
         info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
         let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
-        if catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).is_some_and(|form| form.get(b"XFA").is_ok()) {
-            info.xfa = Some(if needs_rendering || info.fields.is_empty() { Xfa::Dynamic } else { Xfa::Static });
+        if let Some(xfa) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).and_then(|form| form.get(b"XFA").ok()) {
+            // A form with no fields is taken to be laid out from its template, unless its
+            // configuration says it is a static form (#3180): Designer writes
+            // `<dynamicRender>forbidden</dynamicRender>` for one, whose pages are the form.
+            let static_form = self.xfa_dynamic_render(xfa).as_deref() == Some("forbidden");
+            info.xfa = Some(if needs_rendering || (info.fields.is_empty() && !static_form) { Xfa::Dynamic } else { Xfa::Static });
         }
         self.layers(catalog, &mut info.layers);
         info.layer_groups = self.layer_groups(catalog);
@@ -692,8 +893,10 @@ impl<'a> Inspector<'a> {
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
             if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {
                 let mut seen = HashSet::new();
-                for (name, spec) in self.name_tree(ef, &mut seen, 0) {
-                    info.attachments.push(self.attachment(name.clone(), spec, AttachmentSource::Document { key: name }));
+                for (name, spec) in self.name_tree(ef, &mut seen, 0, &mut text_budget) {
+                    // The key is kept a second time when it is also the name.
+                    let fallback = |budget: &mut usize| spend(name.as_bytes(), budget, |_| name.clone());
+                    info.attachments.push(self.attachment(spec, AttachmentSource::Document { key: name.clone() }, &mut text_budget, fallback));
                 }
             }
             info.has_javascript |= names.get(b"JavaScript").is_ok();
@@ -704,6 +907,25 @@ impl<'a> Inspector<'a> {
         {
             info.has_javascript = true;
         }
+        info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
+    }
+
+    /// The destination `/OpenAction` opens at (ISO 32000-2 §7.7.2 Table 29): an explicit
+    /// destination array, a `/GoTo` action's `/D`, or (leniently, since Table 29 asks for an array
+    /// or an action) a destination name or string; a name or string is looked up as a named
+    /// destination (§12.3.2.4). Any other action (a script, a remote go-to) has none here, and
+    /// neither has a page number past the end of the document.
+    fn open_dest(&self, action: &Object) -> Option<(usize, DestView)> {
+        let dest = match self.resolve(action) {
+            Object::Dictionary(d) => {
+                if d.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) != Some(&b"GoTo"[..]) {
+                    return None;
+                }
+                d.get(b"D").ok()?
+            }
+            other => other,
+        };
+        self.dest(dest, 0).filter(|(page, _)| *page < self.page_ids.len())
     }
 
     // ── object helpers ──────────────────────────────────────────────────────────────────────
@@ -755,8 +977,36 @@ impl<'a> Inspector<'a> {
         }
     }
 
+    /// The value of `dynamicRender` in an XFA form's configuration packet (`config`, under
+    /// `acrobat/acrobat7`): `required` for a dynamic form, `forbidden` for a static one. `/XFA` is
+    /// either one stream holding the whole XDP or an array of packet names and streams (ISO
+    /// 32000-1 §12.7.8). Lenient: `None` when the packet is missing, unreadable or over
+    /// `MAX_XFA_CONFIG_BYTES` decoded, or has no such element.
+    fn xfa_dynamic_render(&self, xfa: &'a Object) -> Option<String> {
+        let stream = match self.resolve(xfa) {
+            Object::Array(items) => {
+                let at = items.iter().position(|o| matches!(self.resolve(o), Object::String(name, _) if name.as_slice() == b"config"))?;
+                self.resolve(items.get(at.checked_add(1)?)?)
+            }
+            whole => whole,
+        };
+        let stream = stream.as_stream().ok()?;
+        let bytes = if stream.dict.get(b"Filter").is_ok() {
+            stream.decompressed_content_with_limit(MAX_XFA_CONFIG_BYTES).ok()?
+        } else {
+            stream.content.get(..stream.content.len().min(MAX_XFA_CONFIG_BYTES))?.to_vec()
+        };
+        xfa_config_dynamic_render(&xfa_packet_text(&bytes))
+    }
+
     fn resolve(&self, o: &'a Object) -> &'a Object {
         self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
+    }
+
+    /// The object a reference ends at after following any chain of references; `None` for a
+    /// direct object or a broken reference.
+    fn resolved_id(&self, o: &Object) -> Option<ObjectId> {
+        self.doc.dereference(o).ok().and_then(|(id, _)| id)
     }
 
     fn dict(&self, o: &'a Object) -> Option<&'a Dictionary> {
@@ -768,14 +1018,17 @@ impl<'a> Inspector<'a> {
     }
 
     fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
-        let o = self.resolve(d.get(key).ok()?);
-        let s = match o {
-            Object::String(bytes, _) => text_string(bytes),
-            Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
-            _ => return None,
-        };
-        let s = s.trim_matches('\0').trim().to_string();
+        let s = trimmed_text(self.resolve(d.get(key).ok()?))?;
         (!s.is_empty()).then_some(s)
+    }
+
+    /// [`Self::text`], converted and spent from `budget` as [`spend`] does, so text that trims
+    /// short or to nothing still spends its raw length.
+    fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
+        let o = self.resolve(d.get(key).ok()?);
+        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return None };
+        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default())?;
+        (!text.is_empty()).then_some(text)
     }
 
     fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
@@ -866,7 +1119,15 @@ impl<'a> Inspector<'a> {
         }
     }
 
-    fn name_tree(&self, node: &'a Dictionary, seen: &mut HashSet<*const Dictionary>, depth: u32) -> Vec<(String, &'a Object)> {
+    /// The entries of an embedded-files name tree. Each string key is spent from `text_budget`
+    /// (see [`MAX_LINK_ATTACHMENT_TEXT_BYTES`]), and an entry whose key does not fit is left out.
+    fn name_tree(
+        &self,
+        node: &'a Dictionary,
+        seen: &mut HashSet<*const Dictionary>,
+        depth: u32,
+        text_budget: &mut usize,
+    ) -> Vec<(String, &'a Object)> {
         let mut out = Vec::new();
         if depth > 32 || !seen.insert(node as *const _) {
             return out;
@@ -875,7 +1136,10 @@ impl<'a> Inspector<'a> {
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
                     let key = match self.resolve(k) {
-                        Object::String(bytes, _) => text_string(bytes),
+                        Object::String(bytes, _) => match spend(bytes, text_budget, text_string) {
+                            Some(key) => key,
+                            None => continue,
+                        },
                         _ => String::new(),
                     };
                     out.push((key, v));
@@ -885,11 +1149,51 @@ impl<'a> Inspector<'a> {
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
                 if let Some(d) = self.dict(k) {
-                    out.extend(self.name_tree(d, seen, depth + 1));
+                    out.extend(self.name_tree(d, seen, depth + 1, text_budget));
                 }
             }
         }
         out
+    }
+
+    /// The first entry of an embedded-files name tree whose key is `key`, in the order
+    /// [`Self::name_tree`] lists them, with no key budget. It keeps no key, and converts a key
+    /// object or `/Names` array that several places reference only once (a second visit cannot
+    /// match, since the first would have returned).
+    fn name_tree_find(&self, node: &'a Dictionary, key: &str, seen: &mut NameTreeSeen, depth: u32) -> Option<&'a Object> {
+        if depth > 32 || !seen.nodes.insert(node as *const _) {
+            return None;
+        }
+        let names = node.get(b"Names").ok();
+        if let Some(names) = names
+            && self.resolved_id(names).is_none_or(|id| seen.objects.insert(id))
+            && let Object::Array(pairs) = self.resolve(names)
+        {
+            for pair in pairs.chunks(2) {
+                if let [k, v] = pair {
+                    if self.resolved_id(k).is_some_and(|id| !seen.objects.insert(id)) {
+                        continue;
+                    }
+                    let found = match self.resolve(k) {
+                        Object::String(bytes, _) => text_string(bytes) == key,
+                        _ => key.is_empty(),
+                    };
+                    if found {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
+            for k in kids {
+                if let Some(d) = self.dict(k)
+                    && let Some(v) = self.name_tree_find(d, key, seen, depth + 1)
+                {
+                    return Some(v);
+                }
+            }
+        }
+        None
     }
 
     // ── outline ─────────────────────────────────────────────────────────────────────────────
@@ -934,7 +1238,13 @@ impl<'a> Inspector<'a> {
             }
             let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
             let title = self.text(d, b"Title").unwrap_or_default();
-            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open }));
+            let color = match d.get(b"C").map(|o| self.resolve(o)) {
+                Ok(Object::Array(c)) => outline_color(c.iter().map(|v| self.resolve(v).as_float().ok())),
+                _ => None,
+            };
+            let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
+            let (italic, bold) = (flags & 1 != 0, flags & 2 != 0);
+            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open, color, italic, bold }));
         }
         (nest_outline(listed), more)
     }
@@ -1091,89 +1401,141 @@ impl<'a> Inspector<'a> {
 
     // ── annotations ─────────────────────────────────────────────────────────────────────────
 
-    fn annotations(&self, info: &mut DocInfo) {
-        for (&id, &page) in &self.page_index {
+    /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
+    fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
+        let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
+        pages.sort_unstable_by_key(|&(_, page)| page);
+        // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
+        // first of them (§12.5.2 allows one page per annotation). Both are told apart by the object
+        // a reference resolves to, since an indirect object may itself hold a reference. Where each
+        // annotation is listed is collected before any is read, so a reply's `/IRT` finds its
+        // parent by reference even when the parent comes later.
+        let mut seen_arrays = HashSet::new();
+        let mut slots: HashMap<ObjectId, (usize, usize)> = HashMap::new();
+        let mut entries = Vec::new();
+        for (id, page) in pages {
             let Ok(page_dict) = self.doc.get_dictionary(id) else { continue };
+            if let Ok(annots) = page_dict.get(b"Annots")
+                && let Some(r) = self.resolved_id(annots)
+                && !seen_arrays.insert(r)
+            {
+                continue;
+            }
             let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
             for (index, a) in annots.iter().enumerate() {
-                let Some(d) = self.dict(a) else { continue };
-                let Some(subtype) = self.name(d, b"Subtype") else { continue };
-                if subtype == "FileAttachment"
-                    && let Ok(fs) = d.get(b"FS")
-                {
-                    let name = self.text(d, b"Contents").unwrap_or_else(|| "attachment".into());
-                    info.attachments.push(self.attachment(name, fs, AttachmentSource::Annotation { page, index }));
+                if let Some(r) = self.resolved_id(a) {
+                    let Entry::Vacant(slot) = slots.entry(r) else { continue };
+                    slot.insert((page, index));
                 }
-                if subtype == "Link" {
-                    if let Some(link) = self.link(page, index, d) {
-                        if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
-                            info.has_javascript = true;
-                        }
-                        info.links.push(link);
-                    }
-                    continue;
-                }
-                // Not comments: form widgets, pop-ups and non-markup annotations such as the
-                // Screen annotation that drives a LaTeX `animate` player (keep in step with
-                // `pdfcraft_annot::is_comment_subtype`).
-                if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
-                {
-                    continue;
-                }
-                let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
-                let mut color = match d.get(b"C").map(|o| self.resolve(o)) {
-                    Ok(Object::Array(c)) if c.len() == 3 => {
-                        let f = |i: usize| c[i].as_float().unwrap_or(0.0);
-                        Some([f(0), f(1), f(2)])
-                    }
-                    _ => None,
-                };
-                // A text box's /C is its background; its text colour is in /DA.
-                if subtype == "FreeText"
-                    && let Some(da) = self.text(d, b"DA")
-                {
-                    let t: Vec<&str> = da.split_whitespace().collect();
-                    if let Some(i) = t.iter().position(|x| *x == "rg")
-                        && i >= 3
-                    {
-                        let f = |k: usize| t[k].parse::<f32>().unwrap_or(0.0);
-                        color = Some([f(i - 3), f(i - 2), f(i - 1)]);
-                    }
-                }
-                let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
-                    Ok(Object::Array(q)) => {
-                        let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
-                        v.as_chunks::<8>().0.to_vec()
-                    }
-                    _ => Vec::new(),
-                };
-                let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
-                let fill_sign = self.is_fill_sign(d, &subtype);
-                info.annotations.push(Annotation {
-                    page,
-                    subtype,
-                    author: self.text(d, b"T"),
-                    // Acrobat ends lines with CR, which the interface would draw as nothing (keep
-                    // in step with `pdfcraft_annot::summaries`).
-                    contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
-                    modified: self.text(d, b"M").map(|m| pretty_date(&m)),
-                    name: self.text(d, b"NM"),
-                    in_reply_to,
-                    rect,
-                    color,
-                    index,
-                    state: self.text(d, b"State"),
-                    quads,
-                    locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
-                    intent: self.name(d, b"IT"),
-                    fill_sign,
-                });
+                entries.push((page, index, a));
             }
         }
+        let mut kept = 0usize;
+        // Once the comment budget is spent, comments are no longer built, but links and attachments
+        // are still listed.
+        let mut comments_full = false;
+        for (page, index, a) in entries {
+            let Some(d) = self.dict(a) else { continue };
+            let Some(subtype) = self.name(d, b"Subtype") else { continue };
+            if subtype == "FileAttachment"
+                && let Ok(fs) = d.get(b"FS")
+            {
+                let fallback = |budget: &mut usize| self.budgeted_text(d, b"Contents", budget);
+                info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
+            }
+            if subtype == "Link" {
+                if let Some(link) = self.link(page, index, d, text_budget) {
+                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                        info.has_javascript = true;
+                    }
+                    info.links.push(link);
+                }
+                continue;
+            }
+            // Not comments: form widgets, pop-ups and non-markup annotations such as the
+            // Screen annotation that drives a LaTeX `animate` player (keep in step with
+            // `pdfcraft_annot::is_comment_subtype`).
+            if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark") {
+                continue;
+            }
+            if comments_full {
+                continue;
+            }
+            let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
+            let mut color = match d.get(b"C").map(|o| self.resolve(o)) {
+                Ok(Object::Array(c)) if c.len() == 3 => {
+                    let f = |i: usize| c[i].as_float().unwrap_or(0.0);
+                    Some([f(0), f(1), f(2)])
+                }
+                _ => None,
+            };
+            // A text box's /C is its background; its text colour is in /DA.
+            if subtype == "FreeText"
+                && let Some(da) = self.text(d, b"DA")
+            {
+                let t: Vec<&str> = da.split_whitespace().collect();
+                if let Some(i) = t.iter().position(|x| *x == "rg")
+                    && i >= 3
+                {
+                    let f = |k: usize| t[k].parse::<f32>().unwrap_or(0.0);
+                    color = Some([f(i - 3), f(i - 2), f(i - 1)]);
+                }
+            }
+            let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
+                Ok(Object::Array(q)) => {
+                    let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
+                    v.as_chunks::<8>().0.to_vec()
+                }
+                _ => Vec::new(),
+            };
+            let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+            let parent = d.get(b"IRT").ok().and_then(|o| self.resolved_id(o)).and_then(|r| slots.get(&r).copied());
+            let fill_sign = self.is_fill_sign(d, &subtype);
+            // Keep in step with `pdfcraft_annot::summaries`.
+            let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
+            let points = match d.get(key).map(|o| self.resolve(o)) {
+                Ok(Object::Array(v)) if matches!(subtype.as_str(), "Line" | "PolyLine" | "Polygon") => {
+                    let v: Vec<f32> = v.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
+                    let pts: Vec<[f32; 2]> = v.as_chunks::<2>().0.to_vec();
+                    if subtype == "Line" && pts.len() != 2 { Vec::new() } else { pts }
+                }
+                _ => Vec::new(),
+            };
+            let annotation = Annotation {
+                page,
+                subtype,
+                author: self.text(d, b"T"),
+                // Acrobat ends lines with CR, which the interface would draw as nothing (keep
+                // in step with `pdfcraft_annot::summaries`).
+                contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
+                modified: self.text(d, b"M").map(|m| pretty_date(&m)),
+                name: self.text(d, b"NM"),
+                in_reply_to,
+                parent,
+                grouped: self.name(d, b"RT").as_deref() == Some("Group"),
+                rect,
+                color,
+                index,
+                state: self.text(d, b"State"),
+                quads,
+                locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
+                intent: self.name(d, b"IT"),
+                fill_sign,
+                no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
+                points,
+            };
+            kept = kept.saturating_add(retained(&annotation));
+            if kept > MAX_ANNOTATION_BYTES {
+                comments_full = true;
+                continue;
+            }
+            info.annotations.push(annotation);
+        }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
+        link_replies(&mut info.annotations);
     }
 
-    fn link(&self, page: usize, index: usize, d: &Dictionary) -> Option<Link> {
+    fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -1186,10 +1548,15 @@ impl<'a> Inspector<'a> {
                     LinkTarget::Page(page, view)
                 }
                 Some("URI") => {
-                    LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
+                    let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                    match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                        Some(uri) => LinkTarget::Uri(uri),
+                        None => LinkTarget::Other("URI".into()),
+                    }
                 }
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+                Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
@@ -1198,25 +1565,7 @@ impl<'a> Inspector<'a> {
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
-        if self.name(action, b"FS").as_deref() == Some("URL") {
-            return None;
-        }
-        let file = match self.resolve(action.get(b"F").ok()?) {
-            Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
-            Object::Dictionary(spec) => {
-                if self.name(spec, b"FS").as_deref() == Some("URL") {
-                    return None;
-                }
-                spec.get(b"UF")
-                    .ok()
-                    .and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES))
-                    .or_else(|| spec.get(b"F").ok().and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES)))?
-            }
-            _ => return None,
-        };
-        if file.is_empty() {
-            return None;
-        }
+        let file = self.action_file(action)?;
         let destination = match action.get(b"D") {
             Err(_) => RemoteDestination::Default,
             Ok(o) => match self.resolve(o) {
@@ -1243,11 +1592,54 @@ impl<'a> Inspector<'a> {
                 _ => return None,
             },
         };
-        let new_window = match action.get(b"NewWindow").map(|o| self.resolve(o)) {
+        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+    }
+
+    /// The non-empty local file an action's `/F` names (a string or a file specification), shared
+    /// by GoToR and Launch. A URL file system (`/FS /URL`) names no local file.
+    fn action_file(&self, action: &Dictionary) -> Option<String> {
+        if self.name(action, b"FS").as_deref() == Some("URL") {
+            return None;
+        }
+        let file = match self.resolve(action.get(b"F").ok()?) {
+            Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
+            Object::Dictionary(spec) => {
+                if self.name(spec, b"FS").as_deref() == Some("URL") {
+                    return None;
+                }
+                spec.get(b"UF")
+                    .ok()
+                    .and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES))
+                    .or_else(|| spec.get(b"F").ok().and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES)))?
+            }
+            _ => return None,
+        };
+        (!file.is_empty()).then_some(file)
+    }
+
+    fn new_window(&self, action: &Dictionary) -> Option<bool> {
+        match action.get(b"NewWindow").map(|o| self.resolve(o)) {
             Ok(Object::Boolean(value)) => Some(*value),
             _ => None,
-        };
-        Some(LinkTarget::RemoteGoTo { file, destination, new_window })
+        }
+    }
+
+    /// A Launch action (ISO 32000-2 §12.6.4.6, Table 207) whose `/F` names a `.pdf` file, read as
+    /// the remote Go-To to that file's first page that it amounts to (#4168). Launching anything
+    /// else, or with the deprecated `/Win` launch parameters (an application, an operation, its
+    /// arguments), is not followed: a document must not start programs. `\` separators, which
+    /// Windows writers put in such paths, are read as `/` (§7.11.2.1 separates components with
+    /// `/`) when the path has no `/` of its own. Launch has no `/D`, so one present (written
+    /// for GoToR, or junk) is ignored rather than checked as a destination.
+    fn launch_pdf(&self, action: &Dictionary) -> Option<LinkTarget> {
+        if action.has(b"Win") {
+            return None;
+        }
+        let file = self.action_file(action)?;
+        let new_window = self.new_window(action);
+        let file = if file.contains('/') { file } else { file.replace('\\', "/") };
+        let pdf = file.rsplit('/').next().is_some_and(|name| name.len() > 4 && name.to_ascii_lowercase().ends_with(".pdf"));
+        pdf.then_some(LinkTarget::RemoteGoTo { launch: true, file, destination: RemoteDestination::Default, new_window })
     }
 
     fn pdf_text(&self, o: &Object, max_bytes: usize) -> Option<String> {
@@ -1428,7 +1820,7 @@ impl<'a> Inspector<'a> {
                 _ => !base_off,
             };
             let Some(id) = id else { continue };
-            out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible });
+            out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
         }
     }
 
@@ -1517,7 +1909,14 @@ impl<'a> Inspector<'a> {
         out.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
-    fn attachment(&self, name: String, spec: &Object, source: AttachmentSource) -> Attachment {
+    /// The attachment's name is the file specification's, else `fallback`'s, else a generic one.
+    fn attachment(
+        &self,
+        spec: &Object,
+        source: AttachmentSource,
+        text_budget: &mut usize,
+        fallback: impl FnOnce(&mut usize) -> Option<String>,
+    ) -> Attachment {
         let d = self.dict(spec);
         let size =
             d.and_then(|d| d.get(b"EF").ok()).and_then(|o| self.dict(o)).and_then(|ef| ef.get(b"F").ok().or_else(|| ef.get(b"UF").ok())).and_then(
@@ -1534,8 +1933,11 @@ impl<'a> Inspector<'a> {
                     _ => None,
                 },
             );
-        let display = d.and_then(|d| self.text(d, b"UF").or_else(|| self.text(d, b"F"))).unwrap_or(name);
-        Attachment { name: display, description: d.and_then(|d| self.text(d, b"Desc")), size, source }
+        let display = d
+            .and_then(|d| self.budgeted_text(d, b"UF", text_budget).or_else(|| self.budgeted_text(d, b"F", text_budget)))
+            .or_else(|| fallback(text_budget))
+            .unwrap_or_else(|| "attachment".into());
+        Attachment { name: display, description: d.and_then(|d| self.budgeted_text(d, b"Desc", text_budget)), size, source }
     }
 }
 
@@ -1545,12 +1947,60 @@ fn text_string(bytes: &[u8]) -> String {
     pdfcraft_cos::PdfString::literal(bytes).to_text()
 }
 
+/// What [`Inspector::name_tree_find`] has visited: node dictionaries, and the key and `/Names`
+/// array objects it reached by reference.
+#[derive(Default)]
+struct NameTreeSeen {
+    nodes: HashSet<*const Dictionary>,
+    objects: HashSet<ObjectId>,
+}
+
+/// A string or name value as text, without surrounding NULs and white space.
+fn trimmed_text(o: &Object) -> Option<String> {
+    let s = match o {
+        Object::String(bytes, _) => text_string(bytes),
+        Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+        _ => return None,
+    };
+    Some(s.trim_matches('\0').trim().to_string())
+}
+
+/// `convert(bytes)` when the result fits in `budget`, which it then spends by the longer of the raw
+/// and converted lengths. Bytes longer than the budget are not converted. A conversion that comes
+/// out too long spends the raw length, so a string many entries share is converted only until the
+/// budget runs out.
+fn spend(bytes: &[u8], budget: &mut usize, convert: impl FnOnce(&[u8]) -> String) -> Option<String> {
+    if bytes.len() > *budget {
+        return None;
+    }
+    let text = convert(bytes);
+    if text.len() > *budget {
+        *budget = budget.saturating_sub(bytes.len());
+        return None;
+    }
+    // The conversion's work follows the raw length, even when the text it keeps is shorter.
+    *budget = budget.saturating_sub(text.len().max(bytes.len()));
+    Some(text)
+}
+
 fn limited_pdf_string(bytes: &[u8], max_bytes: usize) -> Option<String> {
     if bytes.len() > max_bytes {
         return None;
     }
     let text = text_string(bytes);
     (text.len() <= max_bytes).then_some(text)
+}
+
+/// A bookmark title's colour from its `/C` entries, each kept within 0–1 (ISO 32000-2 §12.3.3,
+/// Table 151: "An array of three numbers in the range 0.0 to 1.0, representing the components in
+/// the DeviceRGB colour space"). Black, the default, and anything that isn't three numbers give
+/// `None`.
+pub(crate) fn outline_color(values: impl Iterator<Item = Option<f32>>) -> Option<[f32; 3]> {
+    let v: Vec<Option<f32>> = values.take(4).collect();
+    let [Some(r), Some(g), Some(b)] = v.as_slice() else { return None };
+    // A number past the range, however large, is kept at its edge.
+    let rgb = [*r, *g, *b].map(|c| c.clamp(0.0, 1.0));
+    (rgb != [0.0; 3]).then_some(rgb)
 }
 
 /// Nests a pre-order list of `(depth, item)` into the outline tree.
@@ -1578,6 +2028,17 @@ fn close_outline(open: &mut Vec<(usize, OutlineItem)>, roots: &mut Vec<OutlineIt
             None => roots.push(item),
         }
     }
+}
+
+/// An annotation's `/F` as the renderer reads it: a real is truncated, and a value that isn't a
+/// `u32` counts as no flags.
+fn draw_flags(o: &Object) -> u32 {
+    let f = match o {
+        Object::Integer(i) => *i,
+        Object::Real(r) => *r as i64,
+        _ => 0,
+    };
+    u32::try_from(f).unwrap_or(0)
 }
 
 fn rect4(o: &Object) -> [f32; 4] {
@@ -1617,8 +2078,7 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
             AttachmentSource::Document { key } => {
                 let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
                 let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
-                let mut seen = HashSet::new();
-                insp.name_tree(ef, &mut seen, 0).into_iter().find(|(k, _)| k == key).map(|(_, v)| v).ok_or("attachment not found")?
+                insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
             }
             AttachmentSource::Annotation { page, index } => {
                 let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
@@ -1638,6 +2098,116 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
         }
     };
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+}
+
+/// An XFA packet's bytes as text: UTF-16 (little- or big-endian, told by a byte order mark or by
+/// how `<` is written) or UTF-8, as `pdfcraft_xfa::packets::decode` reads them. Lossy: only one
+/// element is looked for.
+fn xfa_packet_text(bytes: &[u8]) -> String {
+    let utf16 = |b: &[u8], from: fn([u8; 2]) -> u16| {
+        let units = b.as_chunks::<2>().0.iter().map(|c| from(*c));
+        char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect::<String>()
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [b'<', 0, ..] => utf16(bytes, u16::from_le_bytes),
+        [0, b'<', ..] => utf16(bytes, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// One markup tag found by [`next_tag`]: where it starts (`<`) and ends (after `>`), whether it
+/// closes (`</x>`) or closes itself (`<x/>`), and its name without a namespace prefix.
+struct Tag<'a> {
+    start: usize,
+    end: usize,
+    close: bool,
+    empty: bool,
+    local: &'a str,
+}
+
+/// The next element tag in `xml` at or after `from`, skipping comments, CDATA sections,
+/// processing instructions and declarations. A byte scan, not an XML parser: enough to find one
+/// known element in an XFA packet, whose tags Designer writes with a line break before each `>`.
+fn next_tag(xml: &str, mut from: usize) -> Option<Tag<'_>> {
+    loop {
+        let lt = from + xml.get(from..)?.find('<')?;
+        let rest = xml.get(lt..)?;
+        let skip_to = |end: &str| rest.find(end).map(|i| lt + i + end.len());
+        if rest.starts_with("<!--") {
+            from = skip_to("-->")?;
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            from = skip_to("]]>")?;
+            continue;
+        }
+        if rest.starts_with("<?") || rest.starts_with("<!") {
+            from = skip_to(">")?;
+            continue;
+        }
+        let gt = lt + rest.find('>')?;
+        let inner = xml.get(lt + 1..gt)?;
+        let (close, inner) = match inner.strip_prefix('/') {
+            Some(i) => (true, i),
+            None => (false, inner),
+        };
+        let empty = !close && inner.ends_with('/');
+        let name = inner.split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or_default();
+        let local = name.rsplit(':').next().unwrap_or(name);
+        return Some(Tag { start: lt, end: gt + 1, close, empty, local });
+    }
+}
+
+/// What `<name>…</name>` holds: the content of the first top-level element of `xml` called `name`
+/// (any prefix). Elements nested in other elements are not looked at. `None` when there is none,
+/// it closes itself, or it is never closed.
+fn xml_child_body<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+    let mut at = 0;
+    // The elements open around `at`, innermost last: a closing tag must name the innermost one,
+    // or the markup is malformed and has no value.
+    let mut open_tags: Vec<&str> = Vec::new();
+    // Where the wanted element's content starts, once its opening tag is seen at the top level.
+    let mut open = None;
+    loop {
+        let tag = next_tag(xml, at)?;
+        at = tag.end;
+        if tag.close {
+            if open_tags.pop()? != tag.local {
+                return None;
+            }
+            if open_tags.is_empty()
+                && let Some(start) = open
+            {
+                return xml.get(start..tag.start);
+            }
+        } else if !tag.empty {
+            if open_tags.is_empty() && tag.local == name {
+                open = Some(tag.end);
+            }
+            open_tags.push(tag.local);
+        } else if open_tags.is_empty() && tag.local == name {
+            return None;
+        }
+    }
+}
+
+/// The trimmed text at `path` (element names from the outside in, any prefix, each a child of the
+/// one before) in `xml`, if it is plain text.
+fn xml_path_text(xml: &str, path: &[&str]) -> Option<String> {
+    let body = path.iter().try_fold(xml, |within, name| xml_child_body(within, name))?;
+    let text = body.trim();
+    (!text.is_empty() && !text.contains('<')).then(|| text.to_owned())
+}
+
+/// `dynamicRender` at `config/acrobat/acrobat7` in the configuration packet: the `config` child
+/// of the `xdp` root in a whole-XDP stream, or the `config` packet itself. The same names inside
+/// the form data or the template are not the configuration.
+fn xfa_config_dynamic_render(packet: &str) -> Option<String> {
+    const IN_CONFIG: [&str; 4] = ["config", "acrobat", "acrobat7", "dynamicRender"];
+    xml_path_text(packet, &["xdp", IN_CONFIG[0], IN_CONFIG[1], IN_CONFIG[2], IN_CONFIG[3]]).or_else(|| xml_path_text(packet, &IN_CONFIG))
 }
 
 #[cfg(test)]
@@ -1924,6 +2494,56 @@ mod tests {
         let p = super::PageInfo { width: 200.0, height: 300.0, label: String::new(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 0 };
         assert_eq!(p.view_to_user(0.0, 0.0), [10.0, 320.0]);
         assert_eq!(p.view_rect_to_quad([0.0, 0.0, 10.0, 5.0]), [10.0, 320.0, 20.0, 320.0, 10.0, 315.0, 20.0, 315.0]);
+    }
+
+    /// #2583: a NoRotate comment is drawn upright with its top-left as displayed at the upper-left
+    /// corner of `/Rect`, its width across and its height down; a box resized as drawn maps back to
+    /// the `/Rect` that shows it. Other comments, and pages that aren't quarter-turned, keep `/Rect`.
+    #[test]
+    fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
+        let mut note = super::Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [40.0, 50.0, 70.0, 70.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: true,
+            points: Vec::new(),
+        };
+        let rect = note.rect.map(f64::from);
+        for rotation in [0u16, 90, 180, 270, 45] {
+            let (w, h) = if rotation % 180 == 90 { (140.0, 200.0) } else { (200.0, 140.0) };
+            let p = super::PageInfo { width: w, height: h, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation };
+            let shown = note.shown_rect(rotation);
+            let (a, b) = (p.user_to_view(shown[0], shown[1]), p.user_to_view(shown[2], shown[3]));
+            let [cx, cy] = p.user_to_view(40.0, 70.0);
+            let want = [cx, cy, cx + 30.0, cy + 20.0];
+            let got = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "{rotation}: shown {got:?}, want {want:?}");
+            assert_eq!(note.rect_for_shown(note.shown(rect, rotation), rotation), rect, "{rotation}");
+            // Moved by (5, -7) and resized to 50 × 10 as drawn, back to a /Rect.
+            let resized = [shown[0] as f64 + 5.0, shown[1] as f64 - 7.0, 0.0, 0.0];
+            let across = if rotation % 180 == 90 { [10.0, 50.0] } else { [50.0, 10.0] };
+            let resized = [resized[0], resized[1], resized[0] + across[0], resized[1] + across[1]];
+            let back = note.rect_for_shown(resized, rotation);
+            assert_eq!((back[2] - back[0], back[3] - back[1]), (50.0, 10.0), "{rotation}: {back:?}");
+            assert_eq!(note.shown(back, rotation), resized, "{rotation}");
+        }
+        note.no_rotate = false;
+        assert_eq!(note.shown_rect(90), note.rect);
+        assert_eq!(note.rect_for_shown([1.0, 2.0, 3.0, 4.0], 90), [1.0, 2.0, 3.0, 4.0]);
     }
 
     use super::*;
@@ -2358,6 +2978,24 @@ trailer << /Root 1 0 R /Info 4 0 R >>
         assert_eq!(info.layer_groups, [vec![(5, 0), (6, 0)], vec![(6, 0), (7, 0)]]);
     }
 
+    #[test]
+    fn initial_layer_visibility_is_the_default_configuration() {
+        // BaseState OFF: Red is listed ON; Green is listed both ON and OFF, and OFF wins; Blue
+        // isn't listed, so it takes the base state.
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D << /BaseState /OFF /ON [5 0 R 6 0 R] /OFF [6 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Red) >> endobj
+6 0 obj << /Type /OCG /Name (Green) >> endobj
+7 0 obj << /Type /OCG /Name (Blue) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+        let layers: Vec<_> = info.layers.iter().map(|l| (l.name.as_str(), l.initial)).collect();
+        assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
+    }
+
     const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
@@ -2392,6 +3030,249 @@ trailer << /Root 1 0 R >>
         fn encrypted(&self) -> bool {
             false
         }
+    }
+
+    /// One comment referenced many times, or a page-shared `/Annots` array, is listed once, and many
+    /// small comments sharing one large `/Contents` string stop at the retained-bytes budget.
+    #[test]
+    fn repeated_annotations_are_listed_once_within_a_byte_budget() {
+        let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 7 0 R >> ".repeat(1200);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 5 0 R >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 5 0 R >> endobj\n\
+             5 0 obj [{} {small}] endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (note) >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            "6 0 R ".repeat(1000),
+            "x".repeat(64 << 10),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page.clone(), page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        let notes = &info.annotations;
+        assert_eq!(notes.iter().filter(|a| a.contents.as_deref() == Some("note")).count(), 1);
+        assert!(notes.iter().all(|a| a.page == 0), "the shared array is the first page's");
+        assert!(notes.len() > 1);
+        assert!(notes.iter().map(retained).sum::<usize>() <= MAX_ANNOTATION_BYTES);
+    }
+
+    /// A link reached through an indirect object that holds only a reference to it is the same
+    /// annotation as the link itself, and so is a page array reached the same way: each is listed once.
+    #[test]
+    fn an_annotation_reached_through_a_reference_chain_is_listed_once() {
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 8 0 R >> endobj\n\
+             5 0 obj 6 0 R endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI (https://example.com) >> >> endobj\n\
+             7 0 obj [5 0 R 6 0 R] endobj\n\
+             8 0 obj 7 0 R endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let mut doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut saved = Vec::new();
+        doc.save_to(&mut saved).expect("saves");
+        let lazy = LazyStructure::new(Arc::new(saved), None).expect("opens");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        for reader in [&doc as &dyn Structure, &lazy] {
+            let mut info = DocInfo { pages: vec![page.clone(), page.clone()], ..Default::default() };
+            Inspector::new(reader).fill(&mut info);
+            assert_eq!(info.links.len(), 1, "{:?}", info.links);
+        }
+    }
+
+    /// A reply finds its comment where the listing keeps it: on the first page of a page-shared
+    /// `/Annots` array, whether its `/IRT` names the comment or an object holding a reference to it.
+    #[test]
+    fn a_reply_finds_its_comment_through_a_reference_chain_and_a_shared_array() {
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >> endobj\n\
+             5 0 obj 6 0 R endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (comment) >> endobj\n\
+             7 0 obj [5 0 R 8 0 R 9 0 R] endobj\n\
+             8 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (to the comment) /IRT 6 0 R >> endobj\n\
+             9 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (through the chain) /IRT 5 0 R >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let mut doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut saved = Vec::new();
+        doc.save_to(&mut saved).expect("saves");
+        let lazy = LazyStructure::new(Arc::new(saved), None).expect("opens");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        for reader in [&doc as &dyn Structure, &lazy] {
+            let mut info = DocInfo { pages: vec![page.clone(), page.clone()], ..Default::default() };
+            Inspector::new(reader).fill(&mut info);
+            let notes = &info.annotations;
+            assert_eq!(notes.len(), 3, "{notes:?}");
+            let comment = notes.iter().find(|a| a.contents.as_deref() == Some("comment")).expect("listed");
+            assert_eq!((comment.page, comment.index, comment.is_reply()), (0, 0, false));
+            for reply in ["to the comment", "through the chain"] {
+                let a = notes.iter().find(|a| a.contents.as_deref() == Some(reply)).expect("listed");
+                assert_eq!((a.page, a.parent), (0, Some((0, 0))), "{reply}");
+            }
+        }
+    }
+
+    /// A conversion rejected as too long, or trimmed short or to nothing, still spends the raw
+    /// length, so a string many entries share is converted only a few times.
+    #[test]
+    fn rejected_text_conversions_spend_the_budget() {
+        let mut budget = 10;
+        let mut conversions = 0;
+        for _ in 0..10 {
+            // Each 0xFF becomes the three-byte replacement character.
+            let kept = spend(&[0xFF; 5], &mut budget, |b| {
+                conversions += 1;
+                String::from_utf8_lossy(b).into_owned()
+            });
+            assert_eq!(kept, None);
+        }
+        assert_eq!((conversions, budget), (2, 0));
+
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let d = Dictionary::from_iter([("Contents", Object::string_literal("   "))]);
+        let mut budget = 10;
+        assert_eq!(Inspector::new(&doc).budgeted_text(&d, b"Contents", &mut budget), None);
+        assert_eq!(budget, 7);
+        // Text that trims short spends its raw length.
+        let d = Dictionary::from_iter([("Contents", Object::string_literal("      x"))]);
+        let mut budget = 10;
+        assert_eq!(Inspector::new(&doc).budgeted_text(&d, b"Contents", &mut budget).as_deref(), Some("x"));
+        assert_eq!(budget, 3);
+    }
+
+    /// An annotation attachment's `/Contents` spends the text budget only when it names the
+    /// attachment, so long descriptions of named files leave a later web address listed.
+    #[test]
+    fn a_named_attachment_leaves_its_contents_unspent() {
+        let files = "<< /Subtype /FileAttachment /Rect [0 0 1 1] /Contents 6 0 R /FS << /F (a.txt) >> >> ".repeat(20);
+        // Longer than what 20 MiB of charged `/Contents` would leave of the 16 MiB budget.
+        let uri = format!("https://example.com/{}", "a".repeat(2 << 20));
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{files} \
+             << /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI ({uri}) >> >>] >> endobj\n\
+             6 0 obj ({}) endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(1 << 20),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        assert!(info.attachments.iter().all(|a| a.name == "a.txt"));
+        assert_eq!(info.links.len(), 1);
+        assert!(matches!(&info.links[0].target, LinkTarget::Uri(u) if *u == uri));
+    }
+
+    /// Embedded files whose name-tree keys share one long string keep it, as key and as name, only
+    /// within `MAX_LINK_ATTACHMENT_TEXT_BYTES`.
+    #[test]
+    fn embedded_file_keys_sharing_a_long_string_keep_it_within_a_budget() {
+        let entries = "4 0 R << /Type /Filespec >> ".repeat(20);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [{entries}] >> >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+             4 0 obj ({}) endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(1 << 20),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut info = DocInfo::default();
+        Inspector::new(&doc).fill(&mut info);
+        let kept: usize =
+            info.attachments.iter().map(|a| a.name.len() + if let AttachmentSource::Document { key } = &a.source { key.len() } else { 0 }).sum();
+        assert!(!info.attachments.is_empty());
+        // Past the budget an attachment still has the generic name.
+        let generic = info.attachments.len() * "attachment".len();
+        assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES + generic, "{kept} bytes kept");
+    }
+
+    /// An embedded file the listing keeps is extracted, though earlier keys the listing could not
+    /// keep would fill a fresh key budget before it.
+    #[test]
+    fn a_listed_embedded_file_is_extracted_past_keys_the_listing_left_out() {
+        let skipped = "6 0 R 7 0 R ".repeat(9);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [{skipped}(b.txt) 9 0 R] >> >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+             << /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI ({}) >> >>] >> endobj\n\
+             6 0 obj ({}) endobj\n\
+             7 0 obj << /Type /Filespec /F (a.txt) >> endobj\n\
+             8 0 obj << /Type /EmbeddedFile /Length 5 >> stream\nhello\nendstream endobj\n\
+             9 0 obj << /Type /Filespec /F (b.txt) /EF << /F 8 0 R >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "u".repeat(15 << 20),
+            "k".repeat(2 << 20),
+        );
+        let bytes = Arc::new(pdf.into_bytes());
+        let info = inspect(bytes.clone(), None).expect("opens");
+        let listed = info.attachments.iter().find(|a| a.name == "b.txt").expect("b.txt is listed");
+        assert_eq!(attachment_data(&bytes, None, listed).as_deref(), Ok(&b"hello"[..]));
+    }
+
+    /// Links and attachments sharing one long string each keep a copy only within
+    /// `MAX_LINK_ATTACHMENT_TEXT_BYTES`, and every one is still listed.
+    #[test]
+    fn links_and_attachments_sharing_a_long_string_keep_it_within_a_budget() {
+        const EACH: usize = 20;
+        let links = "<< /Subtype /Link /Rect [0 0 1 1] /A 5 0 R >> ".repeat(EACH);
+        let files = "<< /Subtype /FileAttachment /Rect [0 0 1 1] /FS 7 0 R >> ".repeat(EACH);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{links} {files}] >> endobj\n\
+             5 0 obj << /S /URI /URI 6 0 R >> endobj\n\
+             6 0 obj ({}) endobj\n\
+             7 0 obj << /Type /Filespec /F (a.txt) /Desc 6 0 R >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(1 << 20),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        assert_eq!(info.links.len(), EACH);
+        assert_eq!(info.attachments.len(), EACH);
+        let uris = info.links.iter().map(|l| if let LinkTarget::Uri(u) = &l.target { u.len() } else { 0 });
+        let descriptions = info.attachments.iter().map(|a| a.description.as_ref().map_or(0, String::len));
+        let kept: usize = uris.chain(descriptions).sum();
+        assert!(kept > 0 && kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} bytes kept");
+        assert!(info.links.iter().any(|l| matches!(&l.target, LinkTarget::Other(s) if s == "URI")));
+    }
+
+    /// Links and attachments after the comment budget fills are still listed, and a JavaScript link
+    /// among them still marks the document.
+    #[test]
+    fn links_and_attachments_past_the_comment_budget_are_listed() {
+        let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 6 0 R >> ".repeat(1100);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{small} \
+             << /Subtype /Link /Rect [0 0 1 1] /A << /S /JavaScript /JS (1) >> >>] >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+             << /Subtype /FileAttachment /Rect [0 0 1 1] /FS << /Type /Filespec /F (a.txt) >> >>] >> endobj\n\
+             6 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(64 << 10),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page.clone(), page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        assert!(info.annotations.len() < 1100, "the comment budget filled");
+        assert_eq!(info.links.len(), 1);
+        assert!(info.has_javascript);
+        assert_eq!(info.attachments.len(), 1);
     }
 
     /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'
@@ -2437,6 +3318,71 @@ trailer << /Root 1 0 R >>
         // page dictionaries about 50,000 times.
         let reads = counting.reads.get();
         assert!(reads < 20 * (PAGES + PAGES * PER_PAGE), "{reads} object reads");
+    }
+
+    /// #2365: the issue's fixture is two PDFs concatenated, the second cut off before its
+    /// cross-reference data, and the first's only trailer is a cross-reference stream. The
+    /// lazy reader refuses a file that needed repair, and lopdf's rebuild found no `trailer`
+    /// keyword and failed, so Document Properties showed every field empty. The rebuild now
+    /// takes the cross-reference stream's dictionary as the trailer.
+    #[test]
+    fn rebuilt_file_keeps_the_info_of_its_cross_reference_stream() {
+        let header = "%PDF-1.5\n";
+        let obj1 = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
+        let obj2 = "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n";
+        let obj3 = "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>endobj\n";
+        let obj4 = "4 0 obj<</Title(Kept)/Creator(Me)>>endobj\n";
+        let o1 = header.len();
+        let o2 = o1 + obj1.len();
+        let o3 = o2 + obj2.len();
+        let o4 = o3 + obj3.len();
+        let o5 = o4 + obj4.len();
+        let rows: Vec<u8> =
+            [[0u8, 0, 0, 255], [1, 0, o1 as u8, 0], [1, 0, o2 as u8, 0], [1, 0, o3 as u8, 0], [1, 0, o4 as u8, 0], [1, (o5 >> 8) as u8, o5 as u8, 0]]
+                .concat();
+        let mut bytes = format!("{header}{obj1}{obj2}{obj3}{obj4}").into_bytes();
+        bytes.extend_from_slice(format!("5 0 obj<</Type/XRef/Root 1 0 R/Info 4 0 R/Size 6/W[1 2 1]/Length {}>>stream\n", rows.len()).as_bytes());
+        bytes.extend_from_slice(&rows);
+        // A wrong startxref, and a second file after %%EOF: every reader rebuilds the table.
+        bytes.extend_from_slice(b"\nendstream\nendobj\nstartxref\n999999\n%%EOF\n%PDF-1.3\n");
+        bytes.extend_from_slice(&[b'x'; 1024]);
+
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.title.as_deref(), Some("Kept"));
+        assert_eq!(info.creator.as_deref(), Some("Me"));
+    }
+
+    /// #2365 review: the rebuild prefers a trailer whose /Root is the catalog. A later
+    /// cross-reference stream whose /Root points at the Info dictionary used to replace the
+    /// earlier `trailer`, so Document Properties lost the catalog it should have read.
+    #[test]
+    fn rebuilt_file_prefers_a_trailer_whose_root_is_the_catalog() {
+        let mut bytes = b"%PDF-1.5\n".to_vec();
+        for body in [
+            "<</Type/Catalog/Pages 2 0 R>>",
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>",
+            "<</Title(Kept)/Creator(Me)>>",
+        ] {
+            let n = bytes.iter().filter(|b| **b == b'\n').count();
+            bytes.extend_from_slice(format!("{n} 0 obj{body}endobj\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"trailer\n<</Size 5/Root 1 0 R/Info 4 0 R>>\n");
+        bytes.extend_from_slice(b"5 0 obj<</Type/XRef/Root 4 0 R/Size 6/W[1 2 1]/Length 4>>stream\n\x01\x00\x09\x00\nendstream\nendobj\n");
+        // A wrong startxref, and a second file after %%EOF: every reader rebuilds the table.
+        bytes.extend_from_slice(b"startxref\n999999\n%%EOF\n%PDF-1.3\n");
+        bytes.extend_from_slice(&[b'x'; 1024]);
+
+        let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.title.as_deref(), Some("Kept"));
+        // A later stream whose /Root names the catalog's number with another generation does
+        // not count either: loading `1 1 R` finds no such object.
+        let at = bytes.windows(10).position(|w| w == b"/Root 4 0 ").unwrap();
+        bytes[at..at + 10].copy_from_slice(b"/Root 1 1 ");
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!((info.pages.len(), info.title.as_deref()), (1, Some("Kept")));
     }
 
     #[test]
@@ -2486,6 +3432,46 @@ trailer << /Root 1 0 R >>
         );
     }
 
+    /// #4168: a Launch action naming a `.pdf` file is read as the link to that file it amounts
+    /// to, `\` separators included, and a stray `/D` (which Launch has no use for) doesn't stop
+    /// it. One naming anything else, with no file, or with `/Win` launch parameters stays an
+    /// action that isn't followed.
+    #[test]
+    fn launch_actions_that_name_a_pdf_open_it_like_a_remote_link() {
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R 36 0 R 37 0 R 38 0 R] >> endobj\n\
+             30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Launch /F (..\\\\se\\\\se_ST.pdf) >> >> endobj\n\
+             31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Launch /F << /Type /Filespec /F (chapters/Two.PDF) >> /NewWindow true >> >> endobj\n\
+             32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /Launch /F (tool.exe) >> >> endobj\n\
+             33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /Launch /F (a.pdf) /Win << /F (cmd.exe) /P (/c x) >> >> >> endobj\n\
+             34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /Launch /Win << /F (b.pdf) >> >> >> endobj\n\
+             35 0 obj << /Type /Annot /Subtype /Link /Rect [0 100 10 110] /A << /S /Launch /F (.pdf) >> >> endobj\n\
+             36 0 obj << /Type /Annot /Subtype /Link /Rect [0 120 10 130] /A << /S /Launch /F (dir/a\\\\b.pdf) >> >> endobj\n\
+             37 0 obj << /Type /Annot /Subtype /Link /Rect [0 140 10 150] /A << /S /Launch /FS /URL /F (https://example.com/x.pdf) >> >> endobj\n\
+             38 0 obj << /Type /Annot /Subtype /Link /Rect [0 160 10 170] /A << /S /Launch /F (c.pdf) /D 0 >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        let launch =
+            |file: &str, new_window| LinkTarget::RemoteGoTo { launch: true, file: file.into(), destination: RemoteDestination::Default, new_window };
+        let other = || LinkTarget::Other("Launch".into());
+        assert_eq!(
+            targets,
+            [
+                launch("../se/se_ST.pdf", None),
+                launch("chapters/Two.PDF", Some(true)),
+                other(),
+                other(),
+                other(),
+                other(),
+                launch("dir/a\\b.pdf", None),
+                other(),
+                launch("c.pdf", None),
+            ]
+        );
+    }
+
     #[test]
     fn links_read_bounded_local_remote_go_to_actions() {
         use DestView::{Fit, Xyz};
@@ -2514,6 +3500,7 @@ trailer << /Root 1 0 R >>
         let targets: Vec<_> = info.links.iter().map(|l| (l.index, l.target.clone())).collect();
         let huge_page_target = usize::try_from(i64::MAX)
             .map(|page| LinkTarget::RemoteGoTo {
+                launch: false,
                 file: "chapter.pdf".into(),
                 destination: RemoteDestination::Page { page, view: Fit },
                 new_window: None,
@@ -2525,6 +3512,7 @@ trailer << /Root 1 0 R >>
                 (
                     1,
                     LinkTarget::RemoteGoTo {
+                        launch: false,
                         file: "chapters/remote.pdf".into(),
                         destination: RemoteDestination::Page { page: 2, view: Xyz { left: Some(10.0), top: Some(20.0), zoom: Some(1.5) } },
                         new_window: Some(true),
@@ -2533,16 +3521,33 @@ trailer << /Root 1 0 R >>
                 (
                     2,
                     LinkTarget::RemoteGoTo {
+                        launch: false,
                         file: "foo.pdf".into(),
                         destination: RemoteDestination::Page { page: 0, view: Fit },
                         new_window: Some(false),
                     }
                 ),
-                (3, LinkTarget::RemoteGoTo { file: "remote.pdf".into(), destination: RemoteDestination::Default, new_window: None }),
-                (4, LinkTarget::RemoteGoTo { file: "chapter.pdf".into(), destination: RemoteDestination::Named("chapter".into()), new_window: None }),
+                (3, LinkTarget::RemoteGoTo { launch: false, file: "remote.pdf".into(), destination: RemoteDestination::Default, new_window: None }),
+                (
+                    4,
+                    LinkTarget::RemoteGoTo {
+                        launch: false,
+                        file: "chapter.pdf".into(),
+                        destination: RemoteDestination::Named("chapter".into()),
+                        new_window: None
+                    }
+                ),
                 (5, LinkTarget::Other("GoToR".into())),
                 (6, LinkTarget::Other("GoToR".into())),
-                (7, LinkTarget::RemoteGoTo { file: "chapter.pdf".into(), destination: RemoteDestination::Named("chapter".into()), new_window: None }),
+                (
+                    7,
+                    LinkTarget::RemoteGoTo {
+                        launch: false,
+                        file: "chapter.pdf".into(),
+                        destination: RemoteDestination::Named("chapter".into()),
+                        new_window: None
+                    }
+                ),
                 (8, LinkTarget::Other("GoToR".into())),
                 (9, LinkTarget::Other("GoToR".into())),
                 (10, huge_page_target),
@@ -2663,6 +3668,101 @@ trailer << /Root 1 0 R >>
         assert_eq!(titles, ["第一章", "目录", "A\u{FFFD}B", "概述", "Café", "A"]);
     }
 
+    #[test]
+    fn xfa_dynamic_render_is_read_from_config_acrobat7_only() {
+        let text = xfa_config_dynamic_render;
+        let config =
+            |inner: &str| format!("<config xmlns=\"http://www.xfa.org/schema/xci/3.0/\"><acrobat><acrobat7>{inner}</acrobat7></acrobat></config>");
+        // Designer's style: a line break before each `>`.
+        assert_eq!(
+            text("<config\n><acrobat\n><acrobat7\n><dynamicRender\n>forbidden</dynamicRender\n></acrobat7\n></acrobat\n></config\n>").as_deref(),
+            Some("forbidden")
+        );
+        assert_eq!(text(&config("<xci:dynamicRender> required </xci:dynamicRender>")).as_deref(), Some("required"));
+        // Commented out, in CDATA, or a longer name: not the element.
+        assert_eq!(text(&config("<!-- a > b <dynamicRender>forbidden</dynamicRender> -->")), None);
+        assert_eq!(text(&config("<![CDATA[ a > b <dynamicRender>forbidden</dynamicRender> ]]>")), None);
+        assert_eq!(text(&config("<dynamicRenderX>forbidden</dynamicRenderX>")), None);
+        // Self-closing, empty, or holding markup: no value.
+        assert_eq!(text(&config("<dynamicRender/>")), None);
+        assert_eq!(text(&config("<dynamicRender></dynamicRender>")), None);
+        assert_eq!(text(&config("<dynamicRender><b>forbidden</b></dynamicRender>")), None);
+        // Closing tags that don't match what they close: malformed, no value (review on #3192).
+        assert_eq!(text(&config("<dynamicRender>forbidden</other>")), None);
+        assert_eq!(text("<config><acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat></acrobat7></config>"), None);
+        // The same name anywhere but config/acrobat/acrobat7 (form data, another config branch).
+        let xdp = "<xdp:xdp><xfa:datasets><xfa:data><dynamicRender>forbidden</dynamicRender></xfa:data></xfa:datasets><config><present><dynamicRender>forbidden</dynamicRender></present></config></xdp:xdp>";
+        assert_eq!(text(xdp), None);
+        // A whole XDP with the config after the template.
+        let xdp = format!("<xdp:xdp><template><subform/></template>{}</xdp:xdp>", config("<dynamicRender>forbidden</dynamicRender>"));
+        assert_eq!(text(&xdp).as_deref(), Some("forbidden"));
+        // A whole config path inside the form data, before the real config packet, is data: the
+        // real packet's value counts (review on #3192).
+        let xdp = format!(
+            "<?xml version=\"1.0\"?><xdp:xdp><xfa:datasets><xfa:data>{}</xfa:data></xfa:datasets>{}</xdp:xdp>",
+            config("<dynamicRender>forbidden</dynamicRender>"),
+            config("<dynamicRender>required</dynamicRender>")
+        );
+        assert_eq!(text(&xdp).as_deref(), Some("required"));
+        // Only in the data, or nested in the template: no configuration at all.
+        let xdp =
+            format!("<xdp:xdp><xfa:datasets><xfa:data>{}</xfa:data></xfa:datasets></xdp:xdp>", config("<dynamicRender>forbidden</dynamicRender>"));
+        assert_eq!(text(&xdp), None);
+        let xdp = format!("<xdp:xdp><template>{}</template></xdp:xdp>", config("<dynamicRender>forbidden</dynamicRender>"));
+        assert_eq!(text(&xdp), None);
+        // acrobat7 must be a child of acrobat, not deeper.
+        assert_eq!(text("<config><acrobat><x><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></x></acrobat></config>"), None);
+        // Cut short anywhere: no panic, nothing read.
+        let whole = config("<!-- x --><dynamicRender>forbidden</dynamicRender>");
+        for end in 0..whole.len() {
+            assert_eq!(text(&whole[..end]), None, "cut at {end}");
+        }
+        assert_eq!(text(&whole).as_deref(), Some("forbidden"));
+    }
+
+    #[test]
+    fn xfa_config_packets_are_read_in_utf16_too() {
+        let xml = "<config><acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></acrobat></config>";
+        let le: Vec<u8> = xml.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = xml.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for bytes in [
+            le.clone(),
+            be.clone(),
+            [&[0xFF, 0xFE][..], &le].concat(),
+            [&[0xFE, 0xFF][..], &be].concat(),
+            [&[0xEF, 0xBB, 0xBF][..], xml.as_bytes()].concat(),
+        ] {
+            assert_eq!(xfa_packet_text(&bytes), xml);
+        }
+        // An odd byte or a broken surrogate doesn't stop the scan.
+        assert!(xfa_packet_text(&[0xFF, 0xFE, b'<', 0, 0x00, 0xD8, b'x']).starts_with('<'));
+    }
+
+    /// #3180: an XFA form with no fields was always taken to be dynamic, so its pages were
+    /// replaced by a layout on open, even when its configuration says it is a static form.
+    #[test]
+    fn an_xfa_form_without_fields_is_static_when_its_config_forbids_dynamic_rendering() {
+        let xfa_of = |config: &str, catalog_extra: &str| {
+            let bodies = [
+                format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} /AcroForm << /Fields [] /XFA [(config) 4 0 R (template) 5 0 R] >> >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+                "<< /Type /Page /Parent 2 0 R >>".to_string(),
+                format!("<< /Length {} >>\nstream\n{config}\nendstream", config.len()),
+                "<< /Length 11 >>\nstream\n<template/>\nendstream".to_string(),
+            ];
+            inspect(Arc::new(pdf_of(&bodies)), None).expect("opens").xfa
+        };
+        let config = |value: &str| {
+            format!(
+                r#"<config xmlns="http://www.xfa.org/schema/xci/3.0/"><acrobat><acrobat7><dynamicRender>{value}</dynamicRender></acrobat7></acrobat></config>"#
+            )
+        };
+        assert_eq!(xfa_of(&config("forbidden"), ""), Some(Xfa::Static));
+        assert_eq!(xfa_of(&config("required"), ""), Some(Xfa::Dynamic));
+        assert_eq!(xfa_of("<config/>", ""), Some(Xfa::Dynamic), "no field and no word from the config: dynamic, as before");
+        assert_eq!(xfa_of(&config("forbidden"), "/NeedsRendering true"), Some(Xfa::Dynamic), "/NeedsRendering still wins");
+    }
+
     /// A file whose objects are `bodies` in order (object 1 first), with a cross-reference table.
     fn pdf_of(bodies: &[String]) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n".to_vec();
@@ -2695,6 +3795,54 @@ trailer << /Root 1 0 R >>
     /// The titles of `items`, with children in brackets (`Parent[Child]`).
     fn shape(items: &[OutlineItem]) -> Vec<String> {
         items.iter().map(|o| if o.children.is_empty() { o.title.clone() } else { format!("{}[{}]", o.title, shape(&o.children).join(",")) }).collect()
+    }
+
+    /// #3193: a bookmark's colour and style (ISO 32000-2 §12.3.3, Tables 151 and 152). `/C` is
+    /// three numbers within 0–1 (one outside is kept at the edge); black, the default, and a `/C`
+    /// that isn't three numbers read as no colour. `/F` bit 1 is italic, bit 2 bold.
+    #[test]
+    fn outline_items_carry_their_colour_and_style() {
+        let titles = [
+            ("Plain", ""),
+            ("Red", "/C [1 0 0]"),
+            ("Italic", "/F 1"),
+            ("Bold", "/F 2"),
+            ("Both", "/C [0 0 1] /F 3"),
+            ("Black", "/C [0 0 0]"),
+            ("Bright", "/C [2 -1 0.5]"),
+            ("Short", "/C [1 0]"),
+            ("Long", "/C [1 0 0 0]"),
+            ("Named", "/C [1 /x 0]"),
+            ("Other bits", "/F 4"),
+        ];
+        let n = titles.len();
+        let items: Vec<String> = titles
+            .iter()
+            .enumerate()
+            .map(|(k, (title, extra))| {
+                let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+                let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+                format!("<< /Title ({title}) /Parent 4 0 R{prev}{next} /Dest [3 0 R /Fit] {extra} >>")
+            })
+            .collect();
+        let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+        let got: Vec<(&str, Option<[f32; 3]>, bool, bool)> = info.outline.iter().map(|o| (o.title.as_str(), o.color, o.italic, o.bold)).collect();
+        assert_eq!(
+            got,
+            [
+                ("Plain", None, false, false),
+                ("Red", Some([1.0, 0.0, 0.0]), false, false),
+                ("Italic", None, true, false),
+                ("Bold", None, false, true),
+                ("Both", Some([0.0, 0.0, 1.0]), true, true),
+                ("Black", None, false, false),
+                ("Bright", Some([1.0, 0.0, 0.5]), false, false),
+                ("Short", None, false, false),
+                ("Long", None, false, false),
+                ("Named", None, false, false),
+                ("Other bits", None, false, false),
+            ]
+        );
     }
 
     #[test]
@@ -2776,6 +3924,41 @@ trailer << /Root 1 0 R >>
         // A degenerate crop box never divides by zero.
         let flat = PageInfo { crop: [0.0, 0.0, 0.0, 0.0], rotation: 0, ..p };
         assert!(flat.dest_fraction(Some(5.0), Some(-5.0), 0).iter().all(|f| f.is_some_and(|f| (0.0..=1.0).contains(&f))));
+    }
+
+    #[test]
+    fn a_displayed_point_becomes_the_xyz_position_that_goes_back_to_it() {
+        // Every rotation, on a crop box away from the origin: pinning a displayed point and
+        // reading the destination back lands on the same fraction of the displayed page.
+        for rotation in [0u16, 90, 180, 270] {
+            let (width, height) = if rotation.is_multiple_of(180) { (300.0, 400.0) } else { (400.0, 300.0) };
+            let p = PageInfo { width, height, label: "1".into(), crop: [100.0, 50.0, 400.0, 450.0], rotation };
+            let (x, y) = (0.25 * width, 0.75 * height);
+            let near = |got: [Option<f32>; 2], want: [Option<f32>; 2]| {
+                for (g, w) in got.iter().zip(want) {
+                    match (g, w) {
+                        (Some(g), Some(w)) => assert!((g - w).abs() < 1e-4, "{rotation}: {got:?} vs {want:?}"),
+                        (None, None) => {}
+                        _ => panic!("{rotation}: {got:?} vs {want:?}"),
+                    }
+                }
+            };
+            let [l, t] = p.xyz_for_view(Some(x), Some(y));
+            assert!(l.is_some() && t.is_some(), "{rotation}: a point pins both");
+            near(p.dest_fraction(l, t, 0), [Some(0.25), Some(0.75)]);
+            // Only a height: the horizontal position is left alone, whichever user axis that is.
+            let [l, t] = p.xyz_for_view(None, Some(y));
+            assert_eq!((l.is_some(), t.is_some()), if rotation.is_multiple_of(180) { (false, true) } else { (true, false) }, "{rotation}");
+            near(p.dest_fraction(l, t, 0), [None, Some(0.75)]);
+            let [l, t] = p.xyz_for_view(Some(x), None);
+            near(p.dest_fraction(l, t, 0), [Some(0.25), None]);
+            assert_eq!(p.xyz_for_view(None, None), [None, None]);
+            assert_eq!(p.xyz_for_view(Some(f32::NAN), Some(f32::INFINITY)), [None, None], "not finite is not given");
+        }
+        // The top of an upright page is the crop box's top edge.
+        let p = PageInfo { width: 300.0, height: 400.0, label: "1".into(), crop: [100.0, 50.0, 400.0, 450.0], rotation: 0 };
+        assert_eq!(p.xyz_for_view(None, Some(0.0)), [None, Some(450.0)]);
+        assert_eq!(p.xyz_for_view(None, Some(100.0)), [None, Some(350.0)]);
     }
 
     #[test]
@@ -3073,5 +4256,114 @@ mod open_action_javascript_tests {
         let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
         let info = inspect(Arc::new(bytes), None).expect("inspects");
         assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod open_dest_tests {
+    use std::sync::Arc;
+
+    use super::{DestView, inspect};
+
+    /// Three 612×792 pages (objects 3, 4, 5); `catalog` is added to the catalog dictionary and
+    /// `extra` become objects 6, 7, ….
+    fn pdf(catalog: &str, extra: &[String]) -> Vec<u8> {
+        let mut objs =
+            vec![format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"), "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_string()];
+        for _ in 0..3 {
+            objs.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_string());
+        }
+        objs.extend(extra.iter().cloned());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    fn open_dest(catalog: &str, extra: &[String]) -> Option<(usize, DestView)> {
+        inspect(Arc::new(pdf(catalog, extra)), None).expect("inspects").open_dest
+    }
+
+    const XYZ: DestView = DestView::Xyz { left: Some(100.0), top: Some(500.0), zoom: Some(2.0) };
+
+    #[test]
+    fn an_explicit_destination_opens_at_its_page_and_position() {
+        assert_eq!(open_dest("/OpenAction [5 0 R /XYZ 100 500 2]", &[]), Some((2, XYZ)));
+        assert_eq!(open_dest("/OpenAction [4 0 R /FitH 400]", &[]), Some((1, DestView::FitH { top: Some(400.0) })));
+        // Indirect, and a zoom of 0 keeps the zoom (Table 149).
+        assert_eq!(
+            open_dest("/OpenAction 6 0 R", &["[4 0 R /XYZ 0 792 0]".into()]),
+            Some((1, DestView::Xyz { left: Some(0.0), top: Some(792.0), zoom: None }))
+        );
+    }
+
+    #[test]
+    fn a_go_to_action_opens_at_its_destination_explicit_or_named() {
+        assert_eq!(open_dest("/OpenAction << /S /GoTo /D [5 0 R /XYZ 100 500 2] >>", &[]), Some((2, XYZ)));
+        // A name, through the PDF 1.1 catalog /Dests dictionary (§12.3.2.4).
+        assert_eq!(open_dest("/OpenAction << /S /GoTo /D /there >> /Dests << /there [5 0 R /XYZ 100 500 2] >>", &[]), Some((2, XYZ)));
+        // A byte string, through the /Names /Dests name tree, whose value is a dictionary with /D.
+        assert_eq!(
+            open_dest(
+                "/OpenAction << /S /GoTo /D (there) >> /Names << /Dests 6 0 R >>",
+                &["<< /Kids [7 0 R] >>".into(), "<< /Names [(here) [3 0 R /Fit] (there) << /D [5 0 R /XYZ 100 500 2] >>] >>".into()]
+            ),
+            Some((2, XYZ))
+        );
+    }
+
+    #[test]
+    fn an_open_action_given_as_a_name_or_string_is_looked_up() {
+        assert_eq!(open_dest("/OpenAction /there /Dests << /there [4 0 R /Fit] >>", &[]), Some((1, DestView::Fit)));
+        assert_eq!(
+            open_dest("/OpenAction (there) /Names << /Dests << /Names [(there) [5 0 R /FitV 30]] >> >>", &[]),
+            Some((2, DestView::FitV { left: Some(30.0) }))
+        );
+    }
+
+    #[test]
+    fn an_open_action_that_goes_nowhere_here_has_no_destination() {
+        for catalog in [
+            "",
+            "/OpenAction << /S /JavaScript /JS (app.alert(1)) >>",
+            // A remote go-to's /D is a page of another file.
+            "/OpenAction << /S /GoToR /F (other.pdf) /D [1 /Fit] >>",
+            "/OpenAction << /D [4 0 R /Fit] >>",
+            // An unknown name, and no name dictionaries at all.
+            "/OpenAction << /S /GoTo /D /missing >> /Dests << /there [4 0 R /Fit] >>",
+            "/OpenAction /missing",
+            // A page number past the end, and a page reference that is no page.
+            "/OpenAction [7 /Fit]",
+            "/OpenAction [2 0 R /Fit]",
+            "/OpenAction 42",
+        ] {
+            assert_eq!(open_dest(catalog, &[]), None, "{catalog}");
+        }
+    }
+
+    #[test]
+    fn cyclic_and_deep_named_destinations_end() {
+        // Names that refer to each other.
+        assert_eq!(open_dest("/OpenAction /a /Dests << /a /b /b /a >>", &[]), None);
+        assert_eq!(open_dest("/OpenAction /a /Dests << /a << /D /a >> >>", &[]), None);
+        // A name tree whose node is its own kid.
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &["<< /Kids [6 0 R] >>".into()]), None);
+        // A name tree deeper than the depth bound: the leaf past it isn't read.
+        let depth = 40;
+        let mut nodes: Vec<String> = (0..depth).map(|i| format!("<< /Kids [{} 0 R] >>", 7 + i)).collect();
+        nodes.push("<< /Names [(x) [4 0 R /Fit]] >>".into());
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &nodes), None);
+        // A shallow one is read.
+        let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
+        assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
     }
 }

@@ -16,7 +16,7 @@ fn fields() -> Vec<FieldState> {
 }
 
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())] }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {
@@ -244,6 +244,53 @@ fn document_requests_and_console() {
     );
 }
 
+/// Bytes of text a run handed back in its messages, console lines and requests.
+fn kept_bytes(o: &Outcome) -> usize {
+    let req = |r: &Request| match r {
+        Request::Reset(names) => names.iter().map(String::len).sum(),
+        Request::Submit(u) | Request::LaunchUrl(u) | Request::Focus(u) => u.len(),
+        _ => 0,
+    };
+    o.console.iter().chain(&o.alerts).map(String::len).sum::<usize>() + o.requests.iter().map(req).sum::<usize>()
+}
+
+#[test]
+fn exec_menu_item_requests_are_capped_like_other_requests() {
+    let o = go("for (var i = 0; i < 12000; i++) app.execMenuItem('Print');", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.error, None);
+    assert_eq!(o.requests.len(), crate::xfa::MAX_EFFECTS);
+}
+
+#[test]
+fn console_alerts_and_requests_are_capped_in_count_and_bytes() {
+    let o = go(
+        "var s = 'x'; while (s.length < 8192) s += s; \
+         for (var i = 0; i < 1500; i++) { console.println(s); app.alert(s); } \
+         var a = []; for (var i = 0; i < 2000; i++) a.push(s); \
+         for (var i = 0; i < 5; i++) this.resetForm(a); \
+         for (var i = 0; i < 12000; i++) app.launchURL('u');",
+        &Event::field("Mouse Up", "agree", ""),
+    );
+    assert_eq!(o.error, None);
+    assert!(o.console.len() <= crate::xfa::MAX_CONSOLE + 1, "{} console lines", o.console.len());
+    assert!(o.alerts.len() <= crate::xfa::MAX_ALERTS, "{} alerts", o.alerts.len());
+    assert!(o.requests.len() <= crate::xfa::MAX_EFFECTS, "{} requests", o.requests.len());
+    assert!(o.console.iter().chain(&o.alerts).all(|m| m.chars().count() <= 4_097));
+    assert!(kept_bytes(&o) <= crate::xfa::MAX_PAYLOAD, "{} bytes kept", kept_bytes(&o));
+    assert!(o.console.last().is_some_and(|l| l.contains("left out")), "{:?}", o.console.last());
+}
+
+#[test]
+fn printd_reads_a_long_literal_run_in_linear_work() {
+    crate::PRINTD_SCANNED.store(0, std::sync::atomic::Ordering::Relaxed);
+    let o = go("event.value = util.printd(new Array(20001).join('x'), new Date(2024, 0, 5)).length;", &Event::field("Calculate", "total", ""));
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "20000");
+    // Other tests format short dates at the same time; they add a few dozen bytes at most.
+    let scanned = crate::PRINTD_SCANNED.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(scanned < 40_000, "printd scanned {scanned} bytes for a 20000-byte format");
+}
+
 #[test]
 fn document_level_functions_are_available() {
     let o = run(
@@ -255,6 +302,61 @@ fn document_level_functions_are_available() {
         Limits::default(),
     );
     assert_eq!(o.value, "8");
+}
+
+/// #3940: a document script that throws after defining a helper (here calling an Acrobat method
+/// PdfCraft lacks) still leaves the helper, and the later scripts, to the field script.
+#[test]
+fn a_failing_document_script_does_not_stop_the_field_script() {
+    let docs = [
+        "function double(x) { return x * 2; }\nthis.getField('qty').buttonSetIcon(null);\nvar after = 1;".to_string(),
+        "function plus(x) { return x + 1; }".to_string(),
+        "this is not javascript".to_string(),
+    ];
+    let o = run(
+        "event.value = plus(double(getField('qty').value));",
+        &Event::field("Calculate", "total", ""),
+        &doc(),
+        &fields(),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((o.error.as_deref(), o.value.as_str()), (None, "9"));
+    assert_eq!(o.doc_errors.len(), 2, "{:?}", o.doc_errors);
+    assert!(o.doc_errors[0].starts_with("document script 1: TypeError"), "{:?}", o.doc_errors);
+    assert!(o.doc_errors[1].starts_with("document script 3: SyntaxError"), "{:?}", o.doc_errors);
+    // The failing script stopped where it failed.
+    let o = run("event.value = typeof after;", &Event::field("Calculate", "total", ""), &doc(), &fields(), &docs, Limits::default());
+    assert_eq!(o.value, "undefined");
+    // Working document scripts report nothing.
+    assert!(go("event.value = 1;", &Event::field("Calculate", "total", "")).doc_errors.is_empty());
+}
+
+/// A document script refused before running (too long, or nested too deeply to run safely) is
+/// skipped like one that throws: never run, reported in its place, the rest still run.
+#[test]
+fn a_document_script_too_big_to_run_is_skipped_and_reported() {
+    let docs = [
+        "this.getField('qty').buttonSetIcon(null);".to_string(),
+        format!("var big = 1{};", "+1".repeat(MAX_SCRIPT_BYTES / 2)),
+        "function double(x) { return x * 2; }".to_string(),
+        format!("var deep = {}1{};", "(".repeat(10_000), ")".repeat(10_000)),
+    ];
+    let o = run(
+        "event.value = double(getField('qty').value) + typeof big;",
+        &Event::field("Calculate", "total", ""),
+        &doc(),
+        &fields(),
+        &docs,
+        Limits::default(),
+    );
+    assert_eq!((o.error.as_deref(), o.value.as_str()), (None, "8undefined"));
+    let places: Vec<&str> = o.doc_errors.iter().map(|e| e.split(':').next().unwrap_or_default()).collect();
+    assert_eq!(places, ["document script 1", "document script 2", "document script 4"], "{:?}", o.doc_errors);
+    assert!(o.doc_errors[1].contains("too long") && o.doc_errors[2].contains("nested too deeply"), "{:?}", o.doc_errors);
+    // The field script's own limits still refuse it outright.
+    let o = run(&format!("1{}", "+1".repeat(MAX_SCRIPT_BYTES)), &Event::field("Calculate", "total", ""), &doc(), &fields(), &docs, Limits::default());
+    assert!(o.error.is_some_and(|e| e.contains("too long")) && o.doc_errors.is_empty());
 }
 
 #[test]
@@ -296,9 +398,11 @@ fn deeply_nested_scripts_fail_instead_of_crashing() {
         let o = go(s, &Event::doc("Open"));
         assert!(o.error.is_some(), "{}…", &s[..20]);
     }
-    // A hostile document-level script is refused too, before the field script runs.
+    // A hostile document-level script is refused too: it never runs, and is reported, while
+    // the field script still does (#3940).
     let o = run("event.value = 'ran';", &Event::field("Calculate", "a", ""), &doc(), &fields(), &[hostile[0].clone()], Limits::default());
-    assert!(o.error.is_some());
+    assert_eq!((o.error, o.value.as_str()), (None, "ran"));
+    assert!(o.doc_errors.len() == 1 && o.doc_errors[0].contains("nested too deeply"), "{:?}", o.doc_errors);
 }
 
 #[test]
@@ -311,6 +415,23 @@ fn ordinary_nesting_still_runs() {
     // Brackets in strings and comments don't count.
     let s = format!("// {}\nevent.value = '{}'.length;", "(".repeat(1000), "[".repeat(1000));
     assert_eq!(go(&s, &Event::field("Calculate", "a", "")).value, "1000");
+}
+
+/// Code built from strings at run time would reach the parser without the size and nesting
+/// checks the script itself passed, so `eval` and the `Function` constructors refuse it.
+#[test]
+fn scripts_cannot_compile_code_from_strings() {
+    for s in [
+        "event.value = eval('1 + 1');",
+        "event.value = (0, eval)('1 + 1');",
+        "event.value = new Function('return 2')();",
+        "event.value = Function('a', 'return a')(2);",
+        "event.value = (function* () {}).constructor('yield 2')().next().value;",
+        "event.value = new Array(1001).join('(') + '1' + new Array(1001).join(')'); event.value = eval(event.value);",
+    ] {
+        let o = go(s, &Event::field("Calculate", "a", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("compile code from strings")), "{s}: {o:?}");
+    }
 }
 
 mod xfa_model {
@@ -380,12 +501,15 @@ mod xfa_model {
         }
     }
 
+    /// Run the JavaScript `script` for `activity` on the test form, from the node at `target`.
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
         let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
         run_xfa(script, &ev, &doc, &form(), Limits::default())
     }
 
+    /// A calculate script finds its siblings by name and yields its last expression, and a
+    /// value it sets comes back as an effect.
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
@@ -395,6 +519,76 @@ mod xfa_model {
         assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].total[0]".into(), value: "5".into() }]);
     }
 
+    /// A long value written again and again stops at the run's byte budget, and the write that
+    /// does not fit is left out of the field the script reads as well as of the effect.
+    #[test]
+    fn a_value_past_the_byte_budget_is_left_out_of_reads_and_effects_alike() {
+        let o = go(
+            "var s = 'x'; while (s.length < 65536) s += s; \
+             for (var i = 0; i < 300; i++) details.note.rawValue = ('00000' + i).slice(-6) + s.slice(6); \
+             details.note.rawValue.slice(0, 6)",
+            "form1[0].page1[0].total[0]",
+            "calculate",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        let set: Vec<&str> = o
+            .effects
+            .iter()
+            .filter_map(|e| if let XfaEffect::SetValue { value, .. } = e { Some(value.get(..6).unwrap_or(value)) } else { None })
+            .collect();
+        assert_eq!(set.len(), 1);
+        assert_eq!(o.result.as_deref(), set.first().copied());
+    }
+
+    /// The script runs through `eval`, so code built from strings at run time is held to the
+    /// script's own size and nesting checks instead of being refused outright.
+    #[test]
+    fn code_built_from_strings_is_checked_like_the_script() {
+        let total = "form1[0].page1[0].total[0]";
+        assert_eq!(go("eval('qty.rawValue * 2')", total, "calculate").result.as_deref(), Some("8"));
+        assert_eq!(go("new Function('return 3')()", total, "calculate").result.as_deref(), Some("3"));
+        for s in [
+            "eval(new Array(1001).join('(') + '1' + new Array(1001).join(')'))",
+            "new Function(new Array(1001).join('[') + new Array(1001).join(']'))",
+        ] {
+            let o = go(s, total, "calculate");
+            assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{s}: {o:?}");
+        }
+    }
+
+    /// A form whose one field `d` holds the ISO date 2026-10-20, shown as 20261020.
+    pub(super) fn dated_form() -> XfaNode {
+        let d = XfaNode { formatted: Some("20261020".into()), ..field("d", "form1[0].page1[0].d[0]", "2026-10-20", false) };
+        XfaNode {
+            name: "form1".into(),
+            som: "form1[0]".into(),
+            kind: Some(XfaKind::Subform),
+            children: vec![XfaNode {
+                name: "page1".into(),
+                som: "form1[0].page1[0]".into(),
+                kind: Some(XfaKind::Subform),
+                children: vec![d],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// `formattedValue` reads the value as the field's picture shows it, and `rawValue` the
+    /// value itself; once the script sets the value, `formattedValue` gives that value.
+    #[test]
+    fn formatted_value_reads_the_shown_value_until_the_script_sets_one() {
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].d[0]".into(), ..Default::default() };
+        let doc = XfaDoc::default();
+        let run = |script: &str| run_xfa(script, &ev, &doc, &dated_form(), Limits::default());
+        let o = run("this.formattedValue + ' ' + this.rawValue");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("20261020 2026-10-20"));
+        let o = run("this.rawValue = '2026-10-21'; this.formattedValue");
+        assert_eq!(o.result.as_deref(), Some("2026-10-21"));
+    }
+
+    /// Long values a script sets, and long results, are cut where they are stored, with a note.
     #[test]
     fn long_values_and_results_are_cut_where_they_are_stored() {
         // The value kept for later reads is the one the effect saves.
@@ -556,6 +750,74 @@ mod xfa_model {
         assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.chars().count() <= 4_097));
     }
 
+    /// Past the byte budget, adding or removing a row is left out of the snapshot as well as the
+    /// effects, so the script never counts rows the form will not get.
+    #[test]
+    fn rows_changed_past_the_byte_budget_are_left_out_of_the_snapshot_too() {
+        let o = go(
+            "var s = 'x'; while (s.length < 4096) s += s; for (var i = 0; i < 9000; i++) xfa.host.gotoURL(s); \
+             table._row.removeInstance(0); var added = table._row.addInstance(1); (added === null) + ':' + table._row.count",
+            "form1[0].page1[0].go[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert!(o.notes.iter().any(|n| n.contains("MiB")), "{:?}", o.notes);
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::AddInstance { .. } | XfaEffect::RemoveInstance { .. })));
+        assert_eq!(o.result.as_deref(), Some("true:2"));
+    }
+
+    /// Past the effect cap, presence and access set on a new object are left out of the snapshot
+    /// as well as the effects; one set again on an object that already has its effect still lands.
+    #[test]
+    fn presence_and_access_past_the_effect_cap_are_left_out_of_the_snapshot_too() {
+        let read = "qty.presence + ':' + qty.access + ':' + price.presence";
+        let before = go(read, "form1[0].page1[0]", "click").result;
+        let o = go(
+            &format!(
+                "price.presence = 'invisible'; for (var i = 0; i < 20000; i++) xfa.host.beep(); qty.presence = 'hidden'; qty.access = 'readOnly'; price.presence = 'hidden'; {read}"
+            ),
+            "form1[0].page1[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        let unchanged = before.as_deref().and_then(|b| b.rsplit_once(':')).map(|(qty, _)| format!("{qty}:hidden"));
+        assert_eq!(o.result, unchanged);
+        assert!(o.effects.contains(&XfaEffect::SetPresence { som: "form1[0].page1[0].price[0]".into(), presence: "hidden".into() }));
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::SetPresence { som, .. } | XfaEffect::SetAccess { som, .. } if som.contains("qty"))));
+    }
+
+    /// Past the effect cap, a value written to a field with no effect yet is left out of reads as
+    /// well as the effects; a field written again before the cap still takes its new value.
+    #[test]
+    fn a_value_past_the_effect_cap_is_left_out_of_reads_and_effects_alike() {
+        let o = go(
+            "price.rawValue = 1; for (var i = 0; i < 20000; i++) xfa.host.beep(); qty.rawValue = 9; price.rawValue = 3; qty.rawValue + ':' + price.rawValue",
+            "form1[0].page1[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        assert_eq!(o.result.as_deref(), Some("4:3"));
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { som, .. } if som.contains("qty"))));
+    }
+
+    #[test]
+    fn urls_and_reset_lists_are_clipped_and_deduplicated() {
+        let o = go(
+            "var s = 'x'; while (s.length < 65536) s += s; for (var i = 0; i < 600; i++) xfa.host.gotoURL(s + i); \
+             var r = 'a,'; while (r.length < 262144) r += r; xfa.host.resetData(r);",
+            "form1[0].page1[0]",
+            "initialize",
+        );
+        assert_eq!(o.error, None);
+        let urls: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::LaunchUrl(u) = e { Some(u) } else { None }).collect();
+        assert_eq!(urls.len(), 600);
+        assert!(urls.iter().all(|u| u.chars().count() <= 4_097));
+        let names: usize = o.effects.iter().map(|e| if let XfaEffect::ResetData(n) = e { n.len() } else { 0 }).sum();
+        assert_eq!(names, 1);
+    }
+
     #[test]
     fn a_slow_engine_start_does_not_count_against_the_script() {
         let ms = std::time::Duration::from_millis;
@@ -607,6 +869,78 @@ mod formcalc {
         o.result.unwrap_or_default()
     }
 
+    /// A negative value that rounds to zero under the picture prints without a minus sign.
+    #[test]
+    fn format_does_not_print_negative_zero() {
+        assert_eq!(calc(r#"Format("9.9", -0.04)"#), "0.0");
+        assert_eq!(calc(r#"Format("99", -0.2)"#), "00");
+        assert_eq!(calc(r#"Format("9.9", -1.5)"#), "-1.5");
+    }
+
+    /// Assigning one long value to many fields at once stops at the run's byte budget and is
+    /// charged per copy, and a reset list names each field once.
+    #[test]
+    fn bulk_assignments_and_reset_lists_are_bounded() {
+        let f = |i: usize| super::xfa_model::field("f", &format!("form1[0].page1[0].f[{i}]"), "", false);
+        let root = XfaNode {
+            name: "form1".into(),
+            som: "form1[0]".into(),
+            kind: Some(XfaKind::Subform),
+            children: vec![XfaNode {
+                name: "page1".into(),
+                som: "form1[0].page1[0]".into(),
+                kind: Some(XfaKind::Subform),
+                children: (0..1300).map(f).collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ev = XfaEvent { activity: "initialize".into(), target: "form1[0]".into(), ..Default::default() };
+        let run = |script: &str| run_formcalc(script, &ev, &XfaDoc::default(), &root, Limits::default());
+        let o = run("var s = \"x\"\nwhile (Len(s) < 65536) do s = Concat(s, s) endwhile\npage1.f = s");
+        assert_eq!(o.error, None, "{o:?}");
+        let kept: usize = o.effects.iter().map(|e| if let XfaEffect::SetValue { value, .. } = e { value.len() } else { 0 }).sum();
+        assert!(kept <= MAX_PAYLOAD, "{kept} bytes of values kept");
+        assert!(o.notes.iter().any(|n| n.contains("left out")), "{:?}", o.notes);
+        // 1300 copies of a 1 MiB value are more work than a script may do.
+        let o = run("var s = \"x\"\nwhile (Len(s) < 1048576) do s = Concat(s, s) endwhile\npage1.f = s");
+        assert_eq!(o.error.as_deref(), Some("the script ran too long"), "{:?}", o.notes);
+        let o = run("var r = \"a,\"\nwhile (Len(r) < 262144) do r = Concat(r, r) endwhile\n$host.resetData(r)\n$host.resetData(r)");
+        assert_eq!(o.error, None, "{o:?}");
+        let names: usize = o.effects.iter().map(|e| if let XfaEffect::ResetData(n) = e { n.len() } else { 0 }).sum();
+        assert_eq!(names, 2);
+    }
+
+    /// FormCalc presence and access past the effect cap are left out of the snapshot too.
+    #[test]
+    fn formcalc_presence_and_access_past_the_effect_cap_are_left_out_of_the_snapshot_too() {
+        let o = go(
+            "for i = 1 upto 20000 do $host.beep() endfor\nqty.presence = \"hidden\"\nqty.access = \"readOnly\"\nConcat(qty.presence, \":\", qty.access)",
+            "form1[0].page1[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        let before = go("Concat(qty.presence, \":\", qty.access)", "form1[0].page1[0]", "click");
+        assert_eq!(o.result, before.result);
+    }
+
+    /// FormCalc reads `formattedValue` as the field's picture shows it too, until the script
+    /// sets the value.
+    #[test]
+    fn formcalc_formatted_value_reads_the_shown_value_until_the_script_sets_one() {
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].d[0]".into(), ..Default::default() };
+        let doc = XfaDoc::default();
+        let run = |script: &str| run_formcalc(script, &ev, &doc, &super::xfa_model::dated_form(), Limits::default());
+        let o = run("Concat($.formattedValue, \" \", $.rawValue)");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("20261020 2026-10-20"));
+        let o = run("$.rawValue = \"2026-10-21\"\n$.formattedValue");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2026-10-21"));
+    }
+
+    /// FormCalc arithmetic, string conversion and comparisons follow FormCalc's own rules.
     #[test]
     fn arithmetic_strings_and_comparisons_follow_formcalc_rules() {
         assert_eq!(calc("1 + 2 * 3"), "7");
@@ -651,6 +985,17 @@ mod formcalc {
         assert_eq!(calc(r#"Num2Date(45350, "YYYY-MM-DD x")"#), "2024-02-29 x");
     }
 
+    /// Accepted day numbers past chrono's own date range (about year 262143) keep the dates the
+    /// pre-chrono algorithm gave, on both sides of the epoch, through Num2Date and Format.
+    #[test]
+    fn date_numbers_beyond_chronos_range_keep_their_dates() {
+        assert_eq!(calc(r#"Num2Date(99000000, "YYYY-MM-DD")"#), "272952-10-16");
+        assert_eq!(calc(r#"Format("YYYY-MM-DD", 99000000)"#), "272952-10-16");
+        assert_eq!(calc(r#"Num2Date(99999999, "YYYY-MM-DD")"#), "275690-09-11");
+        assert_eq!(calc(r#"Num2Date(-99000000, "YYYY-MM-DD")"#), "-269153-03-16");
+        assert_eq!(calc(r#"Num2Date(-99999999, "YYYY-MM-DD")"#), "-271891-04-20");
+    }
+
     #[test]
     fn str_and_format_round_exact_ties_away_from_zero() {
         assert_eq!(calc("Str(2.5, 3, 0)"), "  3");
@@ -665,8 +1010,16 @@ mod formcalc {
     }
 
     #[test]
+    fn round_keeps_huge_values_finite() {
+        assert_eq!(calc("Round(1e300, 12) == 1e300"), "1");
+        assert_eq!(calc("Round(1.2345, 2)"), "1.23");
+    }
+
+    #[test]
     fn built_in_functions_cover_the_common_set() {
         assert_eq!(calc("Abs(-2.5)"), "2.5");
+        assert_eq!(calc(r#"Decode("a%2Fb", "url")"#), "a/b");
+        assert_eq!(calc(r#"Decode("a%+fb", "url")"#), "a%+fb");
         assert_eq!(calc("Ceil(2.1)"), "3");
         assert_eq!(calc("Floor(-2.1)"), "-3");
         assert_eq!(calc("Mod(7, 3)"), "1");
@@ -708,16 +1061,31 @@ mod formcalc {
         assert_eq!(calc(r#"Num2Date(45350, "YYYY-MM-DD")"#), "2024-02-29");
         assert_eq!(calc(r#"Num2Date(Date2Num("2024-02-29") + 1, "MMMM D, YYYY")"#), "March 1, 2024");
         assert_eq!(calc(r#"Time2Num("01:00:00")"#), "3600000");
+        assert_eq!(calc(r#"IsoTime2Num("12:30:45Z")"#), "45045000");
+        assert_eq!(calc(r#"IsoTime2Num("12:30:45.250")"#), "45045250");
+        assert_eq!(calc(r#"IsoTime2Num("T12:30:45")"#), "45045000");
         assert_eq!(calc(r#"Num2Time(3661000)"#), "01:01:01");
         assert_eq!(calc("Round(Pmt(10000, 0.01, 12), 2)"), "888.49");
         assert_eq!(calc("Round(FV(100, 0.01, 12), 2)"), "1268.25");
         assert_eq!(calc("Round(PV(100, 0.01, 12), 2)"), "1125.51");
         assert_eq!(calc(r#"UnitValue("2in", "mm")"#), "50.8");
         assert_eq!(calc(r#"UnitType("2.5cm")"#), "cm");
+        assert_eq!(calc(r#"UnitValue("72points", "in")"#), "1");
+        assert_eq!(calc(r#"UnitValue("25.4millimeters", "inches")"#), "1");
+        assert_eq!(calc(r#"UnitValue("1in", "points")"#), "72");
         assert_eq!(calc(r#"Encode("a b&c", "url")"#), "a%20b%26c");
         assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));
+    }
+
+    #[test]
+    fn format_nine_pads_the_integer_part() {
+        assert_eq!(calc(r#"Format("99999", 42)"#), "00042");
+        assert_eq!(calc(r#"Format("9999", 5)"#), "0005");
+        assert_eq!(calc(r#"Format("999.99", 4.5)"#), "004.50");
+        assert_eq!(calc(r#"Format("zzz9", 42)"#), "42");
+        assert_eq!(calc(r#"Format("99", 12345)"#), "12345");
     }
 
     #[test]
@@ -1040,6 +1408,8 @@ mod session {
     use crate::xfa::*;
     use crate::xfa_session::{Script, XfaSession};
 
+    /// A JavaScript or FormCalc script for `activity` on `target`, against the test form with
+    /// default limits and a 3 s timeout.
     fn script(source: &str, formcalc: bool, target: &str, activity: &str) -> Script {
         Script {
             source: source.into(),
@@ -1051,6 +1421,9 @@ mod session {
         }
     }
 
+    /// JavaScript and FormCalc scripts run in turn in one session, each on the form the caller
+    /// sends: nothing an earlier script changed or defined leaks into the next, a failing script
+    /// doesn't end the session, and hundreds of scripts run on its one thread.
     #[test]
     fn scripts_of_one_event_run_on_one_thread_each_on_the_form_the_caller_sends() {
         let mut s = XfaSession::new(XfaDoc { page_count: 3, ..Default::default() });
@@ -1090,6 +1463,8 @@ mod session {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
+    /// A JavaScript or FormCalc script whose engine takes longer to be ready than the script's
+    /// time limit still runs and returns its result, and the session stays alive.
     #[test]
     fn a_scripts_time_starts_when_its_context_is_ready() {
         // The engine made slow to be ready (300 ms) under a 50 ms script limit: the script is
@@ -1110,6 +1485,9 @@ mod session {
         assert_eq!(s.dead(), None);
     }
 
+    /// An endless JavaScript loop past its 200 ms limit is abandoned within 2 s and leaves the
+    /// session dead, so nothing more runs in it; an endless FormCalc loop is abandoned or
+    /// reported as running too long.
     #[test]
     fn a_script_past_its_time_is_abandoned_and_the_session_is_dead_after_it() {
         let mut s = XfaSession::new(XfaDoc::default());
@@ -1131,4 +1509,307 @@ mod session {
         let o = s.run(slow);
         assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
     }
+}
+
+#[test]
+fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
+    let initial = Arc::new(fields());
+    let before = initial.as_ref().clone();
+    let event = Event::field("Calculate", "total", "");
+    let write = run_shared(
+        "var scriptLocal = 1; getField('qty').value = 9; getField('agree').checkThisBox(0, true); event.value = getField('qty').value;",
+        &event,
+        &doc(),
+        Arc::clone(&initial),
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(write.error, None);
+    assert_eq!(write.value, "9");
+    assert_eq!(write.changed.iter().find(|f| f.name == "qty").unwrap().value, ["9"]);
+    assert_eq!(write.changed.iter().find(|f| f.name == "agree").unwrap().value, ["Yes"]);
+    assert_eq!(*initial, before, "script writes cannot mutate the caller's snapshot");
+    let failed = run_shared("getField('qty').value = 99; throw new Error('rejected');", &event, &doc(), Arc::clone(&initial), &[], Limits::default());
+    assert!(failed.error.is_some());
+    assert_eq!(*initial, before, "an exception cannot leak partial writes into the initial snapshot");
+    let read = run_shared(
+        "event.value = typeof scriptLocal + ':' + getField('qty').value + ':' + getField('agree').isBoxChecked(0);",
+        &event,
+        &doc(),
+        initial,
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(read.error, None);
+    assert_eq!(read.value, "undefined:4:false");
+    assert!(read.changed.is_empty());
+}
+
+mod scand {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEvent, run_xfa};
+
+    /// Runs `util.scand(format, text)` for each case and checks the date it gives, written as
+    /// `yyyy-mm-dd HH:MM:ss`, or `null`.
+    fn assert_scand(cases: &[(&str, &str, &str)]) {
+        let list: Vec<String> = cases.iter().map(|(f, t, _)| format!("['{f}', '{t}']")).collect();
+        let script = format!(
+            "event.value = [{}].map(function (c) {{ var d = util.scand(c[0], c[1]); \
+             return d === null ? 'null' : util.printd('yyyy-mm-dd HH:MM:ss', d); }}).join('|');",
+            list.join(", ")
+        );
+        let o = go(&script, &Event::field("Calculate", "total", ""));
+        assert_eq!(o.error, None);
+        let got: Vec<&str> = o.value.split('|').collect();
+        assert_eq!(got.len(), cases.len());
+        for ((f, t, want), got) in cases.iter().zip(got) {
+            assert_eq!(got, *want, "util.scand('{f}', '{t}')");
+        }
+    }
+
+    // The cases below are another viewer's answers, observed black-box with a synthetic file.
+
+    /// Any separator may come between fields, whether the format has that one, another or none,
+    /// but a text with a space or a letter before or after the date reads nothing.
+    #[test]
+    fn scand_allows_separators_between_fields_but_nothing_before_or_after_them() {
+        assert_scand(&[
+            ("yyyymmdd", "20261018", "2026-10-18 00:00:00"),
+            ("yyyymmdd", "2026-10-18", "2026-10-18 00:00:00"),
+            ("yyyymmdd", "2026 10 18", "2026-10-18 00:00:00"),
+            ("mm/dd/yyyy", "10/18/2026", "2026-10-18 00:00:00"),
+            ("mm/dd/yyyy", "10-18-2026", "2026-10-18 00:00:00"),
+            ("yyyymmdd", " 20261018 ", "null"),
+            ("yyyymmdd", "20261018x", "null"),
+            ("yyyymmdd", "x20261018", "null"),
+        ]);
+    }
+
+    /// Digits typed together fill the joined fields with exactly as many digits as each field has
+    /// letters, so a run of any other length reads nothing.
+    #[test]
+    fn scand_splits_digits_typed_together_by_the_formats_letter_counts() {
+        assert_scand(&[
+            ("yyyymmdd", "261018", "null"),
+            ("yyyymmdd", "2026118", "null"),
+            ("yyyymmdd", "202610181", "null"),
+            ("yymmdd", "20261018", "null"),
+            ("yyyymdd", "2026118", "2026-01-18 00:00:00"),
+            ("yyyymmd", "2026118", "2026-11-08 00:00:00"),
+            ("yyyymd", "2026118", "null"),
+            ("yyyymd", "202618", "2026-01-08 00:00:00"),
+            ("yyyymd", "20261018", "null"),
+            ("yymd", "2618", "2026-01-08 00:00:00"),
+            ("yymd", "261018", "null"),
+        ]);
+    }
+
+    /// A month past 12, a day past the month's end and February 29 outside a leap year are
+    /// refused, while a month or day of 0 is read as 1.
+    #[test]
+    fn scand_refuses_impossible_dates_and_reads_a_zero_month_or_day_as_1() {
+        assert_scand(&[
+            ("yyyymmdd", "20261318", "null"),
+            ("yyyymmdd", "20260230", "null"),
+            ("yyyymmdd", "20260229", "null"),
+            ("yyyymmdd", "20240229", "2024-02-29 00:00:00"),
+            ("mm/dd/yyyy", "13/45/2026", "null"),
+            ("yyyymmdd", "20260018", "2026-01-18 00:00:00"),
+            ("yyyymmdd", "20261000", "2026-10-01 00:00:00"),
+        ]);
+    }
+
+    /// A field typed by itself may have one or two digits, but a `yyyy` year needs four; `yy` reads
+    /// as 1950–2049; month names may be full or three letters in any case; weekday names are read.
+    #[test]
+    fn scand_reads_lone_fields_two_digit_years_and_month_and_weekday_names() {
+        assert_scand(&[
+            ("mm/dd/yyyy", "1/5/2026", "2026-01-05 00:00:00"),
+            ("m/d/yyyy", "1/5/2026", "2026-01-05 00:00:00"),
+            ("m/d/yyyy", "01/05/2026", "2026-01-05 00:00:00"),
+            ("m/d/yy", "1/5/26", "2026-01-05 00:00:00"),
+            ("mm/dd/yyyy", "10/18/26", "null"),
+            ("yyyy/mm/dd", "26/10/18", "null"),
+            ("yymmdd", "261018", "2026-10-18 00:00:00"),
+            ("yymmdd", "491018", "2049-10-18 00:00:00"),
+            ("yymmdd", "501018", "1950-10-18 00:00:00"),
+            ("mmm d, yyyy", "Oct 18, 2026", "2026-10-18 00:00:00"),
+            ("mmm d, yyyy", "October 18, 2026", "2026-10-18 00:00:00"),
+            ("mmm d, yyyy", "oct 18, 2026", "2026-10-18 00:00:00"),
+            ("mmmm d, yyyy", "Oct 18, 2026", "2026-10-18 00:00:00"),
+            ("mmmm d, yyyy", "October 18, 2026", "2026-10-18 00:00:00"),
+            ("dd-mmm-yyyy", "18-Oct-2026", "2026-10-18 00:00:00"),
+            ("dddd, mmmm d, yyyy", "Sunday, October 18, 2026", "2026-10-18 00:00:00"),
+        ]);
+    }
+
+    /// A time is read along with a date, but a format with only time fields reads nothing.
+    #[test]
+    fn scand_reads_a_time_only_with_a_date() {
+        assert_scand(&[
+            ("mm/dd/yyyy HH:MM:ss", "10/18/2026 21:07:05", "2026-10-18 21:07:05"),
+            ("HH:MM", "09:07", "null"),
+            ("HH:MM", "9:07", "null"),
+            ("h:MM tt", "9:07 pm", "null"),
+            ("h:MM tt", "9:07 am", "null"),
+            ("h:MM tt", "12:07 am", "null"),
+            ("h:MM tt", "9:07pm", "null"),
+        ]);
+    }
+
+    /// An empty text reads as today at noon, and a text that is not a string (a number, or none
+    /// at all) reads nothing.
+    #[test]
+    fn scand_reads_only_text_and_an_empty_text_is_today_at_noon() {
+        let o = go(
+            "var d = util.scand('yyyymmdd', ''), n = new Date(); \
+             event.value = [d.toDateString() == n.toDateString(), d.getHours(), d.getMinutes(), d.getSeconds(), \
+             util.scand('yyyymmdd', 20261018), util.scand(), util.scand('yyyymmdd')].join('|');",
+            &Event::field("Calculate", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "true|12|0|0|||");
+    }
+
+    // Not observed: the choices made where the other viewer wasn't asked.
+
+    /// A year left out is this year, `h:MM tt` reads a 12-hour time and refuses hours it cannot
+    /// have, and a letter the format writes must be typed there.
+    #[test]
+    fn scand_takes_this_year_when_none_is_given_and_reads_12_hour_times_and_written_letters() {
+        assert_scand(&[
+            ("mm/dd/yyyy h:MM tt", "10/18/2026 9:07 pm", "2026-10-18 21:07:00"),
+            ("mm/dd/yyyy h:MM tt", "10/18/2026 12:07 AM", "2026-10-18 00:07:00"),
+            ("mm/dd/yyyy h:MM tt", "10/18/2026 13:07 pm", "null"),
+            ("mm/dd/yyyy HH:MM", "10/18/2026 24:00", "null"),
+            ("yyyy-mm-ddTHH:MM", "2026-10-18T21:07", "2026-10-18 21:07:00"),
+            ("yyyy-mm-ddTHH:MM", "2026-10-18X21:07", "null"),
+        ]);
+        let o = go(
+            "var d = util.scand('mm/dd', '10/18'); event.value = [d.getFullYear() == new Date().getFullYear(), d.getMonth(), d.getDate()].join('|');",
+            &Event::field("Calculate", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "true|9|18");
+    }
+
+    /// A format of 50,000 literal letters and one of 100,000 fields, with texts to match, are read
+    /// in linear time. The limit is generous so a loaded runner passes (it also covers starting
+    /// the engine and building the strings); a quadratic scan of inputs this size takes minutes.
+    #[test]
+    fn scand_reads_long_formats_and_texts_in_linear_time() {
+        // Scripts can pass anything; native code isn't bounded by the loop limit.
+        let started = std::time::Instant::now();
+        let o = go(
+            "var x = new Array(50001).join('x'), md = new Array(50001).join('md'), ones = new Array(100000).join('1 ') + '1'; \
+             event.value = [util.scand(x + 'yyyy', x + '2026') !== null, util.scand('yyyy' + md, '2026 ' + ones) !== null].join('|');",
+            &Event::field("Calculate", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(o.value, "true|true");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    /// The check an XFA form runs on leaving a date field tries six formats with `util.scand` and
+    /// writes the first that reads the text back as `yyyymmdd`, or reports an invalid date.
+    #[test]
+    fn xfa_scripts_check_typed_dates_with_util_scand() {
+        // The check a form runs when a date field is left: the first of six formats that reads
+        // the typed text, written back as yyyymmdd; or an invalid date. Results as another viewer gives them.
+        let check = |typed: &str| {
+            let script = format!(
+                "var six = ['yyyymmdd', 'yymmdd', 'yyyymdd', 'yyyymmd', 'yyyymd', 'yymd'], out = 'invalid'; \
+                 for (var i = 0; i < six.length; i++) {{ var d = util.scand(six[i], '{typed}'); \
+                 if (d !== null) {{ out = util.printd('yyyymmdd', d); break; }} }} out"
+            );
+            let event = XfaEvent { activity: "exit".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
+            run_xfa(&script, &event, &XfaDoc::default(), &super::xfa_model::form(), Limits::default())
+        };
+        for (typed, want) in [
+            ("20261018", "20261018"),
+            ("261018", "20261018"),
+            ("2026118", "20260118"),
+            ("202618", "20260108"),
+            ("2618", "20260108"),
+            ("2026-10-18", "20261018"),
+            ("20261318", "invalid"),
+            ("20260230", "invalid"),
+        ] {
+            let o = check(typed);
+            assert_eq!(o.error, None, "{typed}: {o:?}");
+            assert_eq!(o.result.as_deref(), Some(want), "{typed}");
+        }
+    }
+}
+
+mod menu_items {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
+
+    /// Every side panel has a fixed id in automation output.
+    #[test]
+    fn each_panel_has_a_fixed_id_for_automation() {
+        let ids = [Panel::Bookmarks, Panel::Pages, Panel::Attachments, Panel::Signatures, Panel::Layers].map(Panel::id);
+        assert_eq!(ids, ["bookmarks", "pages", "attachments", "signatures", "layers"]);
+    }
+
+    /// Each side panel item, Print and SaveAs make their request, in order; an unknown item
+    /// makes none and is not an error.
+    #[test]
+    fn exec_menu_item_shows_side_panels_prints_and_saves() {
+        let o = go(
+            "app.execMenuItem('ShowHideFileAttachment'); app.execMenuItem('ShowHideBookmarks'); app.execMenuItem('ShowHideThumbnails'); \
+             app.execMenuItem('ShowHideSignatures'); app.execMenuItem('ShowHideOptCont'); app.execMenuItem('Print'); \
+             app.execMenuItem('SaveAs'); app.execMenuItem('NoSuchItem');",
+            &Event::field("Mouse Up", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(
+            o.requests,
+            [
+                Request::ShowPanel(Panel::Attachments),
+                Request::ShowPanel(Panel::Bookmarks),
+                Request::ShowPanel(Panel::Pages),
+                Request::ShowPanel(Panel::Signatures),
+                Request::ShowPanel(Panel::Layers),
+                Request::Print,
+                Request::SaveAs,
+            ]
+        );
+    }
+
+    /// `app.execMenuItem` works in XFA scripts too: a click shows the attachments panel.
+    #[test]
+    fn xfa_scripts_show_the_attachments_panel() {
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("app.execMenuItem('ShowHideFileAttachment')", &event, &XfaDoc::default(), &super::xfa_model::form(), Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert!(o.effects.contains(&XfaEffect::ShowPanel(Panel::Attachments)), "{:?}", o.effects);
+    }
+}
+
+/// The check XFA forms run on opening: without both globals, or with a version below 2.8, it
+/// alerts that the viewer can't show the form.
+const XFA_CHECK: &str = "if (typeof(xfa_installed) == 'undefined' || typeof(xfa_version) == 'undefined' || xfa_version < 2.8) app.alert('old viewer'); \
+                         event.value = typeof xfa_installed + ' ' + typeof xfa_version + ' ' + xfa_version;";
+
+/// An XFA form sees `xfa_installed` (true) and `xfa_version` (3.5), so the check passes.
+#[test]
+fn an_xfa_form_sees_the_xfa_plugin_installed() {
+    let xfa = DocInfo { xfa: true, ..doc() };
+    let o = run(XFA_CHECK, &Event::doc("Open"), &xfa, &fields(), &[], Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "boolean number 3.5");
+    assert!(o.alerts.is_empty(), "{:?}", o.alerts);
+    let o = run("event.value = String(xfa_installed);", &Event::doc("Open"), &xfa, &fields(), &[], Limits::default());
+    assert_eq!(o.value, "true");
+}
+
+/// A form without XFA sees `xfa_version` but no `xfa_installed`, so the check alerts.
+#[test]
+fn a_plain_form_sees_the_xfa_version_but_not_installed() {
+    let o = go(XFA_CHECK, &Event::doc("Open"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "undefined number 3.5");
+    assert_eq!(o.alerts, ["old viewer"]);
 }

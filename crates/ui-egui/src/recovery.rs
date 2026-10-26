@@ -206,10 +206,10 @@ impl RecoveryStore {
         let mut out = Vec::new();
         for entry in dir.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("pdf") || !entry.file_type().is_ok_and(|t| t.is_file()) {
+            if path.extension().and_then(std::ffi::OsStr::to_str) != Some("pdf") || !entry.file_type().is_ok_and(|t| t.is_file()) {
                 continue;
             }
-            let Some(key) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            let Some(key) = path.file_stem().and_then(std::ffi::OsStr::to_str) else { continue };
             let meta = std::fs::read(path.with_extension("json"))
                 .and_then(|b| serde_json::from_slice::<RecoveryMeta>(&b).map_err(std::io::Error::other))
                 .and_then(|m| if m.key == key { Ok(m) } else { Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "snapshot key mismatch")) });
@@ -266,7 +266,7 @@ impl RecoveryStore {
         for entry in dir.flatten() {
             let path = entry.path();
             // Only sidecars whose PDF is gone: they hold no document content.
-            if path.extension().and_then(|e| e.to_str()) == Some("json")
+            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json")
                 && entry.file_type().is_ok_and(|t| t.is_file())
                 && !path.with_extension("pdf").exists()
             {
@@ -311,14 +311,32 @@ impl PdfCraftApp {
         }
     }
 
-    /// Autosave when the interval has passed (called every frame).
-    pub(crate) fn autosave_tick(&mut self, now: f64) {
+    /// Autosave when the interval has passed (called by `logic`, which also runs while hidden).
+    ///
+    /// The deadline is monotonic (`web_time::Instant`): egui's input clock does not advance
+    /// during a hidden `run_logic`, so using it would stall autosave or restart its interval.
+    pub(crate) fn autosave_tick(&mut self, ctx: &egui::Context, now: web_time::Instant) {
         if self.recovery.is_none() {
             return;
         }
-        if now - self.last_autosave >= AUTOSAVE_SECS {
-            self.last_autosave = now;
+        // The first tick starts the interval, as the old zero clock did: it does not snapshot
+        // immediately just because no deadline had been recorded yet.
+        let Some(last) = self.last_autosave else {
+            self.last_autosave = Some(now);
+            if self.session.has_pending_autosave() {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(AUTOSAVE_SECS));
+            }
+            return;
+        };
+        if now.duration_since(last).as_secs_f64() >= AUTOSAVE_SECS {
+            self.last_autosave = Some(now);
             self.autosave_now();
+        }
+        // An idle native window has no input-driven frames. Wake it at the existing
+        // autosave deadline, without keeping clean or already-snapshotted documents awake.
+        if self.session.has_pending_autosave() {
+            let next = self.last_autosave.unwrap_or(now) + std::time::Duration::from_secs_f64(AUTOSAVE_SECS);
+            ctx.request_repaint_after(next.saturating_duration_since(now));
         }
     }
 
@@ -404,6 +422,174 @@ impl PdfCraftApp {
                 store.remove(key);
             }
             self.recovery_keys.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        /// A new folder of this test's own. The tests run on parallel threads of one process, and
+        /// two can read the same clock time (it moves in microseconds on macOS), so a counter
+        /// tells their folders apart; the time keeps runs of the process apart.
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = std::env::temp_dir().join(format!("pdfcraft-idle-recovery-{}-{nonce}-{n}", std::process::id()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        /// The folder.
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        /// Remove the folder and what the test left in it.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Folders made at the same moment on parallel threads, as the tests make theirs, are each
+    /// their own: none fails because another test's folder took its name.
+    #[test]
+    fn test_folders_made_at_once_on_parallel_threads_are_each_their_own() {
+        let start = std::sync::Barrier::new(8);
+        let dirs: Vec<PathBuf> = std::thread::scope(|s| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| {
+                    s.spawn(|| {
+                        start.wait();
+                        (0..25).map(|_| TestDir::new()).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            threads.into_iter().flat_map(|t| t.join().unwrap()).map(|d| d.path().to_path_buf()).collect()
+        });
+        let distinct: std::collections::HashSet<&PathBuf> = dirs.iter().collect();
+        assert_eq!(distinct.len(), 200);
+    }
+
+    fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, now: web_time::Instant) -> Duration {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.autosave_tick(ui.ctx(), now);
+        });
+        // Headless timer test: acknowledge texture uploads without a GPU backend.
+        out.textures_delta.clear();
+        out.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    /// Check that an idle dirty document schedules a bounded write and autosaves without input, then stops
+    /// waking the window.
+    #[test]
+    fn idle_dirty_document_requests_its_deadline_and_writes_without_input() {
+        let dir = TestDir::new();
+        let store = RecoveryStore::new(dir.path());
+        let mut app = PdfCraftApp::new();
+        app.enable_recovery(store.clone());
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = app.session.open_new("Untitled.pdf", bytes).unwrap();
+        let ctx = egui::Context::default();
+        let base = web_time::Instant::now();
+        frame(&mut app, &ctx, base);
+        let mut delay = Duration::ZERO;
+        for _ in 0..4 {
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(15));
+        }
+        assert!(delay > Duration::ZERO && delay <= Duration::from_secs(45), "idle deadline: {delay:?}");
+        assert!(store.list().is_empty());
+        frame(&mut app, &ctx, base + Duration::from_secs(60));
+        assert_eq!(store.list().len(), 1, "timer frame writes the snapshot without input");
+        assert!(app.session.get(id).unwrap().dirty, "autosave does not mark the document saved");
+        assert!(!app.session.has_pending_autosave());
+        for _ in 0..4 {
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(61));
+        }
+        assert_eq!(delay, Duration::MAX, "unchanged snapshot needs no periodic wake");
+    }
+
+    /// Check that an edit after autosave schedules the next deadline, keeps the old snapshot until then, and
+    /// replaces it on time.
+    #[test]
+    fn second_edit_after_autosave_schedules_next_deadline_and_updates_snapshot() {
+        let dir = TestDir::new();
+        let store = RecoveryStore::new(dir.path());
+        let mut app = PdfCraftApp::new();
+        app.enable_recovery(store.clone());
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = app.session.open_new("Untitled.pdf", bytes).unwrap();
+        let ctx = egui::Context::default();
+        let base = web_time::Instant::now();
+        frame(&mut app, &ctx, base);
+        frame(&mut app, &ctx, base + Duration::from_secs(60));
+        let entries = store.list();
+        assert_eq!(entries.len(), 1);
+        let key = entries[0].key.clone();
+        let first = store.read(&key).unwrap();
+        assert!(!app.session.has_pending_autosave());
+        let mut delay = Duration::ZERO;
+        for _ in 0..4 {
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(61));
+        }
+        assert_eq!(delay, Duration::MAX);
+
+        app.session.apply(id, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Second edit".into() }).unwrap();
+        assert!(app.session.has_pending_autosave());
+        for _ in 0..4 {
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(75));
+        }
+        assert!(delay > Duration::ZERO && delay <= Duration::from_secs(45), "second edit wakes by 120 seconds: {delay:?}");
+        assert_eq!(store.read(&key).unwrap(), first, "editing does not overwrite the snapshot before its deadline");
+        frame(&mut app, &ctx, base + Duration::from_secs(119));
+        assert_eq!(store.read(&key).unwrap(), first);
+        frame(&mut app, &ctx, base + Duration::from_secs(120));
+        let entries = store.list();
+        assert_eq!(entries.len(), 1, "the same document replaces its existing snapshot");
+        assert_eq!(entries[0].key, key);
+        let second = store.read(&key).unwrap();
+        assert_ne!(second, first);
+        let mut recovered = pdfcraft_engine::Session::new();
+        let restored = recovered.open("Snapshot.pdf", None, second.into(), None).unwrap();
+        assert_eq!(recovered.get(restored).unwrap().info_value("Title"), Some("Second edit".into()));
+        assert!(app.session.get(id).unwrap().dirty);
+        assert!(!app.session.has_pending_autosave());
+        for _ in 0..4 {
+            delay = frame(&mut app, &ctx, base + Duration::from_secs(121));
+        }
+        assert_eq!(delay, Duration::MAX, "the second snapshot also lets the window sleep");
+    }
+
+    /// Check that a clean document and a document with recovery disabled never schedule an autosave.
+    #[test]
+    fn clean_documents_and_disabled_recovery_do_not_schedule_autosave() {
+        for recovery_enabled in [false, true] {
+            let dir = TestDir::new();
+            let mut app = PdfCraftApp::new();
+            if recovery_enabled {
+                app.enable_recovery(RecoveryStore::new(dir.path()));
+            }
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            if recovery_enabled {
+                app.session.open("Clean.pdf", None, bytes, None).unwrap();
+            } else {
+                app.session.open_new("Unsaved.pdf", bytes).unwrap();
+            }
+            let ctx = egui::Context::default();
+            let base = web_time::Instant::now();
+            let mut delay = Duration::ZERO;
+            for _ in 0..4 {
+                delay = frame(&mut app, &ctx, base + Duration::from_secs(15));
+            }
+            assert_eq!(delay, Duration::MAX);
         }
     }
 }

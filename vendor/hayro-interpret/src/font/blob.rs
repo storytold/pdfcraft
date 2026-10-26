@@ -13,7 +13,7 @@ use skrifa::raw::{FontData as ReadFontData, FontRead};
 use skrifa::{FontRef, GlyphId, MetadataProvider, OutlineGlyphCollection};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use yoke::{Yoke, Yokeable};
 
 type FontData = Arc<dyn AsRef<[u8]> + Send + Sync>;
@@ -50,7 +50,11 @@ impl Type1FontBlob {
 
 /// A font blob for CFF-based fonts.
 #[derive(Clone)]
-pub(crate) struct CffFontBlob(Arc<CffFontYoke>);
+pub(crate) struct CffFontBlob(Arc<CffFontYoke>, Arc<OnceLock<GlyphNames>>);
+
+/// PdfCraft patch: (see vendor/README.md hayro-interpret (50)) glyph name to glyph id, built on
+/// first use.
+type GlyphNames = HashMap<Box<[u8]>, GlyphId>;
 
 impl Debug for CffFontBlob {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -84,7 +88,7 @@ impl CffFontBlob {
         });
 
         let _ = (cff, charset, subfonts);
-        Some(Self(Arc::new(yoke)))
+        Some(Self(Arc::new(yoke), Arc::new(OnceLock::new())))
     }
 
     pub(crate) fn font_data(&self) -> FontData {
@@ -134,11 +138,22 @@ impl CffFontBlob {
     }
 
     pub(crate) fn glyph_index_by_name(&self, name: &str) -> Option<GlyphId> {
-        // TODO: This is probably slow to do repeatedly?
-        self.charset()?.iter().find_map(|(gid, sid)| {
-            let bytes = self.0.as_ref().get().cff.string(sid)?;
-            (bytes == name.as_bytes()).then_some(gid)
-        })
+        // Called for every character code of a font, so the charset is read once. The first
+        // glyph of a name wins, as it did when the charset was searched in order.
+        self.1
+            .get_or_init(|| {
+                let mut names = GlyphNames::new();
+                if let Some(charset) = self.charset() {
+                    for (gid, sid) in charset.iter() {
+                        if let Some(bytes) = self.0.as_ref().get().cff.string(sid) {
+                            names.entry(bytes.into()).or_insert(gid);
+                        }
+                    }
+                }
+                names
+            })
+            .get(name.as_bytes())
+            .copied()
     }
 
     pub(crate) fn glyph_index_by_cid(&self, cid: u16) -> Option<GlyphId> {
@@ -179,11 +194,14 @@ impl OpenTypeFontBlob {
         let f = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
         // Reject fonts with invalid post table version, fixes pdf.js issue 9462. Not sure if there
         // is a better fix, for some reason skrifa accepts the font which is completely invalid.
+        // PdfCraft patch: also accept 1.0, 2.0 and 3.0 with the two 16-bit halves swapped
+        // (`00 00 00 03` for 3.0), as ScanSoft PDF Create! writes it into every font it embeds
+        // (#2946). Rejecting those fonts drew their text with a substitute that has no such glyphs.
         let invalid = f.post().is_ok_and(|p| {
             !matches!(
                 p.version().to_major_minor(),
                 (1, 0) | (2, 0) | (2, 5) | (3, 0)
-            )
+            ) && !matches!(p.version().to_be_bytes(), [0, 0, 0, 1..=3])
         });
 
         if invalid {
@@ -253,6 +271,27 @@ impl OpenTypeFontBlob {
             return glyph_names;
         };
 
+        // PdfCraft patch: a version written with its halves swapped (`00 00 00 02`, accepted in
+        // `new`) is read as the version it means, from a copy of the table with the version
+        // written correctly: read-fonts reads a 2.0 table's name index only under version 2.0,
+        // so otherwise its glyph names were never found (#2946).
+        let repaired = match post.version().to_be_bytes() {
+            [0, 0, 0, n @ 1..=3] => self
+                .font_ref()
+                .table_data(skrifa::raw::types::Tag::new(b"post"))
+                .map(|data| {
+                    let mut bytes = data.as_bytes().to_vec();
+                    if let Some(version) = bytes.get_mut(..4) {
+                        version.copy_from_slice(&[0, n, 0, 0]);
+                    }
+                    bytes
+                }),
+            _ => None,
+        };
+        let repaired_post = repaired.as_deref().and_then(|b| {
+            skrifa::raw::tables::post::Post::read(ReadFontData::new(b)).ok()
+        });
+        let post = repaired_post.as_ref().unwrap_or(&post);
         match post.version().to_major_minor() {
             (1, 0) => {
                 for (gid, name) in DEFAULT_GLYPH_NAMES.iter().enumerate() {
@@ -332,4 +371,102 @@ struct CFFYoke<'a> {
     cff: Cff<'a>,
     charset: Option<Charset<'a>>,
     subfonts: Vec<Subfont>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A CFF font with glyphs `.notdef`, `Alpha`, `Alpha` (a duplicate name) and `Beta`.
+    fn cff_with_names() -> Vec<u8> {
+        fn index(items: &[&[u8]]) -> Vec<u8> {
+            let mut out = (items.len() as u16).to_be_bytes().to_vec();
+            if items.is_empty() {
+                return out;
+            }
+            out.push(1);
+            let mut offset = 1u8;
+            out.push(offset);
+            for item in items {
+                offset += item.len() as u8;
+                out.push(offset);
+            }
+            for item in items {
+                out.extend_from_slice(item);
+            }
+            out
+        }
+        // Operands use the 5-byte form so the Top DICT has a fixed size.
+        fn int(value: usize) -> Vec<u8> {
+            let mut out = vec![29];
+            out.extend_from_slice(&(value as u32).to_be_bytes());
+            out
+        }
+        fn build_top(charset: usize, char_strings: usize, private: usize) -> Vec<u8> {
+            let mut dict = Vec::new();
+            dict.extend(int(charset));
+            dict.push(15);
+            dict.extend(int(char_strings));
+            dict.push(17);
+            dict.extend(int(0));
+            dict.extend(int(private));
+            dict.push(18);
+            dict
+        }
+        let header = vec![1, 0, 4, 1];
+        let names = index(&[b"T"]);
+        let strings = index(&[b"Alpha", b"Beta"]);
+        let subrs = index(&[]);
+        // Standard strings take SIDs 0..=390, so the first custom string is 391.
+        let charset = vec![0, 0x01, 0x87, 0x01, 0x87, 0x01, 0x88];
+        let char_strings = index(&[&[14], &[14], &[14], &[14]]);
+        // The Top DICT has a fixed size because every operand takes the 5-byte form.
+        let top_len = index(&[&build_top(0, 0, 0)]).len();
+        let charset_at = header.len() + names.len() + top_len + strings.len() + subrs.len();
+        let char_strings_at = charset_at + charset.len();
+        let private_at = char_strings_at + char_strings.len();
+        let dict = build_top(charset_at, char_strings_at, private_at);
+        let top = index(&[&dict]);
+        let mut out = header;
+        for part in [names, top, strings, subrs, charset, char_strings] {
+            out.extend(part);
+        }
+        out
+    }
+
+    /// The charset search `glyph_index_by_name` replaced.
+    fn linear(blob: &CffFontBlob, name: &str) -> Option<GlyphId> {
+        blob.charset()?.iter().find_map(|(gid, sid)| {
+            let bytes = blob.0.as_ref().get().cff.string(sid)?;
+            (bytes == name.as_bytes()).then_some(gid)
+        })
+    }
+
+    #[test]
+    fn glyph_names_resolve_to_the_first_glyph_with_that_name() {
+        let data: FontData = Arc::new(cff_with_names());
+        let blob = CffFontBlob::new(data).expect("the test font parses");
+        assert!(blob.1.get().is_none(), "the name map is built on first use");
+        assert_eq!(blob.glyph_index_by_name("Alpha"), Some(GlyphId::new(1)));
+        assert_eq!(blob.glyph_index_by_name("Beta"), Some(GlyphId::new(3)));
+        assert_eq!(blob.glyph_index_by_name("Missing"), None);
+        assert_eq!(blob.glyph_index_by_name(""), None);
+        for name in ["Alpha", "Beta", "Missing", ".notdef", ""] {
+            assert_eq!(
+                blob.glyph_index_by_name(name),
+                linear(&blob, name),
+                "{name:?}"
+            );
+            // The second lookup is answered from the stored map.
+            assert_eq!(
+                blob.glyph_index_by_name(name),
+                linear(&blob, name),
+                "{name:?}"
+            );
+        }
+        assert!(blob.1.get().is_some(), "the lookups built the name map");
+        let shared = blob.clone();
+        assert!(Arc::ptr_eq(&blob.1, &shared.1), "clones share one name map");
+        assert_eq!(shared.glyph_index_by_name("Alpha"), Some(GlyphId::new(1)));
+    }
 }

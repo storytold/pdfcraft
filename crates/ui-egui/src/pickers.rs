@@ -71,10 +71,25 @@ impl std::fmt::Debug for Picked {
     }
 }
 
+/// A request that came while another picker was showing (#2150).
+struct Waiting {
+    ask: Ask,
+    target: Option<PickTarget>,
+    then: Then,
+}
+
+impl std::fmt::Debug for Waiting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Waiting").field("target", &self.target).finish_non_exhaustive()
+    }
+}
+
 /// Pickers in flight and the picks they finished.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Pickers {
-    /// A picker is showing, or its pick is waiting for the frame; a second request is refused
+    /// Requests that show, in order, once the picker before them is answered.
+    waiting: std::collections::VecDeque<Waiting>,
+    /// A picker is showing, or its pick is waiting for the frame; a second request waits
     /// until the pick's closure starts.
     showing: Arc<AtomicBool>,
     done: Arc<Mutex<Vec<Picked>>>,
@@ -163,14 +178,17 @@ impl PdfCraftApp {
         };
         let ask = if multiple { Ask::Files(dialog) } else { Ask::File(dialog) };
         self.ask(ask, target, move |app, paths| match pick_for {
-            PickFor::Open => paths.iter().for_each(|p| app.open_path(&p.to_string_lossy())),
+            PickFor::Open => paths.iter().for_each(|p| {
+                app.open_path(&p.to_string_lossy());
+            }),
             PickFor::Files(purpose) => app.use_paths(purpose, &paths),
         });
     }
 
     /// Show `ask` without blocking the frame, and call `then` with the chosen paths on a later
-    /// frame ([`Self::process_picked`]). Returns false, after telling the user, when no picker
-    /// could be shown: another one is still open, or its worker couldn't start.
+    /// frame ([`Self::process_picked`]). While another picker is open, `ask` waits and shows
+    /// when that one is answered (the user is told). Returns false, after telling the user,
+    /// when no picker could be shown because its worker couldn't start.
     ///
     /// `then` is not called when the picker is cancelled, or when `target` is given and by then
     /// that document is no longer the active one or has been edited (the user is told). Use
@@ -180,12 +198,19 @@ impl PdfCraftApp {
     /// `pick_override` answers instead of a native panel (tests and automation); the answer
     /// still arrives on a later frame, like a real pick.
     pub(crate) fn ask(&mut self, ask: Ask, target: Option<DocId>, then: impl FnOnce(&mut PdfCraftApp, Vec<PathBuf>) + Send + 'static) -> bool {
-        if self.pickers.showing.swap(true, Ordering::SeqCst) {
-            self.notify_tr("Another file dialog is still open. Finish with it first.");
-            return false;
-        }
         let target = self.pick_target(target);
         let then: Then = Box::new(then);
+        if self.pickers.showing.swap(true, Ordering::SeqCst) {
+            // Refusing would drop what asked, such as a finished Reduce File Size copy.
+            self.pickers.waiting.push_back(Waiting { ask, target, then });
+            self.notify_tr("Another file dialog is still open. This one will open when it closes.");
+            return true;
+        }
+        self.show_picker(ask, target, then)
+    }
+
+    /// [`Self::ask`] once `showing` is claimed for it.
+    fn show_picker(&mut self, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
         if let Some(paths) = self.pick_override.clone() {
             self.pickers.deliver(target, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;
@@ -255,6 +280,13 @@ impl PdfCraftApp {
             if let Err(m) = pdfcraft_engine::guard(|| then(self, paths)) {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
             }
+        }
+        // After the closures, so a picker one of them asked for comes before the waiting ones.
+        if !self.pickers.waiting.is_empty()
+            && !self.pickers.showing.swap(true, Ordering::SeqCst)
+            && let Some(Waiting { ask, target, then }) = self.pickers.waiting.pop_front()
+        {
+            self.show_picker(ask, target, then);
         }
     }
 }
@@ -359,34 +391,112 @@ mod tests {
     }
 
     #[test]
-    fn a_second_picker_is_refused_while_one_is_showing() {
+    fn a_second_picker_waits_for_the_one_showing_and_opens_when_it_closes() {
+        let mut app = PdfCraftApp::new();
+        app.pick_override = Some(vec!["c.pdf".into()]);
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let first = got.clone();
+        assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, move |_, _| first.lock().unwrap().push("first")));
+        let second = got.clone();
+        assert!(app.ask(Ask::Folder(rfd::AsyncFileDialog::new()), None, move |_, _| second.lock().unwrap().push("second")));
+        assert!(app.toast.as_ref().is_some_and(|(m, _)| m.contains("will open when it closes")), "the user is told it will follow");
+        app.process_picked();
+        assert_eq!(*got.lock().unwrap(), vec!["first"], "the waiting picker shows only once the first one is answered");
+        assert!(app.pickers.showing.load(Ordering::SeqCst), "the waiting picker owns the flag now");
+        app.process_picked();
+        assert_eq!(*got.lock().unwrap(), vec!["first", "second"]);
+        assert!(!app.pickers.showing.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_waiting_picker_still_opens_when_the_one_showing_is_cancelled() {
         let mut app = PdfCraftApp::new();
         app.pick_override = Some(vec!["c.pdf".into()]);
         app.pickers.showing.store(true, Ordering::SeqCst);
         let got = Arc::new(Mutex::new(Vec::new()));
         let into = got.clone();
-        assert!(!app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
+        assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
         app.process_picked();
-        assert!(got.lock().unwrap().is_empty());
-        assert!(app.pickers.showing.load(Ordering::SeqCst), "the showing picker still owns the flag");
-        assert!(app.toast.as_ref().is_some_and(|(m, _)| m.contains("Another file dialog")), "the user is told");
+        assert!(got.lock().unwrap().is_empty(), "the showing picker still owns the flag");
+        app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
+        app.process_picked();
+        app.process_picked();
+        assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("c.pdf")]);
+    }
+
+    /// A one-page document showing `text`, with an unencoded content stream long enough that
+    /// Reduce File Size makes a smaller copy (it saves none otherwise).
+    fn text_pdf(text: &str) -> Vec<u8> {
+        let content = format!("BT /F1 12 Tf 20 250 Td ({text}) Tj ET\n{}", "q Q\n".repeat(500));
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// #2150: Reduce File Size finishing under an open Save As panel used to drop its bytes.
+    #[test]
+    fn a_reduced_copy_finished_under_another_dialog_is_saved_once_it_closes() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-pickers-{}-reduce", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("notes (reduced).pdf");
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let source = text_pdf("Minutes of the harbour board");
+        app.open_bytes("notes.pdf", None, source.clone()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        let (reduced, _) = app.session.optimize_job(doc, &pdfcraft_engine::optimize::Settings::default(), &[]).unwrap().run(|_| true).unwrap();
+        assert!(reduced.len() < source.len(), "a copy that isn't smaller would not be saved at all");
+        app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
+        // Save As is still open on another tab when the optimizer finishes.
+        app.pickers.showing.store(true, Ordering::SeqCst);
+        app.save_optimized(doc, crate::optimize_ui::OptimizeKind::Reduce, Ok((reduced.clone(), String::new())));
+        app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
+        app.process_picked();
+        app.process_picked();
+        let written = std::fs::read(&out).unwrap_or_default();
+        assert!(written == *reduced, "the reduced copy is saved where the user chose, byte for byte");
+        let mut again = pdfcraft_engine::Session::new();
+        let id = again.open("notes (reduced).pdf", None, Arc::new(written), None).unwrap();
+        let text = pdfcraft_engine::export::Exporter::new(again.get(id).unwrap()).text(0).unwrap();
+        assert!(text.contains("Minutes of the harbour board"), "the saved copy reopens with its text: {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn a_follow_up_that_asks_again_gets_its_picker_even_if_another_request_came_first() {
+    fn a_follow_up_that_asks_again_gets_its_picker_before_a_request_that_came_first() {
         let mut app = PdfCraftApp::new();
         app.pick_override = Some(vec!["first.fdf".into()]);
         let got = Arc::new(Mutex::new(Vec::new()));
         let into = got.clone();
         assert!(app.ask(Ask::Files(rfd::AsyncFileDialog::new()), None, move |app, _| {
             // Merge data: the spreadsheet's save picker, asked from the first pick's closure.
-            assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
+            assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, move |_, _| into.lock().unwrap().push("chained")));
         }));
-        // Another command asks for a picker before the frame uses the first pick: refused.
-        assert!(!app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, |_, _| panic!("must not run")));
-        app.process_picked();
-        app.process_picked();
-        assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("first.fdf")], "the chained picker answered");
+        // Another command asks for a picker before the frame uses the first pick: it waits.
+        let other = got.clone();
+        assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, _| other.lock().unwrap().push("other")));
+        for _ in 0..4 {
+            app.process_picked();
+        }
+        assert_eq!(*got.lock().unwrap(), vec!["chained", "other"], "the chained picker answers first");
     }
 
     #[test]

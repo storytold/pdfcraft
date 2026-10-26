@@ -20,6 +20,11 @@
 [people.YouseifUS]
 sync_github_name = true
 
+[people.brian-moon]
+real_name = "Il Min Brian Moon"
+display_name = "Il Min Brian Moon"
+sync_github_name = false
+
 [people.echelon]
 real_name = "Brandon Thomas"
 display_name = "Brandon Thomas"
@@ -29,6 +34,9 @@ sync_github_name = false
 real_name = "Eduardo Soares"
 display_name = "Eduardo Soares"
 sync_github_name = false
+
+[people.guillehr2]
+real_name = "Guillem Hermida"
 
 [people.jcl-bit]
 real_name = "James Locke"
@@ -153,3 +161,22 @@ sync_github_name = true
 real_name = "Eric Kaden"
 display_name = "Eric Kaden"
 sync_github_name = false
+
+[people.MatrixMagician]
+sync_github_name = true
+
+[people.Lcoding15]
+real_name = "Livio Oswald"
+
+[people.Bode512]
+sync_github_name = true
+
+[people.amoisttowe1]
+real_name = "Nick Nyssen"
+
+[people.agent-reed]
+sync_github_name = true
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true

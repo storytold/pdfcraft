@@ -16,9 +16,9 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept. Digits are Western (0-9).
 #
-# Write every entry in logical (typing) order. The interface draws text left to right, so
-# i18n/mod.rs puts each entry into display order when it loads the catalog (bidi::display_rtl);
-# spaces and a colon at either end of an entry stay at that end, next to what the code appends.
+# Write every entry in logical (typing) order. Catalogs stay logical: epaint shapes and
+# reorders each line with UAX #9, so preordering here would reverse right-to-left text twice.
+# Spaces and a colon at either end of an entry stay at that end, next to what the code appends.
 
 	Menu	القائمة
 	File	ملف
@@ -138,6 +138,8 @@
 	Next view	العرض التالي
 	Page display	عرض الصفحات
 	Continuous scrolling	تمرير متواصل
+	Show gaps between pages	إظهار الفراغات بين الصفحات
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	أخفِ الفراغات لوصل حواف الصفحات. تبقى الهوامش داخل ملف PDF دون تغيير.
 	Two-page view	عرض صفحتين
 	Single page	صفحة واحدة
 	Show cover page in two-page view	إظهار صفحة الغلاف في عرض الصفحتين
@@ -182,6 +184,15 @@
 	Available	متاح
 	Ready	جاهز
 	Search tools and commands…	البحث في الأدوات والأوامر…
+
+# Accessible names for inputs that have no visible label.
+	Added text	النص المضاف
+	Link URL	عنوان URL للرابط
+	Search tools and commands	البحث في الأدوات والأوامر
+	Text editing line	سطر تحرير النص
+	Text to place	النص المراد وضعه
+	Tooltip	تلميح
+	Words or phrases to redact	الكلمات أو العبارات المراد حجبها
 	No matching tools	لا توجد أدوات مطابقة
 	Tool	أداة
 	Command	أمر
@@ -519,6 +530,36 @@
 	Could not save: {e}	تعذّر الحفظ: {e}
 	Earlier in tab order	أبكر في ترتيب التنقل
 	Later in tab order	أبعد في ترتيب التنقل
+	Calculation order	ترتيب الحساب
+	Fix order	إصلاح الترتيب
+	Move only what must move, so every field calculates after the fields it reads.	ينقل فقط ما يجب نقله، كي يُحسب كل حقل بعد الحقول التي يقرؤها.
+	Earlier in calculation order	أبكر في ترتيب الحساب
+	Later in calculation order	أبعد في ترتيب الحساب
+	Too early	مبكر جدًا
+	Reads {name}, which calculates later, so it shows an old value.	يقرأ {name} الذي يُحسب لاحقًا، لذا يعرض قيمة قديمة.
+	Loop	حلقة
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	يقرأ {names} التي تقرؤه بدورها. لا يمكن لأي ترتيب إصلاح الحلقة: غيّر إحدى الصيغ.
+	Not in order	خارج الترتيب
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	غير موجود في ترتيب الحساب المحفوظ في ملف PDF: قد لا تحسبه برامج عرض PDF الأخرى.
+	Back to Prepare a form	العودة إلى تجهيز نموذج
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	لا يحسب أي حقل في هذا النموذج قيمته بعد. امنح حقلًا عملية حساب في علامة التبويب «الحساب» ضمن خصائصه، وسيظهر هنا.
+	{names} and {last}	{names} و{last}
+	{field} reads no other field	{field} لا يقرأ أي حقل آخر
+	{field} reads {fields}	{field} يقرأ {fields}
+	No field reads it	لا يقرؤه أي حقل
+	The order saved in the PDF needs tidying	يحتاج الترتيب المحفوظ في PDF إلى تنظيم
+	Moves only what must move	ينقل فقط ما يجب نقله
+	Every field calculates after the fields it reads.	يُحسب كل حقل بعد الحقول التي يقرؤها.
+	Every field outside a loop calculates after the fields it reads.	يُحسب كل حقل خارج حلقة بعد الحقول التي يقرؤها.
+	{field} reads its own value	{field} يقرأ قيمته نفسها
+	{fields} read each other	{fields} يقرأ بعضها بعضًا
+	No order can fix a loop. Change one of the formulas.	لا يمكن لأي ترتيب إصلاح حلقة. غيّر إحدى الصيغ.
+	Edit {field}'s formula	تحرير صيغة {field}
+	Order · top calculates first	الترتيب · الأعلى يُحسب أولًا
+	Script	برنامج نصي
+	Links on page	الروابط على الصفحة
+	Show on the page which fields each field reads	إظهار الحقول التي يقرؤها كل حقل على الصفحة
+	Drag a field to move it, or select it and press {up} or {down}.	اسحب حقلًا لنقله، أو حدده واضغط {up} أو {down}.
 	From:	من:
 	To:	إلى:
 	High Resolution	دقة عالية
@@ -579,6 +620,7 @@
 	Discard private data of other applications	تجاهل البيانات الخاصة بالتطبيقات الأخرى
 	Discard hidden text	تجاهل النص المخفي
 	Use Flate to encode streams that are not encoded	استخدام Flate لترميز التدفقات غير المرمَّزة
+	In streams that use LZW encoding, use Flate instead	في التدفقات التي تستخدم ترميز LZW، استخدام Flate بدلاً منه
 	Remove invalid links and bookmarks	إزالة الروابط والإشارات المرجعية غير الصالحة
 	Remove unreferenced named destinations	إزالة الوجهات المسماة غير المشار إليها
 	Compress document structure (object streams)	ضغط بنية المستند (تدفقات الكائنات)
@@ -811,6 +853,7 @@
 	Insert Page Number	إدراج رقم الصفحة
 	Insert Date	إدراج التاريخ
 	Start page number	رقم صفحة البداية
+	Shrink the page content to make room for the header and footer	تصغير محتوى الصفحة لإفساح المجال للرأس والتذييل
 	Source	المصدر
 	Fit to page	ملاءمة الصفحة
 	Rotation	التدوير
@@ -1189,6 +1232,7 @@
 	Off	متوقف
 	Flip on long edge	قلب على الحافة الطويلة
 	Flip on short edge	قلب على الحافة القصيرة
+	Printer default	افتراضي الطابعة
 	Paper:	الورق:
 	Pages to Print	الصفحات المراد طباعتها
 	More options:	خيارات أخرى:
@@ -1332,6 +1376,8 @@
 	This document has no layers.	هذا المستند لا يحتوي على طبقات.
 	This document has no attachments.	هذا المستند لا يحتوي على مرفقات.
 	Hide layer	إخفاء الطبقة
+	Layer options	خيارات الطبقات
+	Reset to Initial Visibility	إعادة تعيين إلى الرؤية الأولية
 	Show layer	إظهار الطبقة
 	Set layer visibility	ضبط ظهور الطبقة
 	on page {label}	في الصفحة {label}
@@ -1620,6 +1666,7 @@
 	Looking for printers…	جارٍ البحث عن الطابعات…
 	Sending sheet {s} of {n} to {printer}…	جارٍ إرسال الورقة {s} من {n} إلى {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	لم يُعثر على أي طابعة. تحقّق من أن الطابعة مثبّتة وأن خدمة التخزين المؤقت للطباعة تعمل، ثم افتح «طباعة» مرة أخرى.
+	Reading the printer's settings…	جارٍ قراءة إعدادات الطابعة…
 	Sending to {printer}…	جارٍ الإرسال إلى {printer}…
 	Choose a folder for the searchable files	اختر مجلدًا للملفات القابلة للبحث
 	Files are combined from top to bottom. Leave Pages empty to take every page.	تُدمج الملفات من الأعلى إلى الأسفل. اترك «الصفحات» فارغًا لأخذ كل الصفحات.
@@ -1764,6 +1811,7 @@
 	This document has no restrictions to lift	لا توجد في هذا المستند قيود لرفعها
 	The document's security settings don't allow this change	إعدادات أمان المستند لا تسمح بهذا التغيير
 	The document's security settings don't allow copying text and images	إعدادات أمان المستند لا تسمح بنسخ النصوص والصور
+	The document's security settings don't allow printing	إعدادات أمان المستند لا تسمح بالطباعة
 	Open a document first	افتح مستندًا أولًا
 	Security will be removed when you save	سيُزال الأمان عند الحفظ
 	Click text or an image to edit it	انقر على نص أو صورة لتحريرها
@@ -1927,6 +1975,7 @@
 	Delete field	حذف الحقل
 	Duplicate field	تكرار الحقل
 	Set tab order	ضبط ترتيب التنقل
+	Set calculation order	تعيين ترتيب الحساب
 	Change initial view	تغيير العرض الأولي
 	Set alternate text	تعيين النص البديل
 	Mark figure as decorative	تعليم الشكل كزخرفي
@@ -2001,6 +2050,10 @@
 	Perimeter	المحيط
 	Area	المساحة
 	Drawing scale	مقياس الرسم
+	Scale	المقياس
+	Common scales	مقاييس شائعة
+	Enter a scale such as 1:50.	أدخل مقياسًا مثل 1:50.
+	Applying a scale switches units to m / mm.	يؤدي تطبيق المقياس إلى تحويل الوحدات إلى م / مم.
 	Snapping	الانجذاب
 	Export measurements	تصدير القياسات
 	Open a PDF to measure it.	افتح ملف PDF لقياسه.
@@ -2154,6 +2207,7 @@ calendar date	October	أكتوبر
 calendar date	November	نوفمبر
 calendar date	December	ديسمبر
 	Reopen the files that were open when PdfCraft last closed	إعادة فتح الملفات التي كانت مفتوحة عند آخر إغلاق لـ PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	استعادة آخر عرض (الصفحة والتكبير وعرض الصفحات) عند فتح المستند مرة أخرى
 	Clear Recent Files	مسح الملفات الأخيرة
 	Remove from Recent	إزالة من الأخيرة
 	Remove {name} from Recent	إزالة {name} من الأخيرة
@@ -2301,6 +2355,9 @@ key	Space	مسافة
 	Printer paper and scaling may differ. Check driver settings.	قد يختلف ورق الطابعة ومقياس الطباعة. تحقق من إعدادات برنامج التشغيل.
 	Drawing scale changes. Use Actual size for full-scale plans.	يتغير مقياس الرسم. استخدم الحجم الفعلي لطباعة المخططات بمقياسها الأصلي.
 	Reload documents when their files change on disk	إعادة تحميل المستندات عند تغيّر ملفاتها على القرص
+	Don't show again	عدم الإظهار مرة أخرى
+	Show a notice when a document is secured	إظهار إشعار عندما يكون المستند مؤمَّنًا
+	Always use my default zoom and page layout	استخدام التكبير وتخطيط الصفحة الافتراضيين دائمًا
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	تغيّر هذا الملف على القرص. «إعادة التحميل» تعرض النسخة الجديدة وتُسقط تغييراتك غير المحفوظة؛ و«حفظ» يستبدلها بهذه النسخة.
 	Reload	إعادة تحميل
 	Couldn't reload {name}: {e}	تعذّرت إعادة تحميل {name}: {e}
@@ -2362,6 +2419,13 @@ animation effects	Off	معطّلة
 	no unused output name	لا يوجد اسم ناتج غير مستخدم
 	no output folder was chosen	لم يتم اختيار مجلد للإخراج
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	تم تنزيل {n} من ملفات PDF|تم تنزيل ملف PDF واحد ({n})|تم تنزيل ملفي PDF ({n})|تم تنزيل {n} ملفات PDF|تم تنزيل {n} ملف PDF|تم تنزيل {n} من ملفات PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	تم تحديث {n} من العمليات الحسابية لتستخدم الاسم الجديد.|عملية حسابية واحدة ({n}) تستخدم الآن الاسم الجديد.|عمليتان حسابيتان ({n}) تستخدمان الآن الاسم الجديد.|{n} عمليات حسابية تستخدم الآن الاسم الجديد.|{n} عملية حسابية تستخدم الآن الاسم الجديد.|{n} من العمليات الحسابية تستخدم الآن الاسم الجديد.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	يحتوي ترتيب الحساب على {n} من الإدخالات التي لا تحسب شيئًا. «إصلاح الترتيب» يزيلها.|يحتوي ترتيب الحساب على إدخال واحد ({n}) لا يحسب شيئًا. «إصلاح الترتيب» يزيله.|يحتوي ترتيب الحساب على إدخالين ({n}) لا يحسبان شيئًا. «إصلاح الترتيب» يزيلهما.|يحتوي ترتيب الحساب على {n} إدخالات لا تحسب شيئًا. «إصلاح الترتيب» يزيلها.|يحتوي ترتيب الحساب على {n} إدخالًا لا يحسب شيئًا. «إصلاح الترتيب» يزيلها.|يحتوي ترتيب الحساب على {n} من الإدخالات التي لا تحسب شيئًا. «إصلاح الترتيب» يزيلها.
+@plural	{fields} reads it|{fields} read it	{fields} تقرؤه|{fields} يقرؤه|{fields} يقرآنه|{fields} تقرؤه|{fields} تقرؤه|{fields} تقرؤه
+@plural	{n} field shows an old value|{n} fields show old values	{n} من الحقول تعرض قيمًا قديمة|حقل واحد ({n}) يعرض قيمة قديمة|حقلان ({n}) يعرضان قيمًا قديمة|{n} حقول تعرض قيمًا قديمة|{n} حقلًا يعرض قيمًا قديمة|{n} من الحقول تعرض قيمًا قديمة
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} يُحسب قبل {fields}، التي يقرؤها.|{field} يُحسب قبل {fields}، الذي يقرؤه.|{field} يُحسب قبل {fields}، اللذين يقرؤهما.|{field} يُحسب قبل {fields}، التي يقرؤها.|{field} يُحسب قبل {fields}، التي يقرؤها.|{field} يُحسب قبل {fields}، التي يقرؤها.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} من الحقول الأخرى تُحسب مبكرًا جدًا.|حقل آخر ({n}) يُحسب مبكرًا جدًا.|حقلان آخران ({n}) يُحسبان مبكرًا جدًا.|{n} حقول أخرى تُحسب مبكرًا جدًا.|{n} حقلًا آخر يُحسب مبكرًا جدًا.|{n} من الحقول الأخرى تُحسب مبكرًا جدًا.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.|{fields} غير موجود في الترتيب المحفوظ في PDF، لذا قد لا تحسبه عارضات PDF الأخرى.|{fields} غير موجودين في الترتيب المحفوظ في PDF، لذا قد لا تحسبهما عارضات PDF الأخرى.|{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.|{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.|{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.
 	Scan	مسح ضوئي
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	وقّع على ورقة بيضاء والتقط لها صورة في إضاءة ساطعة ومتساوية (استخدم الفلاش). اختر الصورة أو أفلتها هنا: يعثر PdfCraft على التوقيع ويزيل الورق.
 	Choose photo…	اختيار صورة…
@@ -2711,3 +2775,61 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Create & Edit	الإنشاء والتحرير
+	Review & Compare	المراجعة والمقارنة
+	Forms & Signatures	النماذج والتوقيعات
+	Protect & Standardize	الحماية والتوحيد القياسي
+	Customize & Automate	التخصيص والأتمتة
+	No tools match your search.	لا توجد أدوات تطابق بحثك.
+	Expand all tools	توسيع كل الأدوات
+	Collapse all tools	طي كل الأدوات
+	Attach a file…	إرفاق ملف…
+	Delete attachment	حذف المرفق
+	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد
+	Attach {name}	إرفاق {name}
+	Delete attachment {key}	حذف المرفق {key}
+	Bulleted list	قائمة نقطية
+	Numbered list	قائمة مرقمة
+	Alignment	المحاذاة
+	Superscript	نص مرتفع
+	Subscript	نص منخفض
+	Paragraph spacing	تباعد الفقرات
+	Less	أقل
+	Other options	خيارات أخرى
+	Thumbnail size	حجم الصور المصغرة
+	Smaller thumbnails	تصغير الصور المصغرة
+	Larger thumbnails	تكبير الصور المصغرة
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	إعادة تشكيل التعليق
+
+# Prepare a form ▸ Text field table
+	Add text field table	إضافة جدول حقول نصية
+	Text field table	جدول حقول نصية
+	Text Field Table	جدول حقول نصية
+	Columns	الأعمدة
+	Row spacing	المسافة بين الصفوف
+	Column spacing	المسافة بين الأعمدة
+	First row number	رقم الصف الأول
+	Column widths	عروض الأعمدة
+	Distribute evenly	توزيع بالتساوي
+	Field names	أسماء الحقول
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N أو {row} هو رقم الصف، و{col} رقم العمود، و{seq} رقم الخلية. إذا لم يوجد أي منها، يُضاف رقم الصف في النهاية.
+	Column {n}	العمود {n}
+	Add fields	إضافة الحقول
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	الصفوف قصيرة جدًا: اجعل المنطقة أطول، أو استخدم صفوفًا أقل أو مسافة أقل بين الصفوف
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	أحد الأعمدة ضيق جدًا: اجعل المنطقة أعرض، أو امنح العمود عرضًا أكبر، أو استخدم أعمدة أقل أو مسافة أقل بين الأعمدة
+	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
+	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
+	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	اليوم
+@plural	{n} reply|{n} replies	{n} رد|{n} رد|{n} ردّان|{n} ردود|{n} ردًا|{n} رد
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	أدوات الصفحات
+	Insert pages from a file after the selection…	إدراج صفحات من ملف بعد التحديد…
+	Rotate the selected pages counterclockwise	تدوير الصفحات المحددة عكس اتجاه عقارب الساعة
+	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
+	Extract the selected pages…	استخراج الصفحات المحددة…
+	Delete the selected pages	حذف الصفحات المحددة

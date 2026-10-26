@@ -235,7 +235,7 @@ fn hex(c: &[f64]) -> Option<String> {
 
 fn parse_hex(s: &str) -> Option<[f64; 3]> {
     let h = s.trim().trim_start_matches('#');
-    if h.len() != 6 {
+    if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let p = |i: usize| h.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()).map(|v| f64::from(v) / 255.0);
@@ -246,6 +246,23 @@ fn nums_of(doc: &Document, o: Option<&Object>) -> Vec<f64> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect())).unwrap_or_default()
 }
 
+/// A `/Rect` of exactly four finite numbers; any other entry makes the whole rectangle unusable.
+fn rect_strict(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+    let num = |x: &Object| doc.resolve(x).as_f64().filter(|v| v.is_finite());
+    match doc.resolve(o?).as_array()?.as_slice() {
+        [x0, y0, x1, y1] => Some([num(x0)?, num(y0)?, num(x1)?, num(y1)?]),
+        _ => None,
+    }
+}
+
+/// Whether a quad's four corners enclose any area: some three of them are not collinear.
+fn quad_has_area(q: &[f64; 8]) -> bool {
+    let [ax, ay, bx, by, cx, cy, dx, dy] = *q;
+    let cross = |(px, py): (f64, f64), (qx, qy): (f64, f64), (rx, ry): (f64, f64)| (qx - px) * (ry - py) - (qy - py) * (rx - px);
+    let (a, b, c, d) = ((ax, ay), (bx, by), (cx, cy), (dx, dy));
+    [cross(a, b, c), cross(a, b, d), cross(a, c, d), cross(b, c, d)].iter().any(|v| v.abs() > 0.0)
+}
+
 fn text_of(doc: &Document, d: &Dict, k: &[u8]) -> Option<String> {
     d.get(k).and_then(|o| match &*doc.resolve(o) {
         Object::String(s) => Some(s.to_text()),
@@ -254,8 +271,10 @@ fn text_of(doc: &Document, d: &Dict, k: &[u8]) -> Option<String> {
     })
 }
 
+/// The numbers of a list; empty when any entry is non-finite (`nan`, `inf`), so the list is unusable as a whole.
 fn csv(list: &str) -> Vec<f64> {
-    list.split([',', ';', ' ']).filter(|t| !t.is_empty()).filter_map(|t| t.trim().parse().ok()).collect()
+    let v: Vec<f64> = list.split([',', ';', ' ']).filter(|t| !t.is_empty()).filter_map(|t| t.trim().parse().ok()).collect();
+    if v.iter().all(|x| x.is_finite()) { v } else { Vec::new() }
 }
 
 fn arr(v: &[f64]) -> Object {
@@ -312,9 +331,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
             let fl: Vec<&str> = FLAGS.iter().filter(|(b, _)| flags & b != 0).map(|(_, s)| *s).collect();
-            if !fl.is_empty() {
-                let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
-            }
+            let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
             if let Some(c) = hex(&nums_of(doc, d.get(b"C"))) {
                 let _ = write!(attrs, " color=\"{c}\"");
             }
@@ -339,7 +356,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 && le.len() == 2
             {
                 let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
-                let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
+                let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", esc(&name(&le[0])), esc(&name(&le[1])));
             }
             // A callout: its leader path, text-box inset, intent and (single-name) line ending.
             let cl = nums_of(doc, d.get(b"CL"));
@@ -415,7 +432,13 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
             continue;
         }
         let mut node = &mut root;
-        for part in f.name.split('.') {
+        // One `<field>` level per part of the name, but no more levels than the import reads
+        // back. A `/T` can hold periods of its own, so a name can split into far more parts than
+        // the field tree has levels: nesting every part wrote a file the import refuses and, for
+        // a long enough name, recursed in `write_node` until the stack overflowed. The parts past
+        // the last level stay together in the deepest element's name, and the import joins them
+        // back with periods into the same full name.
+        for part in f.name.splitn(MAX_DEPTH, '.') {
             let i = match node.kids.iter().position(|(k, _)| k == part) {
                 Some(i) => i,
                 None => {
@@ -1013,10 +1036,12 @@ const REDACT_UNSEEN: i64 = 1 | 2 | 32;
 /// `/F` Locked (ISO 32000-2 Table 167): the user protected this annotation from change.
 const LOCKED: i64 = 128;
 
-/// An existing annotation an import must never replace, move or unlock: one the user locked, or a
-/// redaction mark (replacing it would drop the region the user marked to remove).
-fn import_protected(x: &Dict) -> bool {
-    x.int(b"F").unwrap_or(0) & LOCKED != 0 || x.name(b"Subtype") == Some(b"Redact".as_slice())
+/// An existing annotation an import must never replace, move or unlock: one the user locked, a
+/// redaction mark (replacing it would drop the region the user marked to remove), or a form
+/// widget or field (replacing it would set the field's value and policy around the form setter).
+fn import_protected(doc: &Document, x: &Dict) -> bool {
+    let flags = x.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+    flags & LOCKED != 0 || matches!(x.name(b"Subtype"), Some(b"Redact" | b"Widget")) || x.contains(b"FT")
 }
 
 fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, DataError> {
@@ -1026,6 +1051,29 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
         let f = d.int(b"F").unwrap_or(0);
         if f & REDACT_UNSEEN != 0 {
             d.set(b"F".to_vec(), Object::Int(f & !REDACT_UNSEEN));
+        }
+        // Its review outline is drawn opaque, and from the area it removes: applying a mark
+        // without usable /QuadPoints removes its /Rect, which the outline is then drawn from.
+        d.remove(b"CA");
+        d.remove(b"ca");
+        let quads_drawable = d.get(b"QuadPoints").and_then(Object::as_array).is_some_and(|q| {
+            let v: Vec<f64> = q.iter().filter_map(Object::as_f64).filter(|v| v.is_finite()).collect();
+            let (quads, rest) = v.as_chunks::<8>();
+            v.len() == q.len() && rest.is_empty() && !quads.is_empty() && quads.iter().all(quad_has_area)
+        });
+        if !quads_drawable {
+            // Quads the outline can't draw, or any quad that encloses no area, are replaced by the
+            // /Rect's, or dropped when there is no usable /Rect either; such a mark then removes
+            // nothing.
+            match rect_strict(doc, d.get(b"Rect")) {
+                Some([x0, y0, x1, y1]) => {
+                    let (l, r, b, t) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+                    d.set(b"QuadPoints".to_vec(), arr(&[l, t, r, t, l, b, r, b]));
+                }
+                _ => {
+                    d.remove(b"QuadPoints");
+                }
+            }
         }
     }
     let nm = d.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text()));
@@ -1038,13 +1086,13 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
         .unwrap_or_default();
     let mut kept = Vec::new();
     let mut removed: Vec<ObjRef> = Vec::new();
-    // Never let a same-name import replace a locked comment or a redaction mark: keep it, and add
-    // the imported dict beside it under no name of its own.
+    // Never let a same-name import replace a protected annotation (`import_protected`): keep it,
+    // and add the imported dict beside it under no name of its own.
     let mut clash = false;
     for a in annots {
         let existing = a.as_ref().and_then(|r| doc.get(r).as_dict().cloned());
         let same = nm.is_some() && existing.as_ref().and_then(|x| x.get(b"NM").and_then(|n| doc.resolve(n).as_string().map(|s| s.to_text()))) == nm;
-        if same && existing.as_ref().is_some_and(import_protected) {
+        if same && existing.as_ref().is_some_and(|x| import_protected(doc, x)) {
             clash = true;
             kept.push(a);
         } else if same {
@@ -1078,6 +1126,24 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
     Ok(r)
 }
 
+/// A pop-up window for the comment `parent`, on its page.
+fn add_popup(doc: &mut Document, page: ObjRef, parent: ObjRef, rect: &[f64], open: bool) -> Result<(), DataError> {
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Annot"));
+    p.set(b"Subtype".to_vec(), Object::name("Popup"));
+    p.set(b"Rect".to_vec(), arr(rect));
+    p.set(b"Parent".to_vec(), Object::Ref(parent));
+    p.set(b"Open".to_vec(), Object::Bool(open));
+    let pr = doc.add(Object::Dict(p));
+    doc.update_dict(parent, |d| d.set(b"Popup".to_vec(), Object::Ref(pr)))?;
+    doc.update_dict(page, |pd| {
+        if let Some(Object::Array(a)) = pd.get_mut(b"Annots") {
+            a.push(Object::Ref(pr));
+        }
+    })?;
+    Ok(())
+}
+
 fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -1109,19 +1175,7 @@ fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
             if let Some(pop) = node.children().find(|c| c.has_tag_name("popup"))
                 && let Some(rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4)
             {
-                let mut p = Dict::new();
-                p.set(b"Type".to_vec(), Object::name("Annot"));
-                p.set(b"Subtype".to_vec(), Object::name("Popup"));
-                p.set(b"Rect".to_vec(), arr(&rect));
-                p.set(b"Parent".to_vec(), Object::Ref(r));
-                p.set(b"Open".to_vec(), Object::Bool(pop.attribute("open") == Some("yes")));
-                let pr = doc.add(Object::Dict(p));
-                doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pr)))?;
-                doc.update_dict(page, |pd| {
-                    if let Some(Object::Array(a)) = pd.get_mut(b"Annots") {
-                        a.push(Object::Ref(pr));
-                    }
-                })?;
+                add_popup(doc, page, r, &rect, pop.attribute("open") == Some("yes"))?;
             }
             report.comments += 1;
         }
@@ -1153,18 +1207,66 @@ fn find_by_name(doc: &Document, nm: &str) -> Option<ObjRef> {
     None
 }
 
-/// Copy an object out of another document, resolving references (FDF objects are small).
-fn deep(src: &Document, o: &Object, depth: usize) -> Object {
+/// What one FDF import may copy out of the file. A field tree or comment that repeats a reference
+/// level after level would otherwise expand a small file into millions of values.
+const MAX_FDF_IMPORT_VALUES: usize = 1_000_000;
+
+struct ImportBudget {
+    values: usize,
+    bytes: usize,
+}
+
+impl ImportBudget {
+    fn new() -> Self {
+        Self { values: MAX_FDF_IMPORT_VALUES, bytes: MAX_FDF_BYTES }
+    }
+
+    fn spend(&mut self, values: usize, bytes: usize) -> Result<(), DataError> {
+        match (self.values.checked_sub(values), self.bytes.checked_sub(bytes)) {
+            (Some(v), Some(b)) => {
+                (self.values, self.bytes) = (v, b);
+                Ok(())
+            }
+            _ => Err(DataError::Malformed(format!(
+                "the file expands to more than {MAX_FDF_IMPORT_VALUES} values or {} MiB of text",
+                MAX_FDF_BYTES >> 20
+            ))),
+        }
+    }
+}
+
+/// Copy an object out of another document, resolving references. A reference back to an object
+/// being copied becomes null.
+fn deep(src: &Document, o: &Object, depth: usize, path: &mut Vec<ObjRef>, budget: &mut ImportBudget) -> Result<Object, DataError> {
+    budget.spend(1, 0)?;
     if depth > 16 {
-        return Object::Null;
+        return Ok(Object::Null);
     }
-    match o {
-        Object::Ref(r) => deep(src, &src.get(*r), depth + 1),
-        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1)).collect()),
-        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), deep(src, v, depth + 1))).collect()),
+    Ok(match o {
+        Object::Ref(r) => {
+            if path.contains(r) {
+                return Ok(Object::Null);
+            }
+            path.push(*r);
+            let copy = deep(src, &src.get(*r), depth + 1, path, budget);
+            path.pop();
+            copy?
+        }
+        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1, path, budget)).collect::<Result<_, _>>()?),
+        Object::Dict(d) => {
+            Object::Dict(d.iter().map(|(k, v)| Ok((k.clone(), deep(src, v, depth + 1, path, budget)?))).collect::<Result<_, DataError>>()?)
+        }
         Object::Stream(_) => Object::Null,
+        Object::String(s) => {
+            budget.spend(0, s.bytes.len())?;
+            o.clone()
+        }
+        Object::Name(n) => {
+            budget.spend(0, n.len())?;
+            o.clone()
+        }
         other => other.clone(),
-    }
+    })
 }
 
 fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) -> Result<(), DataError> {
@@ -1180,7 +1282,11 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
             // Comments and processing instructions can split a value into several text nodes.
             .map(|v| v.children().filter(|n| n.is_text()).filter_map(|n| n.text()).collect())
             .collect();
-        if !vals.is_empty() {
+        // A leaf with no `<value>` is an empty field (the export writes one that way), so it
+        // clears the field like FDF's `/V ()`; a field with kids only names their parent. A
+        // leaf holding only `<value-richtext>` is not read yet, so it leaves the field alone.
+        let names_kids_or_rich = f.children().any(|c| c.has_tag_name("field") || c.has_tag_name("value-richtext"));
+        if !vals.is_empty() || !names_kids_or_rich {
             out.push((full.clone(), vals));
         }
         walk_xfdf(f, &full, out, depth + 1)?;
@@ -1188,27 +1294,59 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
     Ok(())
 }
 
-fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) {
+/// Read an FDF field tree. A field listed again beneath itself is skipped.
+fn walk_fdf(
+    fdf: &Document,
+    list: &[Object],
+    prefix: &str,
+    out: &mut Vec<(String, Vec<String>)>,
+    depth: usize,
+    path: &mut Vec<ObjRef>,
+    budget: &mut ImportBudget,
+) -> Result<(), DataError> {
     if depth > 32 {
-        return;
+        return Ok(());
     }
     for f in list {
-        let Some(d) = fdf.resolve(f).as_dict().cloned() else { continue };
+        budget.spend(1, 0)?;
+        let held;
+        let field = match f {
+            Object::Ref(r) if path.contains(r) => continue,
+            Object::Ref(r) => {
+                held = fdf.get(*r);
+                &*held
+            }
+            direct => direct,
+        };
+        let Some(d) = field.as_dict() else { continue };
         let Some(t) = d.get(b"T").and_then(|t| fdf.resolve(t).as_string().map(|s| s.to_text())) else { continue };
         let full = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
+        budget.spend(0, full.len())?;
         if let Some(v) = d.get(b"V").map(|v| fdf.resolve(v)) {
             let vals: Vec<String> = match &*v {
                 Object::String(s) => vec![s.to_text()],
                 Object::Name(n) => vec![pdfcraft_forms::name_text(n)],
-                Object::Array(a) => a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect(),
+                Object::Array(a) => {
+                    budget.spend(a.len(), 0)?;
+                    a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect()
+                }
                 _ => Vec::new(),
             };
+            budget.spend(vals.len(), vals.iter().map(String::len).fold(0, usize::saturating_add))?;
             out.push((full.clone(), vals));
         }
-        if let Some(kids) = d.get(b"Kids").map(|k| fdf.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            walk_fdf(fdf, &kids, &full, out, depth + 1);
+        if let Some(kids) = d.get(b"Kids").map(|k| fdf.resolve(k))
+            && let Some(kids) = kids.as_array()
+        {
+            let entered = f.as_ref().map(|r| path.push(r)).is_some();
+            let walked = walk_fdf(fdf, kids, &full, out, depth + 1, path, budget);
+            if entered {
+                path.pop();
+            }
+            walked?;
         }
     }
+    Ok(())
 }
 
 fn fdf_body(fdf: &Document) -> Result<Dict, DataError> {
@@ -1227,8 +1365,9 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
         let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
         let body = fdf_body(&fdf)?;
         let mut values = Vec::new();
+        let mut budget = ImportBudget::new();
         if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-            walk_fdf(&fdf, &list, "", &mut values, 0);
+            walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
         }
         return Ok(values);
     }
@@ -1261,6 +1400,10 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 
 /// Merge Data Files into Spreadsheet: one CSV row per file, one column per field name (in the
 /// order they first appear).
+///
+/// The names and values come from other people's files, and spreadsheet programs evaluate a cell
+/// that starts with `=`, `+`, `-` or `@` (after any leading whitespace) as a formula. Such a cell
+/// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut columns: Vec<&str> = Vec::new();
     for f in files {
@@ -1270,7 +1413,19 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
             }
         }
     }
-    let q = |s: &str| if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+    let literal = |s: &str| {
+        let t = s.trim_start();
+        let formula = match t.chars().next() {
+            Some('=' | '@') => true,
+            Some('+' | '-') => !t.parse::<f64>().is_ok_and(f64::is_finite),
+            _ => false,
+        };
+        if formula { format!("'{s}") } else { s.to_string() }
+    };
+    let q = |s: &str| {
+        let s = literal(s);
+        if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+    };
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
@@ -1285,10 +1440,11 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
     let body = fdf_body(&fdf)?;
     let mut report = Report::default();
+    let mut budget = ImportBudget::new();
     // Fields (with /Kids for hierarchical names).
     let mut values = Vec::new();
     if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-        walk_fdf(&fdf, &list, "", &mut values, 0);
+        walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
     }
     // Comments: parents first, then replies (whose /IRT needs the parent's new reference).
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
@@ -1299,7 +1455,13 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
         // The parent is another comment: link it below rather than copying it in.
         let irt = src.get(b"IRT").cloned();
         src.remove(b"IRT");
-        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0) else { continue };
+        // The pop-up is an annotation of its own (/Popup shall be an indirect reference, ISO
+        // 32000-2 Table 172): copied in, it would become a direct dictionary. A new one is
+        // placed on the page below, as the XFDF import does.
+        let popup = src.get(b"Popup").map(|p| fdf.resolve(p)).and_then(|p| p.as_dict().cloned());
+        src.remove(b"Popup");
+        let mut path: Vec<ObjRef> = a.as_ref().into_iter().collect();
+        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0, &mut path, &mut budget)? else { continue };
         let Some(page) = d.get(b"Page").and_then(Object::as_int).and_then(|p| usize::try_from(p).ok()).and_then(|p| pages.get(p).copied()) else {
             continue;
         };
@@ -1310,6 +1472,10 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
         d.set(b"P".to_vec(), Object::Ref(page));
         let r = place(doc, page, d)?;
         later.remove(&r);
+        if let Some(rect) = popup.as_ref().and_then(|p| rect_strict(&fdf, p.get(b"Rect"))) {
+            let open = popup.as_ref().and_then(|p| p.get(b"Open")).is_some_and(|o| matches!(&*fdf.resolve(o), Object::Bool(true)));
+            add_popup(doc, page, r, &rect, open)?;
+        }
         if let Some(fr) = a.as_ref() {
             placed.insert(fr, r);
         }

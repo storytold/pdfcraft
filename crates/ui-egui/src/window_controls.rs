@@ -96,7 +96,7 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
             Button::Close => tl!("Close"),
         };
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         let response = response.on_hover_text(label);
         if ui.is_rect_visible(rect) {
             paint(ui.painter(), rect, button, maximized, &t, &response);
@@ -203,7 +203,7 @@ pub fn resize_edges(ctx: &egui::Context) {
     }
     let screen = ctx.content_rect();
     let t = Tokens::get(ctx);
-    egui::Area::new(egui::Id::new("window_resize_edges"))
+    egui::Area::new(egui::Id::unique("window_resize_edges"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .pivot(Align2::LEFT_TOP)
@@ -214,10 +214,10 @@ pub fn resize_edges(ctx: &egui::Context) {
                 if rect.width() <= 0.0 || rect.height() <= 0.0 {
                     continue;
                 }
-                let response = ui.interact(rect, ui.id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
+                let response = ui.interact(rect, ui.scope_id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
                 // Sensing only drags, a drag starts on the press itself.
                 if response.drag_started() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                    desktop_grab(ui.ctx(), egui::ViewportCommand::BeginResize(direction));
                 }
             }
             // Without the desktop's frame or shadow, a hairline keeps the window apart from
@@ -229,6 +229,63 @@ pub fn resize_edges(ctx: &egui::Context) {
                 egui::StrokeKind::Inside,
             );
         });
+}
+
+/// Return the stable egui id for desktop window-grab state.
+fn grab_id() -> egui::Id {
+    egui::Id::unique("window_controls_desktop_grab")
+}
+
+/// Hand the pointer to the desktop to move or resize the window. On Wayland the compositor keeps
+/// the button's release and winit reports only that the pointer left, which egui doesn't count as
+/// a release; egui would think the button still held, and the next press on an edge or the title
+/// bar wouldn't start a drag until a click inside the window. The release comes back on the next
+/// input (`release_after_desktop_grab`).
+pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    ctx.data_mut(|d| d.insert_temp(grab_id(), ()));
+    ctx.request_repaint();
+}
+
+/// After `desktop_grab`, add the primary button's release to the next input, unless it brings one.
+/// The release goes before the input's first press (the next resize or move, or a click), which
+/// egui would otherwise end straight away; a release after that press is the press's own. It also
+/// goes before the pointer leaving, as a button event would bring the gone pointer back; a release
+/// the input brings after the pointer left is the grab's own, and moves there instead.
+pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if ctx.data_mut(|d| d.remove_temp::<()>(grab_id())).is_none() {
+        return;
+    }
+    let mut at = raw.events.len();
+    let mut gone = None;
+    let mut brought = None;
+    for (n, e) in raw.events.iter().enumerate() {
+        match e {
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => {
+                brought = Some(n);
+                break;
+            }
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. } => {
+                at = n;
+                break;
+            }
+            egui::Event::PointerGone => {
+                gone.get_or_insert(n);
+            }
+            _ => {}
+        }
+    }
+    if let Some(n) = brought {
+        // `gone` was found before `n`, so both are in range.
+        if let Some(g) = gone {
+            let release = raw.events.remove(n);
+            raw.events.insert(g, release);
+        }
+        return;
+    }
+    let at = gone.unwrap_or(at);
+    let (pos, modifiers) = ctx.input(|i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
+    raw.events.insert(at, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
 }
 
 #[cfg(test)]
@@ -284,5 +341,122 @@ mod tests {
         for (_, r) in super::zones(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), 5.0, 16.0) {
             assert!(r.width() >= 0.0 && r.height() >= 0.0);
         }
+    }
+
+    #[test]
+    fn a_desktop_grab_gives_the_button_release_back() {
+        let ctx = egui::Context::default();
+        let releases = |raw: &egui::RawInput| {
+            raw.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count()
+        };
+        let mut raw = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 0, "no grab, no release");
+
+        super::desktop_grab(&ctx, egui::ViewportCommand::StartDrag);
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 1, "the release the desktop kept");
+
+        let mut raw = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 0, "only once");
+
+        super::desktop_grab(&ctx, egui::ViewportCommand::BeginResize(ResizeDirection::East));
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerButton {
+            pos: Pos2::ZERO,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 1, "not doubled when the input brings it");
+    }
+
+    #[test]
+    fn the_release_goes_before_the_press_of_the_next_grab() {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: Pos2::new(5.0, 5.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let primary = |raw: &egui::RawInput| {
+            raw.events
+                .iter()
+                .filter_map(|e| if let egui::Event::PointerButton { pressed, .. } = e { Some(*pressed) } else { None })
+                .collect::<Vec<_>>()
+        };
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>, grab: Option<egui::ViewportCommand>| {
+            let mut raw = egui::RawInput { events, ..Default::default() };
+            super::release_after_desktop_grab(&ctx, &mut raw);
+            let order = primary(&raw);
+            ctx.run_ui(raw, |ui| {
+                if let Some(command) = grab.clone() {
+                    super::desktop_grab(ui.ctx(), command);
+                }
+            })
+            .textures_delta
+            .clear();
+            order
+        };
+        // The press of the first resize starts the grab; the desktop keeps its release.
+        frame(vec![egui::Event::PointerMoved(Pos2::new(5.0, 5.0)), button(true)], Some(egui::ViewportCommand::BeginResize(ResizeDirection::East)));
+        // The next input brings the press of the second resize.
+        assert_eq!(frame(vec![button(true)], None), [false, true], "the kept release, then the new press");
+        assert!(ctx.input(|i| i.pointer.primary_down()), "the second resize holds the button");
+
+        // A quick click's release belongs to its own press, not to the grab before it.
+        frame(vec![], Some(egui::ViewportCommand::StartDrag));
+        assert_eq!(frame(vec![button(true), button(false)], None), [false, true, false]);
+    }
+
+    #[test]
+    fn the_release_goes_before_the_pointer_leaving() {
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>, grab: bool| {
+            let mut raw = egui::RawInput { events, ..Default::default() };
+            super::release_after_desktop_grab(&ctx, &mut raw);
+            let order = raw.events.clone();
+            ctx.run_ui(raw, |ui| {
+                if grab {
+                    super::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
+                }
+            })
+            .textures_delta
+            .clear();
+            order
+        };
+        let release = |e: &egui::Event| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. });
+        let press = egui::Event::PointerButton {
+            pos: Pos2::new(5.0, 5.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // On Wayland the input after a move brings only that the pointer left.
+        frame(vec![egui::Event::PointerMoved(Pos2::new(5.0, 5.0)), press], true);
+        let order = frame(vec![egui::Event::PointerGone], false);
+        assert!(matches!(order.as_slice(), [r, egui::Event::PointerGone] if release(r)), "{order:?}");
+        assert_eq!(ctx.input(|i| i.pointer.latest_pos()), None, "the pointer stays gone");
+        assert!(!ctx.input(|i| i.pointer.primary_down()));
+
+        // A release after the pointer left is the one the desktop kept, not to be doubled.
+        frame(vec![], true);
+        let order = frame(
+            vec![
+                egui::Event::PointerGone,
+                egui::Event::PointerButton {
+                    pos: Pos2::new(5.0, 5.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            false,
+        );
+        assert!(matches!(order.as_slice(), [r, egui::Event::PointerGone] if release(r)), "moved, not doubled: {order:?}");
+        assert_eq!(ctx.input(|i| i.pointer.latest_pos()), None, "the pointer stays gone");
     }
 }

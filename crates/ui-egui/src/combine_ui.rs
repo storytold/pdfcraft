@@ -742,7 +742,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.close();
                 }
                 for (i, name) in &open_docs {
-                    if ui.button(crate::bidi::visual(name).as_ref()).clicked() {
+                    if ui.button(name.as_str()).clicked() {
                         app.add_open_documents(&[*i]);
                         ui.close();
                     }
@@ -921,7 +921,7 @@ fn skip_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         left_out.push((f.name.as_str(), f.problem.as_deref().unwrap_or_default()));
     }
     let mut choice: Option<bool> = None;
-    let modal = egui::Modal::new(egui::Id::new("combine-skip")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("combine-skip")).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.horizontal(|ui| {
             ui.add(icons::image("triangle-alert", 22.0, ERROR));
@@ -932,7 +932,7 @@ fn skip_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         for (name, why) in left_out.iter().take(SKIP_PROMPT_NAMES) {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(format!("• {}", crate::bidi::visual(name))).strong());
+                ui.label(egui::RichText::new(format!("• {name}")).strong());
                 ui.label(egui::RichText::new(*why).color(t.text_muted));
             });
         }
@@ -978,7 +978,7 @@ fn unlock_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     };
     let batch = files.len() > 1;
     let (mut submit, mut cancel) = (false, false);
-    let area = egui::Area::new(egui::Id::new("combine-unlock")).order(egui::Order::Foreground).fixed_pos(prompt.at).show(ctx, |ui| {
+    let area = egui::Area::new(egui::Id::unique("combine-unlock")).order(egui::Order::Foreground).fixed_pos(prompt.at).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
             ui.set_width(340.0);
             ui.horizontal(|ui| {
@@ -1189,7 +1189,7 @@ fn zoom_controls(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, edge: f32
         let percent =
             egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted)).frame(false);
         let percent = ui.add_sized([44.0, 30.0], percent);
-        percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
+        percent.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Reset page size")));
         if percent.on_hover_text(tl!("Reset page size")).clicked() {
             app.combine_tab.zoom_request = Some(1.0);
         }
@@ -1347,7 +1347,7 @@ fn heading(ui: &mut egui::Ui, t: &Tokens, key: SortKey, sort: Option<(SortKey, b
         None => "",
     };
     let a11y = if state.is_empty() { text.to_owned() } else { format!("{text}, {state}") };
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &a11y));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &a11y));
     let being_dragged = egui::DragAndDrop::payload::<HeadingDrag>(ui.ctx()).is_some_and(|p| p.0 == key);
     if being_dragged || response.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, CornerRadius::same(4), t.pressed);
@@ -1395,6 +1395,8 @@ fn heading(ui: &mut egui::Ui, t: &Tokens, key: SortKey, sort: Option<(SortKey, b
     event
 }
 
+/// Draw the Combine files table body: reorder handles, editable page ranges with validation, file metadata
+/// and per-row warnings.
 #[allow(clippy::too_many_arguments)]
 fn table_body(
     app: &mut PdfCraftApp,
@@ -1410,7 +1412,7 @@ fn table_body(
     let order = app.combine_columns.order;
     // The heading being dragged follows the pointer.
     if let (Some(dragged), Some(pos)) = (egui::DragAndDrop::payload::<HeadingDrag>(ui.ctx()), ui.ctx().pointer_latest_pos()) {
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("combine-heading-drag")));
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("combine-heading-drag")));
         let galley = painter.layout_no_wrap(dragged.0.label().to_owned(), theme::medium(12.5), t.text);
         let r = Rect::from_min_size(pos + vec2(10.0, 8.0), galley.size() + vec2(16.0, 8.0));
         painter.rect(r, CornerRadius::same(4), t.card, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
@@ -1454,7 +1456,7 @@ fn table_body(
                     row.set_selected(rows.selected.get(i).copied().unwrap_or(false));
                     // Drag handle.
                     row.col(|ui| {
-                        let id = ui.id().with(("combine-drag", f.id));
+                        let id = ui.scope_id().with(("combine-drag", f.id));
                         ui.dnd_drag_source(id, i, |ui| {
                             let (rect, resp) = ui.allocate_exact_size(vec2(12.0, 18.0), Sense::hover());
                             grip(ui, rect, if resp.hovered() || rows.dragging { t.text_muted } else { t.text_faint });
@@ -1467,7 +1469,8 @@ fn table_body(
                         row.col(|ui| match kind {
                             SortKey::Name => {
                                 ui.add(icons::image("file-text", 16.0, t.icon));
-                                ui.add(egui::Label::new(crate::bidi::visual(&f.name).as_ref()).truncate().selectable(false));
+                                // A file name is file/path chrome: explicitly LTR, extension last.
+                                crate::widgets::label_ltr_truncated(ui, f.name.clone(), theme::regular(13.0), t.text);
                             }
                             // The range field and how many pages it takes.
                             SortKey::Pages => {
@@ -1581,7 +1584,7 @@ fn table_body(
                         let r = response.rect;
                         let y = if from > i { r.top() } else { r.bottom() };
                         if from != i {
-                            response.ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("combine-drop-line"))).hline(
+                            response.ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("combine-drop-line"))).hline(
                                 r.x_range(),
                                 y,
                                 Stroke::new(2.0, t.accent),
@@ -1861,22 +1864,35 @@ pub(crate) fn ago(time: SystemTime) -> String {
     }
 }
 
-/// `time` as "2026-10-08 14:05 UTC".
+/// `time` as "2026-10-08 14:05 UTC". A clock before 1970 reads as the epoch; past chrono's year
+/// 262143 range the proleptic Gregorian date is kept via the 400-year cycle, not the epoch.
 fn utc_stamp(time: SystemTime) -> String {
     let secs = time.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let days = i64::try_from(secs / 86_400).unwrap_or(0);
-    let rem = secs % 86_400;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    let (y, m, d) = civil_from_days(days);
+    // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", rem / 3600, rem % 3600 / 60)
+}
+
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+///
+/// A pre-1970 time already clamps to the epoch (`unwrap_or(0)`), so `days` is an unsigned count
+/// that can run past `NaiveDate`'s ±262143-year range, where the old hand-rolled converter still
+/// produced a date. The Gregorian calendar repeats every 400 years (146_097 days), so chrono
+/// converts the day within one cycle and whole cycles go back into the year (an `i128`, then
+/// saturated into `i64`), keeping chrono as the only calendar logic and reproducing the old
+/// result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
+fn civil_from_days(days: u64) -> (i64, u32, u32) {
+    use chrono::Datelike;
+    let (cycles, rest) = (days / 146_097, days % 146_097);
+    // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+    match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(d) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(i64::MAX), d.month(), d.day())
+        }
+        None => (1970, 1, 1), // unreachable
+    }
 }
 
 impl PdfCraftApp {
@@ -2595,6 +2611,29 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_stamp_is_utc_minutes_and_clamps_pre_epoch() {
+        use std::time::Duration;
+        let at = |s: u64| utc_stamp(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
+        assert_eq!(at(0), "1970-01-01 00:00 UTC");
+        assert_eq!(at(1_791_446_357), "2026-10-08 07:59 UTC");
+        // The 400-year leap rule.
+        assert_eq!(at(951_782_400), "2000-02-29 00:00 UTC");
+        // A clock before 1970 reads as the epoch, as the old `unwrap_or(0)` did.
+        assert_eq!(utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)), "1970-01-01 00:00 UTC");
+        // Past chrono's range keeps the proleptic Gregorian date the old code gave, not the epoch.
+        // Windows' SystemTime holds only up to about year 30828, so this is checked where it fits.
+        if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(10_000_000_000_000)) {
+            assert_eq!(utc_stamp(far), "318857-05-20 17:46 UTC");
+        }
+        // Windows' SystemTime can't hold u64::MAX / 2 seconds, so it is only checked where it exists.
+        if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(u64::MAX / 2)) {
+            assert_eq!(utc_stamp(far), "292277026596-12-04 15:30 UTC");
+        }
+        // Years past 9999 keep the plain zero-padded year (no `+`).
+        assert_eq!(at(253_402_300_800), "10000-01-01 00:00 UTC");
+    }
 
     /// A one-page PDF that opens with "pw".
     fn locked() -> Vec<u8> {

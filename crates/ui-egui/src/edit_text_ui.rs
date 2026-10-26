@@ -12,6 +12,7 @@ use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -32,11 +33,59 @@ pub(crate) struct TextBackground {
     received: Option<u64>,
     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
     draft_rect: Option<[f64; 4]>,
+    /// This frame's place for the textless page under the open paragraph's editor. It stays
+    /// empty, so the page shows its own text, until the paragraph is changed ([`Self::reveal`]).
+    slot: Option<(egui::Painter, egui::layers::ShapeIdx, egui::Shape)>,
+    /// How the open paragraph looked in its editor last frame.
+    look: Option<EditorLook>,
+    /// An applied paragraph's last look. The page raster still has the old text until the page
+    /// is rendered again, so the textless page and this look stay up until then.
+    settling: Option<EditorLook>,
+}
+
+/// A paragraph editor's text as last drawn: its laid-out rows, where they were on the page (in
+/// the page's 0..1 coordinates), and the page's width and turn on screen then.
+struct EditorLook {
+    page: usize,
+    block: usize,
+    galley: Arc<egui::Galley>,
+    at: (f32, f32),
+    color: Color32,
+    page_width: f32,
+    rot: u16,
 }
 
 impl TextBackground {
     pub fn pending(&self) -> bool {
         self.renderer.is_some() && self.received != self.tag
+    }
+
+    /// The open paragraph's editor drew `galley` at `pos` this frame.
+    pub fn remember(&mut self, xf: &PageXform, page: usize, block: usize, galley: Arc<egui::Galley>, pos: Pos2, color: Color32) {
+        self.look = Some(EditorLook { page, block, galley, at: xf.screen_to_norm(pos), color, page_width: xf.rect.width(), rot: xf.rot });
+    }
+
+    /// An edit was applied. When it is the open paragraph's, its last look stays up over the
+    /// textless page until the page is rendered again; any other edit ends both.
+    pub fn committed(&mut self, edit: &Edit) {
+        let look = self.look.take().filter(|look| {
+            matches!(edit, Edit::EditTextBlock { page, block, .. } if (look.page, look.block) == (*page, *block))
+                && self.key.is_some_and(|(_, page, target)| (page, target) == (look.page, TextTarget::Block(look.block)))
+                && self.texture.is_some()
+        });
+        match look {
+            Some(look) => {
+                self.renderer = None;
+                self.settling = Some(look);
+            }
+            None => *self = Self::default(),
+        }
+    }
+
+    pub fn page_received(&mut self, page: usize) {
+        if self.settling.as_ref().is_some_and(|look| look.page == page) {
+            *self = Self::default();
+        }
     }
 
     pub fn prepare(
@@ -50,6 +99,10 @@ impl TextBackground {
         let key = editor
             .map(|ed| (doc.edit_generation(), ed.page, TextTarget::Block(ed.block)))
             .or_else(|| draft.and_then(|d| d.index.map(|index| (doc.edit_generation(), d.page, TextTarget::Added(index)))));
+        self.slot = None;
+        if key.is_none() && self.settling.is_some() {
+            return;
+        }
         if self.key != key {
             *self = Self { key, ..Default::default() };
             if let Some((_, page, target)) = key {
@@ -101,6 +154,11 @@ impl TextBackground {
         }
     }
 
+    /// The draft's measured extent, when it was measured for paragraph `block` on `page`.
+    pub fn draft_rect_for(&self, page: usize, block: usize) -> Option<[f64; 4]> {
+        self.draft_rect.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
+    }
+
     pub fn ready(&self, page: usize, block: usize) -> bool {
         self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))) && self.texture.is_some()
     }
@@ -110,15 +168,20 @@ impl TextBackground {
     }
 
     pub fn paint(
-        &self,
+        &mut self,
         painter: &egui::Painter,
         xf: &PageXform,
         page: usize,
         editor: Option<&LineEditor>,
         draft: Option<&crate::content_ui::TextDraft>,
     ) {
-        let ready = editor.is_some_and(|ed| ed.page == page && self.ready(page, ed.block))
-            || draft.is_some_and(|d| d.page == page && d.index.is_some_and(|index| self.ready_added(page, index)));
+        let for_editor = editor.is_some_and(|ed| ed.page == page && self.ready(page, ed.block));
+        // A zoom or a turn of the view since the paragraph was applied would misplace its rows:
+        // the page raster (with the old text) shows until the new one arrives instead.
+        let settled =
+            self.settling.as_ref().filter(|look| look.page == page && look.rot == xf.rot && (look.page_width - xf.rect.width()).abs() < 0.5);
+        let ready =
+            for_editor || draft.is_some_and(|d| d.page == page && d.index.is_some_and(|index| self.ready_added(page, index))) || settled.is_some();
         if !ready {
             return;
         }
@@ -126,7 +189,30 @@ impl TextBackground {
         // Font metrics can underestimate the actual glyph ink. Paint the complete textless
         // page so overhanging glyphs cannot remain outside the estimated source rectangle.
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
-        xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
+        if for_editor {
+            // Its place under everything drawn on the page later; the editor fills it once the
+            // paragraph changes (an unchanged paragraph looks as the page draws it).
+            let mut mesh = egui::Mesh::with_texture(tex.id());
+            for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                mesh.vertices.push(egui::epaint::Vertex { pos: xf.norm_to_screen(u, v), uv: Pos2::new(u, v), color: Color32::WHITE });
+            }
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            let idx = painter.add(egui::Shape::Noop);
+            self.slot = Some((painter, idx, egui::Shape::mesh(mesh)));
+        } else {
+            xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
+            if let Some(look) = settled {
+                painter.galley(xf.norm_to_screen(look.at.0, look.at.1), Arc::clone(&look.galley), look.color);
+            }
+        }
+    }
+
+    /// The open paragraph has changed: show the textless page under its editor this frame.
+    pub fn reveal(&mut self) {
+        if let Some((painter, idx, shape)) = self.slot.take() {
+            painter.set(idx, shape);
+        }
     }
 }
 
@@ -158,10 +244,18 @@ pub struct LineEditor {
     max_width: f32,
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
-    focus: bool,
+    /// Take the keyboard focus on the next frame.
+    pub(crate) focus: bool,
+    /// Whether the text box had the keyboard at the end of the editor's last frame
+    /// ([`lost_focus_once`]).
+    had_focus: bool,
     /// The Format text panel's values, and what the paragraph had (to send only changes).
     pub look: pdfcraft_engine::AddedText,
     look0: pdfcraft_engine::AddedText,
+    /// A standard family was picked from the font list. The family guessed from a PDF font name
+    /// (Calibri reads as Helvetica) can be the one picked, so comparing `look` with `look0` alone
+    /// would miss the choice.
+    family_chosen: bool,
     /// Underline, line spacing (× size; 0 = the paragraph's own), character spacing (pt) and
     /// horizontal scale (%), and what they were.
     pub extras: Extras,
@@ -182,36 +276,47 @@ impl Default for Extras {
     }
 }
 
-/// Underline, line spacing, character spacing and horizontal scale for the paragraph being
-/// edited (under Format text). Returns `true` when something changed.
-pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
-    let before = *e;
-    ui.horizontal(|ui| {
-        if crate::icons::button(ui, "underline", 26.0, e.underline, tl!("Underline")).clicked() {
-            e.underline = !e.underline;
-        }
-        let zero = tl!("Line spacing").to_string();
-        let label = |v: f64| if v == 0.0 { zero.clone() } else { format!("{v:.2}×") };
-        egui::ComboBox::from_id_salt("line-spacing").selected_text(label(e.line_spacing)).width(110.0).show_ui(ui, |ui| {
-            for v in [1.0, 1.15, 1.5, 2.0] {
-                ui.selectable_value(&mut e.line_spacing, v, label(v));
-            }
-        });
-    });
-    ui.horizontal(|ui| {
-        let l = ui.label(tl!("Character spacing"));
-        ui.add(egui::DragValue::new(&mut e.char_spacing).range(-5.0..=50.0).speed(0.1).suffix(" pt")).labelled_by(l.id);
-    });
-    ui.horizontal(|ui| {
-        let l = ui.label(tl!("Horizontal scale"));
-        ui.add(egui::DragValue::new(&mut e.scale).range(10.0..=400.0).speed(1.0).suffix(" %")).labelled_by(l.id);
-    });
-    *e != before
-}
-
 impl LineEditor {
+    /// What Format text's font list shows: the chosen page font, a standard family picked
+    /// instead, or the paragraph's own font (its `/BaseFont` without the subset tag).
+    pub(crate) fn font_shown(&self, sources: &[(String, String)]) -> String {
+        if let Some(face) = self.font_resource.as_ref().and_then(|r| sources.iter().find(|(res, _)| res == r)).map(|(_, face)| face) {
+            return face.clone();
+        }
+        if self.look.family != self.look0.family || self.family_chosen {
+            return self.look.family.label().to_string();
+        }
+        let base = self.source.as_ref().map(|(block, _)| block.base_font.as_str()).unwrap_or_default();
+        // "ABCDEF+Calibri" is a subset of Calibri.
+        let name = match base.split_once('+') {
+            Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+            _ => base,
+        };
+        if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
+    }
+
+    /// Back to the paragraph's own font: no page font chosen and the family it started with.
+    pub(crate) fn keep_source_font(&mut self) {
+        self.font_resource = None;
+        self.look.family = self.look0.family;
+        self.family_chosen = false;
+    }
+
+    /// A standard family picked from the font list, replacing the paragraph's font even when it
+    /// is the family the paragraph's font name reads as.
+    pub(crate) fn choose_family(&mut self, family: pdfcraft_engine::FontFamily) {
+        self.font_resource = None;
+        self.look.family = family;
+        self.family_chosen = true;
+    }
+
     pub(crate) fn has_changes(&self) -> bool {
-        self.text != self.original || self.look != self.look0 || self.extras != self.extras0
+        self.changes_with(&self.text)
+    }
+
+    /// Whether the paragraph with `text` in it differs from what was opened.
+    fn changes_with(&self, text: &str) -> bool {
+        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen
     }
 
     /// Extra width permitted by the editor. Source containers now remain fixed.
@@ -229,7 +334,7 @@ impl LineEditor {
         let (l, o) = (&self.look, &self.look0);
         let mut style = pdfcraft_engine::BlockStyle {
             resource: self.font_resource.clone(),
-            family: (l.family != o.family || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
+            family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
             size: (l.size != o.size).then_some(l.size),
             color: (l.color != o.color).then_some(l.color),
             align: (l.align != o.align).then_some(l.align),
@@ -267,6 +372,7 @@ impl LineEditor {
     pub fn applied(&mut self) {
         self.selection = None;
         self.font_resource = None;
+        self.family_chosen = false;
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
@@ -358,6 +464,24 @@ pub struct ImageSelection {
     drag: Option<(Pos2, Option<Pos2>)>,
     /// Crop mode (Acrobat's crop handles): the box kept so far.
     pub crop: Option<CropMode>,
+    /// The drag is turning the picture by its rotate handle (the `drag` start is then unused).
+    turning: bool,
+    /// A move or resize applied on release: the frame it had and the one it got, in the page's
+    /// 0..1 coordinates, while the page raster still has the picture where it was.
+    settled: Option<(Rect, Rect)>,
+}
+
+impl ImageSelection {
+    /// Cancel an in-progress text, rotation or crop drag and restore the crop it was previewing.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        self.drag = None;
+        self.turning = false;
+        if let Some(crop) = &mut self.crop
+            && let Some((_, _, before)) = crop.drag.take()
+        {
+            crop.keep = before;
+        }
+    }
 }
 
 /// Cropping a page image: the handles trim instead of resizing, the part that will go is
@@ -390,6 +514,7 @@ fn crop_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     view: &mut DocView,
@@ -399,12 +524,12 @@ fn crop_input(
 ) -> bool {
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
-    let hover_pos = ui.input(|inp| inp.pointer.hover_pos());
+    let hover_pos = ptr.pos;
     let keep_screen = |keep: [f64; 4]| xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
     // A drag in progress moves a grip; the box stays inside the picture and at least 6 px.
     if allow_interaction
         && resp.drag_started()
-        && let Some(o) = ui.input(|inp| inp.pointer.press_origin())
+        && let Some(o) = ptr.origin
     {
         let k = keep_screen(mode.keep);
         let grip = crop_handles(k).iter().position(|h| h.distance(o) < 8.0).or_else(|| k.contains(o).then_some(8));
@@ -451,7 +576,7 @@ fn crop_input(
         max.x = max.x.clamp(min.x + min_w, b.max.x);
         max.y = max.y.clamp(min.y + min_h, b.max.y);
         mode.keep = user_box(xf, info, page, Rect::from_min_max(min, max));
-        if resp.drag_stopped() || !ui.input(|inp| inp.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             mode.drag = None;
         }
     }
@@ -533,9 +658,31 @@ impl ImageSelection {
     }
 }
 
-/// Once a selected corner is grabbed, text under it cannot take over the gesture. The same
+/// The page raster's picture of the box `from`, stretched into `to`, over blanks at `blank` (where
+/// the screen may still show the picture).
+fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::TextureId, blank: &[Rect], from: Rect, to: Rect) {
+    let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+    for r in blank {
+        clipped.rect_filled(*r, CornerRadius::ZERO, Color32::WHITE);
+    }
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (a, b) in [
+        (from.left_top(), to.left_top()),
+        (from.right_top(), to.right_top()),
+        (from.right_bottom(), to.right_bottom()),
+        (from.left_bottom(), to.left_bottom()),
+    ] {
+        let (u, v) = xf.screen_to_norm(a);
+        mesh.vertices.push(egui::epaint::Vertex { pos: b, uv: Pos2::new(u, v), color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    clipped.add(egui::Shape::mesh(mesh));
+}
+
+/// Once a selected corner or the rotate knob is grabbed, text under it cannot take over the gesture. The same
 /// applies after the pointer leaves the image/page while dragging.
-pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) -> bool {
+pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, ptr: &PagePointer, page: usize, info: &DocInfo, view: &DocView) -> bool {
     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
     if selection.drag.is_some() {
         return true;
@@ -543,8 +690,9 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, inf
     let Some(image) = view.edit_images.get(&page).and_then(|(_, images)| images.get(selection.index)) else { return false };
     let Some(rect) = image.visible_rect else { return false };
     let b = xf.user_rect(info, page, rect.map(|v| v as f32));
-    let p = ui.input(|i| if i.pointer.primary_down() { i.pointer.press_origin() } else { i.pointer.hover_pos() });
-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().any(|c| c.distance(p) < 8.0))
+    let p = if ptr.primary_down { ptr.origin } else { ptr.pos };
+    let knob = rotate_knob(b, ui.clip_rect()).0;
+    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), knob].iter().any(|c| c.distance(p) < 8.0))
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -603,6 +751,24 @@ fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
     })
 }
 
+/// A paragraph's box on screen: its text rect (user space), with a little room around it.
+fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
+    xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
+}
+
+/// The width handles need the page upright (or upside down): on a quarter-turned page the
+/// screen's horizontal is the paragraph's vertical.
+fn has_edges(info: &DocInfo, page: usize) -> bool {
+    info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0)
+}
+
+/// Whether a press at `p` takes hold of the width handle of one of the paragraphs `rects` (user
+/// space). The handle is drawn half outside the box and grabs from a little further out still,
+/// where a press is not on the box itself, so area selection must leave it to [`page_input`].
+pub(crate) fn grabs_edge(xf: &PageXform, info: &DocInfo, page: usize, mut rects: impl Iterator<Item = [f64; 4]>, p: Pos2) -> bool {
+    has_edges(info, page) && rects.any(|r| edge_at(paragraph_box(xf, info, page, r), p).is_some())
+}
+
 /// What a right-click on a selected image asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ImageAction {
@@ -620,6 +786,25 @@ pub(crate) enum ImageAction {
     Recognize(usize),
 }
 
+/// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
+/// top edge, or below the bottom edge when the area on screen (`view`) has no room above.
+fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
+    let above = b.center_top() - egui::vec2(0.0, 22.0);
+    if above.y - 6.0 >= view.top() { (above, b.center_top()) } else { (b.center_bottom() + egui::vec2(0.0, 22.0), b.center_bottom()) }
+}
+
+/// Degrees clockwise (-180..=180) that turn "straight up" from `centre` onto the pointer; `snap`
+/// rounds to steps of 15 degrees (Shift). A pointer on the centre turns nothing.
+fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
+    let v = pointer - centre;
+    if !(v.x.is_finite() && v.y.is_finite()) || v.length() < 4.0 {
+        return 0.0;
+    }
+    // Screen y points down: up is (0, -1); clockwise is atan2(x, -y).
+    let d = v.x.atan2(-v.y).to_degrees();
+    if snap { (d / 15.0).round() * 15.0 } else { d }
+}
+
 fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     let p = &info.pages[page];
     let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
@@ -633,6 +818,7 @@ pub(crate) fn image_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     images: &[pdfcraft_engine::PageImage],
@@ -642,7 +828,7 @@ pub(crate) fn image_input(
 ) -> bool {
     let boxes: Vec<Rect> = images.iter().map(|im| im.visible_rect.map_or(Rect::NOTHING, |r| xf.user_rect(info, page, r.map(|v| v as f32)))).collect();
     let painter = ui.painter();
-    let hover_pos = ui.input(|i| i.pointer.hover_pos());
+    let hover_pos = ptr.pos;
     let image_contains = |index: usize, point: Pos2| {
         let (x, y) = xf.screen_to_view(point);
         let Some(p) = info.pages.get(page) else { return false };
@@ -655,14 +841,17 @@ pub(crate) fn image_input(
     // hovered boxes, so a ~1000-image CAD page stays interactive in Edit text & images.
     // Fully clipped placements (empty visible frames) get no outline.
     let faint_all = boxes.len() <= MAX_OUTLINES;
+    // The picture being dragged has its frame at the pointer; its outline where it was would
+    // trail behind until the release.
+    let moving = selected.filter(|_| dragging);
     if faint_all {
-        for b in boxes.iter().filter(|b| b.is_positive()) {
+        for (_, b) in boxes.iter().enumerate().filter(|(i, b)| b.is_positive() && moving != Some(*i)) {
             painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
         }
     }
     let hovered_box = hover_pos.and_then(|p| boxes.iter().enumerate().rposition(|(i, b)| b.is_positive() && b.contains(p) && image_contains(i, p)));
     if !faint_all {
-        for i in selected.into_iter().chain(hovered_box.filter(|h| Some(*h) != selected)) {
+        for i in selected.filter(|_| moving.is_none()).into_iter().chain(hovered_box.filter(|h| Some(*h) != selected)) {
             if let Some(b) = boxes.get(i).filter(|b| b.is_positive()) {
                 painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
             }
@@ -683,7 +872,7 @@ pub(crate) fn image_input(
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
         let b = boxes[i];
         if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()) {
-            return crop_input(ui, resp, xf, page, info, view, i, b, allow_interaction);
+            return crop_input(ui, resp, xf, ptr, page, info, view, i, b, allow_interaction);
         }
         let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
         let handles = |rect: Rect| {
@@ -697,6 +886,26 @@ pub(crate) fn image_input(
                 );
             }
         };
+        // Until the page is rendered again its raster has an applied move or resize's picture
+        // where it was: it stays blanked there and drawn where it went.
+        // The whole-page raster and its tiles are replaced separately: the old frame stays blanked
+        // while anything still shows the picture there, but its pixels come from the old frame
+        // only while the whole-page raster itself is the old one. Once that is fresh it has the
+        // picture where it went, and that is where they come from.
+        let (out_of_date, raster_old, raster) = (view.page_out_of_date(page), view.page_raster_out_of_date(page), view.page_raster(page));
+        let screen = |r: Rect| Rect::from_two_pos(xf.norm_to_screen(r.min.x, r.min.y), xf.norm_to_screen(r.max.x, r.max.y));
+        // Where the screen may still show the picture from before an applied move, while the page
+        // isn't drawn again yet. Another drag keeps it blanked too.
+        let left_at = view.image_selection.as_ref().and_then(|s| s.settled).filter(|_| out_of_date).map(|(from, _)| from);
+        if let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none()) {
+            match (s.settled, raster) {
+                (Some((from, to)), Some(tex)) if out_of_date => {
+                    let source = if raster_old { from } else { to };
+                    stretched_picture(painter, xf, tex, &[screen(from)], screen(source), screen(to));
+                }
+                _ => s.settled = None,
+            }
+        }
         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             handles(b);
@@ -704,10 +913,27 @@ pub(crate) fn image_input(
         if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
             ui.ctx().set_cursor_icon(if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
         }
-        let origin = ui.input(|i| i.pointer.press_origin());
+        // The rotate handle: a knob above the top edge, joined to it by a short stem.
+        let (knob, stem) = rotate_knob(b, ui.clip_rect());
+        if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
+            painter.line_segment([stem, knob], Stroke::new(1.0, ACCENT));
+            painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, ACCENT));
+            if allow_interaction && hover_pos.is_some_and(|p| p.distance(knob) < 8.0) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+        }
         if allow_interaction
             && resp.drag_started()
-            && let Some(o) = origin
+            && let Some(o) = ptr.origin
+            && o.distance(knob) < 8.0
+        {
+            if let Some(s) = view.image_selection.as_mut() {
+                s.drag = Some((o, None));
+                s.turning = true;
+            }
+        } else if allow_interaction
+            && resp.drag_started()
+            && let Some(o) = ptr.origin
         {
             let corner = corners.iter().position(|c| c.distance(o) < 8.0);
             if corner.is_some() || image_contains(i, o) {
@@ -716,6 +942,35 @@ pub(crate) fn image_input(
                     s.drag = Some((o, opposite));
                 }
             }
+        }
+        if view.image_selection.as_ref().is_some_and(|s| s.turning) {
+            let shift = ui.input(|i| i.modifiers.shift);
+            let degrees = hover_pos.map_or(0.0, |p| turn_degrees(b.center(), p, shift));
+            // The turned outline as a preview; the engine redraws the pixels on release.
+            let centre = b.center();
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let turn = |c: Pos2| {
+                let v = c - centre;
+                centre + egui::vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+            };
+            let outline = [b.left_top(), b.right_top(), b.right_bottom(), b.left_bottom()].map(turn).to_vec();
+            painter.add(egui::Shape::closed_line(outline, Stroke::new(1.5, ACCENT)));
+            let galley = painter.layout_no_wrap(format!("{degrees:.0}\u{b0}"), egui::FontId::proportional(12.0), ACCENT);
+            let label = Rect::from_center_size(turn(knob) - egui::vec2(0.0, 14.0), galley.size() + egui::vec2(8.0, 4.0));
+            painter.rect(label, CornerRadius::same(3), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
+            painter.galley(label.center() - galley.size() / 2.0, galley, ACCENT);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if resp.drag_stopped() || !ptr.primary_down {
+                if let Some(s) = view.image_selection.as_mut() {
+                    s.drag = None;
+                    s.turning = false;
+                }
+                if degrees.abs() >= 0.05 {
+                    view.pending_edit =
+                        Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::RotateBy(f64::from(degrees)) });
+                }
+            }
+            return true;
         }
         if let Some((start, opposite)) = view.image_selection.as_ref().and_then(|s| s.drag)
             && let Some(p) = hover_pos
@@ -754,29 +1009,23 @@ pub(crate) fn image_input(
                 if preview != b
                     && let Some(tex) = view.page_raster(page)
                 {
-                    let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
-                    clipped.rect_filled(b, CornerRadius::ZERO, Color32::WHITE);
-                    let mut mesh = egui::Mesh::with_texture(tex);
-                    for (from, to) in [
-                        (b.left_top(), preview.left_top()),
-                        (b.right_top(), preview.right_top()),
-                        (b.right_bottom(), preview.right_bottom()),
-                        (b.left_bottom(), preview.left_bottom()),
-                    ] {
-                        let (u, v) = xf.screen_to_norm(from);
-                        mesh.vertices.push(egui::epaint::Vertex { pos: to, uv: Pos2::new(u, v), color: Color32::WHITE });
-                    }
-                    mesh.add_triangle(0, 1, 2);
-                    mesh.add_triangle(0, 2, 3);
-                    clipped.add(egui::Shape::mesh(mesh));
+                    // Its pixels: where the whole-page raster has it.
+                    let source = left_at.filter(|_| raster_old).map_or(b, screen);
+                    let blank: Vec<Rect> = left_at.map(screen).into_iter().chain(std::iter::once(b)).collect();
+                    stretched_picture(painter, xf, tex, &blank, source, preview);
                 }
                 painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
                 painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
                 handles(preview);
             }
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
+                    let norm = |r: Rect| {
+                        let ((u0, v0), (u1, v1)) = (xf.screen_to_norm(r.min), xf.screen_to_norm(r.max));
+                        Rect::from_two_pos(Pos2::new(u0, v0), Pos2::new(u1, v1))
+                    };
+                    s.settled = (preview != b).then(|| (left_at.unwrap_or_else(|| norm(b)), norm(preview)));
                 }
                 if preview != b {
                     view.pending_edit =
@@ -832,7 +1081,7 @@ pub(crate) fn image_input(
         _ => egui::CursorIcon::PointingHand,
     });
     if resp.clicked() || resp.secondary_clicked() {
-        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None });
+        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None, turning: false, settled: None });
     }
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(menu_key, true));
@@ -963,8 +1212,10 @@ fn open_editor(
         max_width,
         size: (l.size as f32 * scale).clamp(8.0, 72.0),
         focus: true,
+        had_focus: false,
         look: look_of(l),
         look0: look_of(l),
+        family_chosen: false,
         extras: Extras::default(),
         extras0: Extras::default(),
     });
@@ -977,6 +1228,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     doc: &pdfcraft_engine::Document,
     lines: &[pdfcraft_engine::TextBlock],
@@ -988,8 +1240,9 @@ pub(crate) fn page_input(
         view.block_drag = None;
         return true;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)).expand(2.0)).collect();
-    let painter = ui.painter();
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    // Outlines stay on their page, like its text (#3061).
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     for (i, b) in boxes.iter().enumerate() {
         if active != Some(i) {
@@ -1000,17 +1253,20 @@ pub(crate) fn page_input(
     // applied and `lines`/`boxes` are the document's new inventory (#2022).
     if allow_interaction
         && active.is_none()
-        && let Some((open_page, block)) = view.pending_text_open
+        && let Some((open_page, key)) = view.pending_text_open.clone()
         && open_page == page
     {
-        open_editor(ui, xf, doc, lines, &boxes, page, block, view);
+        // The edit may have regrouped the page: open the paragraph that was clicked, wherever it
+        // is now, and none if it was merged into another (#2516).
+        match key.find(lines, 0) {
+            Some(block) => open_editor(ui, xf, doc, lines, &boxes, page, block, view),
+            None => view.pending_text_open = None,
+        }
     }
     if !allow_interaction {
         return false;
     }
-    // The width handle needs the page upright (or upside down): on a quarter-turned page the
-    // screen's horizontal is the paragraph's vertical.
-    let upright = info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0);
+    let upright = has_edges(info, page);
     let draw_handles = |b: Rect| {
         for h in width_handles(b) {
             painter.rect(h, CornerRadius::same(2), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
@@ -1020,7 +1276,7 @@ pub(crate) fn page_input(
     if let Some(d) = view.block_drag.filter(|d| d.page == page)
         && let (Some(b), Some(l)) = (boxes.get(d.block).copied(), lines.get(d.block))
     {
-        let p = ui.input(|i| i.pointer.interact_pos()).unwrap_or(d.start);
+        let p = ptr.pos.unwrap_or(d.start);
         let dx = p.x - d.start.x;
         let preview = match d.grip {
             Grip::Move => b.translate(p - d.start),
@@ -1033,7 +1289,7 @@ pub(crate) fn page_input(
             draw_handles(preview);
         }
         ui.ctx().set_cursor_icon(if resizing { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Move });
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+        if resp.drag_stopped() || !ptr.any_down {
             view.block_drag = None;
             let (from, to) = (user_box(xf, info, page, b), user_box(xf, info, page, preview));
             let edit = if resizing {
@@ -1065,13 +1321,13 @@ pub(crate) fn page_input(
     // quick flick has left the edge by then.
     if resp.drag_started()
         && active.is_none()
-        && let Some(o) = ui.input(|i| i.pointer.press_origin())
+        && let Some(o) = ptr.origin
         && let Some((block, grip)) = grab_at(&boxes, o, upright)
     {
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
-    let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some(p) = ptr.within(xf.rect) else { return false };
     let Some((hit, grip)) = grab_at(&boxes, p, upright) else { return false };
     if active != Some(hit) {
         painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
@@ -1081,14 +1337,18 @@ pub(crate) fn page_input(
         draw_handles(boxes[hit]);
     }
     // A closed paragraph moves when dragged (the four-way arrow says so; a click still opens it
-    // for typing); an edge rewraps it. The open one takes the text cursor.
-    ui.ctx().set_cursor_icon(if on_edge {
-        egui::CursorIcon::ResizeHorizontal
-    } else if active.is_none() {
-        egui::CursorIcon::Move
-    } else {
-        egui::CursorIcon::Text
-    });
+    // for typing); an edge rewraps it. The open one takes the text cursor. Only where the page
+    // shows, so the mode bar and side panels over a paragraph scrolled under them keep their own
+    // cursor (#2755).
+    if resp.contains_pointer() {
+        ui.ctx().set_cursor_icon(if on_edge {
+            egui::CursorIcon::ResizeHorizontal
+        } else if active.is_none() {
+            egui::CursorIcon::Move
+        } else {
+            egui::CursorIcon::Text
+        });
+    }
     if resp.clicked() {
         view.image_selection = None;
         // A click that moves the editor to another paragraph applies the open one first, so its
@@ -1101,11 +1361,12 @@ pub(crate) fn page_input(
             if let Some(old) = view.line_editor.take() {
                 let style = old.style();
                 if old.text != old.original || style != pdfcraft_engine::BlockStyle::default() {
+                    view.applied_editor = Some(old.clone());
                     view.pending_edit = Some(Edit::EditTextBlock { page: old.page, block: old.block, text: old.text, style });
                 }
             }
             // The clicked box opens next frame, from the document with that edit applied.
-            view.pending_text_open = Some((page, hit));
+            view.pending_text_open = lines.get(hit).map(|l| (page, pdfcraft_engine::BlockKey::of(l)));
             return true;
         }
         open_editor(ui, xf, doc, lines, &boxes, page, hit, view);
@@ -1177,7 +1438,7 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
             let Some(line) = lines.get(index) else { continue };
             let mut look = source_look(&line.base_font, line.size, line.color, line.bold, line.italic);
             look.size = line.size;
-            if ed.look.family != ed.look0.family {
+            if ed.look.family != ed.look0.family || ed.family_chosen {
                 look.family = ed.look.family;
             }
             if ed.look.bold != ed.look0.bold {
@@ -1193,7 +1454,8 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
                 look.size = ed.look.size;
             }
             let mut font = editor_font(&look, (look.size as f32 * scale).clamp(1.0, 300.0));
-            let original_face = ed.look.family == ed.look0.family && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
+            let original_face =
+                ed.look.family == ed.look0.family && !ed.family_chosen && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
             let embedded = original_face && ed.fonts.contains_key(&line.font);
             if embedded && let Some(name) = ed.fonts.get(&line.font) {
                 font.family = FontFamily::Name(name.clone().into());
@@ -1226,6 +1488,16 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
         );
     }
     job
+}
+
+/// `galley` drawn in no colour: its rows still place the caret and the selection.
+fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+    for placed in &mut Arc::make_mut(&mut galley).rows {
+        for vertex in &mut Arc::make_mut(&mut placed.row).visuals.mesh.vertices {
+            vertex.color = Color32::TRANSPARENT;
+        }
+    }
+    galley
 }
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
@@ -1301,8 +1573,9 @@ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: 
 
 /// The inline editor; returns the edit once the text is applied.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
-    // Clicks outside the document (the Format text panel) keep the paragraph open.
-    let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
+    // Clicks outside the document (the Format text panel) keep the paragraph open. Where the
+    // click landed is `interact_pos`: `latest_pos` is gone on the frame a tap lifts.
+    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
@@ -1312,7 +1585,18 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         .line_editor
         .as_ref()
         .is_some_and(|ed| view.text_background.ready(ed.page, ed.block) && !ed.source.as_ref().is_some_and(|(b, _)| b.invisible));
-    let draft_rect = view.text_background.draft_rect.map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
+    // The measured extent of this paragraph's draft: a click straight from another paragraph
+    // opens this one after the frame's measuring, which was the other one's.
+    let draft_rect = view
+        .line_editor
+        .as_ref()
+        .and_then(|ed| view.text_background.draft_rect_for(ed.page, ed.block))
+        .map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
+    // The editor draws on its page only, as the page itself does: a paragraph running past the
+    // page's edge (a converter relying on the page clip) must not cover the next page or the
+    // tool bars (#3061).
+    let viewport = view.viewport_rect();
+    let page_clip = xf.rect.intersect(viewport);
     let ed = view.line_editor.as_mut()?;
     if hold {
         ed.focus = true;
@@ -1336,10 +1620,22 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         ed.source.as_ref().and_then(|(block, lines)| block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size as f32).reduce(f32::min));
     let font = editor_font(&ed.look, smallest.map_or(ed.size, |s| (s * scale * 0.5).clamp(1.0, 300.0).min(ed.size)));
     let text_color = color32(ed.look.color);
+    let block = ed.block;
     let mut done = None;
-    egui::Area::new(egui::Id::new("edit-text-line")).order(egui::Order::Foreground).fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top())).show(
-        ctx,
-        |ui| {
+    let mut reveal = false;
+    let mut look = None;
+    // No fade-in: while it faded, the page's own copy of the text showed through the cover.
+    // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
+    // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
+    // the page is, rather than pushed back into the window.
+    egui::Area::new(egui::Id::unique("edit-text-line"))
+        .order(egui::Order::Foreground)
+        .fade_in(false)
+        .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
+        .constrain_to(viewport)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(page_clip));
             // The editor opens at the source size. Once text changes, show the real draft
             // extent: single rows grow toward the page edge, paragraphs rewrap at their
             // source width, and the visible frame grows/shrinks vertically with their rows.
@@ -1363,6 +1659,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
             if let Some(p) = ui.input(|i| i.pointer.hover_pos())
+                && ui.clip_rect().contains(p)
                 && live.expand(2.0 + FRAME_REACH).contains(p)
                 && !live.expand(2.0).contains(p)
             {
@@ -1371,22 +1668,29 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // White, unless the text is too pale to read on white (white text from a coloured
             // banner, #913): then a dark box, with a caret that shows on it.
             let fill = if background_ready { Color32::TRANSPARENT } else { editor_fill(text_color) };
-            // Until the background worker finishes, cover the entire source box, including
-            // lines the draft no longer occupies. Shrinking the text must never expose a copy.
-            if !background_ready {
-                ui.painter().rect_filled(ed.rect.expand(1.0), CornerRadius::ZERO, fill);
-            }
-            egui::Frame::NONE.fill(fill).show(ui, |ui| {
-                // A textless PDF preview keeps its real page background through the transparent editor.
-                // The temporary opaque cover uses the shared caret-contrast rule.
-                ui.visuals_mut().text_cursor.stroke.color =
-                    if background_ready { if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE } } else { caret_color_on(fill) };
+            // An unchanged paragraph is the page's own text: the editor draws only its frame and
+            // caret over it. Once it changes, the textless page goes under the editor's text or,
+            // until that background is ready, a cover over the entire source box, including lines
+            // the draft no longer occupies. Shrinking the text must never expose a copy. Both are
+            // decided after this frame's typing, in places kept under the editor's text.
+            let cover = ui.painter().add(egui::Shape::Noop);
+            let unchanged = !ed.has_changes();
+            egui::Frame::NONE.show(ui, |ui| {
+                // A textless PDF preview, or the page itself, keeps its real background through
+                // the transparent editor. The temporary opaque cover uses the shared caret-contrast rule.
+                ui.visuals_mut().text_cursor.stroke.color = if background_ready || unchanged {
+                    if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE }
+                } else {
+                    caret_color_on(fill)
+                };
                 let rows = 1;
                 let snapshot = ed.clone();
-                let mut layouter =
-                    |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
+                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
+                    if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
+                };
                 let output = egui::TextEdit::multiline(&mut ed.text)
-                    .id(egui::Id::new("edit-text-line-input"))
+                    .id(egui::Id::unique("edit-text-line-input"))
                     .font(font.clone())
                     .margin(egui::Margin::ZERO)
                     .layouter(&mut layouter)
@@ -1395,6 +1699,16 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .desired_width(width)
                     .desired_rows(rows)
                     .show(ui);
+                // The editor paints over the page with no visible label; name it for assistive tech.
+                output.response.response.clone().accessible_name(tl!("Text editing line"));
+                if ed.has_changes() {
+                    if background_ready {
+                        reveal = true;
+                    } else {
+                        ui.painter().set(cover, egui::Shape::rect_filled(ed.rect.expand(1.0).union(output.response.rect), CornerRadius::ZERO, fill));
+                    }
+                }
+                look = Some((Arc::clone(&output.galley), output.galley_pos));
                 if let Some(cursor) = output.cursor_range {
                     let selected = cursor.as_sorted_char_range();
                     let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
@@ -1409,20 +1723,30 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     r.request_focus();
                     ed.focus = false;
                 }
+                let lost = lost_focus_once(&r, &mut ed.had_focus);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
                 if esc {
                     done = Some(false);
-                } else if apply || (r.lost_focus() && !outside && !hold) {
+                } else if apply || (lost && !outside && !hold) {
                     done = Some(true);
                 }
             });
-        },
-    );
+        });
+    if reveal {
+        view.text_background.reveal();
+    }
+    if let Some((galley, pos)) = look {
+        view.text_background.remember(&xf, page, block, galley, pos, text_color);
+    }
     match done {
         Some(apply) => {
             let ed = view.line_editor.take()?;
-            if apply { finished_edit(ed) } else { None }
+            if !apply {
+                return None;
+            }
+            view.applied_editor = Some(ed.clone());
+            finished_edit(ed)
         }
         None => None,
     }
@@ -1439,6 +1763,16 @@ pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
     })
 }
 
+/// Whether an editor's text box `r` lost the keyboard this frame, given whether it `had` it at
+/// the end of the editor's last frame (updated here). egui's `lost_focus` holds for a second
+/// frame as well, and an editor that judges a click away by where the click landed must judge it
+/// once, on the click's frame: on the next, a tap's position is gone (egui-winit sends
+/// `PointerGone` with every touch release) and a mouse may have moved on.
+pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
+    let has = r.has_focus();
+    std::mem::replace(had, has) && !has
+}
+
 /// Caret colour that stays visible on a field filled with `fill`: black on light fills, white on dark ones.
 pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
     let luma = 299 * u32::from(fill.r()) + 587 * u32::from(fill.g()) + 114 * u32::from(fill.b());
@@ -1448,6 +1782,30 @@ pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rotate_knob_moves_below_when_there_is_no_room_above() {
+        let view = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(500.0, 500.0));
+        let roomy = Rect::from_min_max(Pos2::new(100.0, 200.0), Pos2::new(200.0, 250.0));
+        assert_eq!(rotate_knob(roomy, view).0, Pos2::new(150.0, 178.0));
+        let at_top = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 150.0));
+        let (knob, stem) = rotate_knob(at_top, view);
+        assert_eq!((knob, stem), (Pos2::new(150.0, 172.0), Pos2::new(150.0, 150.0)));
+    }
+
+    #[test]
+    fn the_rotate_knob_measures_clockwise_degrees_from_straight_up() {
+        let c = Pos2::new(100.0, 100.0);
+        let at = |x: f32, y: f32| turn_degrees(c, Pos2::new(x, y), false);
+        assert!(at(100.0, 0.0).abs() < 1e-3);
+        assert!((at(200.0, 100.0) - 90.0).abs() < 1e-3, "right is a clockwise quarter");
+        assert!((at(0.0, 100.0) + 90.0).abs() < 1e-3);
+        assert!((at(100.0, 200.0).abs() - 180.0).abs() < 1e-3);
+        // Shift rounds to 15 degrees; the centre and non-finite points turn nothing.
+        assert_eq!(turn_degrees(c, Pos2::new(180.0, 50.0), true) % 15.0, 0.0);
+        assert_eq!(at(101.0, 101.0), 0.0);
+        assert_eq!(at(f32::NAN, 5.0), 0.0);
+    }
 
     /// An app with one text document open, and an editor on its first paragraph.
     fn preview_app() -> (crate::PdfCraftApp, LineEditor) {
@@ -1472,12 +1830,32 @@ mod tests {
             max_width: 400.0,
             size: block.size as f32,
             focus: true,
+            had_focus: false,
             look: look_of(&block),
             look0: look_of(&block),
+            family_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
         };
         (app, ed)
+    }
+
+    #[test]
+    fn picking_the_family_the_font_name_reads_as_still_changes_the_font() {
+        // A Calibri paragraph reads as Helvetica; picking Helvetica from the list used to leave
+        // `look` equal to what the paragraph had, so no family change was sent and Calibri stayed.
+        let (_app, mut ed) = preview_app();
+        let family = ed.look0.family;
+        assert_eq!(ed.style().family, None, "nothing chosen yet");
+        ed.choose_family(family);
+        assert_eq!(ed.style().family, Some((family, ed.look.bold, ed.look.italic)));
+        assert!(ed.has_changes());
+        assert_eq!(ed.font_shown(&[]), family.label());
+        ed.keep_source_font();
+        assert_eq!(ed.style().family, None, "Keep source fonts withdraws the choice");
+        ed.choose_family(family);
+        ed.applied();
+        assert_eq!(ed.style().family, None, "an applied choice is the paragraph's font now");
     }
 
     #[test]
@@ -1493,6 +1871,57 @@ mod tests {
         assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "Preview text");
         assert!(lines.iter().all(|l| l.base_font == "Inter-Regular"), "{:?}", lines.iter().map(|l| &l.base_font).collect::<Vec<_>>());
         assert!(app.views[0].line_editor.is_some(), "the paragraph stays open for editing");
+    }
+
+    #[test]
+    fn save_applies_the_paragraph_open_in_the_editor() {
+        // Save wrote the file without the paragraph still open in the editor (#3496).
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Text preview".into();
+        app.views[0].line_editor = Some(ed);
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-open-paragraph-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
+
+        assert!(app.save_active(crate::SaveTarget::InPlace));
+        assert!(app.views[0].line_editor.is_none());
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refused_text_box_does_not_lose_the_open_paragraph() {
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Text preview".into();
+        app.views[0].line_editor = Some(ed);
+        let draft = crate::content_ui::TextDraft {
+            page: 9,
+            index: None,
+            rect: [20.0, 20.0, 120.0, 40.0],
+            text: "Typed text".into(),
+            style: crate::content_ui::default_style(),
+            focus: true,
+        };
+        app.views[0].content.draft = Some(draft.clone());
+
+        assert!(!app.commit_typing_in(app.views[0].id));
+        assert_eq!(app.views[0].content.draft, Some(draft), "the refused text box stays open");
+        assert!(app.views[0].line_editor.is_none(), "the paragraph was applied");
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
+    }
+
+    #[test]
+    fn a_refused_paragraph_stays_open_with_its_text() {
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Text preview".into();
+        ed.page = 9;
+        app.views[0].line_editor = Some(ed.clone());
+
+        assert!(!app.commit_typing_in(app.views[0].id));
+        assert_eq!(app.views[0].line_editor, Some(ed), "the paragraph keeps its unsaved text");
     }
 
     #[test]

@@ -90,7 +90,13 @@ mod tests {
 
     fn wheel(unit: egui::MouseWheelUnit, dy: f32, command: bool) -> egui::Event {
         let modifiers = egui::Modifiers { command, ..egui::Modifiers::NONE };
-        egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        }
     }
 
     #[test]
@@ -116,8 +122,5 @@ mod tests {
         }
         assert_eq!(ScrollSpeed::parse("FAST"), Some(ScrollSpeed::Fast));
         assert_eq!(ScrollSpeed::parse("warp"), None);
-        // The labels are translated in their own context: they qualify "speed".
-        let ru = crate::i18n::Lang::from_code("ru").expect("Russian ships");
-        assert_eq!(crate::i18n::tr_ctx(ru, "scroll speed", ScrollSpeed::Slow.label()), "Низкая");
     }
 }

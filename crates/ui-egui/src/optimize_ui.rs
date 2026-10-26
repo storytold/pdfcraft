@@ -7,8 +7,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui::{Align, Layout};
-use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset, QUALITIES, Settings};
+use egui::{Align, Layout, RichText};
+use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, Preset, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -172,6 +172,17 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
                 }
             }
         });
+        ui.add_space(8.0);
+        ui.label(tl!("Compatibility"));
+        let compat_label = |c: Compatibility| match c {
+            Compatibility::Retain => tl!("Retain existing").to_string(),
+            _ => format!("PDF {}", c.name()),
+        };
+        egui::ComboBox::from_id_salt("optimize-compatibility").selected_text(compat_label(d.settings.compatibility)).show_ui(ui, |ui| {
+            for c in Compatibility::ALL {
+                ui.selectable_value(&mut d.settings.compatibility, c, compat_label(c));
+            }
+        });
     });
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
@@ -219,9 +230,19 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
         }
         OptimizeTab::CleanUp => {
             ui.add(widgets::checkbox(&mut s.flate_unencoded, tl!("Use Flate to encode streams that are not encoded")));
+            ui.add(widgets::checkbox(&mut s.lzw_to_flate, tl!("In streams that use LZW encoding, use Flate instead")));
             ui.add(widgets::checkbox(&mut s.remove_invalid_links, tl!("Remove invalid links and bookmarks")));
             ui.add(widgets::checkbox(&mut s.remove_unreferenced_dests, tl!("Remove unreferenced named destinations")));
-            ui.add_enabled(false, widgets::checkbox(&mut true, tl!("Compress document structure (object streams)")));
+            let mut object_streams = s.effective_object_streams();
+            if ui
+                .add_enabled(
+                    s.compatibility != Compatibility::Pdf1_4,
+                    widgets::checkbox(&mut object_streams, tl!("Compress document structure (object streams)")),
+                )
+                .changed()
+            {
+                s.object_streams = object_streams;
+            }
             ui.add_enabled(false, widgets::checkbox(&mut true, tl!("Remove unused objects and merge identical ones")));
         }
     }
@@ -246,9 +267,19 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
 /// Audit Space Usage: how the file's bytes are spent now, by kind of content (not what
 /// optimizing would save).
 pub(crate) fn audit_body(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::SpaceUse], t: &Tokens) -> bool {
-    use egui::{RichText, TextWrapMode, WidgetText};
     ui.label(RichText::new(tl!("Space Audit")).font(crate::theme::semibold(18.0)));
     ui.add_space(4.0);
+    audit_table(ui, rows, t);
+    ui.add_space(12.0);
+    let mut ok = false;
+    ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| ok = widgets::pill_button(ui, tl!("OK"), true).clicked()));
+    ok
+}
+
+/// The audit's explanation and its table: bytes and share of the file per kind of content.
+/// Shared by the Optimizer's Audit Space Usage and Properties ▸ Space Audit.
+pub(crate) fn audit_table(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::SpaceUse], t: &Tokens) {
+    use egui::{TextWrapMode, WidgetText};
     ui.label(RichText::new(tl!("What takes up the space in this file, by kind of content.")).color(t.text_muted));
     ui.add_space(8.0);
     // Every cell is laid out first so each column can be exactly as wide as its widest cell. A
@@ -279,7 +310,9 @@ pub(crate) fn audit_body(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::S
     let numbers = width(1) + width(2) + 2.0 * gap;
     let widths = [width(0).max(ui.available_width() - numbers), width(1), width(2)];
     let height = table.iter().flatten().map(|g| g.size().y).fold(ui.spacing().interact_size.y, f32::max);
-    egui::Grid::new("space-audit").num_columns(3).striped(true).spacing([gap, 4.0]).show(ui, |ui| {
+    // No minimum column width: egui's default widened a narrow Bytes column past `widths` and
+    // pushed the table beyond the dialog's padding.
+    egui::Grid::new("space-audit").num_columns(3).striped(true).spacing([gap, 4.0]).min_col_width(0.0).show(ui, |ui| {
         for row in table {
             for (column, (cell, width)) in row.into_iter().zip(widths).enumerate() {
                 // Numbers line up on their last digit.
@@ -290,13 +323,25 @@ pub(crate) fn audit_body(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::S
             ui.end_row();
         }
     });
-    ui.add_space(12.0);
-    let mut ok = false;
-    ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| ok = widgets::pill_button(ui, tl!("OK"), true).clicked()));
-    ok
 }
 
 impl PdfCraftApp {
+    /// Measure the active document's space use, unless `space_audit` already describes it as
+    /// it is now. With no document the audit is empty.
+    pub(crate) fn refresh_space_audit(&mut self) {
+        let Some((_, id)) = self.active_ids() else {
+            self.space_audit.clear();
+            self.space_audit_of = None;
+            return;
+        };
+        let Some(doc) = self.session.get(id) else { return };
+        let key = (id, doc.edit_generation());
+        if self.space_audit_of != Some(key) {
+            self.space_audit = doc.audit_space();
+            self.space_audit_of = Some(key);
+        }
+    }
+
     /// Optimize PDF with the dialog's choices on a worker thread; the copy is saved when done.
     pub fn optimize_with_draft(&mut self) {
         let (settings, discard) = (self.optimize_draft.settings.clone(), self.optimize_draft.discard.clone());

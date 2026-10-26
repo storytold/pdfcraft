@@ -96,6 +96,8 @@
 	Next view	Sonraki görünüm
 	Page display	Sayfa görünümü
 	Continuous scrolling	Sürekli kaydırma
+	Show gaps between pages	Sayfalar arasındaki boşlukları göster
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Sayfa kenarlarını birleştirmek için boşlukları gizleyin. PDF içindeki kenar boşlukları değişmez.
 	Two-page view	İki sayfa görünümü
 	Single page	Tek sayfa
 	Show cover page in two-page view	İki sayfa görünümünde kapak sayfasını göster
@@ -140,6 +142,15 @@
 	Available	Kullanılabilir
 	Ready	Hazır
 	Search tools and commands…	Araçları ve komutları ara…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Eklenen metin
+	Link URL	Bağlantı URL'si
+	Search tools and commands	Araçları ve komutları ara
+	Text editing line	Metin düzenleme satırı
+	Text to place	Yerleştirilecek metin
+	Tooltip	İpucu
+	Words or phrases to redact	Karartılacak sözcükler veya ifadeler
 	No matching tools	Eşleşen araç yok
 	Tool	Araç
 	Command	Komut
@@ -477,6 +488,36 @@
 	Could not save: {e}	Kaydedilemedi: {e}
 	Earlier in tab order	Sekme sırasında daha önce
 	Later in tab order	Sekme sırasında daha sonra
+	Calculation order	Hesaplama sırası
+	Fix order	Sırayı düzelt
+	Move only what must move, so every field calculates after the fields it reads.	Her alan okuduğu alanlardan sonra hesaplansın diye yalnızca taşınması gerekenleri taşır.
+	Earlier in calculation order	Hesaplama sırasında daha önce
+	Later in calculation order	Hesaplama sırasında daha sonra
+	Too early	Çok erken
+	Reads {name}, which calculates later, so it shows an old value.	Daha sonra hesaplanan {name} alanını okur, bu yüzden eski bir değer gösterir.
+	Loop	Döngü
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} alanlarını okur, onlar da bu alanı okur. Hiçbir sıra bir döngüyü düzeltemez: formüllerden birini değiştirin.
+	Not in order	Sırada değil
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF'te kayıtlı hesaplama sırasında yok: diğer PDF görüntüleyicileri bunu hesaplamayabilir.
+	Back to Prepare a form	Form hazırla'ya geri dön
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Bu formdaki hiçbir alan henüz değerini hesaplamıyor. Bir alana özelliklerinin Hesapla sekmesinde bir hesaplama verin, burada görünür.
+	{names} and {last}	{names} ve {last}
+	{field} reads no other field	{field} başka bir alanı okumuyor
+	{field} reads {fields}	{field} şunları okur: {fields}
+	No field reads it	Onu hiçbir alan okumuyor
+	The order saved in the PDF needs tidying	PDF'te kayıtlı sıranın düzenlenmesi gerekiyor
+	Moves only what must move	Yalnızca taşınması gerekeni taşır
+	Every field calculates after the fields it reads.	Her alan, okuduğu alanlardan sonra hesaplanır.
+	Every field outside a loop calculates after the fields it reads.	Döngü dışındaki her alan, okuduğu alanlardan sonra hesaplanır.
+	{field} reads its own value	{field} kendi değerini okuyor
+	{fields} read each other	{fields} birbirini okuyor
+	No order can fix a loop. Change one of the formulas.	Hiçbir sıra bir döngüyü düzeltemez. Formüllerden birini değiştirin.
+	Edit {field}'s formula	{field} formülünü düzenle
+	Order · top calculates first	Sıra · üstteki önce hesaplanır
+	Script	Betik
+	Links on page	Sayfadaki bağlantılar
+	Show on the page which fields each field reads	Her alanın hangi alanları okuduğunu sayfada göster
+	Drag a field to move it, or select it and press {up} or {down}.	Taşımak için bir alanı sürükleyin veya seçip {up} ya da {down} tuşuna basın.
 	From:	Başlangıç:
 	To:	Bitiş:
 	High Resolution	Yüksek Çözünürlük
@@ -537,6 +578,7 @@
 	Discard private data of other applications	Diğer uygulamaların özel verilerini at
 	Discard hidden text	Gizli metni at
 	Use Flate to encode streams that are not encoded	Kodlanmamış akışları kodlamak için Flate kullan
+	In streams that use LZW encoding, use Flate instead	LZW kodlamalı akışlarda bunun yerine Flate kullan
 	Remove invalid links and bookmarks	Geçersiz bağlantıları ve yer işaretlerini kaldır
 	Remove unreferenced named destinations	Referans verilmeyen adlandırılmış hedefleri kaldır
 	Compress document structure (object streams)	Belge yapısını sıkıştır (nesne akışları)
@@ -767,6 +809,7 @@
 	Insert Page Number	Sayfa Numarası Ekle
 	Insert Date	Tarih Ekle
 	Start page number	Başlangıç sayfa numarası
+	Shrink the page content to make room for the header and footer	Üst bilgi ve alt bilgiye yer açmak için sayfa içeriğini küçült
 	Source	Kaynak
 	Fit to page	Sayfaya sığdır
 	Rotation	Döndürme
@@ -1147,6 +1190,7 @@
 	Off	Kapalı
 	Flip on long edge	Uzun kenardan çevir
 	Flip on short edge	Kısa kenardan çevir
+	Printer default	Yazıcı varsayılanı
 	Paper:	Kağıt:
 	Pages to Print	Yazdırılacak Sayfalar
 	More options:	Diğer seçenekler:
@@ -1290,6 +1334,8 @@
 	This document has no layers.	Bu belgede katman yok.
 	This document has no attachments.	Bu belgede ek yok.
 	Hide layer	Katmanı gizle
+	Layer options	Katman seçenekleri
+	Reset to Initial Visibility	Başlangıç görünürlüğüne sıfırla
 	Show layer	Katmanı göster
 	on page {label}	sayfa {label} üzerinde
 	Save attachment…	Eki kaydet…
@@ -1823,6 +1869,7 @@
 	Delete field	Alanı sil
 	Duplicate field	Alanı çoğalt
 	Set tab order	Sekme sırasını ayarla
+	Set calculation order	Hesaplama sırasını ayarla
 	Change initial view	İlk görünümü değiştir
 	Set alternate text	Alternatif metni ayarla
 	Mark figure as decorative	Şekli dekoratif olarak işaretle
@@ -1897,6 +1944,10 @@
 	Perimeter	Çevre
 	Area	Alan
 	Drawing scale	Çizim ölçeği
+	Scale	Ölçek
+	Common scales	Yaygın ölçekler
+	Enter a scale such as 1:50.	1:50 gibi bir ölçek girin.
+	Applying a scale switches units to m / mm.	Ölçek uygulamak birimleri m / mm olarak değiştirir.
 	Snapping	Yakalama
 	Export measurements	Ölçümleri dışa aktar
 	Open a PDF to measure it.	Ölçmek için bir PDF açın.
@@ -2102,6 +2153,7 @@ signature pad	Type	Yaz
 certificate	Subject	Konu
 action wizard	Start	Başlat
 	Reopen the files that were open when PdfCraft last closed	PdfCraft en son kapatıldığında açık olan dosyaları yeniden aç
+	Restore the last view (page, zoom and page display) when a document is opened again	Bir belge yeniden açıldığında son görünümü (sayfa, yakınlaştırma ve sayfa görünümü) geri yükle
 	Add {what}	{what} ekle
 	Use {what}	{what} kullan
 	Place saved {what}	Kayıtlı {what} yerleştir
@@ -2189,6 +2241,7 @@ key	Space	Boşluk
 	Looking for printers…	Yazıcılar aranıyor…
 	Sending sheet {s} of {n} to {printer}…	{n} yapraktan {s}. yaprak {printer} yazıcısına gönderiliyor…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Yazıcı bulunamadı. Yazıcının yüklü olduğunu ve yazdırma biriktiricisinin çalıştığını denetleyip Yazdır'ı yeniden açın.
+	Reading the printer's settings…	Yazıcı ayarları okunuyor…
 	Sending to {printer}…	{printer} yazıcısına gönderiliyor…
 	Column select	Sütun seçimi
 @plural	{n} object selected|{n} objects selected	{n} nesne seçildi
@@ -2259,6 +2312,7 @@ key	Space	Boşluk
 	Couldn't unlock {name}: {e}	{name} kilidi açılamadı: {e}
 	This document has no restrictions to lift	Bu belgede kaldırılacak kısıtlama yok
 	The document's security settings don't allow copying text and images	Belgenin güvenlik ayarları metin ve resimlerin kopyalanmasına izin vermiyor
+	The document's security settings don't allow printing	Belgenin güvenlik ayarları yazdırmaya izin vermiyor
 	Add the files to combine	Birleştirilecek dosyaları ekleyin
 	Leave out files that can't be read?	Okunamayan dosyalar dışarıda bırakılsın mı?
 	These files can't be read, so they won't be in the combined PDF:	Bu dosyalar okunamıyor, bu yüzden birleştirilmiş PDF'de yer almayacak:
@@ -2277,6 +2331,9 @@ key	Space	Boşluk
 	Printer paper and scaling may differ. Check driver settings.	Yazıcı kâğıdı ve ölçekleme farklı olabilir. Sürücü ayarlarını kontrol edin.
 	Drawing scale changes. Use Actual size for full-scale plans.	Çizim ölçeği değişir. Tam ölçekli planlar için Gerçek boyutu kullanın.
 	Reload documents when their files change on disk	Diskteki dosyaları değiştiğinde belgeleri yeniden yükle
+	Don't show again	Bir daha gösterme
+	Show a notice when a document is secured	Bir belge güvenli olduğunda bildirim göster
+	Always use my default zoom and page layout	Her zaman varsayılan yakınlaştırmamı ve sayfa düzenimi kullan
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Bu dosya diskte değişti. Yeniden yükle yeni sürümü gösterir ve kaydedilmemiş değişikliklerinizi atar; Kaydet onu bu sürümle değiştirir.
 	Reload	Yeniden yükle
 	Couldn't reload {name}: {e}	{name} yeniden yüklenemedi: {e}
@@ -2326,6 +2383,13 @@ animation effects	Off	Kapalı
 	no unused output name	kullanılmayan çıktı adı yok
 	no output folder was chosen	çıktı klasörü seçilmedi
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF indirildi
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} hesaplama artık yeni adı kullanıyor.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Hesaplama sırasında hiçbir şey hesaplamayan {n} giriş var. "Sırayı düzelt" bunları kaldırır.
+@plural	{fields} reads it|{fields} read it	Onu {fields} okuyor
+@plural	{n} field shows an old value|{n} fields show old values	{n} alan eski bir değer gösteriyor
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} önce hesaplanıyor; okuduğu {fields} daha sonra hesaplanıyor.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} alan daha çok erken hesaplanıyor.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields}, PDF'te kayıtlı sırada yok; bu yüzden diğer PDF görüntüleyicileri hesaplamayabilir.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} alan adı önceki dosyalarla çakışıyor ve yeniden adlandırılacak: {list}
 	Scan	Tara
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Beyaz bir kâğıda imzanızı atın ve parlak, eşit ışıkta fotoğrafını çekin (flaş kullanın). Fotoğrafı seçin veya buraya bırakın: PdfCraft imzayı bulur ve kâğıdı kaldırır.
@@ -2430,3 +2494,62 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Create & Edit	Oluştur ve Düzenle
+	Review & Compare	İncele ve Karşılaştır
+	Forms & Signatures	Formlar ve İmzalar
+	Protect & Standardize	Koru ve Standartlaştır
+	Customize & Automate	Özelleştir ve Otomatikleştir
+	No tools match your search.	Aramanızla eşleşen araç yok.
+	Expand all tools	Tüm araçları genişlet
+	Collapse all tools	Tüm araçları daralt
+	Attach a file…	Dosya ekle…
+	Delete attachment	Eki sil
+	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor
+	Attach {name}	{name} ekle
+	Delete attachment {key}	{key} ekini sil
+	Font	Yazı tipi
+	Bulleted list	Madde işaretli liste
+	Numbered list	Numaralı liste
+	Alignment	Hizalama
+	Superscript	Üst simge
+	Subscript	Alt simge
+	Paragraph spacing	Paragraf aralığı
+	Less	Daha az
+	Other options	Diğer seçenekler
+	Thumbnail size	Küçük resim boyutu
+	Smaller thumbnails	Küçük resimleri küçült
+	Larger thumbnails	Küçük resimleri büyüt
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Yorumun şeklini değiştir
+
+# Prepare a form ▸ Text field table
+	Add text field table	Metin alanı tablosu ekle
+	Text field table	Metin alanı tablosu
+	Text Field Table	Metin alanı tablosu
+	Columns	Sütunlar
+	Row spacing	Satır aralığı
+	Column spacing	Sütun aralığı
+	First row number	İlk satır numarası
+	Column widths	Sütun genişlikleri
+	Distribute evenly	Eşit dağıt
+	Field names	Alan adları
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N veya {row} satır numarası, {col} sütun numarası, {seq} hücre numarasıdır. Hiçbiri yoksa satır numarası sona eklenir.
+	Column {n}	Sütun {n}
+	Add fields	Alanları ekle
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	satırlar çok kısa: alanı uzatın ya da daha az satır veya daha az satır aralığı kullanın
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	bir sütun çok dar: alanı genişletin, sütuna daha fazla yer verin ya da daha az sütun veya daha az sütun aralığı kullanın
+	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
+	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
+	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Bugün
+@plural	{n} reply|{n} replies	{n} yanıt
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sayfa araçları
+	Insert pages from a file after the selection…	Seçimin ardından dosyadan sayfa ekle…
+	Rotate the selected pages counterclockwise	Seçili sayfaları saat yönünün tersine döndür
+	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
+	Extract the selected pages…	Seçili sayfaları ayıkla…
+	Delete the selected pages	Seçili sayfaları sil

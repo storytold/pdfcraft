@@ -191,6 +191,36 @@
 	Could not save: {e}	Неуспешно записване: {e}
 	Earlier in tab order	По-напред в реда на табулация
 	Later in tab order	По-назад в реда на табулация
+	Calculation order	Ред на изчисляване
+	Fix order	Поправяне на реда
+	Move only what must move, so every field calculates after the fields it reads.	Премества само това, което трябва, така че всяко поле да се изчислява след полетата, които чете.
+	Earlier in calculation order	По-напред в реда на изчисляване
+	Later in calculation order	По-назад в реда на изчисляване
+	Too early	Твърде рано
+	Reads {name}, which calculates later, so it shows an old value.	Чете {name}, което се изчислява по-късно, затова показва стара стойност.
+	Loop	Цикъл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Чете {names}, които на свой ред го четат. Никой ред не може да поправи цикъл: променете една от формулите.
+	Not in order	Извън реда
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Липсва в реда на изчисляване, записан в PDF файла: други програми за PDF може да не го изчисляват.
+	Back to Prepare a form	Назад към „Подготви формуляр“
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Все още нито едно поле в този формуляр не изчислява стойността си. Задайте изчисление на поле в раздела „Изчисляване“ на свойствата му и то ще се покаже тук.
+	{names} and {last}	{names} и {last}
+	{field} reads no other field	{field} не чете друго поле
+	{field} reads {fields}	{field} чете {fields}
+	No field reads it	Никое поле не го чете
+	The order saved in the PDF needs tidying	Редът, запазен в PDF файла, има нужда от подреждане
+	Moves only what must move	Премества само каквото трябва
+	Every field calculates after the fields it reads.	Всяко поле се изчислява след полетата, които чете.
+	Every field outside a loop calculates after the fields it reads.	Всяко поле извън цикъл се изчислява след полетата, които чете.
+	{field} reads its own value	{field} чете собствената си стойност
+	{fields} read each other	{fields} се четат взаимно
+	No order can fix a loop. Change one of the formulas.	Никой ред не може да поправи цикъл. Променете някоя от формулите.
+	Edit {field}'s formula	Редактиране на формулата на {field}
+	Order · top calculates first	Ред · горното се изчислява първо
+	Script	Скрипт
+	Links on page	Връзки на страницата
+	Show on the page which fields each field reads	Показване на страницата кои полета чете всяко поле
+	Drag a field to move it, or select it and press {up} or {down}.	Плъзнете поле, за да го преместите, или го изберете и натиснете {up} или {down}.
 	From:	От:
 	To:	До:
 	High Resolution	Висока резолюция
@@ -252,6 +282,7 @@
 	Discard private data of other applications	Премахни частните данни на други приложения
 	Discard hidden text	Премахни скрития текст
 	Use Flate to encode streams that are not encoded	Кодирай с Flate некодираните потоци
+	In streams that use LZW encoding, use Flate instead	Кодирай с Flate потоците, кодирани с LZW
 	Remove invalid links and bookmarks	Премахни невалидните връзки и отметки
 	Remove unreferenced named destinations	Премахни неизползваните именувани местоназначения
 	Compress document structure (object streams)	Компресирай структурата на документа (потоци от обекти)
@@ -484,6 +515,7 @@
 	Insert Page Number	Вмъкни номер на страница
 	Insert Date	Вмъкни дата
 	Start page number	Начален номер на страница
+	Shrink the page content to make room for the header and footer	Смаляване на съдържанието на страницата, за да има място за горния и долния колонтитул
 	Source	Източник
 	Fit to page	Побери в страницата
 	Rotation	Завъртане
@@ -869,6 +901,7 @@
 	Off	Изключено
 	Flip on long edge	Обръщане по дългия ръб
 	Flip on short edge	Обръщане по късия ръб
+	Printer default	По подразбиране за принтера
 	Paper:	Хартия:
 	Pages to Print	Страници за печат
 	More options:	Още опции:
@@ -936,6 +969,8 @@
 	Next view	Следващ изглед
 	Page display	Показване на страниците
 	Continuous scrolling	Непрекъснато превъртане
+	Show gaps between pages	Показване на разстоянията между страниците
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Скрийте разстоянията, за да съедините ръбовете на страниците. Полетата вътре в PDF остават непроменени.
 	Two-page view	Изглед с две страници
 	Single page	Единична страница
 	Show cover page in two-page view	Показвай корицата в изглед с две страници
@@ -1274,6 +1309,8 @@
 	This document has no layers.	Този документ няма слоеве.
 	This document has no attachments.	Този документ няма прикачени файлове.
 	Hide layer	Скрий слоя
+	Layer options	Опции за слоеве
+	Reset to Initial Visibility	Възстанови първоначалната видимост
 	Show layer	Покажи слоя
 	Set layer visibility	Задай видимост на слоя
 	on page {label}	на страница {label}
@@ -1581,6 +1618,7 @@
 	Looking for printers…	Търсене на принтери…
 	Sending sheet {s} of {n} to {printer}…	Изпращане на лист {s} от {n} до {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Не са намерени принтери. Проверете дали принтерът е инсталиран и дали услугата за опашка за печат работи, след което отворете „Печат“ отново.
+	Reading the printer's settings…	Четене на настройките на принтера…
 	Sending to {printer}…	Изпращане до {printer}…
 	Choose a folder for the searchable files	Изберете папка за файловете с възможност за търсене
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файловете се обединяват отгоре надолу. Оставете „Страници“ празно, за да се вземат всички страници.
@@ -1727,6 +1765,7 @@
 	This document has no restrictions to lift	Този документ няма ограничения за премахване
 	The document's security settings don't allow this change	Настройките за защита на документа не позволяват тази промяна
 	The document's security settings don't allow copying text and images	Настройките за защита на документа не позволяват копиране на текст и изображения
+	The document's security settings don't allow printing	Настройките за защита на документа не позволяват печат
 	Open a document first	Първо отворете документ
 	Security will be removed when you save	Защитата ще бъде премахната при записване
 	Click text or an image to edit it	Щракнете върху текст или изображение, за да го редактирате
@@ -1793,6 +1832,15 @@
 	Tool	Инструмент
 	Command	Команда
 	Search tools and commands…	Търсене на инструменти и команди…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Добавен текст
+	Link URL	URL на връзката
+	Search tools and commands	Търсене на инструменти и команди
+	Text editing line	Ред за редактиране на текст
+	Text to place	Текст за поставяне
+	Tooltip	Подсказка
+	Words or phrases to redact	Думи или фрази за заличаване
 	No matching tools	Няма съответстващи инструменти
 	All tools	Всички инструменти
 	Read	Четене
@@ -1864,6 +1912,10 @@
 	Perimeter	Периметър
 	Area	Площ
 	Drawing scale	Мащаб на чертежа
+	Scale	Мащаб
+	Common scales	Често използвани мащаби
+	Enter a scale such as 1:50.	Въведете мащаб, например 1:50.
+	Applying a scale switches units to m / mm.	Прилагането на мащаб превключва единиците на m / mm.
 	Snapping	Прилепване
 	Export measurements	Експортирай измерванията
 	Open a PDF to measure it.	Отворете PDF файл, за да го измервате.
@@ -2043,6 +2095,7 @@
 	Set status Rejected	Задай състояние „Отхвърлено“
 	Set status Unmarked	Задай състояние „Неотбелязано“
 	Set tab order	Задай реда на обхождане
+	Set calculation order	Задаване на ред на изчисляване
 	Set the image of {name}	Задай изображението на {name}
 	Spreadsheet (.xlsx)	Електронна таблица (.xlsx)
 	Square	Квадрат
@@ -2139,6 +2192,7 @@ signature pad	Type	Въвеждане
 action wizard	Start	Старт
 	Margins (in)	Полета (in)
 	Reopen the files that were open when PdfCraft last closed	Отваряй отново файловете, които бяха отворени при последното затваряне на PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Възстановяване на последния изглед (страница, мащаб и показване на страниците) при повторно отваряне на документ
 	Clear Recent Files	Изчисти последно отваряните файлове
 	Remove from Recent	Премахни от последно отваряните
 	Remove {name} from Recent	Премахни {name} от последно отваряните
@@ -2243,6 +2297,9 @@ key	Space	Интервал
 	Printer paper and scaling may differ. Check driver settings.	Хартията и мащабът на принтера може да се различават. Проверете настройките на драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Мащабът на чертежа се променя. Използвайте Действителен размер за планове в оригинален мащаб.
 	Reload documents when their files change on disk	Презареждай документите, когато файловете им се променят на диска
+	Don't show again	Не показвай отново
+	Show a notice when a document is secured	Показвай известие, когато документът е защитен
+	Always use my default zoom and page layout	Винаги използвай моя мащаб и оформление на страниците по подразбиране
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Този файл беше променен на диска. „Презареждане“ показва новата версия и отхвърля незаписаните ви промени; „Запис“ я заменя с тази версия.
 	Reload	Презареди
 	Couldn't reload {name}: {e}	Неуспешно презареждане на {name}: {e}
@@ -2304,6 +2361,13 @@ animation effects	Off	Изключени
 	no unused output name	няма свободно име за изходния файл
 	no output folder was chosen	не е избрана папка за изхода
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Изтеглен е {n} PDF|Изтеглени са {n} PDF файла
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} изчисление вече използва новото име.|{n} изчисления вече използват новото име.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Редът на изчисляване има {n} запис, който не изчислява нищо. „Поправяне на реда“ го премахва.|Редът на изчисляване има {n} записа, които не изчисляват нищо. „Поправяне на реда“ ги премахва.
+@plural	{fields} reads it|{fields} read it	{fields} го чете|{fields} го четат
+@plural	{n} field shows an old value|{n} fields show old values	{n} поле показва стара стойност|{n} полета показват стари стойности
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} се изчислява преди {fields}, което чете.|{field} се изчислява преди {fields}, които чете.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Още {n} поле се изчислява твърде рано.|Още {n} полета се изчисляват твърде рано.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} липсва в реда, запазен в PDF файла, затова други програми за PDF може да не го изчислят.|{fields} липсват в реда, запазен в PDF файла, затова други програми за PDF може да не ги изчислят.
 	Scan	Сканиране
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Подпишете се на лист бяла хартия и го снимайте на ярка, равномерна светлина (със светкавица). Изберете снимката или я пуснете тук: PdfCraft открива подписа и премахва хартията.
 	Choose photo…	Избор на снимка…
@@ -2397,3 +2461,62 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Create & Edit	Създаване и редактиране
+	Review & Compare	Преглед и сравнение
+	Forms & Signatures	Формуляри и подписи
+	Protect & Standardize	Защита и стандартизация
+	Customize & Automate	Персонализиране и автоматизация
+	No tools match your search.	Няма инструменти, отговарящи на търсенето.
+	Expand all tools	Разгъване на всички инструменти
+	Collapse all tools	Свиване на всички инструменти
+	Attach a file…	Прикачване на файл…
+	Delete attachment	Изтриване на прикачения файл
+	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията
+	Attach {name}	Прикачване на {name}
+	Delete attachment {key}	Изтриване на прикачения файл {key}
+	Font	Шрифт
+	Bulleted list	Списък с водещи символи
+	Numbered list	Номериран списък
+	Alignment	Подравняване
+	Superscript	Горен индекс
+	Subscript	Долен индекс
+	Paragraph spacing	Разстояние между абзаците
+	Less	По-малко
+	Other options	Други опции
+	Thumbnail size	Размер на миниатюрите
+	Smaller thumbnails	По-малки миниатюри
+	Larger thumbnails	По-големи миниатюри
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Промяна на формата на коментара
+
+# Prepare a form ▸ Text field table
+	Add text field table	Добави таблица от текстови полета
+	Text field table	Таблица от текстови полета
+	Text Field Table	Таблица от текстови полета
+	Columns	Колони
+	Row spacing	Разстояние между редовете
+	Column spacing	Разстояние между колоните
+	First row number	Номер на първия ред
+	Column widths	Ширини на колоните
+	Distribute evenly	Разпредели равномерно
+	Field names	Имена на полетата
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N или {row} е номерът на реда, {col} – на колоната, {seq} – на клетката. Без тях номерът на реда се добавя накрая.
+	Column {n}	Колона {n}
+	Add fields	Добави полета
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	редовете са твърде ниски: направете областта по-висока или използвайте по-малко редове или по-малко разстояние между тях
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	колона е твърде тясна: направете областта по-широка, дайте ѝ повече място или използвайте по-малко колони или по-малко разстояние между тях
+	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
+	two cells would both be named {name}	две клетки биха имали едно и също име {name}
+	a field named {name} already exists	вече съществува поле с име {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Днес
+@plural	{n} reply|{n} replies	{n} отговор|{n} отговора
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Инструменти за страници
+	Insert pages from a file after the selection…	Вмъкване на страници от файл след избраното…
+	Rotate the selected pages counterclockwise	Завъртане на избраните страници обратно на часовниковата стрелка
+	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
+	Extract the selected pages…	Извличане на избраните страници…
+	Delete the selected pages	Изтриване на избраните страници
