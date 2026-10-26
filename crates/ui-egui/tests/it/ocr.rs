@@ -55,7 +55,7 @@ fn chinese_ocr_language_runs_from_the_dialog() {
     assert!(h.state_mut().execute("ocr.recognize"));
     h.run_steps(2);
     h.get_by_value("English").click();
-    h.run_steps(1);
+    h.run_steps(2);
     h.get_by_label("Chinese (Simplified) and English").click();
     // The menu closes on the following frame. A click before that hits the menu.
     h.run_steps(2);
@@ -86,7 +86,7 @@ fn german_is_a_document_language() {
     assert!(h.state_mut().execute("ocr.recognize"));
     h.run_steps(2);
     h.get_by_value("English").click();
-    h.run_steps(1);
+    h.run_steps(2);
     h.get_by_label("German").click();
     h.run_steps(1);
     assert_eq!(h.state().ocr_draft.language, "de");
@@ -129,7 +129,7 @@ fn latin_ocr_language_runs_from_the_dialog() {
     assert!(h.state_mut().execute("ocr.recognize"));
     h.run_steps(2);
     h.get_by_value("English").click();
-    h.run_steps(1);
+    h.run_steps(2);
     h.get_by_label("Latin (accented)").click();
     // The menu closes on the following frame. A click before that hits the menu.
     h.run_steps(2);
