@@ -252,24 +252,15 @@ enum ImageLayout {
 
 /// Validate image dimensions and identify the supported packed pixel layout.
 /// Keeping this independent of the OCR engine makes malformed-buffer cases testable.
-fn validate_image_buffer(
-    buffer_len: usize,
-    width: u32,
-    height: u32,
-) -> Result<(usize, ImageLayout), OcrError> {
-    let total_px = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| OcrError::Recognize("image dimensions overflow addressable memory".into()))?;
+fn validate_image_buffer(buffer_len: usize, width: u32, height: u32) -> Result<(usize, ImageLayout), OcrError> {
+    let total_px =
+        (width as usize).checked_mul(height as usize).ok_or_else(|| OcrError::Recognize("image dimensions overflow addressable memory".into()))?;
     if total_px == 0 || buffer_len == 0 {
         return Err(OcrError::EmptyImage);
     }
 
-    let expected_rgb = total_px
-        .checked_mul(3)
-        .ok_or_else(|| OcrError::Recognize("RGB image buffer size overflow".into()))?;
-    let expected_rgba = total_px
-        .checked_mul(4)
-        .ok_or_else(|| OcrError::Recognize("RGBA image buffer size overflow".into()))?;
+    let expected_rgb = total_px.checked_mul(3).ok_or_else(|| OcrError::Recognize("RGB image buffer size overflow".into()))?;
+    let expected_rgba = total_px.checked_mul(4).ok_or_else(|| OcrError::Recognize("RGBA image buffer size overflow".into()))?;
     let layout = if buffer_len == total_px {
         ImageLayout::Grayscale
     } else if buffer_len == expected_rgb {
@@ -410,10 +401,7 @@ const TALL_LOWER_ACCENTED: &str = "àáâãäåèéêëìíîïñòóôõöùú�
 
 /// True if `c` rises to or near the cap/ascender line in Helvetica.
 fn is_tall_glyph(c: char) -> bool {
-    c.is_uppercase()
-        || c.is_ascii_digit()
-        || "bdfhijklt!?/\\()[]{}|'\"#$%&@€£¥§¶¡¿".contains(c)
-        || TALL_LOWER_ACCENTED.contains(c)
+    c.is_uppercase() || c.is_ascii_digit() || "bdfhijklt!?/\\()[]{}|'\"#$%&@€£¥§¶¡¿".contains(c) || TALL_LOWER_ACCENTED.contains(c)
 }
 
 /// True if `c` reaches below the baseline (descenders, cedillas, brackets, inverted Spanish
@@ -453,13 +441,7 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
     for w in words {
         // Public fields allow callers to construct invalid placements. Never emit NaN or infinity
         // as a PDF numeric operand; skip malformed words because this API returns raw content bytes.
-        if !w
-            .origin
-            .iter()
-            .chain(w.across.iter())
-            .chain(w.up.iter())
-            .all(|value| value.is_finite())
-        {
+        if !w.origin.iter().chain(w.across.iter()).chain(w.up.iter()).all(|value| value.is_finite()) {
             continue;
         }
 
@@ -501,10 +483,7 @@ mod tests {
     impl ScratchDir {
         /// Create a clean temporary directory uniquely named for the current test label.
         fn new(label: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "pdfcraft-ocr-{label}-{}",
-                std::process::id()
-            ));
+            let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("create scratch dir");
             Self(dir)
@@ -553,10 +532,7 @@ mod tests {
     fn places_words_through_the_mapping() {
         // 2 pixels per point, page 612 × 792, y flipped.
         let to_user = |x: f32, y: f32| [x as f64 / 2.0, 792.0 - y as f64 / 2.0];
-        let w = PlacedWord::place(
-            &Word { text: "Hello".into(), rect: [100.0, 200.0, 300.0, 240.0] },
-            to_user,
-        );
+        let w = PlacedWord::place(&Word { text: "Hello".into(), rect: [100.0, 200.0, 300.0, 240.0] }, to_user);
         assert_eq!(w.origin, [50.0, 672.0]);
         assert_eq!(w.across, [100.0, 0.0]);
         assert_eq!(w.up, [0.0, 20.0]);
@@ -570,15 +546,12 @@ mod tests {
         for sample in [
             "Münchner Straße",        // German: ü, ß
             "français déjà vu, cœur", // French: ç, é, à, œ
-            "¡Qué año!",               // Spanish: ¿, ¡, é, ñ
-            "Smørrebrød",              // Danish/Norwegian: ø
-            "Ærø",                     // Nordic: Æ, ø
-            "Þingvellir",              // Icelandic: Þ, þ
+            "¡Qué año!",              // Spanish: ¿, ¡, é, ñ
+            "Smørrebrød",             // Danish/Norwegian: ø
+            "Ærø",                    // Nordic: Æ, ø
+            "Þingvellir",             // Icelandic: Þ, þ
         ] {
-            assert!(
-                sample.chars().all(|ch| LATIN_ALPHABET.contains(ch)),
-                "extended alphabet cannot represent sample {sample:?}"
-            );
+            assert!(sample.chars().all(|ch| LATIN_ALPHABET.contains(ch)), "extended alphabet cannot represent sample {sample:?}");
             assert_eq!(pdfcraft_fonts::first_undrawable(sample), None);
         }
     }
@@ -604,12 +577,7 @@ mod tests {
         assert_eq!(&encoded[..], &[0xFC, 0xDF][..]);
 
         let text = "Münchner Straße";
-        let w = PlacedWord {
-            text: text.into(),
-            origin: [10.0, 20.0],
-            across: [80.0, 0.0],
-            up: [0.0, 10.0],
-        };
+        let w = PlacedWord { text: text.into(), origin: [10.0, 20.0], across: [80.0, 0.0], up: [0.0, 10.0] };
         let layer = text_layer(&[w]);
         assert!(layer.starts_with(b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n"));
         assert!(layer.ends_with(b"ET\nQ\nEMC\n"));
@@ -620,12 +588,7 @@ mod tests {
         // Check a French phrase as well: the invisible PDF text must preserve accented letters
         // and the œ ligature instead of replacing them with question marks.
         let french_text = "français déjà vu, cœur";
-        let french_word = PlacedWord {
-            text: french_text.into(),
-            origin: [10.0, 40.0],
-            across: [120.0, 0.0],
-            up: [0.0, 10.0],
-        };
+        let french_word = PlacedWord { text: french_text.into(), origin: [10.0, 40.0], across: [120.0, 0.0], up: [0.0, 10.0] };
         let french_layer = text_layer(&[french_word]);
         let french_literal = pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(french_text));
         assert!(french_layer.windows(french_literal.len()).any(|w| w == &french_literal[..]));
@@ -634,32 +597,18 @@ mod tests {
     /// Verify invisible PDF text is scaled and placed inside its word rectangle.
     #[test]
     fn text_layer_is_invisible_text_fitted_to_each_box() {
-        let w = PlacedWord {
-            text: "Hi".into(),
-            origin: [10.0, 20.0],
-            across: [30.0, 0.0],
-            up: [0.0, 9.3],
-        };
+        let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
         let s = String::from_utf8(text_layer(&[w])).unwrap();
         assert!(s.contains("3 Tr") && s.contains("/PCHelv 1 Tf"), "{s}");
         let width = helvetica_width("Hi", 1.0);
-        assert!(s.contains(&format!(
-            "{} 0 0 {} 10 20 Tm (Hi) Tj",
-            num(30.0 / width),
-            num(9.3 / CAP_HEIGHT)
-        )), "{s}");
+        assert!(s.contains(&format!("{} 0 0 {} 10 20 Tm (Hi) Tj", num(30.0 / width), num(9.3 / CAP_HEIGHT))), "{s}");
         assert!(s.starts_with("/OCR BMC") && s.ends_with("EMC\n"));
     }
 
     /// Verify NaN and infinite placements are omitted from generated PDF operators.
     #[test]
     fn invalid_coordinates_are_not_written_to_pdf_content() {
-        let invalid = PlacedWord {
-            text: "Hi".into(),
-            origin: [f64::NAN, 20.0],
-            across: [30.0, 0.0],
-            up: [0.0, 9.3],
-        };
+        let invalid = PlacedWord { text: "Hi".into(), origin: [f64::NAN, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
         let layer = String::from_utf8(text_layer(&[invalid])).unwrap();
         assert!(!layer.contains("NaN"));
         assert!(!layer.contains("inf"));
@@ -671,12 +620,7 @@ mod tests {
     /// Verify the OCR text layer balances its graphics-state and marked-content operators.
     #[test]
     fn the_layer_restores_the_graphics_state_it_changes() {
-        let w = PlacedWord {
-            text: "Hi".into(),
-            origin: [10.0, 20.0],
-            across: [30.0, 0.0],
-            up: [0.0, 9.3],
-        };
+        let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
         let s = String::from_utf8(text_layer(&[w])).unwrap();
         let mut depth = 0_i32;
         for token in s.split_ascii_whitespace() {
@@ -701,29 +645,17 @@ mod tests {
         assert_eq!(ink_extent("Gallus.Ze@camtel.cm"), (CAP_HEIGHT, 0.0));
         assert_eq!(ink_extent("Corporation"), (CAP_HEIGHT, -DESCENT));
         assert_eq!(ink_extent("--"), (BOX_EM - DESCENT, -DESCENT));
-        let w = PlacedWord {
-            text: "gap".into(),
-            origin: [0.0, 100.0],
-            across: [20.0, 0.0],
-            up: [0.0, 7.3],
-        };
+        let w = PlacedWord { text: "gap".into(), origin: [0.0, 100.0], across: [20.0, 0.0], up: [0.0, 7.3] };
         let s = String::from_utf8(text_layer(&[w])).unwrap();
         let em = 7.3 / (X_HEIGHT + DESCENT);
-        assert!(s.contains(&format!(
-            " 0 0 {} 0 {} Tm (gap) Tj",
-            num(em),
-            num(100.0 + em * DESCENT)
-        )), "{s}");
+        assert!(s.contains(&format!(" 0 0 {} 0 {} Tm (gap) Tj", num(em), num(100.0 + em * DESCENT))), "{s}");
     }
 
     /// Verify rotated-page mappings preserve the recognized word reading direction.
     #[test]
     fn rotated_pages_keep_the_reading_direction() {
         let to_user = |x: f32, y: f32| [y as f64, x as f64];
-        let w = PlacedWord::place(
-            &Word { text: "Up".into(), rect: [0.0, 0.0, 50.0, 10.0] },
-            to_user,
-        );
+        let w = PlacedWord::place(&Word { text: "Up".into(), rect: [0.0, 0.0, 50.0, 10.0] }, to_user);
         assert_eq!(w.across, [0.0, 50.0]);
         assert_eq!(w.up, [-10.0, 0.0]);
     }
@@ -772,21 +704,13 @@ mod tests {
             let exe_dir = root.join(exe_dir);
             let models_dir = root.join(models_dir);
             std::fs::create_dir_all(&exe_dir).unwrap();
-            assert_eq!(
-                Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d)),
-                None,
-                "{name}: no models yet"
-            );
+            assert_eq!(Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d)), None, "{name}: no models yet");
             write_models(&models_dir);
             let found = Models::dirs_beside_exe(&exe_dir)
                 .iter()
                 .find_map(|d| Models::in_dir(d))
                 .unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
-            assert_eq!(
-                found.detection.canonicalize().unwrap(),
-                models_dir.join(DETECTION_MODEL).canonicalize().unwrap(),
-                "{name}"
-            );
+            assert_eq!(found.detection.canonicalize().unwrap(), models_dir.join(DETECTION_MODEL).canonicalize().unwrap(), "{name}");
         }
     }
 
@@ -810,10 +734,7 @@ mod tests {
     fn alphabet_for_follows_the_model_class_count() {
         let scratch = ScratchDir::new("alphabet");
         let dir = scratch.path();
-        let models = Models {
-            detection: dir.join(DETECTION_MODEL),
-            recognition: dir.join(RECOGNITION_MODEL),
-        };
+        let models = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
 
         assert_eq!(models.alphabet_for(Some(97)).unwrap(), ALPHABET);
         assert_eq!(models.alphabet_for(Some(183)).unwrap(), LATIN_ALPHABET);
@@ -856,14 +777,11 @@ mod tests {
     #[test]
     fn reads_rendered_text() {
         let Some(models) = Models::find() else {
-            let required = std::env::var_os("PDFCRAFT_REQUIRE_OCR_MODELS")
-                .is_some_and(|value| !value.is_empty());
+            let required = std::env::var_os("PDFCRAFT_REQUIRE_OCR_MODELS").is_some_and(|value| !value.is_empty());
             if required {
                 panic!("OCR models are required for this test but were not found");
             }
-            eprintln!(
-                "skipped: OCR models not installed (set PDFCRAFT_REQUIRE_OCR_MODELS=1 in CI to require them)"
-            );
+            eprintln!("skipped: OCR models not installed (set PDFCRAFT_REQUIRE_OCR_MODELS=1 in CI to require them)");
             return;
         };
 
@@ -872,16 +790,10 @@ mod tests {
         let lines = ocr.recognize(&px, w, h).unwrap();
         let text: Vec<String> = lines.iter().map(Line::text).collect();
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
-        let word = lines
-            .iter()
-            .flat_map(|line| &line.words)
-            .find(|word| word.text.contains("HELL"))
-            .expect("no word containing 'HELL' in OCR output");
+        let word =
+            lines.iter().flat_map(|line| &line.words).find(|word| word.text.contains("HELL")).expect("no word containing 'HELL' in OCR output");
         let x0 = test_image::X0 as f32;
-        assert!(
-            word.rect[0] >= x0 - 30.0 && word.rect[0] < x0 + 20.0,
-            "first word should start near x={x0}, got {word:?}"
-        );
+        assert!(word.rect[0] >= x0 - 30.0 && word.rect[0] < x0 + 20.0, "first word should start near x={x0}, got {word:?}");
     }
 
     mod test_image {
@@ -907,10 +819,7 @@ mod tests {
                 if c == ' ' {
                     continue;
                 }
-                let (_, rows) = GLYPHS
-                    .iter()
-                    .find(|glyph| glyph.0 == c)
-                    .unwrap_or_else(|| panic!("no glyph for {c:?}"));
+                let (_, rows) = GLYPHS.iter().find(|glyph| glyph.0 == c).unwrap_or_else(|| panic!("no glyph for {c:?}"));
                 for (ry, row) in rows.iter().enumerate() {
                     for (rx, byte) in row.bytes().enumerate() {
                         if byte != b'X' {
