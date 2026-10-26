@@ -3702,6 +3702,92 @@ fn editing_existing_text_in_place() {
     assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
 }
 
+/// #2378: an edit that sets a paragraph in another face because its subset lacks a character tells
+/// the user which character and which face, in their language.
+#[test]
+fn a_substituted_face_is_reported_with_the_missing_character() {
+    let body = "BT /F2 12 Tf 20 150 Td (ab) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F2 5 0 R >> >> >>".to_string(),
+        format!(
+            "<< /Length {} >>
+stream
+{body}
+endstream",
+            body.len()
+        ),
+        "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Arial /FirstChar 97 /LastChar 99 /Widths [500 520 0] /Encoding /WinAnsiEncoding >>"
+            .to_string(),
+    ];
+    let mut pdf = b"%PDF-1.7
+"
+    .to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(
+            format!(
+                "{} 0 obj
+{o}
+endobj
+",
+                i + 1
+            )
+            .as_bytes(),
+        );
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "xref
+0 {}
+0000000000 65535 f 
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for o in offsets {
+        pdf.extend_from_slice(
+            format!(
+                "{o:010} 00000 n 
+"
+            )
+            .as_bytes(),
+        );
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    for (language, expected) in [
+        ("en", "The text's own font can't show c (U+0063), so the edited text is set in Helvetica."),
+        ("de", "Die eigene Schrift des Texts kann c (U+0063) nicht darstellen, daher ist der bearbeitete Text in Helvetica gesetzt."),
+    ] {
+        let pdf = pdf.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("subset.pdf", None, pdf).expect("opens");
+            app
+        });
+        h.state_mut().set_option("language", language).unwrap();
+        h.run_steps(2);
+        let edit = pdfcraft_engine::Edit::EditTextBlock { page: 0, block: 0, text: "abc".into(), style: Default::default() };
+        assert!(h.state_mut().apply_edit(edit));
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some(expected), "{language}");
+    }
+}
+
 /// Under the Edit tab, opens the line "Page 1" (at (20, 150) on a 200 × 300 page, 24 pt) in the
 /// paragraph editor and retypes it as "Chapter One", leaving the editor open.
 fn edit_tab_with_an_open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {

@@ -7932,6 +7932,35 @@ fn text_blocks_stay_cached_after_an_edit_and_follow_undo_and_redo() {
     assert!(Arc::ptr_eq(&redone, &blocks(&session)));
 }
 
+/// #2378: an edit that sets text in another face because its subset lacks a character says so in
+/// `edit_substitutions`, naming the character, and measuring the draft says so before Apply. An
+/// edit the subset can show, a failed edit and undo report nothing.
+#[test]
+fn an_edit_set_in_another_face_names_the_missing_character() {
+    let subset = "/Font << /F2 << /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Arial /FirstChar 97 /LastChar 99 /Widths [500 520 0] /Encoding /WinAnsiEncoding >> >>";
+    let mut s = Session::new();
+    let id = s.open("subset.pdf", None, Arc::new(one_line_page(subset, "BT /F2 12 Tf 20 150 Td (ab) Tj ET")), None).unwrap();
+    let edit = |text: &str| Edit::EditTextBlock { page: 0, block: 0, text: text.into(), style: pdfcraft_edit::BlockStyle::default() };
+    let layout = s.get(id).unwrap().text_edit_layout(0, 0, "abc", &pdfcraft_edit::BlockStyle::default()).unwrap();
+    assert_eq!((layout.substituted.as_deref(), layout.missing.as_slice()), (Some("Helvetica"), ['c'].as_slice()));
+    assert!(!s.get(id).unwrap().dirty, "measuring is no edit");
+    s.apply(id, edit("abc")).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.edit_substitutions, [TextSubstitution { page: 0, font: "Helvetica".into(), missing: vec!['c'] }]);
+    let message = d.edit_substitutions[0].to_string();
+    assert!(message.contains("page 1") && message.contains("Helvetica") && message.contains("\"c\" (U+0063)"), "{message}");
+    let many = TextSubstitution { page: 0, font: "Inter Type3".into(), missing: ('а'..='я').collect() }.to_string();
+    assert!(many.contains("\"у\"") && !many.contains("\"ф\"") && many.ends_with("… (32 in all)"), "the first 20 and the count: {many}");
+    assert!(s.apply(id, Edit::EditTextBlock { page: 0, block: 9, text: "x".into(), style: Default::default() }).is_err());
+    assert!(s.get(id).unwrap().edit_substitutions.is_empty(), "no stale report after a failed edit");
+    s.apply(id, edit("abc")).unwrap();
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().edit_substitutions.is_empty(), "undo reports nothing");
+    let fresh = s.open("subset.pdf", None, Arc::new(one_line_page(subset, "BT /F2 12 Tf 20 150 Td (ab) Tj ET")), None).unwrap();
+    s.apply(fresh, edit("ba ab")).unwrap();
+    assert!(s.get(fresh).unwrap().edit_substitutions.is_empty(), "text the subset shows keeps its font");
+}
+
 /// #4199, #3797: the spaces typed into a paragraph are all there after saving and reopening.
 #[test]
 fn edited_text_keeps_every_space_typed_through_save_and_reopen() {

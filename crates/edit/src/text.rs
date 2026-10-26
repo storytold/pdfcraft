@@ -168,6 +168,11 @@ pub struct TextEditLayout {
     pub source_rect: [f64; 4],
     pub draft_rect: Option<[f64; 4]>,
     pub overflow: bool,
+    /// The face Apply would set the draft in instead of its own, as [`LineEdit::substituted`]
+    /// reports it: known before Apply, so an editor can say so while the user types.
+    pub substituted: Option<String>,
+    /// The draft's characters its own font can't show, as [`LineEdit::missing`].
+    pub missing: Vec<char>,
 }
 
 pub fn text_edit_layout(doc: &Document, page: usize, block: usize, text: &str, style: &BlockStyle) -> Result<TextEditLayout, EditError> {
@@ -186,7 +191,13 @@ fn layout_draft(
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
     if text == source.editor_text && *style == BlockStyle::default() {
-        return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
+        return Ok(TextEditLayout {
+            source_rect: source.rect,
+            draft_rect: Some(source.rect),
+            overflow: false,
+            substituted: None,
+            missing: Vec::new(),
+        });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
@@ -199,7 +210,7 @@ fn layout_draft(
         }
     }
     let mut draft = doc.clone();
-    rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
+    let edit = rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
         if let Some(count) = untouched.get_mut(&key(&line))
@@ -222,7 +233,7 @@ fn layout_draft(
     }
     let overflow = rect
         .is_some_and(|r| r[0] < source.rect[0] - 0.5 || r[1] < source.rect[1] - 0.5 || r[2] > source.rect[2] + 0.5 || r[3] > source.rect[3] + 0.5);
-    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow })
+    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow, substituted: edit.substituted, missing: edit.missing })
 }
 
 /// Text and graphics state captured for rewriting.
@@ -669,8 +680,25 @@ fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
 /// What replacing a line did.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineEdit {
-    /// `Some(font)` when the line's font couldn't show the new text and Helvetica was used.
+    /// `Some(font)` when the line's font couldn't show the new text and Helvetica was used. A
+    /// styled paragraph that needed several faces names them all, in order, separated by `, `.
     pub substituted: Option<String>,
+    /// The characters, each once in text order, that the text's own font can't show: why it was
+    /// substituted (#2378). Empty when nothing was, or when only a requested weight was.
+    pub missing: Vec<char>,
+}
+
+/// The characters of `text`, each once in order, that `font` can't show (all of them without a
+/// font). Spaces and line breaks don't count.
+pub(crate) fn unshown(font: Option<&Metrics>, text: &str) -> Vec<char> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for ch in text.chars().filter(|c| !c.is_whitespace()) {
+        if seen.insert(ch) && font.is_none_or(|m| m.encode(ch.encode_utf8(&mut [0; 4])).is_none()) {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -2574,7 +2602,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }
     })?;
-    Ok(LineEdit { substituted })
+    let missing = if substituted.is_some() { unshown(font.as_ref(), &text) } else { Vec::new() };
+    Ok(LineEdit { substituted, missing })
 }
 
 /// The size of the last `Tf` before operator `at`.
@@ -3297,7 +3326,8 @@ fn rewrite_block_from(
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }
     })?;
-    Ok(LineEdit { substituted })
+    let missing = if substituted.is_some() { unshown(metrics.as_ref(), &flat) } else { Vec::new() };
+    Ok(LineEdit { substituted, missing })
 }
 
 /// The cover (when [`BlockStyle::cover`] asks for one) and visible rendering that start a

@@ -2380,7 +2380,9 @@ fn a_subset_keeps_its_font_for_glyphs_left_to_the_default_width() {
     }
     // `z` maps to a CID the program has no glyph for: that still needs another font.
     let mut doc = doc.clone();
-    assert!(text::replace_block(&mut doc, 0, 0, "Graz").unwrap().substituted.is_some());
+    let graz = text::replace_block(&mut doc, 0, 0, "Graz").unwrap();
+    assert!(graz.substituted.is_some());
+    assert_eq!(graz.missing, ['z'], "only the character the subset lacks");
 }
 
 #[test]
@@ -2714,6 +2716,51 @@ fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello) Tj ET");
     assert!(text::replace_line(&mut doc, 0, 0, "\u{1f4a9}").is_err());
     assert!(text::replace_line(&mut doc, 0, 5, "x").is_err(), "no such line");
+}
+
+/// #2378: an edit that sets text in another face names the characters its own font can't show,
+/// and measuring the draft says so before Apply without changing the document.
+#[test]
+fn a_substitution_names_the_missing_characters_before_and_after_apply() {
+    let page = || text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let line = text::replace_line(&mut page(), 0, 0, "abc acé").unwrap();
+    assert_eq!((line.substituted.as_deref(), line.missing.as_slice()), (Some("Helvetica"), ['c', 'é'].as_slice()));
+    // One style for the paragraph, and a row break, which takes the styled path.
+    for draft in [
+        "abc acé", "ab
+ca é",
+    ] {
+        let mut doc = page();
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let layout = text::text_edit_layout(&doc, 0, 0, draft, &text::BlockStyle::default()).unwrap();
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "measuring changes nothing");
+        assert_eq!(layout.missing, ['c', 'é'], "{draft:?}");
+        assert!(layout.substituted.is_some(), "{draft:?}");
+        let edit = text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+        assert_eq!((edit.substituted, edit.missing), (layout.substituted, layout.missing), "{draft:?}");
+    }
+    // Two faces in one styled paragraph (a standard font for é, Inter's outlines for ш): both are
+    // named, not the last one alone (#4634 review).
+    let mut doc = page();
+    let two = text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some(
+            "ab
+c é ш",
+        ),
+        &text::BlockStyle::default(),
+    )
+    .unwrap();
+    assert_eq!(two.missing, ['c', 'é', 'ш']);
+    let faces = two.substituted.unwrap_or_default();
+    assert!(faces.contains("Helvetica") && faces.contains("Inter"), "{faces}");
+    // Text the font shows has nothing missing, also when the user asks for another weight.
+    let kept = text::rewrite_block(&mut page(), 0, 0, Some("ba ab"), &text::BlockStyle::default()).unwrap();
+    assert_eq!((kept.substituted, kept.missing), (None, Vec::new()));
+    let bold = text::rewrite_block(&mut page(), 0, 0, Some("ab"), &text::BlockStyle { bold: Some(true), ..Default::default() }).unwrap();
+    assert!(bold.substituted.is_some() && bold.missing.is_empty(), "{bold:?}");
 }
 
 /// #4280: two paragraphs in subsets without Ç or Ã, one regular and one bold. Each edit that adds

@@ -3136,6 +3136,47 @@ fn editing_existing_text_through_tools() {
     assert_eq!(p["lines"].as_array().map(Vec::len), Some(2), "{p}");
 }
 
+/// #2378: measuring a draft names the face Apply would use instead of the paragraph's own and the
+/// characters that force it, without changing the document; the edit itself says so in warnings.
+#[test]
+fn a_substituted_face_and_its_missing_characters_are_reported_through_tools() {
+    let dir = workdir("edit-text-substitution");
+    let body = "BT /F2 12 Tf 72 700 Td (ab) Tj ET";
+    std::fs::write(
+        dir.join("subset.pdf"),
+        pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F2 5 0 R >> >> >>",
+            &format!(
+                "<< /Length {} >>
+stream
+{body}
+endstream",
+                body.len()
+            ),
+            "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Arial /FirstChar 97 /LastChar 99 /Widths [500 520 0] /Encoding /WinAnsiEncoding >>",
+        ]),
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "subset.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "text_edit_layout", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "ba" }));
+    assert_eq!((&kept["substituted"], &kept["missing"]), (&json!(null), &json!([])), "{kept}");
+    let layout = ok(&mut a, "text_edit_layout", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "abc é" }));
+    assert_eq!((&layout["substituted"], &layout["missing"]), (&json!("Helvetica"), &json!(["c", "é"])), "{layout}");
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["dirty"], false, "measuring is no edit");
+    let r = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "abc é" }));
+    let warnings = r["warnings"].as_array().unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(warnings.len(), 1, "{r}");
+    let w = warnings[0].as_str().unwrap();
+    assert!(w.contains("Helvetica") && w.contains("\"c\" (U+0063)") && w.contains("\"é\" (U+00E9)"), "{w}");
+    let r = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "abc é ab" }));
+    // The paragraph is set in Helvetica now, which shows all of it: nothing to report again.
+    assert!(r.get("warnings").is_none(), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn styled_cyrillic_fallback_is_batched_through_tools_and_reopen() {
     if pdfcraft_fonts::document_japanese_font().is_none() {

@@ -444,6 +444,38 @@ pub struct Document {
     /// What the last successful [`Session::apply`] wrote that its fonts can't draw: kept as typed,
     /// drawn with `?` in its place (see [`TextNotice`]). The interface shows it; tools return it.
     pub edit_notices: Vec<TextNotice>,
+    /// Text the last successful [`Session::apply`] set in a face other than its own (see
+    /// [`TextSubstitution`]): never silent (#2378). The interface shows it; tools return it.
+    pub edit_substitutions: Vec<TextSubstitution>,
+}
+
+/// Edited text set in another face than its own: a standard font, which isn't embedded, or
+/// fallback outlines from PdfCraft's faces. Editors can say so before Apply too, from
+/// [`pdfcraft_edit::text::TextEditLayout`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextSubstitution {
+    /// The page (0-based) of the edited text.
+    pub page: usize,
+    /// The face it is set in now, as [`pdfcraft_edit::LineEdit::substituted`] names it.
+    pub font: String,
+    /// The characters its own font can't show, each once (empty when only a requested weight
+    /// changed the face).
+    pub missing: Vec<char>,
+}
+
+impl std::fmt::Display for TextSubstitution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let page = self.page + 1;
+        if self.missing.is_empty() {
+            return write!(f, "edited text on page {page} is set in {} instead of its own font", self.font);
+        }
+        // The first few: a paragraph of another script can miss thousands.
+        let mut chars: Vec<String> = self.missing.iter().take(20).map(|ch| format!("\"{}\" (U+{:04X})", ch.escape_debug(), u32::from(*ch))).collect();
+        if self.missing.len() > 20 {
+            chars.push(format!("… ({} in all)", self.missing.len()));
+        }
+        write!(f, "edited text on page {page} is set in {}: its own font can't show {}", self.font, chars.join(", "))
+    }
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn
@@ -2478,9 +2510,17 @@ struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// Text the edit set in another face, for [`Document::edit_substitutions`].
+    substitutions: Vec<TextSubstitution>,
 }
 
 impl EditCtx {
+    fn note_substitution(&mut self, page: usize, edit: pdfcraft_edit::LineEdit) {
+        if let Some(font) = edit.substituted {
+            self.substitutions.push(TextSubstitution { page, font, missing: edit.missing });
+        }
+    }
+
     fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -2506,6 +2546,7 @@ impl EditCtx {
             count: 0,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            substitutions: Vec::new(),
         }
     }
 
@@ -2765,7 +2806,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             a11y::move_tag(doc, *object, *anchor, *placement).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::EditTextLine { page, line, text } => {
-            pdfcraft_edit::replace_line(doc, *page, *line, text)?;
+            let edit = pdfcraft_edit::replace_line(doc, *page, *line, text)?;
+            cx.note_substitution(*page, edit);
         }
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
@@ -2818,7 +2860,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
-            pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
+            let edit = pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
+            cx.note_substitution(*page, edit);
         }
         Edit::RegisterTextFont { page, bytes } => {
             pdfcraft_edit::text::register_text_font(doc, *page, bytes)?;
@@ -3974,6 +4017,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            edit_substitutions: Vec::new(),
         }
     }
 
@@ -3989,6 +4033,7 @@ impl Session {
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
+        doc.edit_substitutions.clear();
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
         let mut scope = scope_of(&edit);
@@ -4174,6 +4219,7 @@ impl Session {
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
+        doc.edit_substitutions = std::mem::take(&mut cx.substitutions);
         if !cx.xfa_removed.is_empty() {
             let removed: Vec<String> = cx.xfa_removed.iter().map(|n| format!("{XFA_REMOVED_PREFIX}{n}")).collect();
             doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
@@ -4219,6 +4265,7 @@ impl Session {
             return Err(e);
         }
         doc.edit_notices.clear();
+        doc.edit_substitutions.clear();
         Self::sync_dirty(doc);
         doc.generation += 1;
         Ok(label)
@@ -4248,6 +4295,7 @@ impl Session {
             return Err(e);
         }
         doc.edit_notices.clear();
+        doc.edit_substitutions.clear();
         Self::sync_dirty(doc);
         doc.generation += 1;
         Ok(label)

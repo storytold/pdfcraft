@@ -32,6 +32,12 @@ these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
 no open-licence declaration are refused. Interface fallback fonts are never exported.
 
+Text set in another face than its own, a standard font (not embedded) or fallback outlines, is
+never silent (#2378). The edit names the face and the characters the text's own font can't show:
+`Document::edit_substitutions` holds them, the app says so after Apply, and `text_edit` returns
+them in `warnings`. Measuring a draft (`text_edit_layout`) reports the same `substituted` and
+`missing` before Apply, so an editor can warn while the user types, or offer another font first.
+
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
 Saving and reopening therefore needs no locally installed font. Editing the same text again
 reuses the font resource the page already has, and every resource made from one program

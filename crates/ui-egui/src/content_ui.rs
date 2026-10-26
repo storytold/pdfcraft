@@ -56,6 +56,22 @@ pub(crate) fn undrawn_message(n: &pdfcraft_engine::TextNotice) -> String {
     crate::i18n::fmt(template, &[("c", &n.ch.to_string()), ("code", &format!("U+{:04X}", u32::from(n.ch)))])
 }
 
+/// The warning after an edit that set text in another face than its own (#2378): the characters
+/// its own font can't show, the first few of them, and the face used instead.
+pub(crate) fn substitution_message(s: &pdfcraft_engine::TextSubstitution) -> String {
+    if s.missing.is_empty() {
+        return crate::i18n::fmt(tl!("The edited text is set in {font} instead of its own font."), &[("font", &s.font)]);
+    }
+    let mut chars: Vec<String> = s.missing.iter().take(5).map(|c| format!("{c} (U+{:04X})", u32::from(*c))).collect();
+    if s.missing.len() > 5 {
+        chars.push("…".into());
+    }
+    crate::i18n::fmt(
+        tl!("The text's own font can't show {chars}, so the edited text is set in {font}."),
+        &[("chars", &chars.join(", ")), ("font", &s.font)],
+    )
+}
+
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
 /// The text being typed or retyped in place.

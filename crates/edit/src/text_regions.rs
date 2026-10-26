@@ -423,7 +423,7 @@ pub(super) fn rewrite_styled_block(
         return Err(EditError::Invalid("the replacement text is too large".into()));
     }
     if draft == block.editor_text && *style == BlockStyle::default() {
-        return Ok(LineEdit { substituted: None });
+        return Ok(LineEdit { substituted: None, missing: Vec::new() });
     }
     let mut ranges: Vec<_> = style.ranges.iter().collect();
     ranges.sort_by_key(|r| r.range.start);
@@ -554,7 +554,17 @@ pub(super) fn rewrite_styled_block(
     let width = style.width.unwrap_or(natural).clamp(1.0, 14_400.0);
     // Each tuple is a character, its source style and an encodable resource name.
     let mut chars = Vec::new();
-    let mut substituted = None;
+    // Every face the paragraph is set in instead of its own, once each in order: a paragraph can
+    // need a standard font for one character and fallback outlines for another.
+    let mut faces: Vec<String> = Vec::new();
+    let mut note_face = |name: &str| {
+        if !faces.iter().any(|f| f == name) {
+            faces.push(name.to_owned());
+        }
+    };
+    // The characters drawn in a fallback face, each once in order (spaces don't count).
+    let mut missing: Vec<char> = Vec::new();
+    let mut missed = std::collections::BTreeSet::new();
     let mut fallback_groups: Vec<FallbackGroup> = Vec::new();
     let mut fallback_names: std::collections::BTreeMap<(String, bool, char), usize> = std::collections::BTreeMap::new();
     let mut fallback_glyphs = 0_usize;
@@ -630,6 +640,9 @@ pub(super) fn rewrite_styled_block(
                 }
             } else {
                 let family = source_family(&source.base_font);
+                if !ch.is_whitespace() && missed.insert(ch) {
+                    missing.push(ch);
+                }
                 if needs_type3(&s) {
                     let key = (source.base_font.clone(), source.bold, ch);
                     let group_index = if let Some(index) = fallback_names.get(&key) {
@@ -675,7 +688,7 @@ pub(super) fn rewrite_styled_block(
                     f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
                     metrics.entry(name.clone()).or_insert_with(|| Metrics::from_dict(doc, &f));
                     fonts.set(name.clone().into_bytes(), Object::Dict(f));
-                    substituted = Some(base.to_string());
+                    note_face(base);
                     name
                 }
             };
@@ -698,7 +711,7 @@ pub(super) fn rewrite_styled_block(
             let (font, _) = fallback.codes.get(&item.0).ok_or_else(|| EditError::Invalid("the fallback glyph is missing".into()))?;
             item.2 = fallback.names.get(*font).cloned().ok_or_else(|| EditError::Invalid("the fallback font is missing".into()))?;
         }
-        substituted = Some(fallback.family.to_owned());
+        note_face(fallback.family);
     }
     let size_of = |source: &TextLine, index: usize| {
         overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
@@ -1102,5 +1115,6 @@ pub(super) fn rewrite_styled_block(
         d.set(b"Contents".to_vec(), contents);
         d.set(b"Resources".to_vec(), Object::Dict(res));
     })?;
-    Ok(LineEdit { substituted })
+    let substituted = (!faces.is_empty()).then(|| faces.join(", "));
+    Ok(LineEdit { substituted, missing })
 }

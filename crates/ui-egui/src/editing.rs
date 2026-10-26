@@ -183,6 +183,10 @@ impl PdfCraftApp {
                 if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
                     self.notify(crate::content_ui::undrawn_message(&n));
                 }
+                // Text set in another face than its own (#2378): said too, naming the characters.
+                if let Some(s) = self.session.get(id).and_then(|d| d.edit_substitutions.first()).cloned() {
+                    self.notify(crate::content_ui::substitution_message(&s));
+                }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
                 true
