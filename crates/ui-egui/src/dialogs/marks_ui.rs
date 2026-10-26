@@ -205,6 +205,14 @@ pub struct MarksDraft {
     pub focused_box: usize,
     pub page_format: usize,
     pub date_format: usize,
+    /// Number of digits for Bates numbering (1 to 15, default 6).
+    pub bates_digits: usize,
+    /// Starting number for Bates numbering (default 1).
+    pub bates_start: u64,
+    /// Prefix for Bates numbering (default empty).
+    pub bates_prefix: String,
+    /// Suffix for Bates numbering (default empty).
+    pub bates_suffix: String,
     /// Watermark: size the text to the page.
     pub fit: bool,
     /// Source ▸ File (watermark or background): the file picked, and the page of a PDF (1-based).
@@ -229,6 +237,10 @@ impl Default for MarksDraft {
             focused_box: 1,
             page_format: 0,
             date_format: 0,
+            bates_digits: 6,
+            bates_start: 1,
+            bates_prefix: String::new(),
+            bates_suffix: String::new(),
             fit: true,
             use_file: false,
             file: None,
@@ -256,6 +268,40 @@ const DATE_FORMATS: [&str; 11] = [
 ];
 const BOX_NAMES: [&str; 6] =
     ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
+
+/// Builds a sanitized Bates number token string.
+pub(crate) fn format_bates_token(digits: usize, start: u64, prefix: &str, suffix: &str) -> String {
+    let clean_prefix = prefix.replace(['#', '<', '>'], "");
+    let clean_suffix = suffix.replace(['#', '<', '>'], "");
+    format!("<<Bates Number#{}#{}#{}#{}>>", digits.clamp(1, 15), start, clean_prefix, clean_suffix)
+}
+
+/// Updates an existing `<<Bates Number#...>>` token in `text` if present, or leaves it unchanged.
+fn update_bates_token_in_text(text: &mut String, digits: usize, start: u64, prefix: &str, suffix: &str) {
+    if let Some(start_idx) = text.find("<<Bates Number")
+        && let Some(end_rel) = text.get(start_idx..).and_then(|s| s.find(">>"))
+    {
+        let end_idx = start_idx + end_rel + 2;
+        let new_token = format_bates_token(digits, start, prefix, suffix);
+        text.replace_range(start_idx..end_idx, &new_token);
+    }
+}
+
+/// Updates an existing `<<Bates Number#...>>` token in the focused header/footer box, or in any
+/// other box if the focused box does not contain one.
+fn update_bates_token(hf: &mut HeaderFooter, focused_box: usize, digits: usize, start: u64, prefix: &str, suffix: &str) {
+    if let Some(box_text) = hf.text.get_mut(focused_box)
+        && box_text.contains("<<Bates Number")
+    {
+        update_bates_token_in_text(box_text, digits, start, prefix, suffix);
+        return;
+    }
+    for box_text in &mut hf.text {
+        if box_text.contains("<<Bates Number") {
+            update_bates_token_in_text(box_text, digits, start, prefix, suffix);
+        }
+    }
+}
 
 fn color_button(ui: &mut egui::Ui, c: &mut [f64; 3]) {
     let mut f = c.map(|v| v as f32);
@@ -543,6 +589,38 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 ui.add_space(12.0);
                 ui.label(tl!("Start page number"));
                 ui.add(egui::DragValue::new(&mut d.hf.start_number).range(1..=999_999));
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Insert Bates Number")).clicked() {
+                    let token = format_bates_token(d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
+                    if let Some(box_text) = d.hf.text.get_mut(d.focused_box) {
+                        box_text.push_str(&token);
+                    }
+                }
+                let l_digits = ui.label(tl!("Digits:"));
+                if ui.add(egui::DragValue::new(&mut d.bates_digits).range(1..=15)).labelled_by(l_digits.id).changed() {
+                    update_bates_token(&mut d.hf, d.focused_box, d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
+                }
+                let l_start = ui.label(tl!("Start:"));
+                if ui.add(egui::DragValue::new(&mut d.bates_start).range(1..=999_999)).labelled_by(l_start.id).changed() {
+                    update_bates_token(&mut d.hf, d.focused_box, d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
+                }
+                let l_prefix = ui.label(tl!("Prefix:"));
+                if ui
+                    .add(egui::TextEdit::singleline(&mut d.bates_prefix).desired_width(50.0).id_salt("bates-prefix"))
+                    .labelled_by(l_prefix.id)
+                    .changed()
+                {
+                    update_bates_token(&mut d.hf, d.focused_box, d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
+                }
+                let l_suffix = ui.label(tl!("Suffix:"));
+                if ui
+                    .add(egui::TextEdit::singleline(&mut d.bates_suffix).desired_width(50.0).id_salt("bates-suffix"))
+                    .labelled_by(l_suffix.id)
+                    .changed()
+                {
+                    update_bates_token(&mut d.hf, d.focused_box, d.bates_digits, d.bates_start, &d.bates_prefix, &d.bates_suffix);
+                }
             });
             ui.add(widgets::checkbox(&mut d.hf.shrink, tl!("Shrink the page content to make room for the header and footer")));
         }
@@ -1003,5 +1081,21 @@ mod tests {
             Edit::AddWatermark { settings, .. } => assert_eq!(settings.offset, [-72.0, 36.0]),
             other => panic!("expected AddWatermark, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bates_token_formatting_and_in_place_updates() {
+        assert_eq!(format_bates_token(8, 1, "DOC-", "-X"), "<<Bates Number#8#1#DOC-#-X>>");
+        assert_eq!(format_bates_token(0, 42, "A#B<C>", "D>E"), "<<Bates Number#1#42#ABC#DE>>");
+        assert_eq!(format_bates_token(20, 1, "", ""), "<<Bates Number#15#1##>>");
+
+        let mut hf = HeaderFooter::default();
+        hf.text[5] = "Ref: <<Bates Number#6#1##>> end".into();
+        update_bates_token(&mut hf, 5, 8, 100, "DOC-", "-CONF");
+        assert_eq!(hf.text[5], "Ref: <<Bates Number#8#100#DOC-#-CONF>> end");
+
+        // Updates the box holding the Bates token even when another box is focused.
+        update_bates_token(&mut hf, 0, 4, 5, "P-", "");
+        assert_eq!(hf.text[5], "Ref: <<Bates Number#4#5#P-#>> end");
     }
 }

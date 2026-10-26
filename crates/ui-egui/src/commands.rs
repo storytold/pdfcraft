@@ -502,7 +502,12 @@ impl PdfCraftApp {
                 // bottom-right box (6 digits from 1), ready to edit.
                 self.marks_draft.replace = false;
                 if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
-                    self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
+                    self.marks_draft.hf.text[5] = crate::marks_ui::format_bates_token(
+                        self.marks_draft.bates_digits,
+                        self.marks_draft.bates_start,
+                        &self.marks_draft.bates_prefix,
+                        &self.marks_draft.bates_suffix,
+                    );
                 }
                 self.marks_draft.focused_box = 5;
                 self.marks_draft.preview = None;
