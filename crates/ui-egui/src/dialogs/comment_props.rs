@@ -108,11 +108,12 @@ impl PdfCraftApp {
             style.fill = p.fill;
         }
         self.comment_prefs.set_style(tool, style);
-        // Keep invisible defaults out of tools where a zero stroke would make them disappear.
-        self.comment_prefs.set_opacity(tool, p.opacity);
         // The fill's and text's own opacities where they show (else the opacity is the whole
-        // comment's).
+        // comment's). With neither a border nor a fill the text is the whole comment: its drawn
+        // opacity, which Comment Properties shows, is the whole comment's default.
         let (fill, text) = parts_shown(p);
+        // Keep invisible defaults out of tools where a zero stroke would make them disappear.
+        self.comment_prefs.set_opacity(tool, p.text_opacity.filter(|_| !text).unwrap_or(p.opacity));
         self.comment_prefs.set_part_opacity(tool, p.fill_opacity.filter(|_| fill), p.text_opacity.filter(|_| text));
         if let Some(w) = p.width {
             self.comment_prefs.set_width(tool, w);
