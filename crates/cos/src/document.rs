@@ -6,7 +6,7 @@
 //! the file (full save).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::CosError;
 use crate::object::{Dict, ObjRef, Object};
@@ -402,6 +402,8 @@ impl std::fmt::Debug for ReadState {
     }
 }
 
+type FallbackHeaders = HashMap<u32, Vec<usize>>;
+
 #[derive(Clone)]
 pub struct Document {
     data: Arc<Vec<u8>>,
@@ -418,6 +420,8 @@ pub struct Document {
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
+    /// Candidate object headers, built once on the first broken xref lookup.
+    fallback_headers: Arc<OnceLock<Option<FallbackHeaders>>>,
     cache: Arc<Mutex<HashMap<u32, Arc<Object>>>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
     stream_limit: usize,
@@ -552,6 +556,7 @@ impl Document {
             xref_oddities: Arc::default(),
             located: Arc::default(),
             repair_log: Arc::new(Vec::new()),
+            fallback_headers: Arc::default(),
             cache: Arc::default(),
             objstms: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
@@ -635,6 +640,7 @@ impl Document {
             xref_oddities: Arc::default(),
             located: Arc::default(),
             repair_log: Arc::new(Vec::new()),
+            fallback_headers: Arc::default(),
             cache: Arc::default(),
             objstms: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
@@ -1250,8 +1256,51 @@ impl Document {
         Ok(stm)
     }
 
-    /// Last-resort lookup: scan the file for `num G obj`.
+    /// Find candidate headers once for damaged xrefs. The cap avoids retaining an unbounded
+    /// index for hostile files; if exceeded, the original per-object scan is used instead.
+    fn fallback_header_index(&self) -> Option<&FallbackHeaders> {
+        const MAX_HEADERS: usize = 500_000;
+        self.fallback_headers
+            .get_or_init(|| {
+                let data = &self.data;
+                let mut headers: HashMap<u32, Vec<usize>> = HashMap::new();
+                let mut count = 0usize;
+                let mut i = 0usize;
+                while let Some(&byte) = data.get(i) {
+                    if byte.is_ascii_digit() && (i == 0 || i.checked_sub(1).and_then(|p| data.get(p)).is_some_and(|b| is_whitespace(*b))) {
+                        let start = i;
+                        while data.get(i).is_some_and(u8::is_ascii_digit) {
+                            i = i.saturating_add(1);
+                        }
+                        // `scan_for` searches the canonical decimal number followed by a space.
+                        if data.get(i) == Some(&b' ') && (i.saturating_sub(start) == 1 || data.get(start) != Some(&b'0')) {
+                            let number = data.get(start..i).and_then(|n| std::str::from_utf8(n).ok()).and_then(|n| n.parse::<u32>().ok());
+                            if let Some(number) = number {
+                                count = count.saturating_add(1);
+                                if count > MAX_HEADERS {
+                                    return None;
+                                }
+                                headers.entry(number).or_default().push(start);
+                            }
+                        }
+                    } else {
+                        i = i.saturating_add(1);
+                    }
+                }
+                Some(headers)
+            })
+            .as_ref()
+    }
+
+    /// Last-resort lookup: find the last valid `num G obj`, as in the original scan.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
+        if let Some(headers) = self.fallback_header_index() {
+            return headers
+                .get(&num)?
+                .iter()
+                .rev()
+                .find_map(|&pos| parse_indirect_shared(&self.data, pos, &|_| None).ok().filter(|(id, _)| id.num == num));
+        }
         let needle = format!("{num} ");
         let data = &self.data;
         let mut found = None;
@@ -1264,7 +1313,7 @@ impl Document {
             if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
                 && id.num == num
             {
-                found = Some((id, o)); // keep the last (newest) definition
+                found = Some((id, o));
             }
         }
         found
@@ -2309,6 +2358,83 @@ const MAX_XREF_OBJECTS: usize = 8_388_607;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_xref_fallback_indexes_candidates_and_keeps_last_valid_object() {
+        let mut doc = Document::new_empty();
+        doc.data = Arc::new(b"%PDF-1.7\n1 0 obj 10 endobj\n2 0 obj 20 endobj\n1 7 obj 30 endobj\n1 9 obj [\n".to_vec());
+        assert!(doc.fallback_headers.get().is_none());
+        assert_eq!(doc.scan_for(1).and_then(|(_, value)| value.as_int()), Some(30));
+        let index = doc.fallback_headers.get().and_then(Option::as_ref).expect("index built");
+        assert_eq!(index.get(&1).map(Vec::len), Some(3));
+        assert_eq!(doc.scan_for(2).and_then(|(_, value)| value.as_int()), Some(20));
+        assert!(doc.scan_for(3).is_none());
+        assert!(Arc::ptr_eq(&doc.fallback_headers, &doc.clone().fallback_headers));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn candidate_index_matches_original_recovery_scan(parts in proptest::collection::vec(0u8..12, 0..60)) {
+            let fragments: [&[u8]; 12] = [
+                b"1 0 obj 1 endobj\n", b"1 4 obj 2 endobj\n", b"1 8 obj [\n",
+                b"2 0 obj (text) endobj\n", b"0 65535 obj null endobj\n", b"01 0 obj 4 endobj\n",
+                b"1 0 obj << /Length 3 >> stream\nabc\nendstream endobj\n", b"1 0 notobj\n",
+                b" 4294967295 0 obj 9 endobj\n", b"\x00\xff 2 ", b"(1 0 obj 7 endobj)\n", b"1 %x\n0 obj 5 endobj\n",
+            ];
+            let mut doc = Document::new_empty();
+            let mut bytes = b"%PDF-1.7\n".to_vec();
+            for part in parts { bytes.extend_from_slice(fragments[usize::from(part)]); }
+            doc.data = Arc::new(bytes);
+            for num in [0, 1, 2, 3, u32::MAX] {
+                let needle = format!("{num} ");
+                let mut expected = None;
+                let mut pos = 0;
+                while let Some(p) = find(&doc.data, needle.as_bytes(), pos, doc.data.len()) {
+                    pos = p + 1;
+                    if p > 0 && !is_whitespace(doc.data[p - 1]) { continue; }
+                    if let Ok((id, object)) = parse_indirect_shared(&doc.data, p, &|_| None) && id.num == num {
+                        expected = Some((id, object));
+                    }
+                }
+                proptest::prop_assert_eq!(doc.scan_for(num), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn stale_incremental_xref_recovers_objects_without_reviving_freed_entries() {
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "30", "40"];
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let first = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size 5 /Root 1 0 R >>\nstartxref\n{first}\n%%EOF\n").as_bytes());
+        let second = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000009 00000 n \n0000000000 00001 f \n0000000009 00000 n \ntrailer << /Size 5 /Root 1 0 R /Prev {first} >>\nstartxref\n{second}\n%%EOF\n").as_bytes());
+        let doc = Document::open(Arc::new(bytes)).expect("open damaged incremental PDF");
+        assert_eq!(doc.try_get(4).expect("recover object 4").as_int(), Some(40));
+        assert!(matches!(&*doc.try_get(3).expect("freed object"), Object::Null));
+        assert!(doc.fallback_headers.get().and_then(Option::as_ref).is_some());
+    }
+
+    #[test]
+    fn damaged_xref_index_is_bounded_and_falls_back_to_scan() {
+        let mut doc = Document::new_empty();
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        for _ in 0..500_001 {
+            bytes.extend_from_slice(b"1 0 obj 7 endobj\n");
+        }
+        doc.data = Arc::new(bytes);
+        assert_eq!(doc.scan_for(1).and_then(|(_, value)| value.as_int()), Some(7));
+        assert!(matches!(doc.fallback_headers.get(), Some(None)));
+    }
 
     #[test]
     fn a_read_state_matches_a_clone_and_no_changed_document() {
