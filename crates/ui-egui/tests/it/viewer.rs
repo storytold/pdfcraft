@@ -1764,6 +1764,28 @@ fn a_clicked_picture_is_selected_and_copied_in_its_original_format() {
     assert_eq!(h.state().views[i].picked_image, None);
 }
 
+/// A click on the canvas beside the page deselects the picked picture. A scan's picture covers its
+/// whole page, so the canvas is the only place left to click away from it.
+#[test]
+fn a_click_beside_the_page_deselects_the_picked_picture() {
+    let (_, mut h) = picture_harness();
+    let i = h.state().active.unwrap();
+    let page = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let click = |h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2| {
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(2);
+    };
+    click(&mut h, page.center());
+    assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
+    // Below the page, on the canvas: the picture covers the whole page, so there is nowhere on
+    // the page to click away from it.
+    click(&mut h, egui::pos2(page.center().x, page.bottom() + 6.0));
+    assert_eq!(h.state().views[i].picked_image, None, "a click beside the page deselects it");
+}
+
 /// A picture picked with the Select tool, then deleted in Edit text & images, leaves no highlight
 /// behind on the empty spot where it was.
 #[test]

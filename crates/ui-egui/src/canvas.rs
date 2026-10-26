@@ -4169,6 +4169,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // It also stays current while it is wholly on screen: a short page (a cheque) gone to
         // from the Pages panel shows less of itself than the tall page below it, and must not
         // hand the highlight to that page.
+        // Select tool: a click on the canvas around the pages (the gap between them, the margin
+        // beside them) deselects the picked picture. A scan's picture covers its whole page, so
+        // this is the only place left to click away from it.
+        if tool == QuickTool::Select && resp.clicked() && pointer.is_some_and(|p| !view.screen_rects.iter().any(|(_, r)| r.contains(p))) {
+            view.picked_image = None;
+        }
         if current_overlap >= best_overlap - TIE || current_overlap >= current_height - TIE {
             current = view.current;
         }
