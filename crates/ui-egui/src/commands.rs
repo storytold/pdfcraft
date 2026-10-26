@@ -112,6 +112,8 @@ impl PdfCraftApp {
         }
     }
 
+    /// Executes a registered UI command once panic protection has been set up, returning `true`
+    /// when the command was recognized and enabled.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -391,6 +393,9 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                if kind == K::HeaderFooter {
+                    self.marks_draft.sync_bates_from_hf();
+                }
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
             }
@@ -398,8 +403,13 @@ impl PdfCraftApp {
                 // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
                 // bottom-right box (6 digits from 1), ready to edit.
                 self.marks_draft.replace = false;
-                if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
-                    self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
+                if !self.marks_draft.sync_bates_from_hf() {
+                    self.marks_draft.hf.text[5] = crate::marks_ui::format_bates_token(
+                        self.marks_draft.bates_digits,
+                        self.marks_draft.bates_start,
+                        &self.marks_draft.bates_prefix,
+                        &self.marks_draft.bates_suffix,
+                    );
                 }
                 self.marks_draft.focused_box = 5;
                 self.marks_draft.preview = None;

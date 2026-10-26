@@ -328,3 +328,56 @@ fn page_range_from_one_to_one_selects_only_the_first_page() {
     assert_eq!(corner(&mut r, 0), vec![255, 255, 217, 255], "page 1 has the background");
     assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }
+
+/// Verifies that the Bates numbering controls in the Header & Footer dialog configure digit
+/// zero-padding, start number, prefix, and suffix, insert and update the Bates token in the
+/// target box, and render zero-padded Bates numbers onto the document pages (#4853).
+#[test]
+fn bates_numbering_dialog_configures_digits_and_padding() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Marks(MarkKind::HeaderFooter)));
+    assert_eq!(h.state().marks_draft.focused_box, 5);
+    assert_eq!(h.state().marks_draft.hf.text[5], "<<Bates Number#6#1##>>");
+
+    // Typing a prefix in the UI updates the existing Bates token in box 5 in place.
+    h.state_mut().marks_draft.hf.text[5] = "<<Bates Number#8#1##>>".into();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.bates_digits, 8, "parsed from the existing token on open");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix:").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix:").type_text("DOC-");
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.text[5], "<<Bates Number#8#1#DOC-#>>");
+
+    // Configure start number and suffix, then insert into box 3 via "Insert Bates Number".
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.hf.text[5].clear();
+        d.focused_box = 3;
+        d.bates_start = 42;
+        d.bates_suffix = "-CONF".into();
+    }
+    h.run_steps(2);
+    h.get_by_label("Insert Bates Number").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.text[3], "<<Bates Number#8#42#DOC-#-CONF>>");
+
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
+
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), pdfcraft_render::RenderConfig::default());
+    let texts: Vec<String> = (0..r.page_count())
+        .map(|page| {
+            let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(texts, ["DOC-00000042-CONF", "DOC-00000043-CONF", "DOC-00000044-CONF"]);
+}
