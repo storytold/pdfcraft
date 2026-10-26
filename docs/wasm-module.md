@@ -40,6 +40,25 @@ const saved = pdf.save(); // incremental: the original bytes stay as a prefix
 displayed (points from the top-left, y down, after the page's rotation), which is what a page drawn at
 `scale` needs for hit testing and an overlay: multiply by `scale`.
 
+## Editing what a page shows
+
+Boxes are `[x0, y0, x1, y1]` in the displayed page's points from its top-left, y down, the same
+space as `view` above, so a page drawn at `scale` passes on what the person touched divided by `scale`.
+
+```js
+const objects = JSON.parse(pdf.objects(0)); // [{ kind, index, type, text, view }]: text, images and added items
+pdf.move_objects(0, JSON.stringify([{ kind: "text", index: 0 }]), 12, 0); // by displayed points
+pdf.resize_object(0, "added", 0, [20, 20, 160, 90]);
+pdf.add_text(0, [20, 40, 180, 80], "Hello", JSON.stringify({ size: 18, bold: true, color: [0.8, 0, 0], align: "center" }));
+pdf.add_image(0, "logo.png", pngBytes, [100, 200, 160, 260]); // or no box: centred at its natural size
+pdf.set_text(0, "text", 2, undefined, JSON.stringify({ italic: true })); // restyle, keeping the words
+pdf.delete_object(0, "added", 1);
+pdf.cover(0, [10, 10, 80, 30]); // a white box over what is there (the content stays in the file)
+```
+
+`kind` is `text` (a paragraph the page already had), `image` (a picture it already had) or `added`
+(something added with `add_text` or `add_image`).
+
 An encrypted file throws an error that starts with `needs-password:` or `wrong-password:`, so the
 page can ask and try again. Page and block indices are 0-based.
 

@@ -6,6 +6,7 @@
 //! layer on top of it (`bindings`, wasm32 only) only converts types.
 
 pub mod core;
+pub mod editing;
 
 #[cfg(target_arch = "wasm32")]
 mod bindings;

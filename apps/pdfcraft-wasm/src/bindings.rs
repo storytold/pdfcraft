@@ -4,6 +4,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::core::{Document, Raster};
+use crate::editing::{Kind, Target, TextStyle, parse_targets};
 
 /// Seconds since the Unix epoch, from the page's clock (wasm has no system clock).
 fn now() -> i64 {
@@ -12,6 +13,14 @@ fn now() -> i64 {
 
 fn js(message: String) -> JsError {
     JsError::new(&message)
+}
+
+/// A box passed as `[x0, y0, x1, y1]`.
+fn rect(v: &[f64]) -> Result<[f64; 4], JsError> {
+    match v {
+        [a, b, c, d] => Ok([*a, *b, *c, *d]),
+        _ => Err(js("a box is [x0, y0, x1, y1]".into())),
+    }
 }
 
 /// A rendered page or tile.
@@ -109,6 +118,53 @@ impl Pdf {
 
     pub fn insert_blank_page(&mut self, at: usize, width: f64, height: f64) -> Result<(), JsError> {
         self.inner.insert_blank_page(at, width, height).map_err(js)
+    }
+
+    /// The page's editable objects as JSON: `kind`, `index`, `type`, `text` and `view` (the box where
+    /// it is drawn, in points from the page's top-left).
+    pub fn objects(&self, page: usize) -> Result<String, JsError> {
+        self.inner.objects_json(page).map_err(js)
+    }
+
+    /// Moves objects by (dx, dy) displayed points. `targets` is `[{"kind": "text", "index": 0}, ...]`.
+    pub fn move_objects(&mut self, page: usize, targets: &str, dx: f64, dy: f64) -> Result<(), JsError> {
+        let targets = parse_targets(targets).map_err(js)?;
+        self.inner.move_objects(page, &targets, dx, dy).map_err(js)
+    }
+
+    /// Gives an object the displayed box `[x0, y0, x1, y1]`.
+    pub fn resize_object(&mut self, page: usize, kind: &str, index: usize, view: Vec<f64>) -> Result<(), JsError> {
+        let target = Target { kind: Kind::parse(kind).map_err(js)?, index };
+        self.inner.resize_object(page, target, rect(&view)?).map_err(js)
+    }
+
+    /// Adds a text box over the displayed box. `style` is JSON: family, bold, italic, size, color, align.
+    pub fn add_text(&mut self, page: usize, view: Vec<f64>, text: &str, style: &str) -> Result<(), JsError> {
+        let style = TextStyle::parse(style).map_err(js)?;
+        self.inner.add_text(page, rect(&view)?, text, &style).map_err(js)
+    }
+
+    /// Adds a picture over `[x0, y0, x1, y1]`, or centred at its natural size when no box is given.
+    pub fn add_image(&mut self, page: usize, name: &str, bytes: &[u8], view: Option<Vec<f64>>) -> Result<(), JsError> {
+        let view = view.as_deref().map(rect).transpose()?;
+        self.inner.add_image(page, name, bytes, view).map_err(js)
+    }
+
+    pub fn delete_object(&mut self, page: usize, kind: &str, index: usize) -> Result<(), JsError> {
+        let target = Target { kind: Kind::parse(kind).map_err(js)?, index };
+        self.inner.delete_object(page, target).map_err(js)
+    }
+
+    /// Rewrites an object's text and/or restyles it; `text` left out keeps the words.
+    pub fn set_text(&mut self, page: usize, kind: &str, index: usize, text: Option<String>, style: &str) -> Result<(), JsError> {
+        let target = Target { kind: Kind::parse(kind).map_err(js)?, index };
+        let style = TextStyle::parse(style).map_err(js)?;
+        self.inner.set_text(page, target, text.as_deref(), &style).map_err(js)
+    }
+
+    /// Paints a white box over the displayed box.
+    pub fn cover(&mut self, page: usize, view: Vec<f64>) -> Result<(), JsError> {
+        self.inner.cover(page, rect(&view)?).map_err(js)
     }
 
     /// The label of the edit `undo` would take back, or nothing.

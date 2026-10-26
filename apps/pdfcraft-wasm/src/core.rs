@@ -57,8 +57,8 @@ pub struct Raster {
 }
 
 pub struct Document {
-    session: Session,
-    id: DocId,
+    pub(crate) session: Session,
+    pub(crate) id: DocId,
     renderer: Option<(Arc<Vec<u8>>, PageRenderer)>,
 }
 
@@ -75,7 +75,7 @@ impl Document {
         Ok(Self { session, id, renderer: None })
     }
 
-    fn doc(&self) -> Result<&pdfcraft_engine::Document, String> {
+    pub(crate) fn doc(&self) -> Result<&pdfcraft_engine::Document, String> {
         self.session.get(self.id).ok_or_else(|| "the document is closed".to_string())
     }
 
@@ -168,7 +168,7 @@ impl Document {
         serde_json::to_string(&blocks).map_err(|e| e.to_string())
     }
 
-    fn apply(&mut self, edit: Edit) -> Result<(), String> {
+    pub(crate) fn apply(&mut self, edit: Edit) -> Result<(), String> {
         self.session.apply(self.id, edit).map_err(|e| e.to_string())
     }
 
