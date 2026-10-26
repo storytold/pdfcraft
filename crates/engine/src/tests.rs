@@ -5615,6 +5615,177 @@ fn latin_ocr_keeps_spanish_names_and_amounts() {
     assert!(text.contains("México") && text.contains("año") && text.contains("16,858.66"), "{text}");
 }
 
+/// #572: every named Latin-model language gets a real document to read, not just a
+/// `preferred_letters` string. Portuguese: acute, grave, circumflex and tilde vowels, and the
+/// cedilla.
+#[test]
+fn latin_ocr_keeps_portuguese_accents() {
+    if !ocr::available_for("pt") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Área, àquele, ânimo, informações, café", "você, Brasília, avó, avô, não, açúcar"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("portuguese.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "pt".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["Área", "àquele", "ânimo", "informações", "café", "você", "Brasília", "avó", "avô", "não", "açúcar"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    assert!(!text.contains('?'), "{text}");
+}
+
+/// Italian's grave and acute stress marks on word-final vowels.
+#[test]
+fn latin_ocr_keeps_italian_accents() {
+    if !ocr::available_for("it") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Città, perché, cioè, più, ciò", "caffè, lì, così, sì, ventitré, però"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("italian.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "it".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["Città", "perché", "cioè", "più", "ciò", "caffè", "lì", "così", "sì", "ventitré", "però"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    assert!(!text.contains('?'), "{text}");
+}
+
+/// Dutch's diaeresis, which keeps a vowel pair from reading as one sound, and its stress mark
+/// (klemtoonteken), which can land on any vowel.
+#[test]
+fn latin_ocr_keeps_dutch_diaereses_and_stress_marks() {
+    if !ocr::available_for("nl") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["ideeën, ruïne, zoölogie, reünie", "wíl, dát, négen, hóe, nú, níet"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("dutch.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "nl".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["ideeën", "ruïne", "zoölogie", "reünie", "wíl", "dát", "négen", "hóe", "nú", "níet"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    assert!(!text.contains('?'), "{text}");
+}
+
+/// Danish and Bokmål Norwegian share å, æ and ø: letters of their own alphabets, not diacritics.
+/// The same page is read once as each language. æ and ø come back correctly; å does not (see the
+/// note below and in `docs/ocr.md`), so it is not asserted here, the way `docs/ocr.md` already
+/// documents the Hungarian model reading `ű` as `ü` without asserting it in a test.
+#[test]
+fn latin_ocr_keeps_danish_and_norwegian_letters() {
+    if !ocr::available_for("da") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Jeg kører på vejen forbi skoven", "og spiser æbler nær søen"], None);
+    for language in ["da", "no"] {
+        let mut s = Session::new();
+        let scan = s.create_from_images(&[("nordic.png".into(), png.clone())]).unwrap();
+        let id = s.open("scan.pdf", None, scan, None).unwrap();
+        let text = s.recognize_text(id, &[], ocr::OcrSettings { language: language.into(), ..Default::default() }).unwrap()[0].text();
+        // #572: å is reliably misread (as à, á or ã, depending on context) by the Latin model, by
+        // more than `PREFERENCE_MARGIN`, so the preference does not reach it; "på" is not checked.
+        for word in ["kører", "forbi", "skoven", "spiser", "æbler", "nær", "søen"] {
+            assert!(text.contains(word), "{language}: missing {word:?} in {text:?}");
+        }
+    }
+}
+
+/// Swedish and Finnish share å, ä and ö (å mainly in Finnish names and Swedish loanwords). ä and ö
+/// come back correctly; lowercase å does not (#572, see `docs/ocr.md`), so "åker" is not checked.
+#[test]
+fn latin_ocr_keeps_swedish_and_finnish_letters() {
+    if !ocr::available_for("sv") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let swedish = inter_scan(&["Jag åker till Göteborg", "för att äta köttbullar"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("swedish.png".into(), swedish)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "sv".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["Göteborg", "för", "äta", "köttbullar"] {
+        assert!(text.contains(word), "sv: missing {word:?} in {text:?}");
+    }
+
+    if !ocr::available_for("fi") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let finnish = inter_scan(&["Äiti söi kalaa Turussa", "ja join kahvia myöhään"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("finnish.png".into(), finnish)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "fi".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["Äiti", "söi", "kalaa", "myöhään"] {
+        assert!(text.contains(word), "fi: missing {word:?} in {text:?}");
+    }
+}
+
+/// Icelandic's extension of the Latin alphabet: eth, the acute vowels, and æ/ö. Thorn (þ) is
+/// reliably misread as a plain "b" (#572, see `docs/ocr.md`), so no word that needs it is checked.
+#[test]
+fn latin_ocr_keeps_icelandic_letters() {
+    if !ocr::available_for("is") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["á, góðan, ég, íslenska, bók", "sæll, ský, öll"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("icelandic.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "is".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["góðan", "ég", "íslenska", "bók", "sæll", "ský", "öll"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+}
+
+/// The Czech pangram that, like its English counterparts, is built to use every diacritic
+/// ("Příliš žluťoučký kůň úpěl ďábelské ódy": too-pale horse yelled devilish odes). The full
+/// caron on č, ř, š and ž, and the acute on á, é, í, ó, ú and ý, come back correctly; the smaller
+/// comma-shaped mark on ď, ť and ň and the ring on ů do not (#572, see `docs/ocr.md`), so
+/// "žluťoučký", "kůň" and "ďábelské" are checked only for the letters that survive.
+#[test]
+fn latin_ocr_keeps_czech_diacritics() {
+    if !ocr::available_for("cs") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Příliš žluťoučký kůň úpěl", "ďábelské ódy"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("czech.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "cs".into(), ..Default::default() }).unwrap()[0].text();
+    for ch in "áčéěíóřšúýž".chars() {
+        assert!(text.contains(ch), "missing {ch} in {text:?}");
+    }
+}
+
+/// The Polish pangram built to use every one of its nine special letters ("Zażółć gęślą jaźń":
+/// turn a quail's goose yellow). ć, ę, ó and ś come back correctly; ą, ł and ź are dropped, and ż
+/// is misread as Czech's ž (#572, see `docs/ocr.md`), so the sentence is checked only for the
+/// letters that survive.
+#[test]
+fn latin_ocr_keeps_polish_diacritics() {
+    if !ocr::available_for("pl") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Zażółć gęślą jaźń"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("polish.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "pl".into(), ..Default::default() }).unwrap()[0].text();
+    for ch in "ćęóś".chars() {
+        assert!(text.contains(ch), "missing {ch} in {text:?}");
+    }
+}
+
 /// A form whose scripts are custom JavaScript: total = price × qty (calculate, through a
 /// document-level function), shown with a custom format; qty is validated; a button script.
 fn scripted_form() -> Vec<u8> {

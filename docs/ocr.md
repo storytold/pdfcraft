@@ -65,6 +65,13 @@ selection boxes cover a recognised line, with approximate character positions wi
 The Latin recogniser reads only the characters in its dictionary: accented letters outside
 it (e.g. some East European ones) are still dropped. A letter that is in the dictionary can
 still come back as another letter in it: on Árvíztűrő tükörfúrógép the model read ű as ü.
+The same is true, by more than the close-call margin that `preferred_letters` can bridge, of
+Danish, Norwegian, Swedish and Finnish lowercase å (misread as à, á or ã), Icelandic þ (misread
+as a plain "b"), Czech's comma-shaped mark on ď, ť and ň and its ring on ů (all dropped), and
+Polish ą, ź and ł (dropped) and ż (misread as Czech's ž). Each language's other accented
+letters, including its vowels, come back correctly; `crates/engine/src/tests.rs`'s
+`latin_ocr_keeps_*` tests cover the letters that do and name the ones that do not, language by
+language.
 
 OCR does not make visible text in a scan directly editable. Existing selectable PDF text
 uses Edit PDF → Edit text and images, whose font/subset and CJK limitations are separate.
