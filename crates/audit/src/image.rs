@@ -19,10 +19,12 @@ pub(crate) struct Budget {
     vertices: usize,
 }
 
+/// Report an unsupported or invalid image as an incomplete audit, never a clean result.
 fn incomplete(reason: &str) -> AuditError {
     AuditError::Image(reason.into())
 }
 
+/// Transform a rectangle into a polygon, reversing reflected vertices to keep positive area.
 pub(crate) fn rectangle(m: Matrix, r: [f64; 4]) -> Polygon {
     let [x0, y0, x1, y1] = r;
     let mut p: Polygon = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
@@ -37,17 +39,21 @@ pub(crate) fn rectangle(m: Matrix, r: [f64; 4]) -> Polygon {
     }
     p
 }
+/// Signed cross product of `AB` and `AC`; nonnegative means `C` is left of directed `AB`.
 fn cross(a: Point, b: Point, c: Point) -> f64 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
+/// Oriented polygon area, positive for counterclockwise vertices and zero for an empty path.
 fn signed_area(p: &[Point]) -> f64 {
     let Some(&origin) = p.first() else { return 0.0 };
     p.iter().zip(p.iter().cycle().skip(1)).take(p.len()).map(|(&a, &b)| cross(origin, a, b)).sum::<f64>() * 0.5
 }
+/// Whether every coordinate is finite and within the image audit's arithmetic bounds.
 fn valid_polygon(p: &[Point]) -> bool {
     p.iter().flatten().all(|v| v.is_finite() && v.abs() <= MAX_COORD)
 }
 
+/// Clip `p` against a counterclockwise convex polygon; fewer than three clip vertices is empty.
 fn intersection(mut p: Polygon, clip: &[Point]) -> Polygon {
     if clip.len() < 3 {
         return Vec::new();
@@ -68,6 +74,7 @@ fn intersection(mut p: Polygon, clip: &[Point]) -> Polygon {
     }
     p
 }
+/// Axis-aligned bounds of the vertices; an empty polygon retains inverted infinite bounds.
 pub(crate) fn bounds(p: &[Point]) -> [f64; 4] {
     p.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |r, p| {
         [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]
@@ -88,6 +95,8 @@ pub(crate) struct State {
     text_mode: i64,
 }
 impl State {
+    /// Intersect the current image clip with `p`; unsupported or oversized geometry makes
+    /// clipping unknown until the enclosing graphics state is restored.
     pub fn clip(&mut self, p: Option<Polygon>) {
         if self.unknown {
             return;
@@ -105,6 +114,8 @@ impl State {
             _ => self.unknown = true,
         }
     }
+    /// Apply named ExtGState entries relevant to image opacity and compositing, retaining
+    /// unspecified values and recording unsupported effects for a later incomplete result.
     pub fn ext(&mut self, doc: &Document, res: &Dict, name: &[u8]) {
         let states = res.get(b"ExtGState").map(|o| doc.resolve(o));
         let state = states.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(name)).map(|o| doc.resolve(o));
@@ -131,6 +142,7 @@ impl State {
             }
         }
     }
+    /// Record default device colour-space overrides that prevent direct sample interpretation.
     pub fn resources(&mut self, doc: &Document, resources: &Dict) {
         if let Some(o) = resources.get(b"ColorSpace") {
             let o = doc.resolve(o);
@@ -139,6 +151,8 @@ impl State {
             }
         }
     }
+    /// Track text clipping, nonstroking colour validity and invalid transforms that affect
+    /// whether a subsequent image can be audited completely.
     pub fn observe(&mut self, op: &Op) {
         match op.op.as_slice() {
             b"Tr" => self.text_mode = op.num(0).unwrap_or(0.0) as i64,
@@ -163,9 +177,12 @@ pub(crate) struct Coverage {
     tiles: Vec<Tile>,
 }
 impl Coverage {
+    /// Comparison cost in stored polygon vertices, charging at least one unit per cover.
     pub fn cost(&self) -> usize {
         self.tiles.iter().map(|t| t.polygon.len()).sum::<usize>().max(1)
     }
+    /// Whether low-contrast tiles substantially hide text painted before `pos`, using the
+    /// audit's word and line area thresholds and excluding later runs of a joined line.
     pub fn covers(&self, line: &TextLine, pos: (usize, usize)) -> bool {
         let ink: Vec<[f64; 4]> = if line.painted_word_runs().next().is_some() {
             line.painted_word_runs().filter(|(p, _)| *p < pos).flat_map(|(_, words)| words.iter().copied()).collect()
@@ -218,6 +235,7 @@ pub(crate) fn inline(dict: &Dict, data: &[u8]) -> Stream {
             b"I" => b"Interpolate",
             _ => k,
         };
+        /// Expand inline colour-space and lossless-filter name abbreviations; retain other values.
         fn expand_name(v: &Object) -> Object {
             match v {
                 Object::Name(n) => Object::Name(match n.as_slice() {
@@ -253,6 +271,8 @@ struct Samples {
     stencil: bool,
 }
 impl Samples {
+    /// Decode supported device-colour or stencil samples under shared byte and pixel budgets.
+    /// Invalid dimensions, unsupported formats, malformed Decode arrays and short data error.
     fn read(doc: &Document, s: &Stream, budget: &mut DecodeBudget, pixels: &mut usize) -> Result<Self, AuditError> {
         let d = &s.dict;
         let integer = |k: &[u8]| {
@@ -300,7 +320,7 @@ impl Samples {
         if stencil && decode[0] != [0.0, 1.0] && decode[0] != [1.0, 0.0] {
             return Err(incomplete("invalid stencil Decode"));
         }
-        let data = budget.decode_strict(s)?;
+        let data = budget.decode_strict(doc, s)?;
         // width * height is at most MAX_PIXELS; channels <= 4 and bits <= 16,
         // so all row/sample offsets below fit even on wasm32.
         let row = width * channels * bits;
@@ -310,6 +330,8 @@ impl Samples {
         }
         Ok(Self { width, height, channels, bits, data, decode, stencil })
     }
+    /// Read one packed component at a validated pixel coordinate, apply its Decode interval
+    /// and clamp to the unit range. Scanline padding is excluded from component offsets.
     fn value(&self, x: usize, y: usize, c: usize) -> f64 {
         let row = (self.width * self.channels * self.bits).div_ceil(8);
         let start = y * row * 8 + (x * self.channels + c) * self.bits;
@@ -320,6 +342,8 @@ impl Samples {
         let [lo, hi] = self.decode.get(c).copied().unwrap_or([0.0, 1.0]);
         (lo + (hi - lo) * f64::from(raw) / f64::from((1u32 << self.bits) - 1)).clamp(0.0, 1.0)
     }
+    /// Convert a validated pixel to RGB; stencils use `fill` for painted bits and return
+    /// `None` for holes, respecting the decoded stencil polarity.
     fn rgb(&self, x: usize, y: usize, fill: [f64; 3]) -> Option<[f64; 3]> {
         let v = |c| self.value(x, y, c);
         if self.stencil {
@@ -333,6 +357,9 @@ impl Samples {
     }
 }
 
+/// Collect opaque sample tiles transformed by `ctm` and intersected with the active clip.
+/// Returns their bounds and coverage, or `None` for no painted area or translucent images.
+/// Unsupported compositing, masks, decoding or exhausted work budgets fail the audit.
 pub(crate) fn collect(
     doc: &Document,
     s: &Stream,
@@ -439,6 +466,8 @@ pub(crate) struct ClipPath {
     pending: bool,
 }
 impl ClipPath {
+    /// Accumulate a supported path in user space and apply pending clipping when a path-ending
+    /// operator arrives. Curves, compound or nonconvex paths mark image clipping unknown.
     pub fn observe(&mut self, op: &Op, ctm: Matrix, state: &mut State) {
         match op.op.as_slice() {
             b"re" => {

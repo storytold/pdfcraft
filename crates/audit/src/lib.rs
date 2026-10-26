@@ -215,6 +215,8 @@ impl Budget {
     }
 }
 
+/// Audit page content and annotations within comparison and report bounds, respecting copy
+/// permissions. Image geometry and ambiguous run order must be fully analyzable or error.
 fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError> {
     let copying = doc.permissions().is_none_or(|p| p.copy());
     let mut budget = Budget { limits, comparisons: 0, page_cost: 0, covered_text: 0 };

@@ -12,6 +12,7 @@ fn fixture() -> Vec<u8> {
     fixture_with(body)
 }
 
+/// Build upright and quarter-turned Letter pages sharing `body` and a Helvetica resource.
 fn fixture_with(body: &str) -> Vec<u8> {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -69,6 +70,8 @@ fn audit_rectangles_match_the_tool_in_top_left_points() {
     assert_eq!(rects(&tool), rects(&cli), "{tool}");
 }
 
+/// CLI and automation report matching inline-image covers on both page rotations, and both
+/// surface incomplete image analysis as a failing command rather than a clean audit.
 #[test]
 fn audit_inline_images_through_cli_and_tool() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-cli-audit-images-{}", std::process::id()));

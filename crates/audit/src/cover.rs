@@ -102,6 +102,7 @@ fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
 }
 
 impl Default for Gs {
+    /// Start with an identity transform, opaque black fill and no image-specific restrictions.
     fn default() -> Self {
         Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0, image: image::State::default() }
     }
@@ -303,6 +304,8 @@ impl<'a> Walker<'a> {
         Ok(())
     }
 
+    /// Charge image analysis to the page budgets and retain its painted coverage at `pos`.
+    /// Record even invisible images as encountered, so unaudited form text cannot pass cleanly.
     fn image(&mut self, stream: &pdfcraft_cos::Stream, gs: &Gs, pos: (usize, usize)) -> Result<(), AuditError> {
         self.images_seen = true;
         if let Some((rect, coverage)) = image::collect(self.doc, stream, &mut self.budget, &mut self.image_budget, &gs.image, gs.ctm, gs.fill)? {
@@ -311,13 +314,16 @@ impl<'a> Walker<'a> {
         Ok(())
     }
 
-    /// Follow a form XObject read-only, composing its matrix onto the current CTM. State
-    /// changes inside never leak out; every rectangle found is stamped with the `Do`
-    /// position `pos`.
+    /// Audit an image XObject or follow a form read-only, composing its matrix onto the CTM
+    /// and intersecting image coverage with its BBox. Form state changes never leak out;
+    /// every cover found is stamped with the `Do` position `pos`. Unreadable or unsupported
+    /// image analysis propagates an error instead of silently skipping the object.
     fn walk_xobject(&mut self, name: &[u8], gs: &Gs, resources: &Dict, depth: usize, pos: (usize, usize)) -> Result<(), AuditError> {
         // Borrowed, not copied: a `Do` must not cost the size of the whole XObject table.
         let xobjects = resources.get(b"XObject").map(|o| self.doc.resolve(o));
-        let Some(entry) = xobjects.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)) else { return Err(AuditError::Image("unresolved XObject".into())) };
+        let Some(entry) = xobjects.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)) else {
+            return Err(AuditError::Image("unresolved XObject".into()));
+        };
         let resolved = self.doc.resolve(entry);
         let Object::Stream(stream) = &*resolved else { return Err(AuditError::Image("invalid XObject stream".into())) };
         let dict = &stream.dict;
@@ -392,11 +398,12 @@ fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
     alpha.filter(|a| a.is_finite()).map(|a| a.clamp(0.0, 1.0)).unwrap_or(1.0)
 }
 
-/// Every opaque filled rectangle drawn by a page's content (and its form XObjects), with paint
+/// Every opaque path or image cover drawn by a page's content (and its form XObjects), with paint
 /// positions. A page's content streams are walked once, joined, with one graphics state, so
 /// state set in an earlier stream is still in force in the later ones. Any content stream that
 /// cannot be decoded, or content and forms that decode or enter past one page's [`DecodeBudget`]
-/// in all, is an audit failure, never an empty result.
+/// in all, is an audit failure, never an empty result. Image coverage also obeys the page box
+/// and its sample/geometry bounds; images combined with unaudited form text fail closed.
 pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, AuditError> {
     let resources = page.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let contents: Vec<Object> = match page.get(b"Contents") {
