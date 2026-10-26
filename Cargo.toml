@@ -117,6 +117,8 @@ codegen-units = 1
 
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
 [patch.crates-io]
+# Shared OCLP Metal compatibility backport; see docs/oclp-wgpu-fork.md.
+wgpu = { git = "https://github.com/ITJamie/wgpu-fork", rev = "21c08e23135ba27ed1c6b68177ecc20c0d076dd9" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
