@@ -2268,3 +2268,96 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// View ▸ Zoom ▸ Loupe tool: toggles the floating loupe window and aperture tracking,
+/// adjusts magnification factor and aperture position, and resets when closed or toggled off.
+#[test]
+fn loupe_tool_toggles_and_magnifies_target() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+
+    // Initial state: loupe is closed, quick tool is Select.
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+
+    // Execute view.loupe command.
+    assert!(h.state_mut().execute("view.loupe"));
+    h.run_steps(3);
+
+    // Loupe is now active.
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Loupe);
+    let loupe = h.state().loupe.as_ref().expect("loupe state active");
+    assert!(loupe.open);
+    assert_eq!(loupe.zoom, 2.0);
+    assert_eq!(loupe.page, 0);
+
+    // Test zoom stepping and clamping.
+    h.state_mut().loupe.as_mut().unwrap().zoom_step(true);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 2.5);
+    h.state_mut().loupe.as_mut().unwrap().set_zoom(8.5);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 8.0);
+    h.state_mut().loupe.as_mut().unwrap().set_zoom(0.5);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 1.0);
+
+    // Setting loupe target updates center and page.
+    h.state_mut().set_loupe_target(0, [0.3, 0.7]);
+    assert_eq!(h.state().loupe.as_ref().unwrap().center, [0.3, 0.7]);
+
+    // Test Turkish localization.
+    h.state_mut().set_option("language", "tr").unwrap();
+    h.run_steps(2);
+    let lang = pdfcraft_ui_egui::i18n::Lang::from_code("tr").unwrap();
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(lang, "Loupe tool"), "Büyüteç aracı");
+
+    // Toggle off via command.
+    assert!(h.state_mut().execute("view.loupe"));
+    h.run_steps(3);
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+
+    // Re-activating loupe and then losing the active document resets QuickTool::Loupe to Select.
+    assert!(h.state_mut().execute("view.loupe"));
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Loupe);
+    h.state_mut().active = None;
+    h.run_steps(2);
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+}
+
+#[test]
+fn loupe_tool_suppressed_in_full_screen_and_resets_on_document_switch() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+
+    assert!(h.state_mut().execute("view.loupe"));
+    h.run_steps(2);
+    assert!(h.state().loupe.is_some());
+    assert_eq!(h.query_all_by_label("Loupe Tool").count(), 1);
+
+    // 1. Entering full screen suppresses the floating loupe window.
+    h.state_mut().full_screen = true;
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Loupe Tool").count(), 0, "loupe window suppressed in full screen");
+
+    h.state_mut().full_screen = false;
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Loupe Tool").count(), 1, "loupe window restored when leaving full screen");
+
+    // 2. Switching to another document resets loupe center and binds to new document.
+    let doc_a = h.state().views[0].id;
+    assert_eq!(h.state().loupe.as_ref().unwrap().doc_id, Some(doc_a));
+    h.state_mut().set_loupe_target(0, [0.2, 0.8]);
+    assert_eq!(h.state().loupe.as_ref().unwrap().center, [0.2, 0.8]);
+
+    // Open second document and switch to it.
+    h.state_mut().open_bytes("second.pdf", None, fixture(2)).unwrap();
+    let doc_b = h.state().views[1].id;
+    h.state_mut().active = Some(1);
+    h.run_steps(3);
+
+    let loupe = h.state().loupe.as_ref().expect("loupe stays open across document switch");
+    assert_eq!(loupe.doc_id, Some(doc_b), "loupe bound to new active document");
+    assert_eq!(loupe.center, [0.5, 0.5], "loupe center reset on document switch");
+}

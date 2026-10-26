@@ -16,6 +16,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.modal_open() || ctx.memory(|m| m.top_modal_layer().is_some()) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
     }
+    if !app.full_screen {
+        crate::loupe_ui::show(app, ctx);
+    }
     dialogs(app, ctx);
     // Last, so it sits above Document Properties when Security's Unlock… asked for it.
     unlock(app, ctx);

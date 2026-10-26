@@ -548,6 +548,7 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.loupe" => self.toggle_loupe(),
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;
