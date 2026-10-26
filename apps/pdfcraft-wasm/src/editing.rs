@@ -157,6 +157,18 @@ fn to_f64(r: [f32; 4]) -> [f64; 4] {
     r.map(f64::from)
 }
 
+/// A text style as the JSON [`TextStyle::parse`] reads back.
+fn style_json(family: FontFamily, bold: bool, italic: bool, size: f64, color: [f64; 3], align: Option<TextAlign>) -> Value {
+    serde_json::json!({
+        "family": match family { FontFamily::Times => "times", FontFamily::Courier => "courier", _ => "helvetica" },
+        "bold": bold,
+        "italic": italic,
+        "size": size,
+        "color": color,
+        "align": align.map(|a| match a { TextAlign::Center => "center", TextAlign::Right => "right", TextAlign::Justify => "justify", TextAlign::Left => "left" }),
+    })
+}
+
 fn family_of(base_font: &str) -> FontFamily {
     if base_font.contains("Times") {
         FontFamily::Times
@@ -173,21 +185,33 @@ impl Document {
     }
 
     /// The page's editable objects as JSON: for each its `kind` and `index` (what the other calls
-    /// take), its `type` (`text`, `image` or `form`), `text` when it has some, and `view`, the box
-    /// where it is drawn.
+    /// take), its `type` (`text`, `image` or `form`), `text` when it has some, `view`, the box where
+    /// it is drawn, and for text its `style` (family, bold, italic, size, color, align).
     pub fn objects_json(&self, page: usize) -> Result<String, String> {
         let info = self.page_info(page)?;
         let objects = self.doc()?.editable_objects(page)?;
+        let blocks = self.doc()?.text_blocks(page);
         let list: Vec<Value> = objects
             .iter()
             .map(|o| {
                 let [a, b] = [info.user_to_view(o.rect[0] as f32, o.rect[1] as f32), info.user_to_view(o.rect[2] as f32, o.rect[3] as f32)];
+                let style = match o.target.kind {
+                    ObjectKind::Text => {
+                        blocks.get(o.target.index).map(|b| style_json(family_of(&b.base_font), b.bold, b.italic, b.size, b.color, None))
+                    }
+                    ObjectKind::Added => match self.added_content(page, o.target.index) {
+                        Ok(AddedContent::Text(t)) => Some(style_json(t.family, t.bold, t.italic, t.size, t.color, Some(t.align))),
+                        _ => None,
+                    },
+                    ObjectKind::Image => None,
+                };
                 serde_json::json!({
                     "kind": match o.target.kind { ObjectKind::Added => "added", ObjectKind::Text => "text", ObjectKind::Image => "image" },
                     "index": o.target.index,
                     "type": o.content_type,
                     "text": o.text,
                     "view": [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])],
+                    "style": style,
                 })
             })
             .collect();
@@ -363,6 +387,9 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["kind"], "text");
         assert_eq!(list[0]["text"], "Hello there");
+        assert_eq!(list[0]["style"]["family"], "helvetica");
+        assert_eq!(list[0]["style"]["bold"], false);
+        assert!((list[0]["style"]["size"].as_f64().expect("size") - 24.0).abs() < 0.5);
         let v = view_of(&list[0]);
         assert!(v[0] >= 0.0 && v[2] <= 200.0 && v[1] < v[3] && v[3] <= 300.0, "inside the page: {v:?}");
     }
@@ -375,6 +402,8 @@ mod tests {
         let added: Vec<Value> = objects(&doc).into_iter().filter(|o| o["kind"] == "added").collect();
         assert_eq!(added.len(), 1);
         assert_eq!(added[0]["text"], "Added words");
+        assert_eq!(added[0]["style"]["bold"], true);
+        assert_eq!(added[0]["style"]["size"], 18.0);
         let target = Target { kind: Kind::Added, index: 0 };
         doc.set_text(
             0,
