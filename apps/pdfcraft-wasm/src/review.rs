@@ -2,7 +2,7 @@
 //! and add links, list annotations and form fields, fill a field. Boxes and points are the displayed
 //! page's points from its top-left, y down (the same space as `objects` and `text_blocks`).
 
-use pdfcraft_engine::{Edit, FieldValue, LinkAction, LinkStyle, Markup, NewAnnotation, Shape, Style};
+use pdfcraft_engine::{Edit, FieldValue, FillMark, LineEnding, LinkAction, LinkStyle, Markup, NewAnnotation, NoteIcon, Shape, StampKind, Style};
 use pdfcraft_render::{FieldKind, LinkTarget};
 use serde_json::{Value, json};
 
@@ -167,6 +167,140 @@ impl Document {
         serde_json::to_string(&list).map_err(|e| e.to_string())
     }
 
+    /// Adds a comment from a description (boxes and points are displayed points from the page's top-left):
+    /// `{"type": "note"|"rect"|"oval"|"line"|"arrow"|"ink"|"textbox"|"stamp", ...}` with `at`, `box`, `from`,
+    /// `to`, `strokes`, `stamp`, `fontSize`, and optionally `contents`, `author`, `color` and `fill` (RGB 0 to 1),
+    /// `width` and `opacity`.
+    pub fn add_annotation(&mut self, page: usize, spec: &str) -> Result<(), String> {
+        let v: Value = serde_json::from_str(spec).map_err(|e| e.to_string())?;
+        let info = self.page_info_ref(page)?;
+        let point = |p: &Value| -> Result<[f64; 2], String> {
+            let a = p.as_array().filter(|a| a.len() == 2).ok_or("a point is [x, y]")?;
+            let (x, y) = (a[0].as_f64().ok_or("a point is numbers")?, a[1].as_f64().ok_or("a point is numbers")?);
+            if !(x.is_finite() && y.is_finite()) {
+                return Err("a point must be finite".into());
+            }
+            let u = info.view_to_user(x as f32, y as f32);
+            Ok([f64::from(u[0]), f64::from(u[1])])
+        };
+        let rect = |key: &str| -> Result<[f64; 4], String> {
+            let a = v[key].as_array().filter(|a| a.len() == 4).ok_or_else(|| format!("{key} is [x0, y0, x1, y1]"))?;
+            let mut b = [0.0; 4];
+            for (slot, n) in b.iter_mut().zip(a) {
+                *slot = n.as_f64().filter(|n| n.is_finite()).ok_or("a box is finite numbers")?;
+            }
+            let u = info.view_rect_to_user([b[0] as f32, b[1] as f32, b[2] as f32, b[3] as f32]);
+            Ok(u.map(f64::from))
+        };
+        let colour = |key: &str| -> Result<Option<[f64; 3]>, String> {
+            match v.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(c) => {
+                    let a = c.as_array().filter(|a| a.len() == 3).ok_or_else(|| format!("{key} is [r, g, b]"))?;
+                    let mut out = [0.0; 3];
+                    for (slot, n) in out.iter_mut().zip(a) {
+                        *slot = n.as_f64().filter(|n| (0.0..=1.0).contains(n)).ok_or_else(|| format!("{key} is three numbers from 0 to 1"))?;
+                    }
+                    Ok(Some(out))
+                }
+            }
+        };
+        let kind = v["type"].as_str().ok_or("a comment has a type")?;
+        let shape = match kind {
+            "note" => Shape::Note { at: point(&v["at"])?, icon: NoteIcon::Comment },
+            "rect" => Shape::Rectangle { rect: rect("box")? },
+            "oval" => Shape::Oval { rect: rect("box")? },
+            "line" => Shape::Line { from: point(&v["from"])?, to: point(&v["to"])?, start: LineEnding::None, end: LineEnding::None },
+            "arrow" => Shape::Line { from: point(&v["from"])?, to: point(&v["to"])?, start: LineEnding::None, end: LineEnding::OpenArrow },
+            "ink" => {
+                let strokes = v["strokes"].as_array().filter(|s| !s.is_empty() && s.len() <= 500).ok_or("ink has strokes")?;
+                let mut out = Vec::with_capacity(strokes.len());
+                for stroke in strokes {
+                    let pts = stroke.as_array().filter(|p| !p.is_empty() && p.len() <= 20_000).ok_or("a stroke has points")?;
+                    out.push(pts.iter().map(&point).collect::<Result<Vec<_>, _>>()?);
+                }
+                Shape::Ink { strokes: out }
+            }
+            "textbox" => {
+                Shape::TextBox { rect: rect("box")?, font_size: v["fontSize"].as_f64().filter(|n| (4.0..=200.0).contains(n)).unwrap_or(12.0) }
+            }
+            "typewriter" => {
+                Shape::Typewriter { rect: rect("box")?, font_size: v["fontSize"].as_f64().filter(|n| (4.0..=200.0).contains(n)).unwrap_or(12.0) }
+            }
+            "mark" => {
+                let mark = match v["mark"].as_str().unwrap_or("check") {
+                    "check" => FillMark::Check,
+                    "cross" => FillMark::Cross,
+                    "dot" => FillMark::Dot,
+                    "line" => FillMark::Line,
+                    other => return Err(format!("unknown mark {other:?}")),
+                };
+                Shape::Mark { rect: rect("box")?, mark }
+            }
+            "signature" => {
+                let strokes = v["strokes"].as_array().filter(|s| !s.is_empty() && s.len() <= 500).ok_or("a signature has strokes")?;
+                let mut out = Vec::with_capacity(strokes.len());
+                for stroke in strokes {
+                    let pts = stroke.as_array().filter(|p| !p.is_empty() && p.len() <= 20_000).ok_or("a stroke has points")?;
+                    out.push(pts.iter().map(&point).collect::<Result<Vec<_>, _>>()?);
+                }
+                Shape::Signature { strokes: out }
+            }
+            "typedSignature" => {
+                let text = v["text"].as_str().filter(|t| !t.trim().is_empty() && t.len() <= 200).ok_or("a typed signature has text")?;
+                let at = point(&v["at"])?;
+                let height = v["height"].as_f64().filter(|h| h.is_finite() && (4.0..=300.0).contains(h)).unwrap_or(36.0);
+                pdfcraft_engine::typed_signature_shape(at, text, height, i64::from(info.rotation))
+                    .ok_or("that text cannot be drawn as a signature")?
+            }
+            "stamp" => {
+                let name = v["stamp"].as_str().ok_or("a stamp has a name")?;
+                let stamp = StampKind::from_name(name.as_bytes()).ok_or_else(|| format!("unknown stamp {name:?}"))?;
+                Shape::Stamp { rect: rect("box")?, stamp, by: v["by"].as_str().map(str::to_string) }
+            }
+            other => return Err(format!("unknown comment type {other:?}")),
+        };
+        let mut style = Style::default_for(&shape);
+        if let Some(c) = colour("color")? {
+            style.color = c;
+        }
+        if let Some(c) = colour("fill")? {
+            style.fill = Some(c);
+        }
+        if let Some(w) = v["width"].as_f64().filter(|w| w.is_finite() && (0.0..=100.0).contains(w)) {
+            style.width = w;
+        }
+        if let Some(o) = v["opacity"].as_f64().filter(|o| (0.0..=1.0).contains(o)) {
+            style.opacity = o;
+        }
+        let contents = v["contents"].as_str().unwrap_or_default().to_string();
+        let author = v["author"].as_str().unwrap_or_default().to_string();
+        self.apply(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
+    }
+
+    /// The stamps that can be added: `name` (what `add_annotation` takes), the `label` on it, its `group`
+    /// and its natural `size` in points.
+    pub fn stamps_json() -> String {
+        let list: Vec<Value> = StampKind::ALL
+            .iter()
+            .map(|k| {
+                let (w, h) = k.size();
+                let group = match k.group() {
+                    pdfcraft_engine::StampGroup::Dynamic => "dynamic",
+                    pdfcraft_engine::StampGroup::SignHere => "signHere",
+                    pdfcraft_engine::StampGroup::StandardBusiness => "business",
+                };
+                json!({ "name": k.name(), "label": k.label(), "group": group, "size": [w, h], "color": k.color() })
+            })
+            .collect();
+        serde_json::to_string(&list).unwrap_or_default()
+    }
+
+    /// Changes the text of the comment at `index` (what `annotations_json` lists).
+    pub fn set_annotation_contents(&mut self, page: usize, index: usize, text: &str) -> Result<(), String> {
+        self.apply(Edit::SetAnnotationContents { page, index, text: text.to_string() })
+    }
+
     pub fn delete_annotation(&mut self, page: usize, index: usize) -> Result<(), String> {
         self.apply(Edit::DeleteAnnotation { page, index })
     }
@@ -295,6 +429,45 @@ mod tests {
         let nothing: Value =
             serde_json::from_str(&doc.select_text_json(5, [0.0, 0.0], [1.0, 1.0]).unwrap_or_else(|_| "{\"text\":\"err\"}".into())).expect("json");
         assert_eq!(nothing["text"], "err", "no such page");
+    }
+
+    #[test]
+    fn adds_comments_stamps_and_edits_their_text() {
+        let mut doc = plain();
+        let specs = [
+            r#"{"type":"note","at":[30,40],"contents":"Check this"}"#,
+            r#"{"type":"rect","box":[20,60,120,100],"color":[1,0,0],"width":2}"#,
+            r#"{"type":"oval","box":[20,110,120,150],"fill":[0.9,0.9,0.1]}"#,
+            r#"{"type":"line","from":[10,160],"to":[100,170]}"#,
+            r#"{"type":"arrow","from":[10,180],"to":[100,190]}"#,
+            r#"{"type":"ink","strokes":[[[10,200],[20,210],[40,205]]],"color":[0,0,1]}"#,
+            r#"{"type":"textbox","box":[20,220,150,250],"fontSize":14,"contents":"Hello"}"#,
+            r#"{"type":"stamp","box":[20,260,140,290],"stamp":"Approved"}"#,
+        ];
+        for spec in specs {
+            doc.add_annotation(0, spec).unwrap_or_else(|e| panic!("{spec}: {e}"));
+        }
+        let marks: Vec<Value> = serde_json::from_str(&doc.annotations_json(0).expect("annotations")).expect("json");
+        assert_eq!(marks.len(), specs.len());
+        let note = marks.iter().find(|m| m["subtype"] == "Text").expect("the note");
+        assert_eq!(note["contents"], "Check this");
+        let index = usize::try_from(note["index"].as_u64().expect("index")).expect("fits");
+        doc.set_annotation_contents(0, index, "Checked").expect("changes the text");
+        let marks: Vec<Value> = serde_json::from_str(&doc.annotations_json(0).expect("annotations")).expect("json");
+        assert!(marks.iter().any(|m| m["contents"] == "Checked"));
+        for bad in [
+            "not json",
+            r#"{"type":"squiggle"}"#,
+            r#"{"type":"rect"}"#,
+            r#"{"type":"rect","box":[0,0,1]}"#,
+            r#"{"type":"rect","box":[0,0,10,10],"color":[2,0,0]}"#,
+            r#"{"type":"ink","strokes":[]}"#,
+            r#"{"type":"stamp","box":[0,0,10,10],"stamp":"Nope"}"#,
+            r#"{"type":"note","at":[1e999,2]}"#,
+        ] {
+            assert!(doc.add_annotation(0, bad).is_err(), "{bad} should be refused");
+        }
+        assert!(Document::stamps_json().contains("Approved"));
     }
 
     #[test]

@@ -222,6 +222,77 @@ impl Pdf {
         self.inner.annotations_json(page).map_err(js)
     }
 
+    /// Adds a comment from a JSON description (see the Rust docs of `add_annotation`).
+    pub fn add_annotation(&mut self, page: usize, spec: &str) -> Result<(), JsError> {
+        self.inner.add_annotation(page, spec).map_err(js)
+    }
+
+    /// The stamps that can be added, as JSON.
+    pub fn stamps() -> String {
+        Document::stamps_json()
+    }
+
+    /// Adds a form field over the displayed box `[x0, y0, x1, y1]` from a JSON description.
+    pub fn add_field(&mut self, page: usize, view: Vec<f64>, spec: &str) -> Result<(), JsError> {
+        self.inner.add_field(page, rect(&view)?, spec).map_err(js)
+    }
+
+    pub fn delete_field(&mut self, name: &str) -> Result<(), JsError> {
+        self.inner.delete_field(name).map_err(js)
+    }
+
+    pub fn set_field_props(&mut self, name: &str, spec: &str) -> Result<(), JsError> {
+        self.inner.set_field_props(name, spec).map_err(js)
+    }
+
+    /// Protects with passwords and permissions, from a JSON description; the next save is encrypted.
+    pub fn protect(&mut self, spec: &str) -> Result<(), JsError> {
+        self.inner.protect(spec).map_err(js)
+    }
+
+    pub fn remove_protection(&mut self) -> Result<(), JsError> {
+        self.inner.remove_protection().map_err(js)
+    }
+
+    /// The layers as JSON: `index`, `name`, `visible`.
+    pub fn layers(&self) -> Result<String, JsError> {
+        self.inner.layers_json().map_err(js)
+    }
+
+    /// Shows or hides a layer for viewing; true when that changed what is shown.
+    pub fn set_layer_visible(&mut self, index: usize, visible: bool) -> bool {
+        self.inner.set_layer_visible(index, visible)
+    }
+
+    /// Puts a picture on the page as a stamp over the displayed box.
+    pub fn add_picture_stamp(&mut self, page: usize, view: Vec<f64>, name: &str, bytes: &[u8]) -> Result<(), JsError> {
+        self.inner.add_picture_stamp(page, rect(&view)?, name, bytes).map_err(js)
+    }
+
+    /// Bakes typed text, marks and signatures into the page.
+    pub fn flatten_fill_sign(&mut self) -> Result<(), JsError> {
+        self.inner.flatten_fill_sign().map_err(js)
+    }
+
+    /// The document's signatures as JSON.
+    pub fn signatures(&self) -> Result<String, JsError> {
+        self.inner.signatures_json().map_err(js)
+    }
+
+    /// Makes a new digital ID (self-signed, P-256) as a PKCS #12 file; `now` is the Unix time in seconds.
+    pub fn create_digital_id(name: &str, organisation: &str, email: &str, password: &str, years: u32, now: f64) -> Result<Vec<u8>, JsError> {
+        Document::create_digital_id(name, organisation, email, password, years, now as i64).map_err(js)
+    }
+
+    /// Signs with a PKCS #12 certificate file and its password; returns the signed PDF.
+    pub fn sign_with_certificate(&mut self, p12: &[u8], password: &str, spec: &str) -> Result<Vec<u8>, JsError> {
+        self.inner.sign_with_certificate(p12, password, spec).map_err(js)
+    }
+
+    pub fn set_annotation_contents(&mut self, page: usize, index: usize, text: &str) -> Result<(), JsError> {
+        self.inner.set_annotation_contents(page, index, text).map_err(js)
+    }
+
     pub fn delete_annotation(&mut self, page: usize, index: usize) -> Result<(), JsError> {
         self.inner.delete_annotation(page, index).map_err(js)
     }

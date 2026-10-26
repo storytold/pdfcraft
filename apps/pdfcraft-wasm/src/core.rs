@@ -104,6 +104,11 @@ impl Document {
         self.renderer.as_mut().map(|(_, r)| r).ok_or_else(|| "no renderer".to_string())
     }
 
+    /// Forgets the drawing state, so the next page drawn reads the document's view settings again.
+    pub(crate) fn drop_renderer(&mut self) {
+        self.renderer = None;
+    }
+
     /// The text of a page with the position of every glyph, as displayed.
     pub(crate) fn page_text(&mut self, page: usize) -> Result<Arc<pdfcraft_render::PageText>, String> {
         if page >= self.page_count() {
@@ -257,11 +262,11 @@ impl Document {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A minimal `n`-page document; page `i` shows "Page i+1".
-    fn fixture(n: usize) -> Vec<u8> {
+    pub(crate) fn fixture(n: usize) -> Vec<u8> {
         let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
         let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
         objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
