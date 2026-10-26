@@ -112,6 +112,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Execute a registered command by id without panic guarding.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -548,6 +549,7 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.dynamic_zoom" => self.quick_tool = crate::QuickTool::DynamicZoom,
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;

@@ -905,6 +905,7 @@ fn initial_view_is_edited_and_honoured_on_open() {
     assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
 }
 
+/// Simulate dragging from position `a` to position `b` across several interpolation steps.
 fn drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
     h.hover_at(a);
     h.run_steps(1);
@@ -918,6 +919,7 @@ fn drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
     h.run_steps(3);
 }
 
+/// Test Marquee Zoom and Snapshot interactions.
 #[test]
 fn marquee_zoom_and_snapshot() {
     let mut h = harness();
@@ -941,6 +943,83 @@ fn marquee_zoom_and_snapshot() {
     assert!(after > before * 2.0, "{before} → {after}");
 }
 
+/// Click with the pointer at `p`.
+fn click_at(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+/// Click with the pointer at `p` while carrying `modifiers`.
+fn click_modifiers_at(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2, modifiers: egui::Modifiers) {
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.run_steps(3);
+}
+
+/// Test that dynamic zoom zooms in when dragging upward, zooms out when dragging downward,
+/// zooms in on click, and zooms out on Shift-click.
+#[test]
+fn dynamic_zoom_drags_up_to_zoom_in_and_down_to_zoom_out() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let center = r.center();
+
+    // 1. Activate Dynamic Zoom tool via command
+    assert!(h.state_mut().execute("view.dynamic_zoom"));
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::DynamicZoom);
+
+    // 2. Drag UP: zooms in
+    let before = h.state().views[i].zoom;
+    drag(&mut h, center, center - egui::vec2(0.0, 80.0));
+    h.run_steps(2);
+    let after_up = h.state().views[i].zoom;
+    assert!(after_up > before * 1.3, "dragging up should zoom in: {before} -> {after_up}");
+
+    // 3. Drag DOWN: zooms out
+    drag(&mut h, center, center + egui::vec2(0.0, 100.0));
+    h.run_steps(2);
+    let after_down = h.state().views[i].zoom;
+    assert!(after_down < after_up * 0.75, "dragging down should zoom out: {after_up} -> {after_down}");
+
+    // 4. Click zooms in by 1.5x
+    let before_click = h.state().views[i].zoom;
+    click_at(&mut h, center);
+    let after_click = h.state().views[i].zoom;
+    assert!((after_click - before_click * 1.5).abs() < 0.05, "click zooms in by 1.5x: {before_click} -> {after_click}");
+
+    // 5. Shift-click zooms out by 1.5x
+    click_modifiers_at(&mut h, center, egui::Modifiers::SHIFT);
+    let after_shift_click = h.state().views[i].zoom;
+    assert!((after_shift_click - before_click).abs() < 0.05, "shift-click zooms back out: {after_click} -> {after_shift_click}");
+
+    // 6. Escape clears an active drag
+    h.hover_at(center);
+    h.run_steps(1);
+    h.drag_at(center);
+    h.run_steps(1);
+    h.hover_at(center - egui::vec2(0.0, 20.0));
+    h.run_steps(1);
+    assert!(h.state().views[i].dynamic_zoom.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].dynamic_zoom, None);
+    h.drop_at(center - egui::vec2(0.0, 20.0));
+    h.run_steps(1);
+
+    // 7. Turkish translation check
+    let tr = pdfcraft_ui_egui::i18n::Lang::from_code("tr").unwrap();
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(tr, "Dynamic zoom"), "Dinamik yakınlaştırma");
+}
+
+/// Test that `view.fit_visible` zooms into the page content width.
 #[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();

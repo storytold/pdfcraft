@@ -44,6 +44,52 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
 }
 
+/// Handle Dynamic Zoom gestures on page `page`: drag up to zoom in, drag down to zoom out
+/// around the initial press point; click zooms in 1.5x, Shift-click zooms out 1.5x.
+pub(crate) fn dynamic_zoom_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, view: &mut DocView) {
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let origin = ui.input(|i| i.pointer.press_origin());
+    if pointer.is_some_and(|p| xf.rect.contains(p)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    if resp.drag_started()
+        && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
+    {
+        view.dynamic_zoom = Some((page, o, view.zoom));
+    }
+    if let Some((p, start_pos, start_zoom)) = view.dynamic_zoom
+        && p == page
+    {
+        if resp.dragged()
+            && let Some(pt) = pointer
+        {
+            let dy = pt.y - start_pos.y;
+            // Dragging up (dy < 0) zooms in; dragging down (dy > 0) zooms out.
+            let factor = (-dy / 150.0).exp();
+            let new_zoom = (start_zoom * factor).clamp(0.08, 64.0);
+            view.zoom_at(new_zoom, start_pos);
+            ui.ctx().request_repaint();
+        }
+        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            view.dynamic_zoom = None;
+        }
+    }
+    if resp.clicked()
+        && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
+    {
+        // Shift as held now, or as the click's own event carried it (synthetic click).
+        let shift = ui.input(|i| {
+            i.modifiers.shift
+                || i.events.iter().any(|e| {
+                    matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } if modifiers.shift)
+                })
+        });
+        let factor = if shift { 1.0 / 1.5 } else { 1.5 };
+        let new_zoom = (view.zoom * factor).clamp(0.08, 64.0);
+        view.zoom_at(new_zoom, p);
+    }
+}
+
 impl PdfCraftApp {
     /// Finish a marquee gesture for the current tool.
     pub(crate) fn finish_marquee(&mut self, index: usize, done: Marquee) {
