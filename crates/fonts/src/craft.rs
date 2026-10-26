@@ -89,6 +89,23 @@ pub fn document_devanagari_font() -> Option<&'static CraftFont> {
     ui_devanagari_fonts().into_iter().next()
 }
 
+/// The `Kore` craft-fonts faces for Korean interface text (file names, document titles),
+/// in manifest order. Empty when built without craft-fonts or when it has no Korean face.
+pub fn ui_korean_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.covers("Kore")).collect()
+}
+
+/// The face for Korean text written into PDFs: the `Kore` face whose style is `Regular`, else
+/// any `Kore` face. `None` without craft-fonts or without a Korean face.
+pub fn document_korean_font() -> Option<&'static CraftFont> {
+    korean_face(CRAFT_FONTS)
+}
+
+fn korean_face(faces: &[CraftFont]) -> Option<&CraftFont> {
+    let kore = || faces.iter().filter(|f| f.covers("Kore"));
+    kore().find(|f| f.style == "Regular").or_else(|| kore().next())
+}
+
 /// The `Hebr` craft-fonts faces for Hebrew interface text (file names, document titles, text
 /// being edited), in manifest order. Empty when built without craft-fonts or when it has no
 /// Hebrew face.
@@ -371,5 +388,28 @@ mod tests {
             assert_eq!(ui.first().map(|f| f.family), Some("BIZ UDPGothic"));
         }
         assert_eq!(document_japanese_font().map(|f| f.family), Some("Shippori Mincho"));
+    }
+
+    #[test]
+    fn korean_faces_follow_the_style_without_inventing_weights() {
+        static KORE_LATN: &[&str] = &["Kore", "Latn"];
+        let faces = [
+            CraftFont { family: "Hakgyoansim Namu", style: "Light", scripts: KORE_LATN, bytes: b"light" },
+            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], bytes: b"not-korean" },
+            CraftFont { family: "Hakgyoansim Namu", style: "Regular", scripts: KORE_LATN, bytes: b"regular" },
+        ];
+        // Regular wins over a listed-first Light.
+        assert_eq!(korean_face(&faces).map(|f| f.bytes), Some(&b"regular"[..]));
+        // No Regular: the first Kore face, never a face of another script.
+        assert_eq!(korean_face(&faces[..1]).map(|f| f.bytes), Some(&b"light"[..]));
+        assert!(korean_face(&faces[1..2]).is_none());
+    }
+
+    #[test]
+    fn korean_apis_match_the_build_input() {
+        // Holds with and without CRAFT_FONTS_DIR.
+        assert_eq!(ui_korean_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Kore")).count());
+        assert_eq!(document_korean_font().is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Kore")));
+        assert!(document_korean_font().is_none_or(|f| f.covers("Kore")));
     }
 }

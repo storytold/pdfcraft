@@ -306,9 +306,9 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
 }
 
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
-/// the CJK, Arabic, Telugu, Hebrew and Thai faces of the optional craft-fonts build input as the
-/// last fallback in every family. Without craft-fonts there is no Japanese, Chinese, Arabic,
-/// Telugu, Hebrew or Thai face here.
+/// the CJK, Arabic, Telugu, Hebrew, Thai and Korean faces of the optional craft-fonts build
+/// input as the last fallback in every family. Without craft-fonts there is no Japanese,
+/// Chinese, Arabic, Telugu, Hebrew, Thai or Korean face here.
 pub fn font_definitions() -> FontDefinitions {
     font_definitions_for(false)
 }
@@ -383,14 +383,16 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         }
     }
     // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,
-    // file names), Hebrew faces (file names, text being edited), Thai faces and Devanagari faces
-    // (the Hindi interface) after the CJK ones; the ranges don't overlap.
+    // file names), Hebrew faces (file names, text being edited), Thai faces, Devanagari faces
+    // (the Hindi interface) and Korean faces (file names, document titles) after the CJK ones;
+    // the ranges don't overlap.
     for face in pdfcraft_fonts::ui_arabic_fonts()
         .into_iter()
         .chain(pdfcraft_fonts::ui_telugu_fonts())
         .chain(pdfcraft_fonts::ui_hebrew_fonts())
         .chain(pdfcraft_fonts::ui_thai_fonts())
         .chain(pdfcraft_fonts::ui_devanagari_fonts())
+        .chain(pdfcraft_fonts::ui_korean_fonts())
     {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {

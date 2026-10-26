@@ -10,6 +10,7 @@ const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
 const HEBREW: &str = "ייפוי כח.pdf";
 const DEVANAGARI: &str = "हिंदी पाठ सम्पादन";
+const KOREAN: &str = "한국어 테스트";
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -106,6 +107,32 @@ fn arabic_ui_text_uses_craft_fonts() {
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+    }
+}
+
+/// Built with a craft-fonts Korean face, Korean text has real glyphs in every family, from a
+/// face placed after the app's own fonts.
+#[test]
+fn korean_ui_text_uses_craft_fonts() {
+    let korean: Vec<String> = pdfcraft_fonts::ui_korean_fonts().iter().map(|f| f.name()).collect();
+    if korean.is_empty() {
+        eprintln!("skipping korean_ui_text_uses_craft_fonts: no Kore face bundled (set CRAFT_FONTS_DIR with a Korean face to run it)");
+        return;
+    }
+    let defs = theme::font_definitions();
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        let first_ko = stack.iter().position(|n| korean.contains(n)).expect("a Kore face is a fallback");
+        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
+        assert!(own < first_ko, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, KOREAN), "{id:?} lacks {KOREAN}");
+    }
+    // Real glyphs are about a full em wide each; tofu boxes and missing glyphs are not.
+    for w in layout_widths(&mut fonts, KOREAN) {
+        assert!(w > 13.0 * 0.7 * KOREAN.chars().count() as f32, "{w}");
     }
 }
 

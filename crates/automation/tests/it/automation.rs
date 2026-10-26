@@ -3226,6 +3226,25 @@ fn win_ansi_paragraph_pdf(body: &str) -> Vec<u8> {
     bytes
 }
 
+/// Korean replacement text through the same tools, saved and reopened: the generated `PCKo`
+/// Type 3 face draws the Hangul and its ToUnicode map returns it on the second opening.
+#[test]
+fn editing_existing_korean_text_through_tools() {
+    if pdfcraft_fonts::document_korean_font().is_none() {
+        eprintln!("skipping editing_existing_korean_text_through_tools: no Korean craft face (set CRAFT_FONTS_DIR to a checkout with one)");
+        return;
+    }
+    let dir = workdir("edit-text-ko");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 2, "line": 1, "text": "두 번째 장" }));
+    assert_eq!(r["line"]["text"], "두 번째 장");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "korean.pdf" }));
+    let re = ok(&mut a, "doc_open", json!({ "path": "korean.pdf" }))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({ "doc": re, "page": 2 }));
+    assert_eq!(lines["lines"][0]["text"].as_str(), Some("두 번째 장"), "Hangul round-trips through the saved ToUnicode map");
+}
+
 /// One page whose content is one stream in three pieces (#155): a `TJ` array ends the middle
 /// piece and its operator starts the last one.
 fn split_streams_pdf() -> Vec<u8> {

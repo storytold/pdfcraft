@@ -21,8 +21,9 @@
 //!    published metrics apply, so this is as close to right as a substitution gets.
 //! 3. craft-fonts holds that exact family. Never another family — see [`crate::embedding`].
 //! 4. The descendant font's `/CIDSystemInfo /Ordering` names a script, and craft-fonts has a face
-//!    for it. Today that means Adobe-Japan1.
-//! 5. The ordering names a script we have **no** licensed face for (GB1, CNS1, Korea1). There is
+//!    for it. Today that means Adobe-Japan1, and Adobe-Korea1 once the checkout carries a `Kore`
+//!    face (Hakgyoansim Namu).
+//! 5. The ordering names a script we still have **no** licensed face for (GB1, CNS1). There is
 //!    no honest substitute, so the chain reports none: the caller draws nothing and can say why.
 //! 6. Otherwise, the nearest of the standard 14 by `/FontDescriptor /Flags` — serif, fixed pitch,
 //!    bold and italic. This step always succeeds, so a simple font is never left without a face.
@@ -156,8 +157,9 @@ impl Substitution {
 fn script_for(ordering: &str) -> Option<&'static str> {
     match ordering {
         "Japan1" => Some("Jpan"),
+        "Korea1" | "KR" => Some("Kore"),
         // Registered orderings the chain maps to no craft-fonts face.
-        "GB1" | "CNS1" | "Korea1" | "KR" => Some(""),
+        "GB1" | "CNS1" => Some(""),
         _ => None,
     }
 }
@@ -181,7 +183,10 @@ pub fn substitute(req: &Request<'_>) -> Substitution {
     }
     if let Some(script) = req.ordering.and_then(script_for) {
         // A script we hold a face for; otherwise there is no honest substitute to offer.
-        return match crate::CRAFT_FONTS.iter().find(|f| f.covers(script)) {
+        // Korean delegates to the document selector — the same face the renderer draws the page
+        // with — instead of restating its order; other scripts keep the first covering face.
+        let face = if script == "Kore" { crate::document_korean_font() } else { crate::CRAFT_FONTS.iter().find(|f| f.covers(script)) };
+        return match face {
             Some(f) => at(Face::Craft(f), Why::ScriptFace),
             None => at(Face::None, Why::NoFaceForScript),
         };
@@ -293,7 +298,7 @@ mod tests {
     fn a_script_with_no_licensed_face_reports_none_rather_than_latin() {
         // The user's Chinese PDF draws nothing. The point of this is that we can now say so,
         // instead of quietly standing Helvetica in and showing the wrong glyphs.
-        for ordering in ["GB1", "CNS1", "Korea1", "KR"] {
+        for ordering in ["GB1", "CNS1"] {
             let s = substitute(&req("SomeCJKFont", false, 0, Some(ordering)));
             assert_eq!(s.face, Face::None, "{ordering}");
             assert_eq!(s.why, Why::NoFaceForScript, "{ordering}");
@@ -328,6 +333,24 @@ mod tests {
             assert_eq!(s.face, Face::None);
         }
         assert!(!s.why.is_faithful(), "a substitution is never faithful");
+    }
+
+    #[test]
+    fn korean_depends_on_craft_fonts_and_says_which_it_got() {
+        // Same contract as Japanese, for both spellings of the Korean CID ordering.
+        for ordering in ["Korea1", "KR"] {
+            let s = substitute(&req("SomeKoreanFont", false, 0, Some(ordering)));
+            if let Some(kore) = crate::document_korean_font() {
+                assert_eq!(s.why, Why::ScriptFace, "{ordering}");
+                assert!(matches!(s.face, Face::Craft(_)), "{ordering}");
+                // The report names the very face the renderer draws the page with.
+                assert_eq!(s.face_name().as_deref(), Some(kore.name().as_str()), "{ordering}");
+            } else {
+                assert_eq!(s.why, Why::NoFaceForScript, "{ordering}");
+                assert_eq!(s.face, Face::None, "{ordering}");
+            }
+            assert!(!s.why.is_faithful(), "a substitution is never faithful");
+        }
     }
 
     #[test]
