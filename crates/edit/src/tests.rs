@@ -7457,3 +7457,49 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
+
+/// The text round-trips too: spaces the font can't encode are drawn as gaps, which read back as
+/// at most one space (and none in front of the first glyph), so a run wrapped in them is marked
+/// with its exact text in `/ActualText` (#4229).
+#[test]
+fn typed_spaces_in_a_subset_without_a_space_glyph_read_back_exactly() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+    text::replace_block(&mut doc, 0, 0, "  ab  ba   ab").unwrap();
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["  ab  ba   ab"], "the typed text, with its indent and runs of spaces");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    // The width still comes from the gaps, not from glyphs.
+    assert_eq!(content.matches("[-330] TJ").count(), 7, "{content}");
+    assert_eq!(content.matches("BDC").count(), 1, "{content}");
+    assert_eq!(content.matches("EMC").count(), 1, "{content}");
+}
+
+/// Single spaces need no `/ActualText`: one gap and one space round-trip by themselves.
+#[test]
+fn a_single_space_in_a_subset_without_a_space_glyph_reads_back_one() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+    text::replace_block(&mut doc, 0, 0, "ab ba").unwrap();
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["ab ba"]);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.matches("BDC").count() == 0, "{content}");
+}
+
+/// The next edit starts from the exact text the marked run reads back as, and replaces the
+/// whole span, so its wrappers don't pile up (#4229).
+#[test]
+fn re_editing_the_marked_run_starts_from_its_read_back_text() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj /F1 12 Tf ( ) Tj /F2 12 Tf (ba) Tj ET");
+    text::replace_block(&mut doc, 0, 0, "  ab  ba   ab").unwrap();
+    let mut doc = reopen(&doc);
+    // The span is one run of the line: another edit replaces it and its wrappers.
+    text::replace_block(&mut doc, 0, 0, "ab ba").unwrap();
+    let doc = reopen(&doc);
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["ab ba"]);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.matches("BDC").count() == 0, "{content}");
+    assert!(content.matches("ActualText").count() == 0, "{content}");
+}

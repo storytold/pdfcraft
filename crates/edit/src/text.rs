@@ -2450,7 +2450,20 @@ fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacin
             out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
         }
     }
-    Ok(out)
+    // A gap between two runs reads back as at most one space, and there is no text at all in
+    // front of the run's first glyph (#4229). When the typed spacing can't round-trip through
+    // the gaps (a run of two or more spaces, or spaces at the edge), wrap the run in
+    // /ActualText, which the reader takes as the exact text the run shows. Spaces alone need no
+    // glyph inside the span: the run keeps its width either way.
+    if !(text.starts_with(' ') || text.ends_with(' ') || text.contains("  ")) {
+        return Ok(out);
+    }
+    let mut properties = Dict::new();
+    properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(text)));
+    let mut wrapped = vec![Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)])];
+    wrapped.extend(out);
+    wrapped.push(Op::new("EMC", vec![]));
+    Ok(wrapped)
 }
 
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
