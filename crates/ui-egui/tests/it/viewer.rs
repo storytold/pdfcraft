@@ -2268,3 +2268,43 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// #4534: refocusing the find bar or Advanced Search field selects its existing query so that
+/// typing a new search term replaces the previous one instead of appending to it.
+#[test]
+fn refocusing_search_field_selects_existing_query_for_replacement() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+
+    // Open the find bar and type an initial query.
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(2);
+    h.event(egui::Event::Text("first query".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().query, "first query");
+
+    // Move focus away from the find input, then refocus via `edit.find`.
+    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("find-input")));
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(2);
+    h.event(egui::Event::Text("second".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().query, "second", "typing after refocusing the find bar replaces the previous query");
+
+    // Opening Advanced Search focuses the panel input and selects the shared query.
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(2);
+    h.event(egui::Event::Text("third".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().query, "third", "typing after opening Advanced Search replaces the existing query");
+
+    // Move focus away from the search panel input, then refocus via `edit.advanced_search`.
+    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("search-panel-input")));
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(2);
+    h.event(egui::Event::Text("fourth".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().query, "fourth", "typing after refocusing Advanced Search replaces the previous query");
+}
