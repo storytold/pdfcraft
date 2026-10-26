@@ -63,6 +63,9 @@ struct Pending {
     a11y_now: bool,
     ocr_now: bool,
     scan_clean_now: bool,
+    // The web build has no folder jobs.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    ocr_batch_now: bool,
     compare_now: bool,
     images_now: bool,
     stamp_now: bool,
@@ -135,6 +138,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Preferences => 610.0,
             Dialog::About => 820.0,
             Dialog::PinTool => 540.0,
+            Dialog::OcrBatch => 600.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -387,6 +391,19 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             if !dialog_preferences(ui, app, req) {
                 return false;
             }
+        }
+        Dialog::OcrBatch => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let (go, cancel) = crate::ocr_batch_ui::body(ui, app, &t);
+                req.ocr_batch_now = go;
+                req.close = go || cancel;
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                req.close = true;
+            }
+            return false;
         }
         Dialog::RecognizeText => {
             let (go, cancel) = crate::ocr_ui::body(ui, app, &t);
@@ -2005,6 +2022,10 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     }
     if req.scan_clean_now {
         app.start_scan_clean();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if req.ocr_batch_now {
+        app.start_ocr_batch();
     }
     if req.compare_now {
         app.run_compare();

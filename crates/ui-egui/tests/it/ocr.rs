@@ -348,3 +348,65 @@ fn only_the_edit_tool_recognizes_a_scanned_page() {
     h.run_steps(6);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
+
+/// Recognize text in multiple files takes folders too: their subfolders when asked, the folder
+/// tree kept in the output folder, the originals unchanged, a name the output folder already has
+/// kept with the new file numbered, and files that aren't PDFs counted as skipped.
+#[test]
+fn recognize_text_in_files_and_folders_keeps_the_originals_and_the_folder_tree() {
+    use egui::accesskit::Role;
+    let dir = tempfile::tempdir().unwrap();
+    let (scans, out) = (dir.path().join("scans"), dir.path().join("out"));
+    std::fs::create_dir_all(scans.join("2025")).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    // One scan for every file: scan() is stamped with the time it was made.
+    let original = scan();
+    for path in [scans.join("a.pdf"), scans.join("2025/b.pdf"), dir.path().join("loose.pdf")] {
+        std::fs::write(path, &original).unwrap();
+    }
+    std::fs::write(scans.join("notes.txt"), "not a PDF").unwrap();
+    std::fs::write(out.join("a.pdf"), "keep me").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize_batch"));
+    h.run_steps(2);
+    h.get_by_label("Add files or folders to recognize.");
+    h.get_by_label("Add folder…");
+    let start_enabled = |h: &Harness<'static, PdfCraftApp>| {
+        h.query_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("Recognize text") && !n.is_disabled()).is_some()
+    };
+    assert!(!start_enabled(&h), "nothing to read yet");
+    // The native pickers can't run headless: fill the list as they would.
+    h.state_mut().ocr_batch_draft.add([scans.clone(), dir.path().join("loose.pdf")]);
+    h.state_mut().ocr_batch_draft.out_dir = Some(scans.clone());
+    h.run_steps(2);
+    h.get_by_label("The output folder can't be one of the folders being read, or contain one.");
+    assert!(!start_enabled(&h), "the results would land among the originals");
+    h.state_mut().ocr_batch_draft.out_dir = Some(out.clone());
+    h.get_by_role_and_label(Role::CheckBox, "Include subfolders").click();
+    h.run_steps(2);
+    assert!(h.state().ocr_batch_draft.recursive);
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    assert!(start_enabled(&h));
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_batch.is_none(), "finished");
+    assert!(h.state().dialog.is_none(), "the dialog closed");
+    let toast = h.state().toast.clone().unwrap().0;
+    assert!(toast.starts_with("Recognized ") && toast.contains("in 3 files; skipped: 1"), "{toast}");
+    assert_eq!(std::fs::read(out.join("a.pdf")).unwrap(), b"keep me", "an existing file is never replaced");
+    for written in [out.join("a (2).pdf"), out.join("2025/b.pdf"), out.join("loose.pdf")] {
+        assert!(std::fs::read(&written).unwrap().len() > original.len(), "{} has its text layer", written.display());
+    }
+    for source in [scans.join("a.pdf"), scans.join("2025/b.pdf"), dir.path().join("loose.pdf")] {
+        assert!(std::fs::read(&source).unwrap() == original, "{} is unchanged", source.display());
+    }
+}

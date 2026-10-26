@@ -526,6 +526,10 @@ impl PdfCraftApp {
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
+            // The web build has no folders: it asks for the PDFs.
+            #[cfg(not(target_arch = "wasm32"))]
+            "ocr.recognize_batch" => self.dialog = Some(Dialog::OcrBatch),
+            #[cfg(target_arch = "wasm32")]
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
