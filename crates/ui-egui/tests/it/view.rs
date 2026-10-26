@@ -1393,6 +1393,35 @@ fn highlight_fields_leaves_a_groups_read_only_button_alone() {
     assert_eq!(tinted, 1, "only the button that can be chosen is tinted");
 }
 
+/// A push button and a text field, with fields highlighted.
+const BUTTON_AND_TEXT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (frame) /Rect [50 200 250 340] /P 3 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [50 100 250 130] /P 3 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A push button holds no value, so Highlight fields leaves it as drawn (an `animate`
+/// animation's frames are push buttons); the text field beside it is tinted.
+#[test]
+fn highlight_fields_leaves_push_buttons_alone() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("button.pdf", None, BUTTON_AND_TEXT.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("fields", "on").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
+    let tinted = h.output().shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == tint)).count();
+    assert_eq!(tinted, 1, "only the text field is tinted");
+}
+
 /// A radio group's read-only button can't be chosen by a click, while the group's other button
 /// can.
 #[test]

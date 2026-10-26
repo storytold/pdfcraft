@@ -4008,9 +4008,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
             // red border. Radio buttons and round XFA check boxes are round, and so is theirs (as
             // in Acrobat). Only what can be filled is marked: a read-only widget (its field's, or a
-            // radio button's own) is left as it is drawn.
+            // radio button's own) is left as it is drawn, and so is a push button, which holds no
+            // value (the frames and controls of a LaTeX `animate` animation are push buttons).
             if view.highlight_fields {
-                for f in form.iter() {
+                for f in form.iter().filter(|f| f.kind != pdfcraft_engine::FormFieldKind::PushButton) {
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
                     for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden && !w.read_only) {
                         let r = w.rect;
