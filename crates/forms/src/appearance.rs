@@ -673,6 +673,57 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
     list_rows_of(doc, &f.da, fobj.as_dict(), &wd)
 }
 
+/// The 0-based option indices selected in a choice field (ISO 32000-2 Table 233 MultiSelect and
+/// Table 234 `/I`).
+///
+/// For a single-select field (`!is_multi`), at most the first value in `values` is considered.
+/// When `/I` is present on `field` and its entries name valid option indices whose export values
+/// match `values`, those indices are returned; otherwise each value in `values` selects the first
+/// remaining option with that export value.
+pub(crate) fn selected_list_indices(
+    doc: &Document,
+    field: Option<&Dict>,
+    options: &[(String, String)],
+    values: &[String],
+    is_multi: bool,
+) -> Vec<usize> {
+    let limit = if is_multi { values.len() } else { values.len().min(1) };
+    let values = values.get(..limit).unwrap_or(values);
+    if values.is_empty() {
+        return Vec::new();
+    }
+    if let Some(arr) = field.and_then(|d| d.get(b"I")).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
+        let mut from_i = Vec::new();
+        for item in arr.iter().take(options.len().saturating_add(64)) {
+            if let Some(idx) = doc.resolve(item).as_int().and_then(|i| usize::try_from(i).ok())
+                && idx < options.len()
+                && !from_i.contains(&idx)
+            {
+                from_i.push(idx);
+                if !is_multi {
+                    break;
+                }
+            }
+        }
+        if from_i.len() == values.len() {
+            let mut i_exports: Vec<&str> = from_i.iter().filter_map(|&i| options.get(i).map(|(e, _)| e.as_str())).collect();
+            let mut v_exports: Vec<&str> = values.iter().map(String::as_str).collect();
+            i_exports.sort_unstable();
+            v_exports.sort_unstable();
+            if i_exports == v_exports {
+                return from_i;
+            }
+        }
+    }
+    let mut selected = Vec::new();
+    for v in values {
+        if let Some((idx, _)) = options.iter().enumerate().find(|(i, (e, _))| e == v && !selected.contains(i)) {
+            selected.push(idx);
+        }
+    }
+    selected
+}
+
 /// The appearance of a text or choice field's widget showing `values`. Characters its font can't
 /// hold come out as `?`; [`field_appearance_drawn`] says which.
 pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
@@ -746,8 +797,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let fobj = doc.get(f.obj);
     let text: String = if f.kind == FieldKind::Combo {
-        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+        let picked = selected_list_indices(doc, fobj.as_dict(), &f.options, values, false);
+        if let Some(d) = picked.first().and_then(|&i| f.options.get(i)).map(|(_, d)| d.clone()) {
+            d
+        } else {
+            values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+        }
     } else {
         values.first().cloned().unwrap_or_default()
     };
@@ -796,16 +853,17 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     match f.kind {
         FieldKind::List => {
             // Every option, one per line from the top (from `/TI`); selected ones highlighted.
-            let fobj = doc.get(f.obj);
             let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
-            for (export, display) in f.options.iter().skip(rows.top) {
+            let is_multi = f.has(flags::MULTI_SELECT);
+            let selected_indices = selected_list_indices(doc, fobj.as_dict(), &f.options, values, is_multi);
+            for (idx, (_, display)) in f.options.iter().enumerate().skip(rows.top) {
                 if y - line < 0.0 {
                     break;
                 }
-                if values.contains(export) {
+                if selected_indices.contains(&idx) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
                 show(&mut body, pad, y - line + size * 0.25, display);

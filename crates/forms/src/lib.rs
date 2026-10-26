@@ -138,6 +138,9 @@ pub struct Field {
     pub max_len: Option<usize>,
     /// Choice options: (export value, display text).
     pub options: Vec<(String, String)>,
+    /// Choice: 0-based indices in `options` of the selected items (`/I`, or the indices matching
+    /// `value`).
+    pub indices: Vec<usize>,
     /// Default appearance string (`/DA`, inherited from the form if absent).
     pub da: String,
     /// Quadding: 0 left, 1 centred, 2 right.
@@ -196,12 +199,20 @@ impl Field {
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
-            FieldKind::Combo | FieldKind::List => self
-                .value
-                .iter()
-                .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
-                .collect::<Vec<_>>()
-                .join(", "),
+            FieldKind::Combo | FieldKind::List => {
+                let by_idx: Option<Vec<&str>> = (self.indices.len() == self.value.len())
+                    .then(|| self.indices.iter().map(|&i| self.options.get(i).map(|(_, d)| d.as_str())).collect())
+                    .flatten();
+                if let Some(texts) = by_idx {
+                    texts.join(", ")
+                } else {
+                    self.value
+                        .iter()
+                        .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            }
             _ => self.value.join(", "),
         }
     }
@@ -903,7 +914,7 @@ fn walk(
             })
         })
         .collect();
-    let options = d
+    let options: Vec<(String, String)> = d
         .get(b"Opt")
         .map(|o| doc.resolve(o))
         .and_then(|o| o.as_array().cloned())
@@ -914,15 +925,26 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect();
+    let is_multi = kind == FieldKind::List && ff & flags::MULTI_SELECT != 0;
+    let mut value = values_of(doc, inh.v.as_ref());
+    if matches!(kind, FieldKind::Combo | FieldKind::List) && !is_multi {
+        value.truncate(1);
+    }
+    let indices = if matches!(kind, FieldKind::Combo | FieldKind::List) {
+        appearance::selected_list_indices(doc, Some(d), &options, &value, is_multi)
+    } else {
+        Vec::new()
+    };
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref()),
+        value,
         default: values_of(doc, inh.dv.as_ref()),
         flags: ff,
         max_len: inh.max_len,
         options,
+        indices,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),
@@ -1133,6 +1155,8 @@ fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
 }
 
+/// Validate and write `value` into `f`, updating its dictionary entries (`/V`, `/I`, `/TI`, `/AS`)
+/// and regenerating its widget appearances.
 fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
@@ -1208,9 +1232,23 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             }
             // Accept export values or display texts; free text only in editable combo boxes.
             let mut exports = Vec::new();
+            let mut picked_indices = Vec::new();
             for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
-                    Some((e, _)) => exports.push(e.clone()),
+                let matched = f
+                    .indices
+                    .iter()
+                    .copied()
+                    .filter(|i| !picked_indices.contains(i))
+                    .find_map(|i| f.options.get(i).filter(|(e, _)| e == v).map(|o| (i, o)))
+                    .or_else(|| f.options.iter().enumerate().find(|(i, (e, d))| !picked_indices.contains(i) && (e == v || d == v)))
+                    .or_else(|| f.options.iter().enumerate().find(|(_, (e, d))| e == v || d == v));
+                match matched {
+                    Some((i, (e, _))) => {
+                        exports.push(e.clone());
+                        if !picked_indices.contains(&i) {
+                            picked_indices.push(i);
+                        }
+                    }
                     None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
                     None if f.options.is_empty() => exports.push(v.clone()),
                     None => {
@@ -1219,8 +1257,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                     }
                 }
             }
-            let mut indices: Vec<Object> =
-                exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
+            let mut indices: Vec<Object> = picked_indices.iter().map(|&i| Object::Int(i as i64)).collect();
             // /I lists option indices in ascending order; /V keeps the caller's value order.
             // Every entry above is an integer, so this sorts by its numeric option index.
             indices.sort_unstable_by_key(Object::as_int);

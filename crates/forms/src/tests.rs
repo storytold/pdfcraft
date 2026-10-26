@@ -4577,3 +4577,57 @@ fn set_values_reads_the_form_once_not_per_value() {
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
+
+/// ISO 32000-2 Table 233 (MultiSelect) and Table 234 (`/I`): a list box whose options share an
+/// export value highlights only the option `/I` selects (falling back to the first matching
+/// option when `/I` disagrees with `/V`), saving a pick preserves its option index in `/I`, and
+/// a single-select list given an array `/V` selects only the first item (#4531).
+#[test]
+fn list_box_duplicate_exports_and_single_select_array_value() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /NeedAppearances true /DA (/Helv 11 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (D_dup) /Ff 0 /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (1) /I [1] /Rect [330 600 520 644] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (H_twovals) /Ff 0 /Opt [[(TW) (Taiwan)] [(JP) (Japan)] [(US) (United States)]] /V [(TW) (JP)] /Rect [330 500 520 544] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ]);
+    let copy = with_field_appearances(&doc).expect("list boxes to draw");
+    let all = fields(&copy);
+    let dup = field(&all, "D_dup");
+    assert_eq!(dup.value, ["1"]);
+    assert_eq!(dup.display_value(), "One-B");
+    let dup_ap = ap(&copy, &dup.widgets[0]);
+    assert_eq!(dup_ap.matches("0.6 0.75 0.86 rg").count(), 1, "only One-B is highlighted: {dup_ap}");
+    assert!(dup_ap.contains("0 16.7 190 12.65 re f"), "second row (One-B) highlighted: {dup_ap}");
+
+    let two = field(&all, "H_twovals");
+    assert_eq!(two.value, ["TW"], "single-select list keeps only the first value");
+    let two_ap = ap(&copy, &two.widgets[0]);
+    assert_eq!(two_ap.matches("0.6 0.75 0.86 rg").count(), 1, "only Taiwan is highlighted: {two_ap}");
+    assert!(two_ap.contains("0 29.35 190 12.65 re f"), "first row (Taiwan) highlighted: {two_ap}");
+
+    // When /I disagrees with /V, Table 234 requires using /V (first matching option in single-select).
+    let mut mismatch = doc.clone();
+    mismatch.update_dict(dup.obj, |d| d.set(b"I".to_vec(), Object::Array(vec![Object::Int(2)]))).unwrap();
+    let mismatch_copy = with_field_appearances(&mismatch).expect("list boxes to draw");
+    let mismatch_ap = ap(&mismatch_copy, &field(&fields(&mismatch_copy), "D_dup").widgets[0]);
+    assert_eq!(mismatch_ap.matches("0.6 0.75 0.86 rg").count(), 1, "{mismatch_ap}");
+    assert!(mismatch_ap.contains("0 29.35 190 12.65 re f"), "falls back to first matching option One-A: {mismatch_ap}");
+
+    // Picking One-A writes /I [0]; picking One-B writes /I [1] and survives save and reopen.
+    set_value(&mut doc, "D_dup", &FieldValue::Choice(vec!["One-A".into()])).unwrap();
+    let i_zero: Vec<i64> = doc.get(dup.obj).as_dict().unwrap().get(b"I").unwrap().as_array().unwrap().iter().filter_map(Object::as_int).collect();
+    assert_eq!(i_zero, [0]);
+    set_value(&mut doc, "D_dup", &FieldValue::Choice(vec!["One-B".into()])).unwrap();
+    let reopened = reopen(&doc);
+    let reopened_all = fields(&reopened);
+    let reopened_dup = field(&reopened_all, "D_dup");
+    let i_one: Vec<i64> =
+        reopened.get(reopened_dup.obj).as_dict().unwrap().get(b"I").unwrap().as_array().unwrap().iter().filter_map(Object::as_int).collect();
+    assert_eq!(i_one, [1]);
+    assert_eq!(reopened_dup.display_value(), "One-B");
+    let reopened_ap = ap(&reopened, &reopened_dup.widgets[0]);
+    assert_eq!(reopened_ap.matches("0.6 0.75 0.86 rg").count(), 1, "{reopened_ap}");
+    assert!(reopened_ap.contains("0 16.7 190 12.65 re f"), "{reopened_ap}");
+}
