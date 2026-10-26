@@ -445,6 +445,10 @@ pub struct Document {
 pub(crate) struct ObjectReader {
     pub(crate) document: Document,
     decoded_count: usize,
+    /// Objects in the parsed-object cache and the bytes of their own, as last measured. Kept
+    /// as a running total so a read does not measure the whole cache again.
+    counted_objects: usize,
+    counted_bytes: usize,
 }
 
 impl ObjectReader {
@@ -488,8 +492,25 @@ impl ObjectReader {
         // have cached large objects.
         if let Ok(mut cache) = self.document.cache.lock() {
             let data = &self.document.data;
-            if cache.len() >= Self::OBJECTS || cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0))) > Self::STREAM_BYTES {
+            // The common read parsed exactly this object and nothing else (a hit changes
+            // nothing): add its size to the running total. Anything else, such as a failed
+            // load, a /Length that cached further objects or a cache changed from outside,
+            // measures the whole cache again.
+            let grew_by_this_object = cache.len() == self.counted_objects.saturating_add(1)
+                && matches!((&object, cache.get(&reference.num)), (Ok(read), Some(cached)) if Arc::ptr_eq(read, cached));
+            if object.is_ok() && cache.len() == self.counted_objects {
+                // Unchanged: a hit, or an object held by the overlay.
+            } else if let (true, Ok(read)) = (grew_by_this_object, &object) {
+                self.counted_bytes = self.counted_bytes.saturating_add(owned_bytes(read, data, 0));
+                self.counted_objects = cache.len();
+            } else {
+                self.counted_bytes = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0)));
+                self.counted_objects = cache.len();
+            }
+            if cache.len() >= Self::OBJECTS || self.counted_bytes > Self::STREAM_BYTES {
                 cache.clear();
+                self.counted_objects = 0;
+                self.counted_bytes = 0;
             }
         }
         object
@@ -1176,7 +1197,7 @@ impl Document {
         let mut document = self.clone();
         document.cache = Arc::default();
         document.objstms = Arc::default();
-        ObjectReader { document, decoded_count: 0 }
+        ObjectReader { document, decoded_count: 0, counted_objects: 0, counted_bytes: 0 }
     }
 
     fn load(&self, num: u32, depth: u32) -> Result<Object, CosError> {
@@ -3004,9 +3025,25 @@ endobj
         // Data of its own (decrypted streams, strings) counts: past the budget the cache is
         // cleared after the next read, including a failed one.
         let owned = Object::Stream(crate::Stream::from_raw(Dict::new(), vec![b'y'; ObjectReader::STREAM_BYTES + 1]));
-        reader.document.cache.lock().unwrap().insert(3, Arc::new(owned));
+        reader.document.cache.lock().unwrap().insert(5, Arc::new(owned));
         assert_eq!(*reader.get(ObjRef::new(99, 0)), Object::Null);
         assert!(reader.document.cache.lock().unwrap().is_empty(), "owned data over budget is evicted");
+    }
+
+    #[test]
+    fn temporary_reader_running_total_matches_the_cache() {
+        let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), "<< /Type /Pages /Kids [] /Count 0 >>".to_owned()];
+        bodies.extend((0..300).map(|i| format!("<< /Value {i} /Name ({}) >>", "s".repeat(i % 40))));
+        let refs: Vec<_> = bodies.iter().map(String::as_str).collect();
+        let doc = Document::open(Arc::new(build(&refs, "/Root 1 0 R"))).unwrap();
+        let mut reader = doc.object_reader();
+        for num in (1..=302).chain([5, 301, 99_999, 7]) {
+            let _ = reader.try_get(ObjRef::new(num, 0));
+            let cache = reader.document.cache.lock().unwrap();
+            let measured = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &reader.document.data, 0)));
+            assert_eq!((reader.counted_objects, reader.counted_bytes), (cache.len(), measured), "after object {num}");
+            assert!(cache.len() < ObjectReader::OBJECTS);
+        }
     }
 
     #[test]
