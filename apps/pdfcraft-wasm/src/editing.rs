@@ -246,7 +246,7 @@ impl Document {
             .filter(|a| a.page == page)
             .nth(index)
             .map(|a| a.content.clone())
-            .ok_or_else(|| format!("page {} has no added item {}", page + 1, index + 1))
+            .ok_or_else(|| format!("page {} has no added item {}", page.saturating_add(1), index.saturating_add(1)))
     }
 
     /// Gives an object a new box. An added item or an image takes it as it is; a paragraph of
@@ -562,6 +562,15 @@ mod tests {
         let text = objects(&doc).into_iter().find(|o| o["type"] == "text").expect("text");
         let t = Target { kind: Kind::Added, index: text["index"].as_u64().expect("index") as usize };
         assert!(doc.rotate_object(0, t, 1).is_err(), "text does not turn");
+    }
+
+    #[test]
+    fn a_huge_page_or_item_number_is_an_error_not_a_wrap() {
+        let mut doc = open();
+        let target = Target { kind: Kind::Added, index: usize::MAX };
+        assert!(doc.resize_object(0, target, [0.0, 0.0, 10.0, 10.0]).is_err());
+        assert!(doc.resize_object(usize::MAX, target, [0.0, 0.0, 10.0, 10.0]).is_err());
+        assert!(doc.set_text(usize::MAX, target, Some("x"), &TextStyle::default()).is_err());
     }
 
     #[test]
