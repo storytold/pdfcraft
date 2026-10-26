@@ -89,6 +89,40 @@ pub fn fold_case(s: &str) -> String {
     out
 }
 
+/// `s` with Arabic script folded for search, so a query typed on a keyboard finds the text as
+/// PDFs store it. Arabic has no case, so find applies this with and without "match case".
+///
+/// - Presentation forms (U+FB50–U+FDFF, U+FE80–U+FEFC: the initial, medial, final and isolated
+///   shapes and the lam-alef ligatures that many older PDFs map their glyphs to) become the
+///   letters they show (NFKC), so `ﻣﺤﻤﺪ` is found by typing `محمد`.
+/// - Tashkeel (harakat, tanwin, shadda, sukun, superscript alef, Quranic marks), their spacing
+///   forms (U+FE70–U+FE7F) and tatweel (U+0640) are dropped: `مُحَمَّد` and `مـحـمـد` match `محمد`.
+/// - Alef with hamza or madda (أ إ آ ٱ) folds to bare alef, and alef maqsura (ى) to yeh (ي): the
+///   spellings people use interchangeably, in typing and in print.
+///
+/// Characters outside Arabic script come through unchanged.
+pub fn fold_arabic(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    fn push(out: &mut String, c: char) {
+        match c {
+            '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{06D6}'..='\u{06ED}' | '\u{0640}' => {}
+            '\u{0622}' | '\u{0623}' | '\u{0625}' | '\u{0671}' => out.push('\u{0627}'),
+            '\u{0649}' => out.push('\u{064A}'),
+            _ => out.push(c),
+        }
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{FE70}'..='\u{FE7F}' => {}
+            // NFKC, not NFKD: ﺅ must become ؤ (as typed), not waw plus a hamza mark.
+            '\u{FB50}'..='\u{FDFF}' | '\u{FE80}'..='\u{FEFC}' => std::iter::once(c).nfkc().for_each(|d| push(&mut out, d)),
+            _ => push(&mut out, c),
+        }
+    }
+    out
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -2418,6 +2452,57 @@ mod tests {
         assert_eq!(fold_case("ÇAĞLAR Şişli"), "çağlar şişli");
         assert_eq!(fold_case("İIıi"), "iiii");
         assert_eq!(fold_case("Σσς"), "σσσ");
+    }
+
+    #[test]
+    fn arabic_folding() {
+        // Presentation forms (initial meem, medial hah, medial meem, final dal) → letters.
+        assert_eq!(fold_arabic("\u{FEE3}\u{FEA4}\u{FEE4}\u{FEAA}"), "محمد");
+        // Lam-alef ligatures, including with hamza (which then folds to bare alef).
+        assert_eq!(fold_arabic("\u{FEFB}"), "لا");
+        assert_eq!(fold_arabic("\u{FEF7}"), "لا");
+        // Hamza on waw and yeh stays as typed.
+        assert_eq!(fold_arabic("\u{FE85}\u{FE8B}"), "ؤئ");
+        // Tashkeel, their spacing forms and tatweel are dropped.
+        assert_eq!(fold_arabic("مُحَمَّدٌ"), "محمد");
+        assert_eq!(fold_arabic("مـحـمـد"), "محمد");
+        assert_eq!(fold_arabic("\u{FE70}\u{FE7C}"), "");
+        // Alef and yeh variants.
+        assert_eq!(fold_arabic("أإآٱا"), "ااااا");
+        assert_eq!(fold_arabic("على"), "علي");
+        // Everything else is untouched, Latin ligatures included.
+        for s in ["Hello", "office \u{FB01}", "日本語", "שָׁלוֹם", ""] {
+            assert_eq!(fold_arabic(s), s);
+        }
+    }
+
+    /// One glyph per glyph text, all on one line, word gaps where `gaps` says.
+    fn line(texts: &[&str], gaps: &[usize]) -> PageText {
+        let glyphs: Vec<TextGlyph> = texts.iter().enumerate().map(|(i, t)| g(t, 300.0 - i as f32 * 7.0, 10.0, 306.0 - i as f32 * 7.0)).collect();
+        let n = glyphs.len();
+        PageText { glyphs, line_of: vec![0; n], space_before: (0..n).map(|i| gaps.contains(&i)).collect() }
+    }
+
+    #[test]
+    fn arabic_search_matches_presentation_forms_tashkeel_and_variants() {
+        // "قال أحمد" as presentation forms, the way many older PDFs map their glyphs.
+        let forms = line(&["\u{FED7}", "\u{FE8E}", "\u{FEDE}", "\u{FE83}", "\u{FEA3}", "\u{FEE4}", "\u{FEAA}"], &[3]);
+        assert_eq!(forms.find("احمد"), vec![3..7]);
+        assert_eq!(forms.find("أحمد"), vec![3..7]);
+        assert_eq!(forms.find("قال احمد"), vec![0..7]);
+        assert_eq!(forms.find_opts("احمد", true, true), vec![3..7], "Arabic has no case");
+        // A lam-alef ligature glyph matches its two letters, and a match ending inside it covers it.
+        let lam_alef = line(&["\u{FEDB}", "\u{FEFC}", "\u{FEE2}"], &[]);
+        assert_eq!(lam_alef.find("كلام"), vec![0..3]);
+        assert_eq!(lam_alef.find("كل"), vec![0..2]);
+        // Text with tashkeel and tatweel, one character per glyph, found without them.
+        let marked: Vec<String> = "مُحَمَّـد".chars().map(String::from).collect();
+        let marked = line(&marked.iter().map(String::as_str).collect::<Vec<_>>(), &[]);
+        assert_eq!(marked.find("محمد"), vec![0..marked.glyphs.len()]);
+        // A query of marks alone finds nothing rather than everything.
+        assert!(marked.find("\u{064E}").is_empty());
+        // Unrelated words still don't match.
+        assert!(forms.find("محمد").is_empty());
     }
 
     fn g(t: &str, x0: f32, y0: f32, x1: f32) -> TextGlyph {

@@ -1,4 +1,7 @@
-use pdfcraft_render::{PageText, TextGlyph, text::fold_case};
+use pdfcraft_render::{
+    PageText, TextGlyph,
+    text::{fold_arabic, fold_case},
+};
 use std::ops::Range;
 
 fn page(parts: &[&str]) -> PageText {
@@ -11,7 +14,7 @@ fn page(parts: &[&str]) -> PageText {
 
 // The original straightforward search is an independent oracle for valid page metadata.
 fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
-    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
+    let fold = |s: &str| fold_arabic(&if sensitive { s.to_owned() } else { fold_case(s) });
     let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() || limit == 0 {
         return Vec::new();
@@ -69,7 +72,8 @@ fn whole_word_rejection_keeps_overlapping_candidates() {
 
 #[test]
 fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
-    let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية"];
+    let alphabet =
+        ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "e\u{301}", "العربية", "\u{FEE3}", "\u{FEFB}", "\u{064E}", "ـ", "أ"];
     let mut seed = 1234567u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);

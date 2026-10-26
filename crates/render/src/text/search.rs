@@ -1,12 +1,12 @@
 //! Literal search in normalized page text, retaining the original glyph owners.
-use super::{PageText, fold_case};
+use super::{PageText, fold_arabic, fold_case};
 use std::ops::Range;
 
 pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
+    let fold = |s: &str| fold_arabic(&if sensitive { s.to_owned() } else { fold_case(s) });
     let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
         return Vec::new();
