@@ -276,7 +276,7 @@ impl Document {
                 let user = self.page_info(page)?.view_rect_to_user(to_f32(view));
                 let block = self.doc()?.text_blocks(page).into_iter().nth(target.index).ok_or("that paragraph no longer exists")?;
                 let style = BlockStyle { width: Some(f64::from(user[2] - user[0])), ..BlockStyle::default() };
-                self.apply(Edit::EditTextBlock { page, block: target.index, text: block.editor_text, style })
+                self.apply(Edit::EditTextBlock { page, block: target.index, text: format!("{} ", block.editor_text.trim_end()), style })
             }
         }
     }
@@ -341,7 +341,9 @@ impl Document {
             },
             Kind::Text => {
                 let block = self.doc()?.text_blocks(page).into_iter().nth(target.index).ok_or("that paragraph no longer exists")?;
-                let words = text.map_or(block.editor_text.clone(), str::to_string);
+                // Words left as they are take the engine's row-keeping path, which cuts a restyled block into
+                // lines; a changed text lays the whole block out again, so a trailing space asks for that.
+                let words = text.map_or_else(|| format!("{} ", block.editor_text.trim_end()), str::to_string);
                 // A family, bold and italic go together in the engine's style; fill what is not said from the paragraph.
                 let wants_face = style.family.is_some() || style.bold.is_some() || style.italic.is_some();
                 let family = wants_face.then(|| {
@@ -526,7 +528,7 @@ mod tests {
         .expect("restyles");
         let blocks: Vec<Value> = serde_json::from_str(&doc.text_blocks_json(0).expect("blocks")).expect("json");
         // the larger size rewraps the paragraph to its box, so compare the words, not the line breaks
-        assert_eq!(blocks[0]["text"].as_str().expect("text").replace('\n', " "), "Hello there");
+        assert_eq!(blocks[0]["text"].as_str().expect("text").replace('\n', " ").trim_end(), "Hello there");
         assert_eq!(blocks[0]["bold"], true);
         assert_eq!(blocks[0]["italic"], true);
         assert!((blocks[0]["size"].as_f64().expect("size") - 30.0).abs() < 0.5);

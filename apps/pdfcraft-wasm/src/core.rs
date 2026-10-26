@@ -212,6 +212,21 @@ impl Document {
         self.apply(Edit::InsertBlankPage { at, width, height })
     }
 
+    /// Adds every page of another PDF (`bytes`, its `name` for messages) so the first lands at page `at`
+    /// (the page count appends them). A form field whose name is taken is renamed.
+    pub fn insert_pages_from(&mut self, name: &str, bytes: &[u8], at: usize) -> Result<(), String> {
+        if at > self.page_count() {
+            return Err(format!("there is no place {at} among {} pages", self.page_count()));
+        }
+        self.apply(Edit::InsertPagesFrom {
+            name: name.to_string(),
+            bytes: Arc::new(bytes.to_vec()),
+            pages: None,
+            at,
+            field_conflicts: Default::default(),
+        })
+    }
+
     /// The label of the edit [`undo`](Self::undo) would take back, when there is one.
     pub fn can_undo(&self) -> Option<String> {
         self.doc().ok()?.can_undo().map(str::to_string)
@@ -380,6 +395,18 @@ mod tests {
         assert_eq!(doc.page_count(), 3);
         assert!(doc.delete_pages(&[7]).is_err());
         assert!(doc.rotate_pages(&[0], 45).is_err(), "only quarter turns");
+    }
+
+    #[test]
+    fn appends_the_pages_of_another_pdf() {
+        let mut doc = open(2);
+        doc.insert_pages_from("more.pdf", &fixture(3), 2).expect("appends");
+        assert_eq!(doc.page_count(), 5);
+        assert_eq!(first_text(&doc, 4), "Page 3");
+        doc.insert_pages_from("more.pdf", &fixture(1), 0).expect("inserts at the front");
+        assert_eq!(doc.page_count(), 6);
+        assert!(doc.insert_pages_from("more.pdf", &fixture(1), 9).is_err(), "no such place");
+        assert!(doc.insert_pages_from("junk.pdf", b"not a pdf", 0).is_err());
     }
 
     #[test]

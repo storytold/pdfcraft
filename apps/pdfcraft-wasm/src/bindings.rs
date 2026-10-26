@@ -116,6 +116,11 @@ impl Pdf {
         self.inner.move_pages(&pages, to).map_err(js)
     }
 
+    /// Adds the pages of another PDF so the first lands at page `at` (the page count appends them).
+    pub fn insert_pages_from(&mut self, name: &str, bytes: &[u8], at: usize) -> Result<(), JsError> {
+        self.inner.insert_pages_from(name, bytes, at).map_err(js)
+    }
+
     pub fn insert_blank_page(&mut self, at: usize, width: f64, height: f64) -> Result<(), JsError> {
         self.inner.insert_blank_page(at, width, height).map_err(js)
     }
