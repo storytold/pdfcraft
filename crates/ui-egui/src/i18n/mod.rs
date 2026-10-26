@@ -567,6 +567,12 @@ pub fn upper_label(english: &str) -> String {
     if lang.code() == "tr" && has(lang, english) { shown.chars().flat_map(upper_turkish).collect() } else { shown.to_uppercase() }
 }
 
+/// `text` in upper case, using Turkish `i` → `İ` and `ı` → `I` when the UI language is Turkish
+/// or `text` contains Turkish letters.
+pub fn upper_text(text: &str) -> String {
+    if current().code() == "tr" || pdfcraft_fonts::has_turkish(text) { text.chars().flat_map(upper_turkish).collect() } else { text.to_uppercase() }
+}
+
 fn upper_turkish(c: char) -> std::char::ToUppercase {
     match c {
         'i' => 'İ'.to_uppercase(),

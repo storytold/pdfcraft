@@ -362,7 +362,7 @@ pub(crate) fn button_caption(doc: &Document, da: &str, caption: &str, width: f64
     let da = parse_da(da);
     let (name, font, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| enc.can_encode(caption)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        None => ("Helv".to_string(), helvetica(pdfcraft_fonts::has_turkish(caption)), FontText::WinAnsi),
     };
     let missing = enc.first_unencodable(caption);
     let size = if da.size > 0.0 { da.size } else { auto };
@@ -374,14 +374,14 @@ pub(crate) fn button_caption(doc: &Document, da: &str, caption: &str, width: f64
     (out, name, font, missing)
 }
 
-/// A non-embedded Helvetica font dictionary in WinAnsi encoding, the fallback when the form's
-/// `/DR` has no font that can show the text.
-fn helvetica() -> Object {
+/// A non-embedded Helvetica font dictionary in WinAnsi encoding (with Turkish `/Differences` when
+/// needed), the fallback when the form's `/DR` has no font that can show the text.
+fn helvetica(turkish: bool) -> Object {
     let mut f = Dict::new();
     f.set(b"Type".to_vec(), Object::name("Font"));
     f.set(b"Subtype".to_vec(), Object::name("Type1"));
     f.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    f.set(b"Encoding".to_vec(), if turkish { pdfcraft_fonts::turkish_encoding() } else { Object::name("WinAnsiEncoding") });
     Object::Dict(f)
 }
 
@@ -761,9 +761,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             enc.can_encode(&text)
         }
     };
+    let turkish = if f.kind == FieldKind::List {
+        f.options.iter().any(|(_, display)| pdfcraft_fonts::has_turkish(display))
+    } else {
+        pdfcraft_fonts::has_turkish(&text)
+    };
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        None => ("Helv".to_string(), helvetica(turkish), FontText::WinAnsi),
     };
     let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);

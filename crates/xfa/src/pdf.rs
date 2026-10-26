@@ -113,12 +113,12 @@ fn rgb_array(c: [f64; 3]) -> Object {
     Object::Array(c.iter().map(|v| Object::Real(v.clamp(0.0, 1.0))).collect())
 }
 
-fn standard_font(base: &str) -> Object {
+fn standard_font(base: &str, turkish: bool) -> Object {
     let mut f = Dict::new();
     f.set(b"Type".to_vec(), Object::name("Font"));
     f.set(b"Subtype".to_vec(), Object::name("Type1"));
     f.set(b"BaseFont".to_vec(), Object::name(base));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    f.set(b"Encoding".to_vec(), if turkish { pdfcraft_fonts::turkish_encoding() } else { Object::name("WinAnsiEncoding") });
     Object::Dict(f)
 }
 
@@ -773,7 +773,7 @@ impl Emitter<'_> {
     fn page(&mut self, page: &Page, pages_ref: ObjRef) -> Result<ObjRef, XfaError> {
         let page_ref = self.doc.add(Object::Dict(Dict::new()));
         let mut content: Vec<u8> = Vec::new();
-        let mut fonts: BTreeMap<&'static str, &'static str> = BTreeMap::new();
+        let mut fonts: BTreeMap<&'static str, (&'static str, bool)> = BTreeMap::new();
         let mut xobjects = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
@@ -827,7 +827,9 @@ impl Emitter<'_> {
                         }
                     }
                     let name = s.face.resource_name();
-                    fonts.insert(name, s.face.family.base_font(s.face.bold, s.face.italic));
+                    let base = s.face.family.base_font(s.face.bold, s.face.italic);
+                    let entry = fonts.entry(name).or_insert((base, false));
+                    entry.1 |= pdfcraft_fonts::has_turkish(&s.text);
                     // Horizontal scaling is text state, which outlives the text object: a
                     // condensed span gets a graphics state of its own, so the next isn't.
                     let scaled = (s.face.h_scale - 1.0).abs() > 1e-6;
@@ -857,8 +859,8 @@ impl Emitter<'_> {
             }
         }
         let mut font_dict = Dict::new();
-        for (name, base) in fonts {
-            font_dict.set(name.as_bytes().to_vec(), standard_font(base));
+        for (name, (base, turkish)) in fonts {
+            font_dict.set(name.as_bytes().to_vec(), standard_font(base, turkish));
         }
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(font_dict));
@@ -1091,7 +1093,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     let mut dr_fonts = dr.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, base) in all_faces() {
         if !dr_fonts.contains(name.as_bytes()) {
-            dr_fonts.set(name.as_bytes().to_vec(), standard_font(base));
+            dr_fonts.set(name.as_bytes().to_vec(), standard_font(base, false));
         }
     }
     if !dr_fonts.contains(b"ZaDb") {

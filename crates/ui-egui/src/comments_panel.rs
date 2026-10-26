@@ -70,7 +70,13 @@ pub fn subtype_icon(s: &str) -> &'static str {
 
 fn initials(name: &str) -> String {
     let s: String = name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
-    if s.is_empty() { "?".into() } else { s.to_uppercase() }
+    if s.is_empty() {
+        "?".into()
+    } else if crate::i18n::current().code() == "tr" || pdfcraft_fonts::has_turkish(name) {
+        crate::i18n::upper_text(&s)
+    } else {
+        s.to_uppercase()
+    }
 }
 
 /// A comment's colour as `RRGGBB` (empty: none), the key the colour sort and filter use.
@@ -689,7 +695,7 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
 
 #[cfg(test)]
 mod filter {
-    use super::any_contains;
+    use super::{any_contains, initials};
 
     #[test]
     fn comments_match_in_any_case_with_turkish_i() {
@@ -698,5 +704,7 @@ mod filter {
         assert!(any_contains(["IRMAK"], "ırmak"));
         assert!(any_contains(["Note"], "NOTE"));
         assert!(!any_contains(["Ayşe Yılmaz"], "mehmet"));
+        assert_eq!(initials("ismail şahin"), "İŞ");
+        assert_eq!(initials("ışıl ırmak"), "II");
     }
 }

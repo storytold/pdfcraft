@@ -319,13 +319,14 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     Some((what, first_undrawable(&text)?))
 }
 
-/// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
-fn helvetica_resource() -> Object {
+/// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding (or the Turkish
+/// `/Differences` when `text` has Turkish letters).
+fn helvetica_resource(text: &str) -> Object {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
     font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    font.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(text));
     let mut fonts = Dict::new();
     fonts.set(b"Helv".to_vec(), Object::Dict(font));
     Object::Dict(fonts)
@@ -537,7 +538,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 // WinAnsi bytes go into the stream as-is, not through UTF-8.
                 tail.extend(literal(&win_ansi(&text)));
                 tail.extend_from_slice(b" Tj ET Q\n");
-                res.set(b"Font".to_vec(), helvetica_resource());
+                res.set(b"Font".to_vec(), helvetica_resource(&text));
             }
         }
         b"Polygon" | b"PolyLine" => {
@@ -627,7 +628,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 out.extend(format!("BT /Helv {} Tf {} {} Td (", n(size), n(x), n(y)).bytes());
                 out.push(0xB6);
                 out.extend_from_slice(b") Tj ET\n");
-                res.set(b"Font".to_vec(), helvetica_resource());
+                res.set(b"Font".to_vec(), helvetica_resource("\u{b6}"));
                 return Some(form(rect, &out, res));
             }
         }
@@ -873,7 +874,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 y -= size * 1.2;
             }
             out.extend_from_slice(b"ET\n");
-            res.set(b"Font".to_vec(), helvetica_resource());
+            res.set(b"Font".to_vec(), helvetica_resource(&text));
             let mut stream = form(full, &out, res);
             if let Some(m) = matrix {
                 stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
@@ -897,7 +898,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
             out.extend(literal(&win_ansi(&value)));
             out.extend_from_slice(b" Tj ET\n");
-            res.set(b"Font".to_vec(), helvetica_resource());
+            res.set(b"Font".to_vec(), helvetica_resource(&value));
         }
     }
     Some(form(rect, &out, res))
@@ -1286,7 +1287,7 @@ fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: Option<&str
         f.set(b"Type".to_vec(), Object::name("Font"));
         f.set(b"Subtype".to_vec(), Object::name("Type1"));
         f.set(b"BaseFont".to_vec(), Object::name(base));
-        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        f.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(by.unwrap_or(label)));
         Object::Dict(f)
     };
     let mut fonts = Dict::new();

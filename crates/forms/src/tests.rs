@@ -3188,6 +3188,27 @@ fn document_scripts_read_each_name_tree_node_once() {
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }
 
+#[test]
+fn turkish_field_values_and_button_captions_draw_without_undrawn_marks() {
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [72.0, 700.0, 272.0, 724.0], &NewField::Text { multiline: false }, Some("sehir")).unwrap();
+    set_value(&mut doc, "sehir", &FieldValue::Text("İstanbul — Iğdır, Şırnak, Gümüşhane".into())).unwrap();
+    add_field(&mut doc, 0, [72.0, 650.0, 172.0, 674.0], &NewField::Button { caption: "GÖNDER / İMZALA".into() }, Some("gonder")).unwrap();
+    let all = fields(&doc);
+    for name in ["sehir", "gonder"] {
+        let w = &field(&all, name).widgets[0];
+        let d = doc.get(w.obj).as_dict().cloned().unwrap();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&d), None, "{name}");
+    }
+    let af = acroform(&doc).unwrap();
+    let dr_fonts =
+        doc.resolve(af.get(b"DR").unwrap()).as_dict().and_then(|d| d.get(b"Font")).and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
+    for font_name in [b"Helv".as_slice(), b"TiRo", b"Cour"] {
+        let fd = doc.resolve(dr_fonts.get(font_name).unwrap()).as_dict().cloned().unwrap();
+        assert_eq!(fd.get(b"Encoding"), Some(&pdfcraft_fonts::turkish_encoding()));
+    }
+}
+
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,
 /// B none, C its own (`(old C)`), D is a combo without one, E a check box with states, F a list
 /// box without one, and G only a down appearance (`/D`, no `/N`).

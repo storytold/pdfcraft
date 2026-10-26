@@ -514,11 +514,15 @@ pub(super) fn rewrite_styled_block(
     let mut res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     for line in lines.iter().filter(|line| line.font.starts_with("PCRange")) {
+        let encoding = fonts
+            .get(line.font.as_bytes())
+            .and_then(|f| doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict)))
+            .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(draft));
         let mut f = Dict::new();
         f.set(b"Type".to_vec(), Object::name("Font"));
         f.set(b"Subtype".to_vec(), Object::name("Type1"));
         f.set(b"BaseFont".to_vec(), Object::name(&line.base_font));
-        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        f.set(b"Encoding".to_vec(), encoding);
         fonts.set(line.font.as_bytes().to_vec(), Object::Dict(f));
     }
     let mut metrics = std::collections::BTreeMap::new();
@@ -668,12 +672,21 @@ pub(super) fn rewrite_styled_block(
                 } else {
                     let base = family.base_font(source.bold, source.italic);
                     let name = format!("PCEd{}", base.replace('-', ""));
+                    let encoding = fonts
+                        .get(name.as_bytes())
+                        .and_then(|f| {
+                            doc.resolve(f)
+                                .as_dict()
+                                .and_then(|d| d.get(b"Encoding"))
+                                .and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict))
+                        })
+                        .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(draft));
                     let mut f = Dict::new();
                     f.set(b"Type".to_vec(), Object::name("Font"));
                     f.set(b"Subtype".to_vec(), Object::name("Type1"));
                     f.set(b"BaseFont".to_vec(), Object::name(base));
-                    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-                    metrics.entry(name.clone()).or_insert_with(|| Metrics::from_dict(doc, &f));
+                    f.set(b"Encoding".to_vec(), encoding);
+                    metrics.insert(name.clone(), Metrics::from_dict(doc, &f));
                     fonts.set(name.clone().into_bytes(), Object::Dict(f));
                     substituted = Some(base.to_string());
                     name

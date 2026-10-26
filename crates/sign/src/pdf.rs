@@ -2421,11 +2421,12 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         let m = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict);
         (tag, Some(m))
     } else {
+        let turkish = (a.name && opts.graphic.is_none() && pdfcraft_fonts::has_turkish(name)) || lines.iter().any(|l| pdfcraft_fonts::has_turkish(l));
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        font.set(b"Encoding".to_vec(), if turkish { pdfcraft_fonts::turkish_encoding() } else { Object::name("WinAnsiEncoding") });
         fonts.set(b"Helv".to_vec(), Object::Dict(font));
         ("Helv".to_string(), None)
     };

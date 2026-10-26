@@ -999,7 +999,7 @@ impl Control {
     }
 
     fn inspect(&self, p: &Value) -> Value {
-        let query = p.get("query").and_then(Value::as_str).map(str::to_lowercase);
+        let query = p.get("query").and_then(Value::as_str).map(pdfcraft_render::text::fold_case);
         let role = p.get("role").and_then(Value::as_str).map(str::to_lowercase);
         let focused = p.get("focused").and_then(Value::as_bool);
         let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
@@ -1013,9 +1013,12 @@ impl Control {
                 stack.push((*c, depth + 1));
             }
             let w = widget(id, node, depth, s.focus == Some(id));
-            let text =
-                format!("{} {} {}", w["label"].as_str().unwrap_or(""), w["value"].as_str().unwrap_or(""), w["description"].as_str().unwrap_or(""))
-                    .to_lowercase();
+            let text = pdfcraft_render::text::fold_case(&format!(
+                "{} {} {}",
+                w["label"].as_str().unwrap_or(""),
+                w["value"].as_str().unwrap_or(""),
+                w["description"].as_str().unwrap_or("")
+            ));
             let role_ok = role.as_ref().is_none_or(|r| w["role"].as_str().is_some_and(|x| x.to_lowercase() == *r));
             let query_ok = query.as_ref().is_none_or(|q| text.contains(q.as_str()));
             let focus_ok = focused.is_none_or(|want| (s.focus == Some(id)) == want);
@@ -1091,11 +1094,13 @@ impl Control {
                 id
             }
             (None, Some(label)) => {
-                let want = label.to_lowercase();
+                let want = pdfcraft_render::text::fold_case(label);
                 let matches: Vec<NodeId> = s
                     .nodes
                     .iter()
-                    .filter(|(_, n)| n.supports_action(Action::Click) && !n.is_disabled() && n.label().is_some_and(|l| l.to_lowercase() == want))
+                    .filter(|(_, n)| {
+                        n.supports_action(Action::Click) && !n.is_disabled() && n.label().is_some_and(|l| pdfcraft_render::text::fold_case(l) == want)
+                    })
                     .map(|(id, _)| *id)
                     .collect();
                 match matches.as_slice() {

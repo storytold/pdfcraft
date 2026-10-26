@@ -344,12 +344,20 @@ fn traditional_chinese_ui_keeps_an_installed_hant_face_before_japanese() {
     installed_chinese_face_covers(theme::CjkPreference::TraditionalChinese, include_str!("../../src/i18n/zh-hant.tsv"), "Traditional");
 }
 
-/// Other languages keep the installed face last.
+/// Other languages keep the installed face last, and still cover CJK language names in Preferences.
 #[test]
 fn non_chinese_ui_keeps_the_installed_face_last() {
     let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
     for stack in defs.families.values() {
         assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
+    }
+    if defs.font_data.contains_key(theme::SYSTEM_CJK_FALLBACK) || !pdfcraft_fonts::ui_japanese_fonts().is_empty() {
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in families() {
+            for name in ["日本語", "简体中文", "繁體中文"] {
+                assert!(fonts.has_glyphs(&id, name), "{id:?} lacks {name}");
+            }
+        }
     }
 }
 

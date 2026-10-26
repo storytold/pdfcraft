@@ -138,19 +138,72 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
     lines
 }
 
-/// The WinAnsiEncoding (ISO 32000-2 Annex D) code for `c`, if the encoding has one.
+/// The byte code PdfCraft writes for `c` in the standard fonts: WinAnsiEncoding (ISO 32000-2
+/// Annex D) plus the six Turkish letters WinAnsi lacks (`Ğ` `ğ` `İ` `ı` `Ş` `ş`) in its six
+/// unassigned 0x7F–0x9F slots ([`turkish_encoding`] supplies the `/Differences` for them).
 ///
 /// Codes 0x80–0x9F come from the same table the text extractor decodes with, so encoding and
 /// decoding agree (Š š Ž ž Œ œ Ÿ ƒ † ‡ ˆ ˜ ‰ ‹ › as well as quotes, dashes, € and ™).
 pub fn win_ansi_byte(c: char) -> Option<u8> {
     match c {
         '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => u8::try_from(u32::from(c)).ok(),
+        'Ğ' => Some(0x7f),
+        'ğ' => Some(0x81),
+        'İ' => Some(0x8d),
+        'ı' => Some(0x8f),
+        'Ş' => Some(0x90),
+        'ş' => Some(0x9d),
         _ => {
             let high = encodings::WIN_ANSI.get(0x80..0xa0)?;
             let i = high.iter().position(|&u| u != 0 && u == u32::from(c))?;
             u8::try_from(0x80 + i).ok()
         }
     }
+}
+
+/// Whether `s` contains one of the six Turkish letters outside `WinAnsiEncoding`
+/// (`Ğ`, `ğ`, `İ`, `ı`, `Ş`, `ş`), so a standard-font resource needs [`turkish_encoding`].
+pub fn has_turkish(s: &str) -> bool {
+    s.chars().any(|c| matches!(c, 'Ğ' | 'ğ' | 'İ' | 'ı' | 'Ş' | 'ş'))
+}
+
+/// Whether `bytes` (encoded by [`win_ansi`]) contains one of the six Turkish codes
+/// (`0x7F`, `0x81`, `0x8D`, `0x8F`, `0x90`, `0x9D`).
+pub fn has_turkish_bytes(bytes: &[u8]) -> bool {
+    bytes.iter().any(|b| matches!(b, 0x7f | 0x81 | 0x8d | 0x8f | 0x90 | 0x9d))
+}
+
+/// `/Encoding` dictionary for a standard font that draws Turkish text: `WinAnsiEncoding` with
+/// its six unassigned 0x7F–0x9F codes mapped to `/Gbreve`, `/gbreve`, `/Idotaccent`,
+/// `/dotlessi`, `/Scedilla` and `/scedilla`.
+pub fn turkish_encoding() -> pdfcraft_cos::Object {
+    let mut enc = pdfcraft_cos::Dict::new();
+    enc.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Encoding"));
+    enc.set(b"BaseEncoding".to_vec(), pdfcraft_cos::Object::name("WinAnsiEncoding"));
+    enc.set(
+        b"Differences".to_vec(),
+        pdfcraft_cos::Object::Array(vec![
+            pdfcraft_cos::Object::Int(0x7f),
+            pdfcraft_cos::Object::name("Gbreve"),
+            pdfcraft_cos::Object::Int(0x81),
+            pdfcraft_cos::Object::name("gbreve"),
+            pdfcraft_cos::Object::Int(0x8d),
+            pdfcraft_cos::Object::name("Idotaccent"),
+            pdfcraft_cos::Object::Int(0x8f),
+            pdfcraft_cos::Object::name("dotlessi"),
+            pdfcraft_cos::Object::Int(0x90),
+            pdfcraft_cos::Object::name("Scedilla"),
+            pdfcraft_cos::Object::Int(0x9d),
+            pdfcraft_cos::Object::name("scedilla"),
+        ]),
+    );
+    pdfcraft_cos::Object::Dict(enc)
+}
+
+/// `/Encoding` for a standard font that draws `s`: [`turkish_encoding`] when `s` contains one
+/// of the six Turkish letters outside `WinAnsiEncoding`, else `/WinAnsiEncoding`.
+pub fn standard_encoding(s: &str) -> pdfcraft_cos::Object {
+    if has_turkish(s) { turkish_encoding() } else { pdfcraft_cos::Object::name("WinAnsiEncoding") }
 }
 
 /// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); tabs become spaces and unmappable
@@ -458,6 +511,44 @@ mod tests {
         assert_eq!(cjk_width("A", 10.0), helvetica_width("A", 10.0));
         let lines = wrap_with("日本語のテキストは文字単位で折り返されます", 10.0, 45.0, cjk_width);
         assert!(lines.len() > 3 && lines.iter().all(|l| cjk_width(l, 10.0) <= 45.0), "{lines:?}");
+    }
+
+    #[test]
+    fn turkish_letters_encode_measure_and_decode_through_standard_encoding() {
+        assert!(encodings::NAMES.is_sorted_by_key(|(name, _)| *name));
+        let turkish = "Pijamalı hasta, yağız şoföre çabucak güvendi. PİJAMALI HASTA, YAĞIZ ŞOFÖRE ÇABUCAK GÜVENDİ.";
+        assert!(has_turkish(turkish));
+        assert!(!has_turkish("Café — 5€"));
+        assert_eq!(first_non_win_ansi(turkish), None);
+        assert_eq!(first_undrawable(turkish), None);
+        let bytes = win_ansi(turkish);
+        assert!(has_turkish_bytes(&bytes));
+        assert!(!bytes.contains(&b'?'));
+
+        let doc = pdfcraft_cos::Document::new_empty();
+        let mut font = pdfcraft_cos::Dict::new();
+        font.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Font"));
+        font.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::name("Helvetica"));
+        font.set(b"Encoding".to_vec(), standard_encoding(turkish));
+        let m = pdf::Metrics::from_dict(&doc, &font);
+        assert_eq!(m.decode(&bytes), turkish);
+        assert_eq!(m.encode(turkish).as_deref(), Some(bytes.as_slice()));
+        for ch in ['Ğ', 'ğ', 'İ', 'ı', 'Ş', 'ş', 'Ç', 'ç', 'Ö', 'ö', 'Ü', 'ü'] {
+            let b = win_ansi_byte(ch).expect("Turkish letter has a code");
+            assert!(Std14::Helvetica.width(b) > 0.0, "{ch:?} has width in Helvetica");
+            assert!((m.width(u32::from(b)) * 1000.0 - Std14::Helvetica.width(b)).abs() < 1e-9);
+        }
+        // In plain /WinAnsiEncoding (without Turkish /Differences), the six unassigned codes stay undefined (width 0).
+        let mut plain_font = pdfcraft_cos::Dict::new();
+        plain_font.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Font"));
+        plain_font.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Type1"));
+        plain_font.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::name("Helvetica"));
+        plain_font.set(b"Encoding".to_vec(), pdfcraft_cos::Object::name("WinAnsiEncoding"));
+        let plain_m = pdf::Metrics::from_dict(&doc, &plain_font);
+        for b in [0x7f_u32, 0x81, 0x8d, 0x8f, 0x90, 0x9d] {
+            assert_eq!(plain_m.width(b), 0.0, "unassigned WinAnsi code {b:#x} must stay 0 wide without /Differences");
+        }
     }
 
     /// Wrapping measures each word and character a bounded number of times, however many fit on a line.

@@ -2210,8 +2210,36 @@ impl Interp<'_> {
                 Val::Str(s.chars().skip(len.saturating_sub(k)).collect())
             }
             "len" => Val::Num(self.arg_str(args, 0)?.chars().count() as f64),
-            "lower" => Val::Str(self.arg_str(args, 0)?.to_lowercase()),
-            "upper" => Val::Str(self.arg_str(args, 0)?.to_uppercase()),
+            "lower" => {
+                let s = self.arg_str(args, 0)?;
+                let turkish = s.chars().any(crate::is_turkish_char);
+                Val::Str(if turkish {
+                    s.chars()
+                        .flat_map(|c| match c {
+                            'İ' => 'i'.to_lowercase(),
+                            'I' => 'ı'.to_lowercase(),
+                            _ => c.to_lowercase(),
+                        })
+                        .collect()
+                } else {
+                    s.to_lowercase()
+                })
+            }
+            "upper" => {
+                let s = self.arg_str(args, 0)?;
+                let turkish = s.chars().any(crate::is_turkish_char);
+                Val::Str(if turkish {
+                    s.chars()
+                        .flat_map(|c| match c {
+                            'i' => 'İ'.to_uppercase(),
+                            'ı' => 'I'.to_uppercase(),
+                            _ => c.to_uppercase(),
+                        })
+                        .collect()
+                } else {
+                    s.to_uppercase()
+                })
+            }
             "ltrim" => Val::Str(self.arg_str(args, 0)?.trim_start().to_string()),
             "rtrim" => Val::Str(self.arg_str(args, 0)?.trim_end().to_string()),
             "space" => {

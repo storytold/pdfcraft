@@ -366,7 +366,7 @@ fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Optio
         }
         faces.push((name.to_vec(), base));
     }
-    add_page_resources(doc, page, opacity, &faces)
+    add_page_resources(doc, page, opacity, &faces, content)
 }
 
 /// The fonts a page draws with: its own resources' or the ones it inherits.
@@ -388,7 +388,8 @@ fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base: &str) -> 
                 && d.name(b"Type") == Some(b"Font")
                 && d.name(b"Subtype") == Some(b"Type1")
                 && d.name(b"BaseFont") == Some(base.as_bytes())
-                && d.name(b"Encoding") == Some(b"WinAnsiEncoding")
+                && (d.name(b"Encoding") == Some(b"WinAnsiEncoding")
+                    || d.get(b"Encoding").is_some_and(|e| *doc.resolve(e) == pdfcraft_fonts::turkish_encoding()))
         }),
     };
     if usable(preferred) {
@@ -399,15 +400,31 @@ fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base: &str) -> 
 
 /// Add the standard `faces` (resource name, base font) and an opacity state to the page's own
 /// resources.
-fn add_page_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, faces: &[(Vec<u8>, &str)]) -> Result<(), EditError> {
+fn add_page_resources(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    opacity: Option<f64>,
+    faces: &[(Vec<u8>, &str)],
+    content: Option<&[u8]>,
+) -> Result<(), EditError> {
     let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, base) in faces {
+        let encoding = fonts
+            .get(name.as_slice())
+            .and_then(|f| doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict)))
+            .unwrap_or_else(|| {
+                if content.is_some_and(pdfcraft_fonts::has_turkish_bytes) {
+                    pdfcraft_fonts::turkish_encoding()
+                } else {
+                    Object::name("WinAnsiEncoding")
+                }
+            });
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         font.set(b"BaseFont".to_vec(), Object::name(base));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        font.set(b"Encoding".to_vec(), encoding);
         fonts.set(name.clone(), Object::Dict(font));
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
@@ -841,9 +858,8 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         let mut content = begin(MarkKind::HeaderFooter, "Header", page.view_matrix(doc)).into_bytes();
         content.extend(body);
         content.extend_from_slice(END.as_bytes());
-        // A name already there is that very font (see `free_font_name`): left as it is.
-        if !page_fonts(doc, page).contains(resource.as_bytes()) {
-            add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
+        if !page_fonts(doc, page).contains(resource.as_bytes()) || pdfcraft_fonts::has_turkish_bytes(&content) {
+            add_page_resources(doc, page, None, &[(resource.into_bytes(), base)], Some(&content))?;
         }
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
@@ -927,7 +943,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
-        add_resources(doc, &page, Some(opacity), None)?;
+        add_resources(doc, &page, Some(opacity), Some(&content))?;
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::Watermark, content, wm.behind)?;
     }

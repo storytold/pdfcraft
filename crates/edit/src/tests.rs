@@ -6287,6 +6287,73 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
 
+#[test]
+fn turkish_text_round_trips_through_added_text_watermarks_and_paragraph_edits() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET\nBT /F1 12 Tf 72 650 Td (Second block) Tj ET");
+    let tr_para = "Pijamalı hasta, yağız şoföre çabucak güvendi. İSTANBUL IĞDIR";
+    text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some(tr_para),
+        &BlockStyle {
+            ranges: vec![text::RangeStyle {
+                range: 0..tr_para.len(),
+                family: Some((Family::Courier, false, false)),
+                resource: None,
+                size: None,
+                color: None,
+                underline: None,
+                char_spacing: None,
+                scale: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // A later ASCII-only range edit reusing PCRangeCourier must keep Turkish encoding on the shared font resource.
+    text::rewrite_block(
+        &mut doc,
+        0,
+        1,
+        Some("ASCII range"),
+        &BlockStyle {
+            ranges: vec![text::RangeStyle {
+                range: 0..11,
+                family: Some((Family::Courier, false, false)),
+                resource: None,
+                size: None,
+                color: None,
+                underline: None,
+                char_spacing: None,
+                scale: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let idx = add_content(
+        &mut doc,
+        0,
+        &Content::Text(AddedText {
+            rect: [72.0, 560.0, 372.0, 600.0],
+            text: "GÜVENLİ İMZA & ŞİFRE".into(),
+            bold: true,
+            size: 14.0,
+            ..AddedText::default()
+        }),
+    )
+    .unwrap();
+    assert_eq!(idx, 0);
+    add_watermark(&mut doc, &[0], &Watermark { text: "ÖRNEK BELGE — İŞLENMİŞTİR".into(), ..Watermark::default() }, false).unwrap();
+    let reopened = reopen(&doc);
+    let blocks = text::text_blocks(&reopened, 0).unwrap();
+    assert!(blocks.iter().any(|b| b.text.contains(tr_para)), "{blocks:?}");
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "GÜVENLİ İMZA & ŞİFRE"), "{lines:?}");
+    assert!(lines.iter().any(|l| l.text == "ÖRNEK BELGE — İŞLENMİŞTİR"), "{lines:?}");
+}
+
 /// #2512: a session's drafts are laid out from the document as it was opened, never from each
 /// other, and its commit writes what a one-shot rewrite writes, whatever was laid out before.
 #[test]

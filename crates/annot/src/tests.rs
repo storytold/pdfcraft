@@ -1552,6 +1552,24 @@ fn free_text_properties_show_legacy_or_absent_border_width() {
     assert_eq!(props(&doc, 0, index).unwrap().width, Some(4.0));
 }
 
+#[test]
+fn turkish_text_boxes_and_stamps_draw_clean_appearances_without_undrawn_marks() {
+    let mut doc = fixture();
+    let mut tb = new(0, Shape::TextBox { rect: [100.0, 100.0, 320.0, 160.0], font_size: 12.0 });
+    tb.contents = "Pijamalı hasta, yağız şoföre çabucak güvendi. İSTANBUL IĞDIR".into();
+    let idx = add_annotation(&mut doc, &tb, &meta("İbrahim Şahin")).unwrap();
+    let saved = reopen(&doc);
+    let annot = &list(&saved, 0)[idx];
+    assert_eq!(pdfcraft_fonts::undrawn_mark(annot), None);
+    let ap_ref = annot.get(b"AP").and_then(Object::as_dict).and_then(|d| d.get(b"N")).and_then(Object::as_ref).unwrap();
+    let Object::Stream(stream) = &*saved.get(ap_ref) else { panic!("expected stream") };
+    let res = saved.resolve(stream.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let fonts = saved.resolve(res.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let helv = saved.resolve(fonts.get(b"Helv").unwrap()).as_dict().cloned().unwrap();
+    let m = pdfcraft_fonts::pdf::Metrics::from_dict(&saved, &helv);
+    assert_eq!(m.decode(&pdfcraft_fonts::win_ansi("İSTANBUL IĞDIR ŞşĞğ")), "İSTANBUL IĞDIR ŞşĞğ");
+}
+
 /// A line's ends and the corners of connected lines and polygons can be moved after drawing:
 /// the points change, `/Rect` follows them (with room for an arrowhead), and the appearance is
 /// drawn anew. A line needs two ends far enough apart; a locked comment keeps its shape.

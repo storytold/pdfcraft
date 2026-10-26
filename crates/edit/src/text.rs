@@ -2552,11 +2552,17 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(base.to_string());
+                let encoding = fonts_res
+                    .get(substitute_name.as_bytes())
+                    .and_then(|f| {
+                        doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict))
+                    })
+                    .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(&fallback_shown));
                 let mut f = Dict::new();
                 f.set(b"Type".to_vec(), Object::name("Font"));
                 f.set(b"Subtype".to_vec(), Object::name("Type1"));
                 f.set(b"BaseFont".to_vec(), Object::name(base));
-                f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                f.set(b"Encoding".to_vec(), encoding);
                 fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
             }
         }
@@ -3095,14 +3101,18 @@ fn rewrite_block_from(
         if flat.chars().zip(back.chars()).any(|(a, c)| c == '?' && a != '?') {
             return Err(EditError::Invalid(format!("\"{flat}\" has characters neither {} nor {base} can show", b.base_font)));
         }
+        // Named after its face, as the line and region rewrites name theirs: one name for every
+        // stand-in would repoint the paragraphs set in an earlier one at this face (#4280).
+        let name = format!("PCEd{}", base.replace('-', ""));
+        let encoding = fonts_res
+            .get(name.as_bytes())
+            .and_then(|f| doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict)))
+            .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(&flat));
         let mut f = Dict::new();
         f.set(b"Type".to_vec(), Object::name("Font"));
         f.set(b"Subtype".to_vec(), Object::name("Type1"));
         f.set(b"BaseFont".to_vec(), Object::name(base));
-        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        // Named after its face, as the line and region rewrites name theirs: one name for every
-        // stand-in would repoint the paragraphs set in an earlier one at this face (#4280).
-        let name = format!("PCEd{}", base.replace('-', ""));
+        f.set(b"Encoding".to_vec(), encoding);
         fonts_res.set(name.clone().into_bytes(), Object::Dict(f));
         if style.family.is_none() {
             substituted = Some(base.to_string());

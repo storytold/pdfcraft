@@ -875,7 +875,7 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
             font.set(b"Subtype".to_vec(), Object::name("Type1"));
             font.set(b"BaseFont".to_vec(), Object::name(base));
             if t.family != Family::Courier || !t.text.is_ascii() {
-                font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                font.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(&t.text));
             }
             let mut fonts = Dict::new();
             fonts.set(name.clone().into_bytes(), Object::Dict(font));
@@ -1174,7 +1174,15 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     for (k, v) in res.iter() {
         let mut sub = pres.get(k).map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()).unwrap_or_default();
         for (n2, o) in v.as_dict().into_iter().flat_map(|d| d.iter()) {
-            sub.set(n2.clone(), o.clone());
+            let keep_existing_encoding = k == b"Font"
+                && sub
+                    .get(n2)
+                    .and_then(|e| doc.resolve(e).as_dict().and_then(|d| d.get(b"Encoding")).map(|e| doc.resolve(e).as_dict().is_some()))
+                    .unwrap_or(false)
+                && o.as_dict().and_then(|d| d.get(b"Encoding")).is_some_and(|e| e.as_dict().is_none());
+            if !keep_existing_encoding {
+                sub.set(n2.clone(), o.clone());
+            }
         }
         pres.set(k.clone(), Object::Dict(sub));
     }

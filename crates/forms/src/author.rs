@@ -157,6 +157,70 @@ pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
     Ok(r)
 }
 
+/// Upgrades any plain `/WinAnsiEncoding` standard Type 1 fonts in the AcroForm's `/DR` dictionary
+/// to the Turkish `/Differences` encoding so `/DA` fonts (`Helv`, `TiRo`, `Cour`) can encode
+/// Turkish field values and captions both in [`appearance`] and in viewers that regenerate from `/DR`.
+pub(crate) fn ensure_turkish_dr(doc: &mut Document) {
+    let Some(root) = doc.root() else { return };
+    let Some(af_entry) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) else { return };
+    let af_dict = doc.resolve(&af_entry).as_dict().cloned().unwrap_or_default();
+    let Some(dr_entry) = af_dict.get(b"DR").cloned() else { return };
+    let mut dr = doc.resolve(&dr_entry).as_dict().cloned().unwrap_or_default();
+    let Some(fonts_entry) = dr.get(b"Font").cloned() else { return };
+    let mut fonts = doc.resolve(&fonts_entry).as_dict().cloned().unwrap_or_default();
+    const STANDARD_TEXT_FONTS: &[&[u8]] = &[
+        b"Helvetica",
+        b"Helvetica-Bold",
+        b"Helvetica-Oblique",
+        b"Helvetica-BoldOblique",
+        b"Times-Roman",
+        b"Times-Bold",
+        b"Times-Italic",
+        b"Times-BoldItalic",
+        b"Courier",
+        b"Courier-Bold",
+        b"Courier-Oblique",
+        b"Courier-BoldOblique",
+    ];
+    let mut changed = false;
+    for (name, font_obj) in fonts.clone().iter() {
+        let Some(mut fd) = doc.resolve(font_obj).as_dict().cloned() else { continue };
+        if fd.name(b"Subtype") == Some(b"Type1")
+            && fd.name(b"Encoding") == Some(b"WinAnsiEncoding")
+            && !fd.contains(b"FontDescriptor")
+            && !fd.contains(b"Widths")
+            && fd.name(b"BaseFont").is_some_and(|b| STANDARD_TEXT_FONTS.contains(&b))
+        {
+            fd.set(b"Encoding".to_vec(), pdfcraft_fonts::turkish_encoding());
+            if let Some(r) = font_obj.as_ref() {
+                doc.set(r, Object::Dict(fd));
+            } else {
+                fonts.set(name.clone(), Object::Dict(fd));
+            }
+            changed = true;
+        }
+    }
+    if !changed {
+        return;
+    }
+    if let Some(r) = fonts_entry.as_ref() {
+        doc.set(r, Object::Dict(fonts));
+    } else {
+        dr.set(b"Font".to_vec(), Object::Dict(fonts));
+        if let Some(r) = dr_entry.as_ref() {
+            doc.set(r, Object::Dict(dr));
+        } else {
+            let mut af = af_dict;
+            af.set(b"DR".to_vec(), Object::Dict(dr));
+            if let Some(r) = af_entry.as_ref() {
+                doc.set(r, Object::Dict(af));
+            } else {
+                let _ = doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)));
+            }
+        }
+    }
+}
+
 /// The form dictionary's `/DR` and its `/Font` dictionary, resolved (empty where missing).
 fn form_fonts(doc: &Document, af: &Dict) -> (Dict, Dict) {
     let dr = af.get(b"DR").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
@@ -988,6 +1052,12 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// `FormError::NoSuchField` when no field is named `name`.
 fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    if f.value.iter().any(|s| pdfcraft_fonts::has_turkish(s))
+        || f.options.iter().any(|(_, d)| pdfcraft_fonts::has_turkish(d))
+        || f.widgets.iter().filter_map(|w| w.caption.as_deref()).any(pdfcraft_fonts::has_turkish)
+    {
+        ensure_turkish_dr(doc);
+    }
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {

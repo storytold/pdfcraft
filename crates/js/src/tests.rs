@@ -1509,6 +1509,21 @@ mod session {
         let o = s.run(slow);
         assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
     }
+
+    #[test]
+    fn turkish_dotted_and_dotless_i_case_convert_in_printx_and_formcalc() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        assert_eq!(
+            s.run(script("util.printx('>*', 'şişli ığdır')", false, "form1[0].page1[0].go[0]", "click")).result.as_deref(),
+            Some("ŞİŞLİ IĞDIR")
+        );
+        assert_eq!(
+            s.run(script("util.printx('<*', 'ŞİŞLİ IĞDIR')", false, "form1[0].page1[0].go[0]", "click")).result.as_deref(),
+            Some("şişli ığdır")
+        );
+        assert_eq!(s.run(script("Upper(\"şişli ığdır\")", true, "form1[0].page1[0].go[0]", "click")).result.as_deref(), Some("ŞİŞLİ IĞDIR"));
+        assert_eq!(s.run(script("Lower(\"ŞİŞLİ IĞDIR\")", true, "form1[0].page1[0].go[0]", "click")).result.as_deref(), Some("şişli ığdır"));
+    }
 }
 
 #[test]
