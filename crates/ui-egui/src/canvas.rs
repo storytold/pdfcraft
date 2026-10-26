@@ -1656,7 +1656,6 @@ fn draw_pages(
         }
     }
     let origin = resp_rect.min - vec2(0.0, y_shift);
-    out.row_on_screen = shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
@@ -1843,6 +1842,8 @@ fn draw_pages(
     if view.continuous {
         view.current = current;
     }
+    // The row as it is now: in continuous view the current page may have changed above.
+    out.row_on_screen = shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     resp.context_menu(|ui| {
         let is_crop_over_image = tool == QuickTool::EditText
             && view.image_selection.clone().is_some_and(|sel| {
