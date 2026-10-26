@@ -464,6 +464,216 @@
 	Planned	מתוכנן
 	Planned for milestone	מתוכנן לאבן הדרך
 	open to see what it will include	פתח כדי לראות מה ייכלל
+	Optional: needs an AI provider you configure	אופציונלי: נדרש ספק AI שתגדיר
+	Coming in milestone	מתוכנן לאבן הדרך
+	Items marked Ready work today.	פריטים המסומנים כמוכנים זמינים כבר עכשיו.
+	Preview	תצוגה מקדימה
+	Edit fields	עריכת שדות
+	Try the form as people filling it in will see it	תצוגת הטופס כפי שיראו אותו ממלאים
+	Redact all	השחרת הכול
+	Clear all	ניקוי הכול
+	Rotate page	סיבוב עמוד
+	Delete page	מחיקת עמוד
+	Move page	העברת עמוד
+	Move pages	העברת עמודים
+	Duplicate page	שכפול עמוד
+	Replace page	החלפת עמוד
+	Replace pages	החלפת עמודים
+	Crop page	חיתוך עמוד
+	Cancel	ביטול
+	Don't save	לא לשמור
+	Apply	החלה
+	Run	הפעלה
+	Clear	ניקוי
+	Sanitize	ניקוי מידע מוסתר
+	Mark all	סימון הכול
+	Save changes to “{name}” before closing?	לשמור את השינויים ב־“{name}” לפני הסגירה?
+	Your changes will be lost if you don't save them.	השינויים יאבדו אם לא תשמור אותם.
+	Password required	נדרשת סיסמה
+	“{name}” is protected. Enter a password to open it.	“{name}” מוגן. הזן סיסמה כדי לפתוח אותו.
+	Password	סיסמה
+	Incorrect password. Try again.	הסיסמה שגויה. נסה שוב.
+	Recognize Text	זיהוי טקסט
+	Password protection will be applied when you save	ההגנה באמצעות סיסמה תחול בעת השמירה
+	Saved the print-ready PDF to {path}	קובץ ה־PDF המוכן להדפסה נשמר ב־{path}
+	Could not save: {e}	לא ניתן לשמור: {e}
+	Earlier in tab order	מוקדם יותר בסדר המעבר בין השדות
+	Later in tab order	מאוחר יותר בסדר המעבר בין השדות
+	Calculation order	סדר החישוב
+	Fix order	תיקון הסדר
+	Move only what must move, so every field calculates after the fields it reads.	יש להזיז רק את מה שנדרש, כך שכל שדה יחושב אחרי השדות שעליהם הוא מסתמך.
+	Earlier in calculation order	מוקדם יותר בסדר החישוב
+	Later in calculation order	מאוחר יותר בסדר החישוב
+	Too early	מוקדם מדי
+	Reads {name}, which calculates later, so it shows an old value.	השדה קורא את {name}, שמחושב אחריו, ולכן מוצג ערך ישן.
+	Loop	לולאה
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	קורא את {names}, שקוראים בחזרה את ערכו. אי אפשר לתקן לולאה באמצעות שינוי סדר; יש לשנות אחת מהנוסחאות.
+	Not in order	לא בסדר החישוב
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	השדה חסר בסדר החישוב שנשמר ב־PDF; מציגי PDF אחרים עלולים שלא לחשב אותו.
+	Back to Prepare a form	חזרה להכנת טופס
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	עדיין אין בטופס שדה שמחושב. הגדר חישוב בכרטיסייה „חישוב” במאפייני השדה כדי שיופיע כאן.
+	{names} and {last}	{names} וגם {last}
+	{field} reads no other field	{field} אינו קורא ערך משדות אחרים
+	{field} reads {fields}	{field} קורא את {fields}
+	No field reads it	אף שדה אינו קורא אותו
+	The order saved in the PDF needs tidying	יש לסדר את סדר החישוב שנשמר ב־PDF
+	Moves only what must move	מזיז רק את מה שחייבים להזיז
+	Every field calculates after the fields it reads.	כל שדה מחושב לאחר השדות שעליהם הוא מסתמך.
+	Every field outside a loop calculates after the fields it reads.	כל שדה שמחוץ ללולאה מחושב לאחר השדות שעליהם הוא מסתמך.
+	{field} reads its own value	{field} קורא את הערך של עצמו
+	{fields} read each other	{fields} קוראים זה את זה
+	No order can fix a loop. Change one of the formulas.	אי אפשר לתקן לולאה באמצעות שינוי סדר. יש לשנות אחת מהנוסחאות.
+	Edit {field}'s formula	עריכת הנוסחה של {field}
+	Order · top calculates first	סדר · העליון מחושב ראשון
+	Script	סקריפט
+	Links on page	קישורים בעמוד
+	Show on the page which fields each field reads	הצגת השדות שכל שדה מסתמך עליהם בעמוד
+	Drag a field to move it, or select it and press {up} or {down}.	גרור שדה כדי להזיז אותו, או בחר אותו והקש {up} או {down}.
+	From:	מאת:
+	To:	אל:
+	High Resolution	רזולוציה גבוהה
+	Print	הדפסה
+	Verify to see what the document needs.	בצע בדיקה כדי לראות מה נדרש במסמך.
+	Set Page Boxes	הגדרת תיבות עמוד
+	Signature panel	חלונית חתימה
+	{month} {day}, {y}	{day} ב{month} {y}
+	The document's security settings don't allow filling in form fields	הגדרות האבטחה של המסמך אינן מאפשרות מילוי שדות טופס
+	{name} is read-only	{name} הוא לקריאה בלבד
+	{name} has no action	ל־{name} לא מוגדרת פעולה
+	Previous month	החודש הקודם
+	Next month	החודש הבא
+	January	ינואר
+	February	פברואר
+	March	מרץ
+	April	אפריל
+	May	מאי
+	June	יוני
+	July	יולי
+	August	אוגוסט
+	September	ספטמבר
+	October	אוקטובר
+	November	נובמבר
+	December	דצמבר
+	Done	בוצע
+	This certificate is in your list of trusted certificates.	האישור מופיע ברשימת האישורים המהימנים שלך.
+	This certificate is trusted through a certificate above it in the chain.	האישור מהימן בזכות אישור שנמצא מעליו בשרשרת.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	האישור אינו מהימן. חתימות שנוצרו באמצעותו יוצגו כזהות לא ידועה.
+	Add to Trusted Certificates	הוספה לאישורים מהימנים
+	Export…	ייצוא…
+	PDF Optimizer	מיטוב PDF
+	Discard Objects	השלכת אובייקטים
+	Discard User Data	הסרת נתוני משתמש
+	Clean Up	ניקוי
+	Color Images	תמונות צבעוניות
+	Grayscale Images	תמונות בגווני אפור
+	Bicubic downsampling to	הקטנה באמצעות דגימה דו־קובית ל־
+	for images above	לתמונות שמעל
+	Compression	דחיסה
+	ZIP	ZIP
+	Retain existing	השארת הקיים
+	Minimum	מינימום
+	Low	נמוכה
+	High	גבוהה
+	Maximum	מקסימום
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	כל תמונה נמדדת בגודל שבו היא מוצגת בעמודים; תמונה מוחלפת רק אם התוצאה קטנה יותר.
+	Discard all links, actions and JavaScript	הסרת כל הקישורים, הפעולות וקוד JavaScript
+	Discard alternate images	הסרת תמונות חלופיות
+	Discard embedded page thumbnails	הסרת תמונות ממוזערות מוטמעות של עמודים
+	Discard document tags	הסרת תגיות המסמך
+	Discard embedded print settings	הסרת הגדרות הדפסה מוטמעות
+	Discard bookmarks	הסרת סימניות
+	Discard hidden layer content	הסרת תוכן של שכבות מוסתרות
+	Discard all comments, forms and multimedia	הסרת כל ההערות, הטפסים ותוכן המולטימדיה
+	Discard document information and metadata	הסרת פרטי המסמך והמטא־נתונים
+	Discard all object data (file attachments)	הסרת כל נתוני האובייקטים (קבצים מצורפים)
+	Discard private data of other applications	הסרת נתונים פרטיים של יישומים אחרים
+	Discard hidden text	הסרת טקסט מוסתר
+	Use Flate to encode streams that are not encoded	שימוש ב־Flate לקידוד זרמים שאינם מקודדים
+	In streams that use LZW encoding, use Flate instead	שימוש ב־Flate במקום קידוד LZW בזרמים המתאימים
+	Remove invalid links and bookmarks	הסרת קישורים וסימניות לא תקינים
+	Remove unreferenced named destinations	הסרת יעדים בעלי שם שאין אליהם הפניות
+	Compress document structure (object streams)	דחיסת מבנה המסמך (זרמי אובייקטים)
+	Remove unused objects and merge identical ones	הסרת אובייקטים שאינם בשימוש ומיזוג אובייקטים זהים
+	Audit space usage…	ניתוח השימוש בנפח…
+	Space Audit	ניתוח נפח
+	What takes up the space in this file, by kind of content.	פירוט הנפח שתופס כל סוג תוכן בקובץ.
+	Bytes	בתים
+	Content Streams	זרמי תוכן
+	X Object Forms	טופסי XObject
+	Structure Info	מידע על המבנה
+	Thumbnails	תמונות ממוזערות
+	Named Destinations	יעדים בעלי שם
+	Color Spaces	מרחבי צבע
+	Shadings	הצללות
+	Patterns (graphics objects)	תבניות (אובייקטים גרפיים)
+	Extended Graphics States	מצבי גרפיקה מורחבים
+	Embedded Files	קבצים מוטמעים
+	Document Overhead	תקורת מסמך
+	Total	סה״כ
+	Text Field Properties	מאפייני שדה טקסט
+	Check Box Properties	מאפייני תיבת סימון
+	Radio Button Properties	מאפייני לחצן בחירה
+	Dropdown Properties	מאפייני רשימה נפתחת
+	List Box Properties	מאפייני תיבת רשימה
+	Button Properties	מאפייני לחצן
+	Digital Signature Properties	מאפייני חתימה דיגיטלית
+	Position	מיקום
+	Options	אפשרויות
+	Validate	אימות
+	Calculate	חישוב
+	Actions	פעולות
+	This field is locked. Unlock it to change its properties.	השדה נעול. בטל את נעילתו כדי לשנות את המאפיינים.
+	Tooltip:	תיאור כלי:
+	Common Properties	מאפיינים משותפים
+	Read Only	לקריאה בלבד
+	Required	נדרש
+	Font Size:	גודל גופן:
+	Auto	אוטומטי
+	Text Color:	צבע הטקסט:
+	Borders and Colors	גבולות וצבעים
+	Border Color:	צבע הגבול:
+	Fill Color:	צבע המילוי:
+	No color	ללא צבע
+	Beveled	משופע
+	Left:	שמאל:
+	Bottom:	למטה:
+	Width:	רוחב:
+	Height:	גובה:
+	Rotation:	סיבוב:
+	Points from the page's bottom-left corner.	נקודות מהפינה השמאלית התחתונה של העמוד.
+	Alignment:	יישור:
+	Default Value:	ערך ברירת מחדל:
+	Multi-line	רב־שורי
+	Scroll long text	גלילה בטקסט ארוך
+	Allow Rich Text Formatting	אפשר עיצוב טקסט עשיר
+	Limit of	מגבלה של
+	characters	תווים
+	Field is used for file selection	השדה משמש לבחירת קובץ
+	Check spelling	בדיקת איות
+	Comb of	תאים למילוי של
+	Export Value: {on}	ערך ייצוא: {on}
+	Check box is checked by default	תיבת הסימון מסומנת כברירת מחדל
+	Button is checked by default	הלחצן מסומן כברירת מחדל
+	Buttons with the same name and value are selected in unison	לחצנים בעלי אותו שם ואותו ערך נבחרים יחד
+	Item:	פריט:
+	Item List	רשימת פריטים
+	Up	למעלה
+	Delete {o}	מחיקת {o}
+	Add the choices people pick from.	הוספת האפשרויות שהמשתמשים יוכלו לבחור מהן.
+	Default:	ברירת מחדל:
+	(none)	(ללא)
+	Sort items	מיון פריטים
+	Allow user to enter custom text	אפשר למשתמש להזין טקסט מותאם אישית
+	Multiple selection	בחירה מרובה
+	Commit selected value immediately	אישור הערך שנבחר באופן מיידי
+	Number	מספר
+	Percentage	אחוז
+	Time	שעה
+	Special	מיוחד
+	Select format category:	בחירת קטגוריית תבנית:
+	The value is shown as typed.	הערך מוצג כפי שהוקלד.
+	Decimal places:	מספר ספרות אחרי הנקודה העשרונית:
+	Separator style:	סגנון מפרידים:
 	Mouse Exit	יציאה עם העכבר
 	On Focus	בעת קבלת מיקוד
 	On Blur	בעת איבוד מיקוד
