@@ -4968,6 +4968,11 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
                         if find.focus {
                             r.request_focus();
+                            let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+                            let char_count = find.query.chars().count();
+                            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(char_count));
+                            state.cursor.set_char_range(Some(all));
+                            state.store(ui.ctx(), r.id);
                             find.focus = false;
                         }
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

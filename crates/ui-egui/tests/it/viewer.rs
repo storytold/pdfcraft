@@ -336,6 +336,122 @@ fn scroll_bar_track_click_and_drag_end_automatic_search_following() {
     h.run_steps(2);
 }
 
+/// #4534: when returning to the find bar with a focus request, its existing query is selected
+/// so typing replaces it instead of appending to the old query.
+#[test]
+fn find_field_selects_existing_query_when_refocused() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    let find_id = egui::Id::unique("find-input");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(find_id), "find field is focused initially");
+
+    h.state_mut().views[0].find.as_mut().unwrap().query = "page".into();
+    h.run_steps(2);
+
+    // Focus lost (user navigated elsewhere).
+    h.ctx.memory_mut(|m| m.surrender_focus(find_id));
+    h.run_steps(2);
+    assert_ne!(h.ctx.memory(|m| m.focused()), Some(find_id), "find field lost focus");
+
+    // Refocus find bar via open_find.
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(find_id), "find field regained focus");
+
+    let state = egui::TextEdit::load_state(&h.ctx, find_id).expect("find field state");
+    let range = state.cursor.char_range().expect("cursor range selected");
+    let ends = [range.primary.index, range.secondary.index];
+    assert!(
+        ends.contains(&egui::text::CCursor::new(0).index) && ends.contains(&egui::text::CCursor::new(4).index),
+        "entire existing query 'page' is selected, got {:?}",
+        ends
+    );
+
+    // Typing replaces the entire query rather than appending.
+    h.event(egui::Event::Text("cat".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().query, "cat", "typing replaces the entire query");
+
+    // Subsequent typing appends normally at the caret.
+    h.event(egui::Event::Text("s".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().query, "cats", "subsequent typing appends at cursor");
+
+    // Focusing without a find.focus request (e.g. direct focus without Find command) does not select all text.
+    h.ctx.memory_mut(|m| m.surrender_focus(find_id));
+    h.run_steps(2);
+    h.ctx.memory_mut(|m| m.request_focus(find_id));
+    h.run_steps(2);
+    let state = egui::TextEdit::load_state(&h.ctx, find_id).expect("find field state");
+    let is_all_selected = state.cursor.char_range().is_some_and(|r| {
+        let ends = [r.primary.index, r.secondary.index];
+        ends.contains(&egui::text::CCursor::new(0).index) && ends.contains(&egui::text::CCursor::new(4).index)
+    });
+    assert!(!is_all_selected, "focusing without find.focus does not select all text");
+}
+
+/// #4534: when returning to the advanced search panel with a focus request, its existing query
+/// is selected so typing replaces it instead of appending to the old query.
+#[test]
+fn search_panel_field_selects_existing_query_when_refocused() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(2);
+    let search_id = egui::Id::unique("search-panel-input");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(search_id), "search panel input is focused");
+
+    h.state_mut().views[0].find.as_mut().unwrap().query = "first".into();
+    h.run_steps(2);
+
+    // Focus lost.
+    h.ctx.memory_mut(|m| m.surrender_focus(search_id));
+    h.run_steps(2);
+    assert_ne!(h.ctx.memory(|m| m.focused()), Some(search_id), "search panel input lost focus");
+
+    // Refocus via edit.advanced_search command.
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(2);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(search_id), "search panel input regained focus");
+
+    let state = egui::TextEdit::load_state(&h.ctx, search_id).expect("search panel field state");
+    let range = state.cursor.char_range().expect("cursor range selected");
+    let ends = [range.primary.index, range.secondary.index];
+    assert!(
+        ends.contains(&egui::text::CCursor::new(0).index) && ends.contains(&egui::text::CCursor::new(5).index),
+        "entire existing query 'first' is selected, got {:?}",
+        ends
+    );
+
+    // Typing replaces the entire query.
+    h.event(egui::Event::Text("second".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().query, "second", "typing replaces the entire query");
+
+    // Subsequent typing appends normally at the caret.
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().query, "second!", "subsequent typing appends at cursor");
+
+    // Focusing without a find.focus request (e.g. direct focus without Find command) does not select all text.
+    h.ctx.memory_mut(|m| m.surrender_focus(search_id));
+    h.run_steps(2);
+    h.ctx.memory_mut(|m| m.request_focus(search_id));
+    h.run_steps(2);
+    let state = egui::TextEdit::load_state(&h.ctx, search_id).expect("search panel field state");
+    let is_all_selected = state.cursor.char_range().is_some_and(|r| {
+        let ends = [r.primary.index, r.secondary.index];
+        ends.contains(&egui::text::CCursor::new(0).index) && ends.contains(&egui::text::CCursor::new(7).index)
+    });
+    assert!(!is_all_selected, "focusing without find.focus does not select all text");
+}
+
 #[test]
 fn marking_while_searching_does_not_jitter_or_reset_search_state() {
     let mut h = harness();

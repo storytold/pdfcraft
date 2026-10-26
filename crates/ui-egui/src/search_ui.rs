@@ -24,6 +24,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         .labelled_by(l.id);
     if find.focus {
         r.request_focus();
+        let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+        let char_count = find.query.chars().count();
+        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(char_count));
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), r.id);
         find.focus = false;
     }
     ui.horizontal(|ui| {
