@@ -178,6 +178,12 @@ pub struct Context<'a> {
     /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
     /// §10.4.2.3) rather than through the CMYK profile used for display.
     pub(crate) luminosity_in_device_cmyk: bool,
+    /// PdfCraft patch (64): the parent-tree key (`/StructParents`) of the content object being
+    /// drawn — the page, or a form XObject within it (ISO 32000-2 §14.7.5.4). Marked content in
+    /// streams without one (patterns, Type 3 glyph streams, soft masks) carries no key, so a
+    /// device can match a structure tree's marked-content reference against the namespace it
+    /// was drawn in.
+    pub(crate) struct_key: Option<i32>,
 }
 
 /// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
@@ -257,6 +263,7 @@ impl<'a> Context<'a> {
             saved_bytes: 0,
             skipped_saves: Vec::new(),
             luminosity_in_device_cmyk: false,
+            struct_key: None,
         }
     }
 

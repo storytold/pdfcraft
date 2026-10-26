@@ -63,7 +63,7 @@ fn count_inner(source: ExportSource, pages: &[usize], options: Options, mut prog
     if !progress(0) {
         return Err("word count cancelled".into());
     }
-    let (mut excluded, unclassified) = if options != Options::default() { exclusions(&source, options)? } else { (HashMap::new(), false) };
+    let (excluded, unclassified) = if options != Options::default() { exclusions(&source, options)? } else { (HashMap::new(), false) };
     let mut renderer = PageRenderer::new(source.bytes, source.config);
     let mut report = Report { unclassified_structure: unclassified, ..Report::default() };
     let mut seen = HashSet::new();
@@ -74,12 +74,8 @@ fn count_inner(source: ExportSource, pages: &[usize], options: Options, mut prog
         if !progress(report.pages.len()) {
             return Err("word count cancelled".into());
         }
-        let filter = TextFilter {
-            tables: options.exclude_tables,
-            code: options.exclude_code,
-            images: options.exclude_images,
-            mcids: excluded.remove(&page).unwrap_or_default(),
-        };
+        let filter =
+            TextFilter { tables: options.exclude_tables, code: options.exclude_code, images: options.exclude_images, mcids: excluded.clone() };
         let text = renderer.filtered_text(page, filter).map_err(|e| format!("page {}: {e}", page.saturating_add(1)))?.plain_text();
         let counts = Counts::of(&text);
         report.pages_without_text += usize::from(text.trim().is_empty());
@@ -110,22 +106,12 @@ fn standard_role(doc: &pdfcraft_cos::Document, map: &Dict, role: &[u8]) -> Vec<u
     role
 }
 
-/// Whether the page's resources hold a Form XObject, whose MCIDs are a separate namespace.
-fn page_has_form_xobject(doc: &pdfcraft_cos::Document, page: &pdfcraft_cos::Dict) -> bool {
-    let resources = page.get(b"Resources").map(|o| doc.resolve(o));
-    let objects = resources.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(b"XObject")).map(|o| doc.resolve(o));
-    objects
-        .as_ref()
-        .and_then(|o| o.as_dict())
-        .is_some_and(|d| d.iter().any(|(_, value)| matches!(&*doc.resolve(value), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))))
-}
-
-type Exclusions = HashMap<usize, HashSet<i32>>;
+type Exclusions = HashMap<i32, HashSet<i32>>;
 
 /// Resolve page-local MCIDs through the structure hierarchy, including inherited roles and
-/// RoleMap aliases. Form XObjects have a separate MCID namespace that the text device does not
-/// expose: retain their page's MCID-tagged text instead of excluding an unrelated same-numbered
-/// span. Explicit Table/Code/Figure marked-content tags still work on those pages.
+/// RoleMap aliases, keyed by parent-tree key: a marked-content reference's `/Pg` page or `/Stm`
+/// stream, and its `/StructParents` (§14.7.5.4). A stream without `/StructParents` (as in a form
+/// XObject with none) cannot be matched against a namespace, so it is reported as unclassified.
 fn exclusions(source: &ExportSource, options: Options) -> Result<(Exclusions, bool), String> {
     let doc = pdfcraft_cos::Document::open_with_password(source.bytes.clone(), source.config.password.as_deref()).map_err(|e| e.to_string())?;
     let catalog = doc.root().and_then(|id| doc.get(id).as_dict().cloned()).unwrap_or_default();
@@ -133,14 +119,23 @@ fn exclusions(source: &ExportSource, options: Options) -> Result<(Exclusions, bo
         return Ok((HashMap::new(), options.exclude_tables || options.exclude_code));
     };
     let roles = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-    let pages = pdfcraft_model::pages(&doc);
-    let page_index: HashMap<_, _> = pages.iter().enumerate().map(|(index, page)| (page.obj, index)).collect();
     let mut stack = root.get(b"K").map(|k| vec![(k.clone(), None::<ObjRef>, false, 0usize)]).unwrap_or_default();
     let mut seen = HashSet::new();
     let mut out: Exclusions = HashMap::new();
     let mut unclassified = false;
     let mut visited = 0usize;
-    while let Some((object, page, excluded, depth)) = stack.pop() {
+    // The parent-tree key of `owner` (a page dict or a content stream the marked content was
+    // drawn in): its `/StructParents` when the object has one, nothing otherwise.
+    let owner_key = |owner: &ObjRef| -> Option<i32> {
+        let resolved = doc.resolve(&Object::Ref(*owner));
+        let dict = match &*resolved {
+            Object::Dict(dict) => dict,
+            Object::Stream(stream) => &stream.dict,
+            _ => return None,
+        };
+        dict.get(b"StructParents").and_then(Object::as_int).and_then(|key| i32::try_from(key).ok().filter(|key| *key >= 0))
+    };
+    while let Some((object, owner, excluded, depth)) = stack.pop() {
         visited += 1;
         if visited > 100_000 || depth > 128 {
             unclassified = true;
@@ -153,46 +148,50 @@ fn exclusions(source: &ExportSource, options: Options) -> Result<(Exclusions, bo
             continue;
         }
         let object = doc.resolve(&object);
-        let mut keep = |id: i64, page: Option<ObjRef>| {
-            if excluded {
-                if let Some((page, id)) = page.and_then(|p| page_index.get(&p).copied()).zip(i32::try_from(id).ok().filter(|id| *id >= 0)) {
-                    out.entry(page).or_default().insert(id);
-                } else {
-                    unclassified = true;
-                }
+        let mut keep = |id: i64, owner: Option<ObjRef>| {
+            if !excluded {
+                return;
+            }
+            let mcid = i32::try_from(id).ok().filter(|id| *id >= 0);
+            let key = owner.as_ref().and_then(owner_key);
+            if let (Some(key), Some(mcid)) = (key, mcid) {
+                out.entry(key).or_default().insert(mcid);
+            } else {
+                // A reference into a stream that names no parent-tree key cannot be matched
+                // against content drawn anywhere this device can say the namespace of.
+                unclassified = true;
             }
         };
         match &*object {
-            Object::Int(id) => keep(*id, page),
+            Object::Int(id) => keep(*id, owner),
             Object::Array(items) => {
                 if stack.len().saturating_add(items.len()) > 100_000 {
                     unclassified = true;
                     break;
                 }
-                stack.extend(items.iter().rev().map(|child| (child.clone(), page, excluded, depth + 1)));
+                stack.extend(items.iter().rev().map(|child| (child.clone(), owner, excluded, depth + 1)));
             }
             Object::Dict(dict) => {
-                let page = dict.get(b"Pg").and_then(Object::as_ref).or(page);
-                if dict.contains(b"Stm") {
-                    unclassified = true;
+                let owner = dict.get(b"Pg").and_then(Object::as_ref).or(owner);
+                let excluded = excluded || dict.name(b"S").is_some_and(|role| excluded_role(&standard_role(&doc, &roles, role), options));
+                if let Some(stm) = dict.get(b"Stm").and_then(Object::as_ref) {
+                    if let Some(key) = owner_key(&stm) {
+                        // The reference names the stream it was drawn in: its own namespace.
+                        if excluded
+                            && let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int).and_then(|id| i32::try_from(id).ok().filter(|id| *id >= 0))
+                        {
+                            out.entry(key).or_default().insert(mcid);
+                        }
+                    } else {
+                        unclassified = true;
+                    }
                 } else if let Some(id) = dict.get(b"MCID").and_then(Object::as_int) {
-                    keep(id, page);
+                    keep(id, owner);
                 } else if let Some(kids) = dict.get(b"K") {
-                    let excluded = excluded || dict.name(b"S").is_some_and(|role| excluded_role(&standard_role(&doc, &roles, role), options));
-                    stack.push((kids.clone(), page, excluded, depth + 1));
+                    stack.push((kids.clone(), owner, excluded, depth + 1));
                 }
             }
             _ => {}
-        }
-    }
-    for (index, page) in pages.iter().enumerate() {
-        if !out.contains_key(&index) {
-            continue;
-        }
-        let has_form = page_has_form_xobject(&doc, &page.dict);
-        if has_form {
-            out.remove(&index);
-            unclassified = true;
         }
     }
     Ok((out, unclassified))
@@ -210,7 +209,11 @@ mod tests {
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         ];
         for (i, body) in bodies.iter().enumerate() {
-            objects.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + i * 2));
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /Contents {} 0 R /StructParents {} /Resources << /Font << /F1 3 0 R >> >> >>",
+                5 + i * 2,
+                i
+            ));
             objects.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
         }
         let mut bytes = b"%PDF-1.7\n".to_vec();
@@ -304,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn word_count_retains_form_namespaces_and_reports_the_limitation() {
+    fn word_count_form_content_without_a_key_is_not_excluded_by_the_pages_mcid() {
         let body = "/Span << /MCID 0 >> BDC BT /F1 12 Tf 10 220 Td (Page words) Tj ET EMC /Fm Do";
         let mut src = source(&[body], "/StructTreeRoot << /K << /S /Table /Pg 4 0 R /K 0 >> >>");
         let mut doc = pdfcraft_cos::Document::open(src.bytes.clone()).unwrap();
@@ -327,8 +330,56 @@ mod tests {
         doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"Resources".to_vec(), resources)).unwrap();
         src.bytes = std::sync::Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
         let report = count(src, &[0], Options { exclude_tables: true, ..Options::default() }, |_| true).unwrap();
-        assert_eq!(report.total.words, 4, "the unrelated form's MCID must not be excluded");
-        assert!(report.unclassified_structure);
+        // The page's MCID 0 is excluded (keyed by its `/StructParents`). The form has no parent
+        // tree key of its own, so its marked content can't be matched against the page's
+        // exclusions (#4228): the form's words stay in the count.
+        assert_eq!(report.total.words, 2, "the form's MCID must not be excluded by the page's");
+        assert!(!report.unclassified_structure);
+    }
+
+    /// A form with its own `/StructParents` keys its marked content under its own parent-tree
+    /// entry, and a structure element whose content lives in the form references it through
+    /// `/Stm`: its MCIDs are excluded, and the page's same-numbered MCIDs are not.
+    #[test]
+    fn word_count_excludes_form_mcids_through_the_parent_tree() {
+        let body = "/Span << /MCID 0 >> BDC BT /F1 12 Tf 10 220 Td (Page words) Tj ET EMC /Fm Do";
+        let mut src = source(&[body], "/StructTreeRoot << /K << /S /Span /Pg 4 0 R /K 0 >> >>");
+        let mut doc = pdfcraft_cos::Document::open(src.bytes.clone()).unwrap();
+        let page = ObjRef::new(4, 0);
+        let mut resources = doc.get(page).as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().clone();
+        let mut form = Dict::new();
+        form.set(b"Type".to_vec(), Object::Name(b"XObject".to_vec()));
+        form.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+        form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 200.into(), 300.into()]));
+        form.set(b"StructParents".to_vec(), Object::Int(1));
+        form.set(b"Resources".to_vec(), resources.clone());
+        let form = doc.add(pdfcraft_cos::Stream::from_raw(form, b"/Span << /MCID 0 >> BDC BT /F1 12 Tf 10 180 Td (Form words) Tj ET EMC".to_vec()));
+        let mut objects = Dict::new();
+        objects.set(b"Fm".to_vec(), Object::Ref(form));
+        resources.set(b"XObject".to_vec(), objects);
+        doc.update_dict(page, |d| {
+            d.remove(b"Resources");
+        })
+        .unwrap();
+        doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"Resources".to_vec(), resources)).unwrap();
+        // The structure element marks the form's MCID 0: `/Stm` names the form stream, whose
+        // `/StructParents` is the parent-tree key the content was drawn under.
+        let mut excluded = Dict::new();
+        excluded.set(b"S".to_vec(), Object::Name(b"Table".to_vec()));
+        excluded.set(b"Stm".to_vec(), Object::Ref(form));
+        excluded.set(b"MCID".to_vec(), Object::Int(0));
+        let mut catalog = doc.get(doc.root().unwrap()).as_dict().unwrap().clone();
+        let mut tree = catalog.get(b"StructTreeRoot").unwrap().as_dict().unwrap().clone();
+        tree.set(b"K".to_vec(), Object::Array(vec![Object::Dict(excluded.clone())]));
+        catalog.set(b"StructTreeRoot".to_vec(), Object::Dict(tree));
+        doc.update_dict(doc.root().unwrap(), |d| {
+            *d = catalog.clone();
+        })
+        .unwrap();
+        src.bytes = std::sync::Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        let report = count(src, &[0], Options { exclude_tables: true, ..Options::default() }, |_| true).unwrap();
+        assert_eq!(report.total.words, 2, "the form's words are excluded through its own key");
+        assert!(!report.unclassified_structure);
     }
 
     #[test]

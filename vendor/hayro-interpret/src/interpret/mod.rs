@@ -171,6 +171,9 @@ pub fn interpret_page<'a>(
 ) {
     let resources = page.resources();
     let mut content = page.content_reader();
+    // PdfCraft patch (64): the page's own parent-tree key, which its marked content is keyed
+    // by (§14.7.5.4); a device matches structure references against it.
+    context.struct_key = page.raw().get::<i32>(b"StructParents");
     // PdfCraft patch: the page's own contents count against its content budget too, where they
     // are decoded whole. Streamed content is only ever held a window at a time.
     crate::context::charge_content(content.materialized_len());
@@ -734,7 +737,7 @@ fn interpret_window<'a>(
                     context.ocg_state.begin_marked_content();
                 }
 
-                device.begin_marked_content(bdc.0, mcid);
+                device.begin_marked_content(bdc.0, mcid, context.struct_key);
 
                 // PdfCraft patch (25): hand the device the sequence's `/ActualText`, from an inline
                 // property list or one named in the resources' `/Properties`.
@@ -757,7 +760,7 @@ fn interpret_window<'a>(
             TypedInstruction::MarkedContentPoint(_) => {}
             TypedInstruction::BeginMarkedContent(bmc) => {
                 context.ocg_state.begin_marked_content();
-                device.begin_marked_content(bmc.0, None);
+                device.begin_marked_content(bmc.0, None, context.struct_key);
             }
             TypedInstruction::BeginText(_) => {
                 context.get_mut().text_state.text_matrix = Affine::IDENTITY;

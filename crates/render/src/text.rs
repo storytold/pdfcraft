@@ -23,16 +23,18 @@ pub struct TextFilter {
     pub code: bool,
     /// Exclude Figure-marked text and invisible text layers, including OCR.
     pub images: bool,
-    /// Page-local MCIDs whose structure ancestors match the selected exclusions.
-    pub mcids: HashSet<i32>,
+    /// Marked content by parent-tree key (`/StructParents`, §14.7.5.4) and MCID whose structure
+    /// ancestors match the selected exclusions. Marked content keyed in another namespace, or
+    /// in a stream that has no `/StructParents`, is never matched by these.
+    pub mcids: HashMap<i32, HashSet<i32>>,
 }
 
 impl TextFilter {
-    fn excludes(&self, tag: &[u8], mcid: Option<i32>) -> bool {
+    fn excludes(&self, tag: &[u8], mcid: Option<i32>, key: Option<i32>) -> bool {
         (self.tables && matches!(tag, b"Table" | b"TR" | b"TH" | b"TD" | b"THead" | b"TBody" | b"TFoot"))
             || (self.code && tag == b"Code")
             || (self.images && tag == b"Figure")
-            || mcid.is_some_and(|id| self.mcids.contains(&id))
+            || mcid.is_some_and(|id| key.is_some_and(|key| self.mcids.get(&key).is_some_and(|mcids| mcids.contains(&id))))
     }
 }
 
@@ -703,9 +705,9 @@ impl<'a> Device<'a> for TextDevice {
     fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
     fn pop_clip_path(&mut self) {}
     fn pop_transparency_group(&mut self) {}
-    fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
+    fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>, key: Option<i32>) {
         self.depth = self.depth.saturating_add(1);
-        if self.excluded_depth.is_none() && self.filter.excludes(tag, mcid) {
+        if self.excluded_depth.is_none() && self.filter.excludes(tag, mcid, key) {
             self.excluded_depth = Some(self.depth);
         }
     }

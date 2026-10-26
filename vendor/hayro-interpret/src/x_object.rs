@@ -142,6 +142,11 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
 
     context.path_mut().truncate(0);
     context.save_state();
+    // PdfCraft patch (64): a form XObject's marked content is keyed by the form's own
+    // `/StructParents`, not by the page's (§14.7.5.4); a form without the entry has no key, so
+    // its marked content matches nothing. The key is restored after the form's contents.
+    let saved_key = context.struct_key;
+    context.struct_key = x_object.dict.get::<i32>(b"StructParents");
     context.pre_concat_affine(x_object.matrix);
     context.push_root_transform();
 
@@ -231,6 +236,7 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         context,
         device,
     );
+    context.struct_key = saved_key;
 
     device.pop_clip_path();
 

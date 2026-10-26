@@ -58,7 +58,11 @@ pub trait Device<'a> {
     ///
     /// The tag is the marked content tag (e.g. b"P", b"Span"). The mcid is
     /// the marked content identifier from the properties dict, if present.
-    fn begin_marked_content(&mut self, _tag: &[u8], _mcid: Option<i32>) {}
+    /// PdfCraft patch (64): the key is the parent-tree key (`/StructParents`) of the content
+    /// object the sequence is drawn in — the page or a form XObject — so a device can match the
+    /// sequence against the structure tree namespace it belongs to. Content in streams with no
+    /// `/StructParents` carries no key.
+    fn begin_marked_content(&mut self, _tag: &[u8], _mcid: Option<i32>, _key: Option<i32>) {}
     /// PdfCraft patch (25): the `/ActualText` of the marked content sequence that just began
     /// (ISO 32000-2 §14.9.4), as the text string's raw bytes. Called right after
     /// `begin_marked_content`; the text replaces everything drawn up to the matching
