@@ -206,3 +206,38 @@ fn reading_colours_seed_on_open() {
         assert_eq!(h.state().session.reading_colors(view.id), Some(ReadingColors::default()));
     }
 }
+
+/// Preferences ▸ Reading colours ▸ Scanned pages: shown for a dark preset only, applied to the
+/// open documents, kept across a change of preset, and saved with the preference.
+#[test]
+fn scanned_pages_setting_shows_for_dark_presets_and_persists() {
+    use pdfcraft_render::ScanMode;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.reading_colors = ReadingColors::BLACK_ON_WHITE;
+        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Scanned pages").next().is_none(), "a light preset leaves scans as they are");
+    h.state_mut().set_reading_colors(ReadingColors::WHITE_ON_BLACK);
+    h.run_steps(4);
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Smart invert")).scroll_to_me();
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Scan contrast").next().is_some(), "smart invert has a contrast");
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Smart invert")).click();
+    h.run_steps(20);
+    h.get_by_label("Invert").click();
+    h.run_steps(2);
+    assert_eq!(h.state().reading_colors.scans.mode, ScanMode::Invert);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.reading_colors(id).map(|c| c.scans.mode), Some(ScanMode::Invert), "the open document follows");
+    assert!(h.query_all_by_label("Scan contrast").next().is_none(), "a plain negative has no contrast");
+    // Still the white-on-black preset, and the choice survives a restart.
+    assert_eq!(h.state().reading_colors.mode_name(), "white-on-black");
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.reading_colors, h.state().reading_colors);
+}

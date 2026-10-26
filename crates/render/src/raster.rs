@@ -31,6 +31,7 @@ use hayro::vello_cpu::color::AlphaColor;
 use hayro::vello_cpu::color::palette::css::{TRANSPARENT, WHITE};
 use hayro::{RenderCache, RenderSettings, render_into, render_size};
 
+use crate::scan::ScanPages;
 use crate::{Pixels, ReadingColors};
 
 /// Monotonic-ish timer that is safe on wasm32 (where `std::time::Instant` panics).
@@ -308,6 +309,7 @@ type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
 fn render_page<'a>(
     pdf: &'a Pdf,
     cache: &RenderCache<'a>,
+    scans: &ScanPages,
     settings: &InterpreterSettings,
     config: &RenderConfig,
     req: RenderRequest,
@@ -327,6 +329,12 @@ fn render_page<'a>(
         if !(w.is_finite() && h.is_finite()) || w < 0.5 || h < 0.5 {
             return Err(format!("page {} has an empty or invalid page box ({w}×{h} pt)", req.page + 1));
         }
+        // A dark reading setting draws a scanned page in its own colours, then through the scan
+        // filter: the page is one picture, which recolouring paints never reaches. Not a layer
+        // laid over another raster: it has no page of its own.
+        let scan_filter =
+            reading.scan_filter().filter(|_| !config.transparent && req.kind == RequestKind::Pixels && scans.is_scan(pdf, req.page, settings));
+        let reading = if scan_filter.is_some() { ReadingColors::default() } else { reading };
         // Reading colours: the page clears to the setting's background, and solid text and
         // line-art paints are remapped (images and patterns never are). Off renders as before.
         let (bg_color, color_replacement) = match reading.params {
@@ -383,6 +391,9 @@ fn render_page<'a>(
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
+        if let Some(filter) = scan_filter {
+            filter.apply(pixels.bytes_mut());
+        }
         Ok((w.into(), h.into(), pixels, None))
     }));
     match result {
@@ -431,13 +442,14 @@ pub struct PageRenderer {
     pdf: Option<Pdf>,
     settings: InterpreterSettings,
     stats: RenderStats,
+    scans: ScanPages,
 }
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
         let settings = config.settings();
-        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() }, scans: ScanPages::default() }
     }
 
     pub fn page_count(&self) -> usize {
@@ -479,7 +491,7 @@ impl PageRenderer {
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let settings = warning_settings(&self.settings, warnings.clone());
-        let r = render_page(pdf, &cache, &settings, &self.config, req);
+        let r = render_page(pdf, &cache, &self.scans, &settings, &self.config, req);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
             self.pdf = parse(&self.bytes, self.config.password.as_deref());
@@ -552,6 +564,8 @@ struct ParseGate {
 struct Shared {
     /// Desired requests, active jobs and bounded completed results share one deduplication key.
     queue: Arc<WorkQueue>,
+    /// The pages judged scans, for the reading colours' scan filter.
+    scans: ScanPages,
     /// Per worker id: the request it is rendering and since when.
     #[cfg(not(target_arch = "wasm32"))]
     busy: Mutex<Vec<Option<Busy>>>,
@@ -1209,7 +1223,7 @@ fn worker(
                         panic!("injected page panic");
                     }
                     match pdf {
-                        Some(pdf) => render_page(pdf, cache, &settings, &config, req),
+                        Some(pdf) => render_page(pdf, cache, &shared.scans, &settings, &config, req),
                         None => Err(("the document could not be parsed".into(), false)),
                     }
                 }))
@@ -7460,9 +7474,10 @@ endstream endobj
         let pdf = parse(&Arc::new(pdf), None).expect("parses");
         let cache = RenderCache::new();
         let settings = InterpreterSettings::default();
-        let preview = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(true)).expect("preview renders");
-        let fin = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(false)).expect("final renders");
-        let fresh = render_page(&pdf, &RenderCache::new(), &settings, &RenderConfig::default(), req(false)).expect("final renders");
+        let preview = render_page(&pdf, &cache, &ScanPages::default(), &settings, &RenderConfig::default(), req(true)).expect("preview renders");
+        let fin = render_page(&pdf, &cache, &ScanPages::default(), &settings, &RenderConfig::default(), req(false)).expect("final renders");
+        let fresh =
+            render_page(&pdf, &RenderCache::new(), &ScanPages::default(), &settings, &RenderConfig::default(), req(false)).expect("final renders");
         assert_eq!(rgb_at(&preview.2, w, 35, 35), [0, 0, 255]);
         assert_eq!(&fin.2[..], &fresh.2[..], "a final render after a preview matches one with a fresh cache");
     }

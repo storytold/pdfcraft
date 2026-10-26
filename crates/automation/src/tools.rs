@@ -851,7 +851,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("comments_hide", "Hide all comments", "Hide or show every comment on the page (fields and links still draw). A view setting: the file doesn't change.")
             .cmd("comment.hide_all")
             .with(schema(json!({ "doc": doc(), "hidden": { "type": "boolean", "description": "Default true." } }), &["doc"])),
-        t("view_reading_colors", "Set reading colours", "Set the document's reading colours (Acrobat's Replace Document Colors, in the Reading Options): solid text and line-art paints are remapped for readability and the page clears to the background colour in page_render. A view setting: the file doesn't change. mode is one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, or custom (which takes text and background as #RRGGBB). only_black maps only near-black paints (default false) and line_art also maps line-art paints (default true); both override the mode's preset. A flag that differs from the mode's preset default makes the returned mode read custom, because the resulting params no longer match any preset. Returns the resulting setting.")
+        t("view_reading_colors", "Set reading colours", "Set the document's reading colours (Acrobat's Replace Document Colors, in the Reading Options): solid text and line-art paints are remapped for readability and the page clears to the background colour in page_render. A view setting: the file doesn't change. mode is one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, or custom (which takes text and background as #RRGGBB). only_black maps only near-black paints (default false) and line_art also maps line-art paints (default true); both override the mode's preset. A flag that differs from the mode's preset default makes the returned mode read custom, because the resulting params no longer match any preset. A dark setting (lighter text than background) draws scanned pages, where a picture covers at least half the page and there is no visible text, through a filter instead, since recolouring text cannot reach a picture: scans is smart (default: paper takes the background, ink the text colour, coloured marks keep their hue), palette (every mark takes the two colours), invert (a photographic negative) or off; scan_contrast 0-100 (default 50) is how much of the range becomes plain paper or plain ink. Both keep their current value when left out, across a change of mode. Returns the resulting setting.")
             .cmd("a11y.reading_options")
             .with(schema(
                 json!({
@@ -861,6 +861,8 @@ pub fn tools() -> Vec<ToolDef> {
                     "background": { "type": "string", "description": "With mode custom: the background colour, #RRGGBB." },
                     "only_black": { "type": "boolean", "description": "Map only near-black paints. Default false." },
                     "line_art": { "type": "boolean", "description": "Also map line-art paints. Default true." },
+                    "scans": { "type": "string", "enum": ["smart", "palette", "invert", "off"], "description": "How a dark mode draws scanned pages. Default smart." },
+                    "scan_contrast": { "type": "integer", "minimum": 0, "maximum": 100, "description": "How much of a scan's range becomes plain paper or ink. Default 50." },
                 }),
                 &["doc", "mode"],
             )),
