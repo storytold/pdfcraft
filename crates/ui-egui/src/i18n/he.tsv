@@ -1,17 +1,14 @@
-# Hebrew (he) catalog for PdfCraft. Columns: context<TAB>source<TAB>translation.
+# Hebrew (he) catalog for PdfCraft. Columns are context<TAB>English source<TAB>Hebrew translation.
 #
-# Catalog strings stay in logical (typing) order. The existing egui 0.37 fork performs
-# right-to-left shaping/reordering; do not reverse or pre-shape Hebrew here.
-# Placeholders such as {name} must stay unchanged. Product names (PdfCraft, PDF, Acrobat,
-# JavaScript, Discord) stay as written in the source. Trailing ellipses are preserved.
+# Clean-room, AI-assisted translations authored from the meaning of PdfCraft's English UI labels.
+# Not independently reviewed by a native-language reviewer yet.
+# Catalogs remain in logical (typing) order; the existing egui 0.37 fork owns RTL shaping and
+# reordering. Do not pre-reverse strings. Keep placeholders and trailing ellipses unchanged.
+# Product and technology names such as PdfCraft, PDF, Acrobat, JavaScript and Discord stay in Latin.
 #
 	Menu	תפריט
-	File	קובץ
-	Edit	עריכה
 	Pages	עמודים
-	View	תצוגה
 	Help	עזרה
-	Preferences	העדפות
 	Preferences…	העדפות…
 	Interface language	שפת הממשק
 	Interface size	גודל הממשק
@@ -20,7 +17,6 @@
 	Identity	פרטי זהות
 	Name on new comments	שם שיופיע בהערות חדשות
 	Hide hover previews for highlights without comment text	הסתרת תצוגה מקדימה במעבר עכבר מעל סימונים שאין בהם טקסט הערה
-	Open…	פתיחה…
 	Open Recent	פתיחת קבצים אחרונים
 	Clear Recent Files	ניקוי רשימת הקבצים האחרונים
 	Remove from Recent	הסרה מהאחרונים
@@ -85,7 +81,6 @@
 	Display theme	ערכת תצוגה
 	Side panels	חלוניות צד
 	Enable Acrobat JavaScript	הפעלת JavaScript של Acrobat
-	OK	אישור
 	Join our Discord	הצטרפות לשרת Discord שלנו
 	Close	סגירה
 	Next / previous match	התוצאה הבאה / הקודמת
@@ -99,14 +94,11 @@
 	Previous / next page	העמוד הקודם / הבא
 	Delete selected pages (Organize)	מחיקת העמודים שנבחרו (ארגון)
 	Select all pages (Organize)	בחירת כל העמודים (ארגון)
-	Home	בית
 	Open	פתיחה
 	Open a PDF ({key})	פתיחת PDF ({key})
 	Dark gray theme	ערכת נושא אפורה כהה
 	Light theme	ערכת נושא בהירה
 	Appearance mode	מצב מראה
-	Light	בהיר
-	Dark	כהה
 	Active	פעיל
 	Dark theme	ערכת נושא כהה
 	Appearance settings…	הגדרות מראה…
@@ -140,10 +132,8 @@
 	Bookmarks	סימניות
 	Fields	שדות
 	Layers	שכבות
-	Attachments	קבצים מצורפים
 	Signatures	חתימות
 	Accessibility Checker	בודק נגישות
-	Search	חיפוש
 	Compare	השוואה
 	Page thumbnails	תמונות ממוזערות של עמודים
 	Form fields	שדות טופס
@@ -164,7 +154,6 @@
 	Open file	פתיחת קובץ
 	Recent	אחרונים
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	קבצים שתפתח ב־PdfCraft יופיעו כאן. אפשר לגרור PDF לכל מקום בחלון כדי לפתוח אותו.
-	Privacy	פרטיות
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft פועל גם ללא חיבור לאינטרנט. אין איסוף נתוני שימוש, אין צורך בחשבון ואין עיבוד בענן, אלא אם מוסיפים ספק.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	סקריפטים פועלים בסביבה מבודדת ללא גישה לקבצים או לרשת. גם כש־JavaScript כבוי, פונקציות format, validate ו־calculate הסטנדרטיות של Acrobat ממשיכות לפעול.
 	Back to all tools	חזרה לכל הכלים
@@ -225,99 +214,253 @@
 	Tab order: by document structure	סדר מעבר בין שדות: לפי מבנה המסמך
 	Add text	הוספת טקסט
 	Edit text & images	עריכת טקסט ותמונות
-	Date	תאריך
-	Signature	חתימה
-	Text	טקסט
-	Link	קישור
-	Attach file	צירוף קובץ
-	Delete	מחק
-	Insert	הוסף
-	Strikethrough	קו חוצה
-	Preview	תצוגה מקדימה
-	Cancel	ביטול
-	Don't save	אל תשמור
-	Clear	ניקוי
-	Password	סיסמה
-	Print	הדפס
-	Previous month	החודש הקודם
-	Next month	החודש הבא
-	January	ינואר
-	February	פברואר
-	March	מרץ
-	April	אפריל
-	May	מאי
-	June	יוני
-	July	יולי
-	August	אוגוסט
-	September	ספטמבר
-	October	אוקטובר
-	November	נובמבר
-	December	דצמבר
-	Done	בוצע
-	Export…	ייצוא…
-	Options	אפשרויות
-	No color	ללא צבע
-	Custom	מותאם אישית
-	Check for updates	חיפוש עדכונים
-	Download	הורדה
-	Later	מאוחר יותר
-	Add	הוספה
-	Name	שם
-	Email Address	כתובת דואר אלקטרוני
-	Country/Region	מדינה/אזור
-	Browse…	עיון…
-	Back	חזרה
-	Appearance	מראה
-	General	כללי
-	Remove	הסר
-	Off	כבוי
-	Size	גודל
-	Right	ימין
-	Document	מסמך
-	Reply	השב
-	Properties…	מאפיינים…
-	More options	אפשרויות נוספות
-	Accepted	התקבל
-	Yellow	צהוב
-	Pink	ורוד
-	Blue	כחול
-	Green	ירוק
-	Bottom	למטה
-	Encrypt	הצפנה
-	Discard	בטל
-	All	הכול
-	From	מאת
-	Security	אבטחה
-	Fonts	גופנים
-	Subject	נושא
-	Location	מיקום
-	Yes	כן
-	No	לא
-	Language	שפה
-	Unlock…	ביטול נעילה…
-	Unlock	ביטול נעילה
-	Export	ייצוא
-	Sign	חתימה
-	Dismiss	בטל
-	Cut	גזור
-	Copy	העתק
-	Rename	שנה שם
-	Move up	העבר למעלה
-	Move down	העבר למטה
-	None	ללא
-	List	רשימה
-	Your name	השם שלך
-	About	אודות
-	Company	חברה
-	Create	צור
-	Open link	פתח קישור
-	Show	הצג
-	Tags	תגיות
-	Word count	ספירת מילים
-	Words	מילים
-	Mobile	נייד
-	Side by side	זה לצד זה
-	Bulleted list	רשימת תבליטים
-	Numbered list	רשימה ממוספרת
-	Columns	עמודות
-	Today	היום
+	Add or edit links	הוספה או עריכה של קישורים
+	Create links from URLs	יצירת קישורים מכתובות URL
+	Remove all links	הסרת כל הקישורים
+	No links to remove	אין קישורים להסרה
+	Removed 1 link	הוסר קישור אחד
+	Removed {n} links	הוסרו {n} קישורים
+	Add Bates numbering…	הוספת מספור בייטס…
+	Add image…	הוספת תמונה…
+	Redact text and images	השחרת טקסט ותמונות
+	Redact pages…	השחרת עמודים…
+	Find text and redact…	חיפוש טקסט והשחרתו…
+	Redaction properties…	מאפייני השחרה…
+	Apply redactions…	החלת השחרה…
+	Clear redaction marks	ניקוי סימוני השחרה
+	Remove hidden information…	הסרת מידע מוסתר…
+	Sanitize document…	ניקוי המסמך ממידע מוסתר…
+	Field properties…	מאפייני שדה…
+	Add a text field	הוספת שדה טקסט
+	Add a checkbox	הוספת תיבת סימון
+	Add a radio button	הוספת לחצן בחירה
+	Add a drop-down list	הוספת רשימה נפתחת
+	Add a list box	הוספת תיבת רשימה
+	Add a button	הוספת לחצן
+	Add an image field	הוספת שדה תמונה
+	Add a date field	הוספת שדה תאריך
+	Add a digital signature field	הוספת שדה חתימה דיגיטלית
+	Digitally sign	חתימה דיגיטלית
+	Certify (visible signature)	אישור באמצעות חתימה גלויה
+	Certify (invisible signature)	אישור באמצעות חתימה לא גלויה
+	Validate all signatures	אימות כל החתימות
+	Signatures panel	חלונית חתימות
+	Fill & Sign: add text	מילוי וחתימה: הוספת טקסט
+	Fill & Sign: checkmark	מילוי וחתימה: סימן אישור
+	Fill & Sign: cross	מילוי וחתימה: סימן X
+	Fill & Sign: dot	מילוי וחתימה: נקודה
+	Fill & Sign: line	מילוי וחתימה: קו
+	Fill & Sign: date	מילוי וחתימה: תאריך
+	Fill & Sign: sign	מילוי וחתימה: חתימה
+	Fill & Sign: initials	מילוי וחתימה: ראשי תיבות
+	Export to image…	ייצוא לתמונה…
+	Reduce file size…	הקטנת גודל הקובץ…
+	Optimize PDF…	מיטוב PDF…
+	Export to text…	ייצוא לטקסט…
+	Export to Word…	ייצוא ל־Word…
+	Export to PowerPoint…	ייצוא ל־PowerPoint…
+	Export to HTML…	ייצוא ל־HTML…
+	Export to RTF…	ייצוא ל־RTF…
+	JavaScript console…	מסוף JavaScript…
+	Document JavaScripts…	סקריפטים של JavaScript במסמך…
+	Recognize text…	זיהוי טקסט…
+	Recognize text in multiple files…	זיהוי טקסט במספר קבצים…
+	Check for accessibility…	בדיקת נגישות…
+	Open accessibility report	פתיחת דוח נגישות
+	Change reading options…	שינוי אפשרויות קריאה…
+	Add alternate text…	הוספת טקסט חלופי…
+	Export all images…	ייצוא כל התמונות…
+	Add header & footer…	הוספת כותרת עליונה ותחתונה…
+	Update header & footer…	עדכון כותרת עליונה ותחתונה…
+	Remove header & footer	הסרת כותרת עליונה ותחתונה
+	Add watermark…	הוספת סימן מים…
+	Update watermark…	עדכון סימן מים…
+	Remove watermark	הסרת סימן מים
+	Add background…	הוספת רקע…
+	Update background…	עדכון רקע…
+	Remove background	הסרת רקע
+	Protect using password…	הגנה באמצעות סיסמה…
+	Remove security	הסרת הגנת האבטחה
+	Security properties…	מאפייני אבטחה…
+	Organize pages	ארגון עמודים
+	New bookmark	סימנייה חדשה
+	New bookmarks from structure	יצירת סימניות חדשות ממבנה המסמך
+	Rotate pages clockwise	סיבוב עמודים עם כיוון השעון
+	Rotate pages counterclockwise	סיבוב עמודים נגד כיוון השעון
+	Delete pages	מחיקת עמודים
+	Insert blank page	הוספת עמוד ריק
+	Rotate pages…	סיבוב עמודים…
+	Duplicate pages	שכפול עמודים
+	Crop pages	חיתוך עמודים
+	Set page boxes…	הגדרת תיבות עמוד…
+	Insert pages from file…	הוספת עמודים מקובץ…
+	Replace pages…	החלפת עמודים…
+	Extract pages…	חילוץ עמודים…
+	Split document…	פיצול מסמך…
+	Number pages…	מספור עמודים…
+	Keyboard shortcuts	קיצורי מקלדת
+	Join the ArtCraft Discord	הצטרפות לשרת ArtCraft ב־Discord
+	PdfCraft web page	אתר PdfCraft
+	PdfCraft on GitHub	PdfCraft ב־GitHub
+	ArtCraft website	אתר ArtCraft
+	Check for updates…	בדיקת עדכונים…
+	About PdfCraft	על PdfCraft
+	Export a PDF	ייצוא PDF
+	Export to	ייצוא אל
+	Microsoft Word (.docx)	Microsoft Word‏ (.docx)
+	Spreadsheet (.xlsx)	גיליון אלקטרוני (.xlsx)
+	Presentation (.pptx)	מצגת (.pptx)
+	Image (PNG)	תמונה (PNG)
+	Export all images	ייצוא כל התמונות
+	HTML web page	דף אינטרנט HTML
+	Rich Text Format (.rtf)	תבנית טקסט עשיר (.rtf)
+	Text (plain)	טקסט פשוט
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	מילוי וחתימה
+	Fill	מילוי
+	Checkmark	סימן אישור
+	Cross	סימן X
+	Dot	נקודה
+	Line	קו
+	Initials	ראשי תיבות
+	Edit a PDF	עריכת PDF
+	Modify page	שינוי עמוד
+	Rotate pages	סיבוב עמודים
+	Insert pages	הוספת עמודים
+	Extract pages	חילוץ עמודים
+	Add content	הוספת תוכן
+	Image	תמונה
+	Header and footer	כותרת עליונה ותחתונה
+	Watermark	סימן מים
+	Bates numbering	מספור בייטס
+	Background	רקע
+	Create a PDF	יצירת PDF
+	Create from	יצירה מתוך
+	Single file	קובץ יחיד
+	Multiple files	מספר קבצים
+	Separate PDFs	קובצי PDF נפרדים
+	Images	תמונות
+	Clipboard	לוח
+	Blank page	עמוד ריק
+	Combine files	שילוב קבצים
+	Combine	שילוב
+	Add files to combine	הוספת קבצים לשילוב
+	Page options	אפשרויות עמוד
+	Page grid	רשת עמודים
+	Rotate	סיבוב
+	Extract	חילוץ
+	Replace	החלפה
+	Split	פיצול
+	More	עוד
+	Set page boxes	הגדרת תיבות עמוד
+	Set page transitions	הגדרת מעברי עמוד
+	Page labels	תוויות עמודים
+	Page transitions	מעברי עמוד
+	Add comments	הוספת הערות
+	Markup	סימון
+	Sticky note	פתק נדבק
+	Underline	קו תחתון
+	Squiggly underline	קו תחתון גלי
+	Text box	תיבת טקסט
+	Drawing	ציור
+	Rectangle	מלבן
+	Oval	אליפסה
+	Arrow	חץ
+	Cloud	ענן
+	Stamp	חותמת
+	Review	סקירה
+	Comment list	רשימת הערות
+	Scan & OCR	סריקה ו־OCR
+	Recognize text	זיהוי טקסט
+	In this file	בקובץ זה
+	In multiple files	במספר קבצים
+	Enhance scanned file	שיפור קובץ סרוק
+	Correct recognized text	תיקון הטקסט שזוהה
+	Protect a PDF	הגנה על PDF
+	Protect	הגנה
+	Protect with password	הגנה באמצעות סיסמה
+	Remove hidden information	הסרת מידע מוסתר
+	Advanced options	אפשרויות מתקדמות
+	Encrypt with certificate	הצפנה באמצעות אישור דיגיטלי
+	Security properties	מאפייני אבטחה
+	Redact a PDF	השחרת תוכן ב־PDF
+	Redact	השחרה
+	Redact pages	השחרת עמודים
+	Find text and redact	חיפוש טקסט והשחרתו
+	Set properties	הגדרת מאפיינים
+	Sanitize document	ניקוי המסמך ממידע מוסתר
+	Compress a PDF	דחיסת PDF
+	Optimize	מיטוב
+	Reduce file size	הקטנת גודל הקובץ
+	Advanced optimization	מיטוב מתקדם
+	Audit space usage	ניתוח השימוש בנפח
+	Field list	רשימת שדות
+	Field properties	מאפייני שדה
+	Tab order by rows	סדר מעבר בין שדות לפי שורות
+	Tab order by columns	סדר מעבר בין שדות לפי עמודות
+	Import data	ייבוא נתונים
+	Export data	ייצוא נתונים
+	Add form components	הוספת רכיבי טופס
+	Text field	שדה טקסט
+	Checkbox	תיבת סימון
+	Radio button	לחצן בחירה
+	Drop-down list	רשימה נפתחת
+	List box	תיבת רשימה
+	Button	לחצן
+	Image field	שדה תמונה
+	Date field	שדה תאריך
+	Digital signature	חתימה דיגיטלית
+	Stamps	חותמות
+	Stamp palette	לוח החותמות
+	Use a certificate	שימוש באישור דיגיטלי
+	Certificates	אישורים דיגיטליים
+	Timestamp	חותמת זמן
+	Use print production	שימוש בכלי הכנה לדפוס
+	Print production	הכנה לדפוס
+	Output preview	תצוגה מקדימה של הפלט
+	Preflight	בדיקה מקדימה
+	Convert colors	המרת צבעים
+	Add printer marks	הוספת סימני דפוס
+	Fix hairlines	תיקון קווים דקים
+	Measure objects	מדידת אובייקטים
+	Measure	מדידה
+	Measuring tool	כלי מדידה
+	Geospatial location	מיקום גאוגרפי
+	Compare files	השוואת קבצים
+	Select files to compare	בחירת קבצים להשוואה
+	Use guided actions	שימוש בפעולות מודרכות
+	Actions list	רשימת פעולות
+	Action Wizard	אשף פעולות
+	Make accessible	הנגשה
+	Prepare for distribution	הכנה להפצה
+	Optimize scanned documents	מיטוב מסמכים סרוקים
+	Archive documents	ארכוב מסמכים
+	Prepare for accessibility	הכנה לנגישות
+	Accessibility	נגישות
+	Automatically tag PDF	תיוג אוטומטי של PDF
+	Change reading options	שינוי אפשרויות קריאה
+	Check for accessibility	בדיקת נגישות
+	Add alternate text	הוספת טקסט חלופי
+	Fix reading order	תיקון סדר הקריאה
+	Apply PDF standards	החלת תקני PDF
+	Standards	תקנים
+	Save as PDF/A	שמירה כ־PDF/A
+	Save as PDF/X	שמירה כ־PDF/X
+	Save as PDF/UA	שמירה כ־PDF/UA
+	Add search index	הוספת אינדקס חיפוש
+	Index	אינדקס
+	Manage embedded index	ניהול אינדקס מוטמע
+	Use JavaScript	שימוש ב־JavaScript
+	JavaScript	JavaScript
+	Console	מסוף
+	Document JavaScripts	סקריפטים של JavaScript במסמך
+	Document actions	פעולות מסמך
+	AI assistant	עוזר AI
+	Bring your own model (off by default)	שימוש במודל משלך (כבוי כברירת מחדל)
+	Summarize	סיכום
+	Ask about this document	שאלות על המסמך
+	Translate	תרגום
+	pages	עמודים
+	Planned	מתוכנן
+	Planned for milestone	מתוכנן לאבן הדרך
+	open to see what it will include	פתח כדי לראות מה ייכלל
