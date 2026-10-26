@@ -191,9 +191,12 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
     let mut budget = Budget { limits, comparisons: 0, page_cost: 0, covered_text: 0 };
     let mut out = Vec::new();
     for (n, page) in pdfcraft_model::pages(doc).iter().enumerate() {
+        // The rows of the page, not its lines: a `TJ` array draws a row, and a cover over the
+        // row hides the row. The edit crate reads the cells of such an array as lines of their
+        // own, so that a cell can be edited on its own; the cover is judged against the row.
         // The glyphs themselves: `/ActualText` is the file's own claim about them, and an empty
         // or substitute one must not hide text a cover sits on.
-        let lines = pdfcraft_edit::glyph_text_lines(doc, page).map_err(|e| AuditError::Text(n, e.to_string()))?;
+        let lines = pdfcraft_edit::glyph_text_rows(doc, page).map_err(|e| AuditError::Text(n, e.to_string()))?;
         budget.start_page(&lines);
         // 1. Opaque filled rectangles over extractable text.
         for r in cover::filled_rects(doc, &page.dict)? {
@@ -266,8 +269,10 @@ fn covers(cover: &[f64; 4], line: &TextLine) -> bool {
 /// (#4164), so the words of the line painted beside the cover, which stay visible, are not
 /// reported as hidden. Neighbouring runs are joined as the line joins them, so a word split
 /// across runs stays one word; runs with others left out between them are spaced. The whole
-/// line when its runs can't say: a single run, a line whose text was reordered for reading, or
-/// a cover that overlaps the line's box but none of its words.
+/// line when its runs can't say: a single run, a line whose text was reordered for reading, a
+/// row the lines read as the cells of one `TJ` array (where a line without the row view keeps
+/// the whole array as its one run), or a cover that overlaps the line's box but none of its
+/// words.
 fn covered_words(cover: &[f64; 4], line: &TextLine, out: &mut String) {
     let overlaps = |w: &[f64; 4]| area(&[cover[0].max(w[0]), cover[1].max(w[1]), cover[2].min(w[2]), cover[3].min(w[3])]) > 0.0;
     let mut words = String::new();
@@ -283,7 +288,10 @@ fn covered_words(cover: &[f64; 4], line: &TextLine, out: &mut String) {
         words.push_str(text);
         last = Some(i);
     }
-    if line.runs().nth(1).is_none() || last.is_none() {
+    // Runs of one operator are the cells of one `TJ` array: they draw one row of a table, and a
+    // cover over part of it reports the row (what a line that doesn't split the array reports).
+    let one_operator = line.one_source_operator();
+    if line.runs().nth(1).is_none() || last.is_none() || one_operator {
         out.push_str(line.text.trim());
     } else {
         out.push_str(words.trim());

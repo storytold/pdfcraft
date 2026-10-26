@@ -1095,7 +1095,27 @@ pub(super) fn rewrite_styled_block(
         block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { o.bt_op };
-    let data = splice(&pieces, &ops, |i| (if i == at { std::mem::take(&mut block_ops) } else { Vec::new() }, !drop.contains(&i)));
+    // A row written as one `TJ` array splits into runs: the block is one cell of it. The
+    // array's other cells keep their places, drawn around the block's new text.
+    let cells = tj_covered_parts(&members);
+    if let Some(part) = cells.get(&at) {
+        let (before, after) = tj_rest_ops(&ops[at], part);
+        let mut wrapped = before;
+        wrapped.extend(block_ops);
+        wrapped.extend(after);
+        block_ops = wrapped;
+    }
+    let data = splice(&pieces, &ops, |i| {
+        if i == at {
+            (std::mem::take(&mut block_ops), !drop.contains(&at))
+        } else if let Some(part) = cells.get(&i) {
+            // Another cell of the same row: the edit doesn't reach it, so it keeps its place.
+            let (before, after) = tj_rest_ops(&ops[i], part);
+            (before.into_iter().chain(after).collect(), false)
+        } else {
+            (Vec::new(), !drop.contains(&i))
+        }
+    });
     let contents = rewritten_contents(doc, &streams, data);
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {

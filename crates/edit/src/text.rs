@@ -11,6 +11,7 @@
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
@@ -61,6 +62,11 @@ pub struct TextLine {
     /// streams parsed joined).
     stream: usize,
     ops: Vec<usize>,
+    /// The parts of `TJ` arrays the line shows, when an array splits into runs: each entry is the
+    /// array's operator and the range of its operands this line covers. The line is one cell of a
+    /// row (or a run of cells it continues), and the array's uncovered cells keep their places
+    /// when it is edited.
+    parts: Vec<(usize, TjPart)>,
     /// Where the line starts: text matrix (text space), the state there, and its `BT`.
     origin: Origin,
     /// Explicit marked-content scope (when present); distinct scopes must not be guessed into one paragraph.
@@ -619,6 +625,13 @@ impl TextLine {
         })
     }
 
+    /// Whether every run of the line comes from one operator: the rows view joins the cells of
+    /// one `TJ` array into the row it draws, where a line without the row view keeps the whole
+    /// array as its one run. `ops` is never empty on a built line.
+    pub fn one_source_operator(&self) -> bool {
+        self.ops.iter().all(|&o| o == self.ops[0])
+    }
+
     fn rotation(&self) -> f64 {
         let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
         m[1].atan2(m[0]).to_degrees()
@@ -899,6 +912,64 @@ struct Shown {
     paint: Paint,
     logical_order: bool,
     actual_text: bool,
+    /// The part of a `TJ` array this run shows, when the array splits into runs.
+    part: Option<TjPart>,
+}
+
+/// A `TJ` array that splits into runs: the range of the array's operands one run shows, and the
+/// operands after it with the text matrix that puts them back in place.
+#[derive(Clone, Debug, PartialEq)]
+struct TjPart {
+    /// The range of the array's operands the run shows.
+    elements: Range<usize>,
+    /// The operands after the run, and the text matrix at the start of the run after them.
+    rest: Option<(Range<usize>, Matrix)>,
+    /// The line matrix where the array is written. A `Tm` sets the line matrix as well as the
+    /// text matrix, so a rebuild that moves the pen puts this back.
+    tlm: Matrix,
+    /// The text matrix where the array starts, so a rebuild can put the pen back there before it
+    /// draws the array's other cells.
+    tm: Matrix,
+}
+
+impl TjPart {
+    /// Widen this part to cover `other`'s operands too: from the earlier of the two starts to
+    /// after the later of the two ends, whose rest follows the whole range.
+    fn cover(&mut self, other: &Self) {
+        self.elements.start = self.elements.start.min(other.elements.start);
+        if other.elements.end >= self.elements.end {
+            self.elements.end = other.elements.end;
+            self.rest = other.rest.clone();
+            self.tlm = other.tlm;
+        }
+    }
+}
+
+/// A run of text inside one showing operator: the text it shows, its glyphs and word boxes, and
+/// the range of the operator's operands it covers.
+struct Run {
+    /// The text it shows.
+    text: String,
+    /// Whether every glyph it shows has a text.
+    decodable: bool,
+    /// Its glyphs.
+    glyph_count: usize,
+    /// The boxes of its words along it, in text space.
+    words: Vec<(f64, f64)>,
+    /// Its start in text space.
+    x: f64,
+    /// Its advance in text space.
+    advance: f64,
+    /// The range of the operator's operands it covers.
+    elements: Range<usize>,
+    /// The operands after it, and the text matrix at the start of the run after them.
+    rest: Option<(Range<usize>, Matrix)>,
+}
+
+impl Run {
+    fn new(x: f64, elements: Range<usize>) -> Self {
+        Run { text: String::new(), decodable: true, glyph_count: 0, words: Vec::new(), x, advance: 0.0, elements, rest: None }
+    }
 }
 
 impl Shown {
@@ -918,7 +989,7 @@ impl Shown {
 }
 
 /// Where the previous run of a line ended: its text object, baseline direction, offset across
-/// the baseline, end along it and size.
+/// the baseline, end along it, size and the operator it came from.
 #[derive(Clone, Copy)]
 struct Pen {
     bt: usize,
@@ -927,12 +998,13 @@ struct Pen {
     end: f64,
     size: f64,
     vertical: bool,
+    op: usize,
 }
 
 impl Pen {
     fn after(s: &Shown) -> Self {
         let (dir, _, end, across) = s.span();
-        Pen { bt: s.bt, dir, across, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some() }
+        Pen { bt: s.bt, dir, across, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some(), op: s.op }
     }
 
     /// Whether `s` could continue the same line on geometry alone: on the same baseline, starting
@@ -1270,8 +1342,18 @@ fn interpret(
                 let tracking = if op.is("TJ") { tj_tracking(&pieces, &m, ts.size, ts.scale) } else { 0.0 };
                 let trm0 = tm.then(&ts.ctm);
                 let start = trm0.apply(0.0, ts.rise);
-                let mut text = String::new();
-                let mut decodable = true;
+                let dir = direction(&trm0);
+                let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
+                let run_size = if size_user > 0.0 { size_user } else { ts.size }.max(1.0);
+                // The reach that joins two runs of one text object onto one line: an OCR layer
+                // joins only across a word space. A `TJ` array that jumps further than that is a
+                // row of cells, and each cell is a run of its own, exactly as separate runs of
+                // one text object would be (#3744).
+                let reach = if ts.render_mode == 3 { run_size * 0.6 } else { run_size * 3.0 };
+                let tm0 = tm;
+                // The runs the operator shows, and the run being built.
+                let mut runs: Vec<Run> = Vec::new();
+                let mut run = Run::new(0.0, 0..0);
                 let mut x_text = 0.0;
                 // Vertical text (§9.4.4): the pen moves along y instead, and each glyph is centred
                 // on it horizontally; `half` is half the widest glyph.
@@ -1279,14 +1361,12 @@ fn interpret(
                 let (mut y_text, mut half) = (0.0, 0.0_f64);
                 // Where each word's glyphs start and end along the run (text space), and whether
                 // the next glyph continues the last word.
-                let mut words: Vec<(f64, f64)> = Vec::new();
                 let mut in_word = false;
-                let mut glyph_count = 0_usize;
-                for p in &pieces {
+                for (pi, p) in pieces.iter().enumerate() {
                     match p {
                         Object::String(s) => {
                             for (code, len) in m.codes(&s.bytes) {
-                                glyph_count = glyph_count.saturating_add(1);
+                                run.glyph_count = run.glyph_count.saturating_add(1);
                                 let shown = m.text_of(code);
                                 let blank =
                                     m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
@@ -1296,9 +1376,9 @@ fn interpret(
                                             .text_left
                                             .checked_sub(t.len())
                                             .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                                        text.push_str(&t);
+                                        run.text.push_str(&t);
                                     }
-                                    None => decodable = false,
+                                    None => run.decodable = false,
                                 }
                                 let spacing = ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
                                 if let Some(w1) = vertical {
@@ -1306,9 +1386,9 @@ fn interpret(
                                     if !blank {
                                         let ink_end = y_text + w1 * ts.size;
                                         let (lo, hi) = (y_text.min(ink_end), y_text.max(ink_end));
-                                        match words.last_mut() {
+                                        match run.words.last_mut() {
                                             Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
-                                            _ => words.push((lo, hi)),
+                                            _ => run.words.push((lo, hi)),
                                         }
                                     }
                                     in_word = !blank;
@@ -1320,23 +1400,24 @@ fn interpret(
                                     // A negative font size or `Tz` runs the glyphs backwards:
                                     // the word is the union of its glyphs, whichever way they go.
                                     let (lo, hi) = (x_text.min(ink_end), x_text.max(ink_end));
-                                    match words.last_mut() {
+                                    match run.words.last_mut() {
                                         Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
-                                        _ => words.push((lo, hi)),
+                                        _ => run.words.push((lo, hi)),
                                     }
                                 }
                                 in_word = !blank;
                                 let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
                                 x_text += w * ts.scale;
                             }
+                            run.elements.end = pi + 1;
                         }
                         other => {
                             if let Some(n) = other.as_f64() {
                                 if vertical.is_some() {
                                     // Down by n/1000 em, not scaled by `Tz`.
                                     let dy = -n / 1000.0 * ts.size;
-                                    if -dy > ts.size * 0.2 && !text.ends_with(' ') {
-                                        text.push(' ');
+                                    if -dy > ts.size * 0.2 && !run.text.ends_with(' ') {
+                                        run.text.push(' ');
                                     }
                                     if dy.abs() > ts.size.abs() * 0.2 {
                                         in_word = false;
@@ -1345,22 +1426,36 @@ fn interpret(
                                     continue;
                                 }
                                 let dx = -n / 1000.0 * ts.size * ts.scale;
-                                // A large gap inside TJ reads as a space.
-                                if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
-                                    text.push(' ');
-                                }
-                                // Tracking and kerning keep a word together; a larger jump
-                                // ends it (whatever the sign of the size or `Tz`).
-                                if dx - tracking > (ts.size * ts.scale).abs() * 0.2 || dx < -(ts.size * ts.scale).abs() * 0.2 {
+                                // How far the pen jumps along the baseline, in user space.
+                                let gap = to_frame(dir, trm0.apply(x_text + dx, ts.rise)).0 - to_frame(dir, trm0.apply(x_text, ts.rise)).0;
+                                if run.glyph_count > 0 && (gap >= reach || gap <= -run_size) {
+                                    // The array jumps to another cell: the cell is a run of its
+                                    // own, as two separate runs of one text object would be.
+                                    run.elements.end = pi;
+                                    run.advance = x_text - run.x;
+                                    run.rest = Some(((pi + 1)..pieces.len(), Matrix([1.0, 0.0, 0.0, 1.0, x_text + dx, 0.0]).then(&tm0)));
+                                    runs.push(std::mem::replace(&mut run, Run::new(x_text + dx, (pi + 1)..(pi + 1))));
                                     in_word = false;
+                                } else {
+                                    // A large gap inside TJ reads as a space.
+                                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !run.text.ends_with(' ') {
+                                        run.text.push(' ');
+                                    }
+                                    // Tracking and kerning keep a word together; a larger jump
+                                    // ends it (whatever the sign of the size or `Tz`).
+                                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 || dx < -(ts.size * ts.scale).abs() * 0.2 {
+                                        in_word = false;
+                                    }
+                                    run.elements.end = pi + 1;
                                 }
                                 x_text += dx;
                             }
                         }
                     }
                 }
+                // The end of the array: the pen went `x_text` along the baseline, or `y_text` down
+                // the column; the operands after it start from there.
                 tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(&tm);
-                let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
                 // The box from `a` to `b` along the run: from descent to ascent across it, or for
                 // vertical text, the widest glyph's width centred on the pen.
                 let span = |a: f64, b: f64| match vertical {
@@ -1374,73 +1469,82 @@ fn interpret(
                         trm0.apply(b, ts.rise + m.ascent * ts.size),
                     ],
                 };
-                let corners = span(0.0, if vertical.is_some() { y_text } else { x_text });
-                let rect = corners
-                    .iter()
-                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-                // The same corners along and across the baseline: the run's own box, not its
-                // upright bounding box turned (which is wider by the box's height on a slant).
-                let dir = direction(&trm0);
-                let frame = corners
-                    .iter()
-                    .map(|&p| to_frame(dir, p))
-                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-                let ink = words
-                    .iter()
-                    .map(|&(a, b)| {
-                        span(a, b)
-                            .iter()
-                            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
-                    })
-                    .collect();
-                let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
+                // The last run the operator shows.
+                run.advance = x_text - run.x;
+                runs.push(run);
                 // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
                 // It must not create a phantom editable line or enlarge its neighbours' boxes.
                 if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
                     continue;
                 }
-                out.push(Shown {
-                    op: i,
-                    extra_ops: Vec::new(),
-                    glyph_count,
-                    // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
-                    // preview divides by size × `Tz`, so `Tz` is put back here.
-                    advance: if vertical.is_some() { y_text * ts.scale } else { x_text },
-                    tracking: 0.0,
-                    tm: Matrix([
-                        tm.0[0],
-                        tm.0[1],
-                        tm.0[2],
-                        tm.0[3],
-                        tm.0[4] - x_text * tm.0[0] - y_text * tm.0[2],
-                        tm.0[5] - x_text * tm.0[1] - y_text * tm.0[3],
-                    ]),
-                    state: ts.clone(),
-                    tlm,
-                    bt_op: at_bt.0,
-                    bt_state: at_bt.1.clone(),
-                    text,
-                    rect,
-                    frame,
-                    ink,
-                    baseline: start.1,
-                    start_x: start.0,
-                    end_x: end.0,
-                    end_y: end.1,
-                    bt,
-                    font: name,
-                    base_font: m.base_font.clone(),
-                    face: ts.face.clone(),
-                    size: if size_user > 0.0 { size_user } else { ts.size },
-                    bold: m.bold,
-                    italic: m.italic,
-                    visual_order: m.visual_order,
-                    decodable,
-                    scope: marked.last().copied().flatten(),
-                    paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
-                    logical_order: false,
-                    actual_text: false,
-                });
+                // One line per run: a `TJ` array that jumps from one cell to the next shows one
+                // cell per run, and each is a line of its own (#3744).
+                let split = runs.len() > 1;
+                for run in runs {
+                    // A run that paints no glyph is no line of text (the jump before it).
+                    if run.glyph_count == 0 {
+                        continue;
+                    }
+                    // Where the run ends along the pen's path, and the operator's whole extent
+                    // (vertical text goes down the column instead of along the baseline).
+                    let end = if vertical.is_some() { trm0.apply(x_text, y_text + ts.rise) } else { trm0.apply(run.x + run.advance, ts.rise) };
+                    let corners = span(run.x, if vertical.is_some() { y_text } else { run.x + run.advance });
+                    let rect = corners
+                        .iter()
+                        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+                    // The same corners along and across the baseline: the run's own box, not its
+                    // upright bounding box turned (which is wider by the box's height on a slant).
+                    let frame = corners
+                        .iter()
+                        .map(|&p| to_frame(dir, p))
+                        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+                    let ink = run
+                        .words
+                        .iter()
+                        .map(|&(a, b)| {
+                            span(a, b)
+                                .iter()
+                                .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
+                        })
+                        .collect();
+                    out.push(Shown {
+                        op: i,
+                        extra_ops: Vec::new(),
+                        glyph_count: run.glyph_count,
+                        // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size;
+                        // the preview divides by size × `Tz`, so `Tz` is put back here.
+                        advance: if vertical.is_some() { y_text * ts.scale } else { run.advance },
+                        tracking: 0.0,
+                        // The run's own text matrix: the operator's, moved to where the run starts.
+                        tm: Matrix([1.0, 0.0, 0.0, 1.0, run.x, 0.0]).then(&tm0),
+                        state: ts.clone(),
+                        tlm,
+                        bt_op: at_bt.0,
+                        bt_state: at_bt.1.clone(),
+                        text: run.text,
+                        rect,
+                        frame,
+                        ink,
+                        baseline: start.1,
+                        start_x: trm0.apply(run.x, ts.rise).0,
+                        end_x: end.0,
+                        end_y: end.1,
+                        bt,
+                        font: name.clone(),
+                        base_font: m.base_font.clone(),
+                        face: ts.face.clone(),
+                        size: if size_user > 0.0 { size_user } else { ts.size },
+                        bold: m.bold,
+                        italic: m.italic,
+                        visual_order: m.visual_order,
+                        decodable: run.decodable,
+                        scope: marked.last().copied().flatten(),
+                        paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+                        logical_order: false,
+                        actual_text: false,
+                        part: if split { Some(TjPart { elements: run.elements, rest: run.rest, tlm, tm: tm0 }) } else { None },
+                    });
+                }
             }
             _ => {}
         }
@@ -1453,9 +1557,11 @@ fn interpret(
     Ok(out)
 }
 
-/// The lines of text on a page (0-based), in content order.
+/// The lines of text on a page (0-based), in content order. A `TJ` array that jumps from one
+/// cell to the next is read as one line per cell, so that a cell can be edited on its own
+/// (#3744).
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, &page_dict(doc, page)?, true)
+    text_lines_in(doc, &page_dict(doc, page)?, true, false)
 }
 
 /// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
@@ -1463,11 +1569,25 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 /// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
 /// through every page doesn't walk the page tree again for each.
 pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, page, false)
+    text_lines_in(doc, page, false, false)
 }
 
-/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans.
-fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) -> Result<Vec<TextLine>, EditError> {
+/// The rows of text on a page (0-based), in content order: a `TJ` array draws a row, and it is
+/// one line here however wide its cells are. A reader that needs the row as a whole (the audit's
+/// cover detection) reads it here; the editor reads the cells (see [`text_lines`]).
+pub fn text_rows(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
+    text_lines_in(doc, &page_dict(doc, page)?, true, true)
+}
+
+/// [`glyph_text_lines`] of `page`, with the cells of one `TJ` array joined into the row it draws.
+/// The audit judges a cover against the row, not against the cell that happens to sit under it.
+pub fn glyph_text_rows(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
+    text_lines_in(doc, page, false, true)
+}
+
+/// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans, and with
+/// `rows`, the cells of one `TJ` array join into the row the array draws.
+fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, rows: bool) -> Result<Vec<TextLine>, EditError> {
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
@@ -1494,6 +1614,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
         let joins = last.is_some_and(|(piece, pen)| {
             let bt = pen.bt;
             let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
+            // The cells of one `TJ` array draw one row: they join into it whatever the gap
+            // between them is.
+            let cell = rows && pen.op == s.op;
             piece == si
                 && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
@@ -1506,10 +1629,10 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                             && fill_color(&s.state.fill) == l.color
                             && same_paint(l, &s.state)
                     }))
-                && near
+                && (near || cell)
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
-                && (s.state.render_mode != 3 || gap < pen.size * 0.6)
+                && (s.state.render_mode != 3 || gap < pen.size * 0.6 || cell)
         });
         if joins && let Some(l) = lines.last_mut() {
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
@@ -1518,6 +1641,14 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 l.text.push(' ');
             }
             l.text.push_str(&s.text);
+            // A cell of a `TJ` array joined with the text after it still knows its part of the
+            // array, so an edit of the line keeps the row's other cells in place (#3744).
+            if let Some(part) = &s.part {
+                match l.parts.iter_mut().find(|(op, _)| *op == s.op) {
+                    Some((_, covered)) => covered.cover(part),
+                    None => l.parts.push((s.op, part.clone())),
+                }
+            }
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
@@ -1556,6 +1687,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
+                parts: s.part.clone().map(|p| vec![(s.op, p)]).unwrap_or_default(),
                 origin: Origin {
                     tm: s.tm.0,
                     tlm: s.tlm.0,
@@ -1633,6 +1765,14 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             l.text.push(' ');
         }
         l.text.push_str(&s.text);
+        // A cell of a `TJ` array joined with the text after it still knows its part of the
+        // array, so an edit of the line keeps the row's other cells in place (#3744).
+        if let Some(part) = &s.part {
+            match l.parts.iter_mut().find(|(op, _)| *op == s.op) {
+                Some((_, covered)) => covered.cover(part),
+                None => l.parts.push((s.op, part.clone())),
+            }
+        }
         l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
         l.frame = union(l.frame, s.frame);
         l.ink.extend(s.ink.iter().copied());
@@ -1670,6 +1810,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
+            parts: s.part.clone().map(|p| vec![(s.op, p)]).unwrap_or_default(),
             origin: Origin {
                 tm: s.tm.0,
                 tlm: s.tlm.0,
@@ -2453,6 +2594,73 @@ fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacin
     Ok(out)
 }
 
+/// The parts of the `TJ` arrays the lines cover, by operator: the first part's start and the
+/// last part's rest, so the array's other cells can be drawn around the edit.
+fn tj_covered_parts(lines: &[&TextLine]) -> HashMap<usize, TjPart> {
+    let mut cells: HashMap<usize, TjPart> = HashMap::new();
+    for l in lines {
+        for (op, part) in &l.parts {
+            cells.entry(*op).and_modify(|covered| covered.cover(part)).or_insert_with(|| part.clone());
+        }
+    }
+    cells
+}
+
+/// The operands of `op`'s `TJ` array before `part`, and those after it with the text matrix where
+/// they start.
+fn tj_rest_opers(op: &Op, part: &TjPart) -> (Vec<Object>, Option<(Vec<Object>, Matrix)>) {
+    let Some(array) = op.operands.first().and_then(Object::as_array) else { return (Vec::new(), None) };
+    // The operands before the run: they end where the run starts.
+    let before: Vec<Object> = array.get(..part.elements.start).map(|s| s.to_vec()).unwrap_or_default();
+    // The operands after the run: they start where the run after them started.
+    let after = part.rest.as_ref().and_then(|(range, tm)| {
+        let items: Vec<Object> = array.get(range.clone()).map(|s| s.to_vec()).unwrap_or_default();
+        (!items.is_empty()).then_some((items, *tm))
+    });
+    (before, after)
+}
+
+/// The operators that draw the rest of a `TJ` array around an edited run: the operands before
+/// it, which leave the pen where the run starts, and the operands after it, which start where
+/// the run after them started. The cells of a row written as one array keep their places.
+fn tj_rest_ops(op: &Op, part: &TjPart) -> (Vec<Op>, Vec<Op>) {
+    let (before, after) = tj_rest_opers(op, part);
+    let before = if before.is_empty() { Vec::new() } else { vec![Op::new("TJ", vec![Object::Array(before)])] };
+    let after = after.map_or_else(Vec::new, |(items, tm)| {
+        vec![
+            // The `Tm` sets the line matrix as well, so the rows after this one would start from
+            // the cell instead of from the line. Put the line matrix back.
+            Op::new("Tm", tm.0.iter().copied().map(pdfcraft_content::num).collect()),
+            Op::new("TJ", vec![Object::Array(items)]),
+            Op::new("Tm", part.tlm.0.iter().copied().map(pdfcraft_content::num).collect()),
+        ]
+    });
+    (before, after)
+}
+
+/// The operators that draw the cells of `op`'s `TJ` array outside the part `part` covers, at the
+/// places they hold in the file. Used when the array's operator leaves its place in the stream,
+/// so the pen no longer stands where the array begins: `Tm` puts it back first.
+fn tj_cell_ops(op: &Op, part: &TjPart) -> Vec<Op> {
+    let (before, after) = tj_rest_opers(op, part);
+    let tm = |m: &Matrix| Op::new("Tm", m.0.iter().copied().map(pdfcraft_content::num).collect());
+    let tj = |items: Vec<Object>| Op::new("TJ", vec![Object::Array(items)]);
+    let mut out = Vec::new();
+    if !before.is_empty() {
+        out.push(tm(&part.tm));
+        out.push(tj(before));
+    }
+    if let Some((items, at)) = after {
+        out.push(tm(&at));
+        out.push(tj(items));
+    }
+    if !out.is_empty() {
+        // A `Tm` sets the line matrix too: put the line back where the array's row begins.
+        out.push(tm(&part.tlm));
+    }
+    out
+}
+
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
 pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) -> Result<LineEdit, EditError> {
     let edit = replace_line_with_limit(doc, page, line, text, MAX_TYPE3_GLYPHS)?;
@@ -2562,7 +2770,30 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
-    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    // The line covers part of a row written as one `TJ` array: the array's other cells keep
+    // their places, drawn around the new text. The operands before the cell leave the pen
+    // where the cell starts, so the new text needs no text matrix of its own.
+    let cells = tj_covered_parts(&[&target]);
+    if let Some(part) = cells.get(&first)
+        && ops[first].is("TJ")
+    {
+        let (before, after) = tj_rest_ops(&ops[first], part);
+        let mut wrapped = before;
+        wrapped.extend(replacement);
+        wrapped.extend(after);
+        replacement = wrapped;
+    }
+    let new_data = splice(&pieces, &ops, |i| {
+        if i == first {
+            (std::mem::take(&mut replacement), false)
+        } else if let Some(part) = cells.get(&i) {
+            // Another cell of a row the line covers, and one the edit doesn't reach: it keeps
+            // its place in the array (#3744).
+            (tj_cell_ops(&ops[i], part), false)
+        } else {
+            (Vec::new(), !drops.contains(&i))
+        }
+    });
     let contents = rewritten_contents(doc, &streams, new_data);
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -3281,10 +3512,27 @@ fn rewrite_block_from(
         block_ops.push(Op::new("BT", vec![]));
         block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
     }
-    let at = if split { start } else { emit.bt_op };
+    // A row written as one `TJ` array splits into runs: the paragraph is one cell of it. The
+    // array's other cells keep their places, drawn around the new text. When the paragraph
+    // starts with such a cell, its text goes where the cell is, so the row keeps its order.
+    let cells = tj_covered_parts(&members);
+    let at = if split || cells.contains_key(&start) { start } else { emit.bt_op };
+    if let Some(part) = cells.get(&at) {
+        let (before, after) = tj_rest_ops(&ops[at], part);
+        let mut wrapped = before;
+        wrapped.extend(block_ops);
+        wrapped.extend(after);
+        block_ops = wrapped;
+    }
     let new_data = splice(&pieces, &ops, |i| {
-        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, !drop.contains(&i))
+        if i == at {
+            (std::mem::take(&mut block_ops), !drop.contains(&at))
+        } else if let Some(part) = cells.get(&i) {
+            // Another cell of the same row: the edit doesn't reach it, so it keeps its place.
+            (tj_cell_ops(&ops[i], part), false)
+        } else {
+            (Vec::new(), !drop.contains(&i))
+        }
     });
     let contents = rewritten_contents(doc, &streams, new_data);
     if new_font {

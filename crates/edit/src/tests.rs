@@ -2256,6 +2256,175 @@ fn a_subset_without_a_space_glyph_keeps_its_font_when_editing_words() {
     }
 }
 
+/// A table row written as one `TJ` array, the cells jumping between each other (as QuickBooks
+/// and the Windows print-to-PDF driver write them). Each cell is its own line, so it edits on
+/// its own (#3744).
+#[test]
+fn a_table_row_written_as_one_tj_array_splits_into_its_cells() {
+    let doc = text_page(&tj_row());
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["Labor", "Remove Cabinets", "150.00", "150.00"]);
+    // The cells keep their own places on the baseline.
+    assert!(lines[0].rect[2] < lines[1].rect[0], "{lines:?}");
+}
+
+/// The row a `TJ` array draws is one line in the row view: a reader that needs the row as a
+/// whole (the audit's cover detection) judges a cover against the row, not against one cell.
+#[test]
+fn a_tj_row_is_one_line_in_the_row_view() {
+    let doc = text_page(&tj_row());
+    let rows = text::text_rows(&doc, 0).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, "Labor Remove Cabinets 150.00 150.00");
+}
+
+/// Editing one cell of a row written as one `TJ` array keeps the other cells where they were.
+#[test]
+fn editing_one_cell_of_a_tj_row_keeps_the_other_cells() {
+    let mut doc = text_page(&tj_row());
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.len(), 4);
+    text::replace_line(&mut doc, 0, 0, "Labor 2").unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    let texts: Vec<&str> = after.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["Labor 2", "Remove Cabinets", "150.00", "150.00"]);
+    // The wider first cell doesn't move the others.
+    for cell in 1..4 {
+        assert!((after[cell].rect[0] - before[cell].rect[0]).abs() < 0.01, "{after:?}");
+    }
+}
+
+/// The array of one row of four cells at 9 pt: the adjustments jump from one cell to the next
+/// (6.7 em, 26.8 em and 3.8 em), as the cells sit far apart.
+fn tj_row_array() -> &'static str {
+    "[(Labor) -6713 (Remove Cabinets) -26768 (150.00) -3846 (150.00)] TJ"
+}
+
+/// One row of four cells at 9 pt, written as a single `TJ` array.
+fn tj_row() -> String {
+    format!("BT /F1 9 Tf 88.56 420 Td {} ET", tj_row_array())
+}
+
+/// The same row written the other ways a table row can be written: each cell in its own text
+/// object, a `Td` to each cell, a `Tm` to each cell. They were four lines before the `TJ` array
+/// was split too (#3744).
+#[test]
+fn the_same_row_written_the_other_ways_splits_into_its_cells() {
+    for content in [
+        // Each cell in its own text object.
+        "BT /F1 9 Tf 88.56 420 Td (Labor) Tj ET BT /F1 9 Tf 174 420 Td (Remove Cabinets) Tj ET \
+         BT /F1 9 Tf 489.976 420 Td (150.00) Tj ET BT /F1 9 Tf 554.616 420 Td (150.00) Tj ET",
+        // One text object, a `Td` to each cell.
+        "BT /F1 9 Tf 88.56 420 Td (Labor) Tj 85.44 0 Td (Remove Cabinets) Tj 315.976 0 Td (150.00) Tj 64.64 0 Td (150.00) Tj ET",
+        // One text object, a `Tm` to each cell.
+        "BT /F1 9 Tf 1 0 0 1 88.56 420 Tm (Labor) Tj 1 0 0 1 174 420 Tm (Remove Cabinets) Tj \
+         1 0 0 1 489.976 420 Tm (150.00) Tj 1 0 0 1 554.616 420 Tm (150.00) Tj ET",
+    ] {
+        let lines = text::text_lines(&text_page(content), 0).unwrap();
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["Labor", "Remove Cabinets", "150.00", "150.00"], "{content}");
+    }
+}
+
+/// A kerned line is one line: a jump that stays within the reach that joins separate runs
+/// keeps the single space it reads as today, so justified and tracked lines stay one line.
+#[test]
+fn a_kerned_line_stays_one_line() {
+    let doc = text_page("BT /F1 9 Tf 88.56 420 Td [(La) -120 (bor)] TJ ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, "Labor");
+    // A jump of two em reads as a space, and the line is still one line.
+    let doc = text_page("BT /F1 9 Tf 88.56 420 Td [(La) -2000 (bor)] TJ ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, "La bor");
+}
+
+/// An OCR layer joins its words only across a word space, so the cells of a `TJ` array in one
+/// split where the separate runs they would be would split too.
+#[test]
+fn an_ocr_tj_row_splits_at_a_word_space() {
+    let doc = text_page("BT 3 Tr /F1 10 Tf 72 500 Tm [(Item) -250 (One) -900 (25.00) -900 (50.00)] TJ ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["Item One", "25.00", "50.00"]);
+}
+
+/// Editing one cell of a row written as one `TJ` array keeps the other cells, in the paragraph
+/// editor too (#3744).
+#[test]
+fn editing_one_cell_of_a_tj_row_by_paragraph_keeps_the_other_cells() {
+    let mut doc = text_page(&tj_row());
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 4);
+    text::replace_block(&mut doc, 0, 0, "Labor 2").unwrap();
+    let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+    let texts: Vec<&str> = after.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(texts, ["Labor 2", "Remove Cabinets", "150.00", "150.00"]);
+    // The wider first cell doesn't move the others.
+    for cell in 1..4 {
+        assert!((after[cell].rect[0] - before[cell].rect[0]).abs() < 0.01, "{after:?}");
+    }
+}
+
+/// Two rows written as two `TJ` arrays in one text object: editing a cell of the first row
+/// leaves the second row where it was. The rebuild moves the pen with a `Tm`, which sets the
+/// line matrix as well, so the line matrix has to be put back (#3744).
+#[test]
+fn editing_a_cell_of_a_tj_row_keeps_the_next_row_in_place() {
+    let mut doc = text_page(&format!("BT /F1 9 Tf 1 0 0 1 88.56 420 Tm {} 0 -12 Td {} ET", tj_row_array(), tj_row_array()));
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.len(), 8);
+    text::replace_line(&mut doc, 0, 0, "Labor 2").unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(after.len(), 8);
+    for cell in 4..8 {
+        assert!((after[cell].rect[0] - before[cell].rect[0]).abs() < 0.01, "{after:?}");
+        assert!((after[cell].rect[1] - before[cell].rect[1]).abs() < 0.01, "{after:?}");
+    }
+}
+
+/// A cell of a `TJ` row followed by a `Tj` that continues it is one line: editing that line keeps
+/// the row's other cells, which the line does not cover (#3744).
+#[test]
+fn editing_a_cell_followed_by_a_tj_keeps_the_rows_other_cells() {
+    let content = "BT /F1 9 Tf 88.56 420 Td [(Labor) -6713 (Remove)] TJ ( Cabinets) Tj ET";
+    for paragraph in [false, true] {
+        let mut doc = text_page(content);
+        let before = text::text_lines(&doc, 0).unwrap();
+        let texts: Vec<&str> = before.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["Labor", "Remove Cabinets"]);
+        if paragraph {
+            assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2);
+            text::replace_block(&mut doc, 0, 1, "Cabinets 2").unwrap();
+        } else {
+            text::replace_line(&mut doc, 0, 1, "Cabinets 2").unwrap();
+        }
+        let after = text::text_lines(&reopen(&doc), 0).unwrap();
+        let texts: Vec<&str> = after.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["Labor", "Cabinets 2"], "paragraph: {paragraph}");
+        // The row's first cell did not move.
+        assert!((after[0].rect[0] - before[0].rect[0]).abs() < 0.01, "{after:?}");
+    }
+}
+
+/// A line that starts before a `TJ` row and continues into it: editing the line keeps the row's
+/// other cells, which are drawn where they were (#3744).
+#[test]
+fn editing_a_line_that_continues_into_a_tj_row_keeps_its_other_cells() {
+    let mut doc = text_page("BT /F1 9 Tf 88.56 420 Td (Labor) Tj [( 2) -6713 (150.00)] TJ ET");
+    let before = text::text_lines(&doc, 0).unwrap();
+    let texts: Vec<&str> = before.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["Labor 2", "150.00"]);
+    text::replace_line(&mut doc, 0, 0, "Labor 3").unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    let texts: Vec<&str> = after.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["Labor 3", "150.00"]);
+    assert!((after[1].rect[0] - before[1].rect[0]).abs() < 0.01, "{after:?}");
+}
+
 /// A Chrome (Skia) style subset: Type0/Identity-H over a TrueType program, CID = glyph id.
 /// `/W` lists most used glyphs, writes 0 for some it dropped, and leaves `a` and `y` to `/DW`;
 /// `z` has a ToUnicode entry but no glyph in the program (its CID is past the last glyph).
