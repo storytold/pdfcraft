@@ -530,7 +530,7 @@ const OWNED_BYTES_DEPTH: usize = 256;
 /// Bytes `object` holds of its own: string and stream data that is not a view into `data`
 /// (the input file). An object nested deeper than [`OWNED_BYTES_DEPTH`] cannot be measured
 /// and counts as too large to keep.
-fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
+pub(crate) fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
     if depth > OWNED_BYTES_DEPTH {
         return usize::MAX;
     }

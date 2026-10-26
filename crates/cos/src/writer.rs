@@ -15,7 +15,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::CosError;
-use crate::document::{Document, ObjectReader, XrefEntry};
+use crate::document::{Document, ObjectReader, XrefEntry, owned_bytes};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -280,6 +280,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
     // Record the type while traversing so classifying packed objects needs no second parse.
     let mut order: Vec<(ObjRef, bool)> = Vec::new();
+    // The parsed object of each entry in `order`, kept for the write pass while the budget
+    // allows it. Past the budget the write pass reads the object again.
+    let mut kept: Vec<Option<Arc<Object>>> = Vec::new();
+    let mut kept_budget = KeptObjects::default();
     let mut queue: VecDeque<ObjRef> = VecDeque::new();
     let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
     for key in [&b"Root"[..], b"Info", b"Encrypt"] {
@@ -305,6 +309,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         map.insert(r, output_number(order.len())?);
         order.push((r, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
+        kept.push(kept_budget.admit(&o, reader.document.bytes()).then_some(o));
     }
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
@@ -329,14 +334,14 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
     // objects still precede object streams, preserving the established output order.
-    let mut packed: Vec<(u32, ObjRef)> = Vec::new();
+    let mut packed: Vec<(u32, ObjRef, Option<Arc<Object>>)> = Vec::new();
     for (i, (r, is_stream)) in order.iter().enumerate() {
         let num = output_number(i)?;
         let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(r) && root_outside != Some(*r);
         if in_stream {
-            packed.push((num, *r));
+            packed.push((num, *r, kept[i].take()));
         } else {
-            let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
+            let o = renumber(&*written_object(&mut reader, *r, *is_stream, kept[i].take())?, &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
             write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
         }
@@ -345,9 +350,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // individually: the whole stream is (§7.5.7, §7.6.2).
     let mut next = output_number(order.len())?;
     let mut batch = ObjectStreamBatch::default();
-    for (num, reference) in packed {
+    for (num, reference, parsed) in packed {
         let mut encoded = Vec::new();
-        serialize(&renumber(&*reread(&mut reader, reference, false)?, &map), &mut encoded);
+        serialize(&renumber(&*written_object(&mut reader, reference, false, parsed)?, &map), &mut encoded);
         if batch.count > 0 && batch.body.len().saturating_add(encoded.len()).saturating_add(1) > OBJSTM_BYTES {
             batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
         }
@@ -398,6 +403,56 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
     Ok(out)
+}
+
+/// What `write_full` keeps of the objects it parsed while numbering them: owned bytes (see
+/// [`owned_bytes`]; streams read from the file are views and cost only their dictionary) and
+/// tree nodes. Beyond either limit objects are read again when written, which bounds the memory
+/// of a save of a huge document.
+#[derive(Default)]
+struct KeptObjects {
+    bytes: usize,
+    nodes: usize,
+}
+
+impl KeptObjects {
+    const BYTES: usize = 64 * 1024 * 1024;
+    const NODES: usize = 2_000_000;
+
+    /// Whether `object` still fits the budget; if so it is counted against it.
+    fn admit(&mut self, object: &Object, data: &Arc<Vec<u8>>) -> bool {
+        let bytes = self.bytes.saturating_add(owned_bytes(object, data, 0));
+        let nodes = self.nodes.saturating_add(node_count(object, 0));
+        if bytes > Self::BYTES || nodes > Self::NODES {
+            return false;
+        }
+        (self.bytes, self.nodes) = (bytes, nodes);
+        true
+    }
+}
+
+/// Values in `object`'s tree, counting the object itself. Past the parser's nesting limit
+/// the count is `usize::MAX`, so nothing that deep is kept.
+fn node_count(object: &Object, depth: usize) -> usize {
+    if depth > 256 {
+        return usize::MAX;
+    }
+    let children = match object {
+        Object::Stream(s) => s.dict.iter().fold(0usize, |n, (_, v)| n.saturating_add(node_count(v, depth + 1))),
+        Object::Array(a) => a.iter().fold(0usize, |n, v| n.saturating_add(node_count(v, depth + 1))),
+        Object::Dict(d) => d.iter().fold(0usize, |n, (_, v)| n.saturating_add(node_count(v, depth + 1))),
+        _ => 0,
+    };
+    children.saturating_add(1)
+}
+
+/// The object to write for `r`: the one parsed while numbering when it was kept, else `r` read
+/// again.
+fn written_object(reader: &mut ObjectReader, r: ObjRef, is_stream: bool, kept: Option<Arc<Object>>) -> Result<Arc<Object>, CosError> {
+    match kept {
+        Some(o) => Ok(o),
+        None => reread(reader, r, is_stream),
+    }
 }
 
 /// Object `r` read again for writing. The traversal read it once and only kept its number, so
@@ -672,6 +727,28 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
+    }
+
+    #[test]
+    fn kept_objects_stop_at_their_byte_and_node_budget() {
+        let data = Arc::new(Vec::new());
+        let string = Object::String(PdfString::literal(vec![b'x'; 1000]));
+        let array = Object::Array(vec![Object::Int(1), Object::Null]);
+        let mut kept = KeptObjects::default();
+        assert!(kept.admit(&string, &data) && kept.admit(&array, &data));
+        assert_eq!((kept.bytes, kept.nodes), (1000, 4));
+        let mut full = KeptObjects { bytes: KeptObjects::BYTES - 999, nodes: 0 };
+        assert!(!full.admit(&string, &data), "one byte over the byte budget");
+        assert_eq!((full.bytes, full.nodes), (KeptObjects::BYTES - 999, 0), "a refused object is not counted");
+        assert!(full.admit(&Object::Int(1), &data));
+        let mut full = KeptObjects { bytes: 0, nodes: KeptObjects::NODES - 2 };
+        assert!(!full.admit(&array, &data), "a node past the node budget");
+        assert!(full.admit(&Object::Int(1), &data));
+        let mut deep = Object::Null;
+        for _ in 0..300 {
+            deep = Object::Array(vec![deep]);
+        }
+        assert!(!KeptObjects::default().admit(&deep, &data), "nesting past the limit is never kept");
     }
 
     #[test]
