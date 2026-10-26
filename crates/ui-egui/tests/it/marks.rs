@@ -644,7 +644,10 @@ fn bates_numbering_dialog_configures_digits_and_padding() {
     assert_eq!(h.state().marks_draft.hf.text[5], "<<Bates Number#6#1##>>");
 
     // Typing a prefix in the UI updates the existing Bates token in box 5 in place.
-    h.state_mut().marks_draft.bates_digits = 8;
+    h.state_mut().marks_draft.hf.text[5] = "<<Bates Number#8#1##>>".into();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.bates_digits, 8, "parsed from the existing token on open");
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix:").click();
     h.run_steps(1);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Prefix:").type_text("DOC-");
