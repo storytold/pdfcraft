@@ -88,11 +88,19 @@ pub struct Motion {
     /// egui's own animation time and scroll animation, kept while they are changed here.
     egui_times: Option<(f32, ScrollAnimation)>,
     wheel: WheelReader,
+    /// This frame's wheel motion, read on its first pass and reused on later passes.
+    ///
+    /// egui empties `RawInput` between the passes of a multi-pass frame, so reading the wheel
+    /// again in a later pass sees nothing. Only the first pass is handed the motion (a scroll
+    /// area keeps the offset it moved to, a view keeps the zoom it set); later passes are handed
+    /// no scroll and a unit zoom, explicitly.
+    frame: Option<(u64, WheelMotion)>,
 }
 
 impl Default for Motion {
+    /// Start motion handling with animations enabled and no desktop preference sampled yet.
     fn default() -> Self {
-        Self { reduced: false, source: None, asked_at: f64::NEG_INFINITY, egui_times: None, wheel: WheelReader::default() }
+        Self { reduced: false, source: None, asked_at: f64::NEG_INFINITY, egui_times: None, wheel: WheelReader::default(), frame: None }
     }
 }
 
@@ -114,13 +122,36 @@ impl Motion {
         if animate {
             // A gesture begun while easing is egui's to finish.
             self.wheel = WheelReader::default();
+            self.frame = None;
             return;
         }
         let options = ctx.options(|o| o.input_options);
-        let motion = ctx.input(|i| self.wheel.read(&i.events, i.viewport_rect().height(), &options));
-        ctx.input_mut(|i| i.smooth_scroll_delta = motion.scroll);
+        // One frame may run several passes (`request_discard`). Only the first pass has this
+        // frame's events, and only it may hand the wheel on: a scroll area applies the delta to
+        // its persisted offset, and a view multiplies the zoom into its persisted zoom, so
+        // replaying either would apply it twice. egui also rebuilds `smooth_scroll_delta` and
+        // its zoom factor from its retained wheel state every pass, so later passes must be
+        // given zero scroll and a unit zoom explicitly. A missing zoom entry would not do: it
+        // would fall back to egui's rebuilt factor.
+        let frame = ctx.cumulative_frame_nr();
+        let first_pass = match self.frame {
+            Some((read_in, _)) => read_in != frame,
+            None => true,
+        };
+        let motion = match self.frame {
+            Some((read_in, motion)) if read_in == frame => motion,
+            _ => {
+                let motion = ctx.input(|i| self.wheel.read(&i.events, i.viewport_rect().height(), &options));
+                self.frame = Some((frame, motion));
+                motion
+            }
+        };
+        let (scroll, zoom) = if first_pass { (motion.scroll, motion.zoom) } else { (Vec2::ZERO, 1.0) };
+        ctx.input_mut(|i| i.smooth_scroll_delta = scroll);
         let pass = ctx.cumulative_pass_nr();
-        ctx.data_mut(|d| d.insert_temp(zoom_id(), (pass, motion.zoom)));
+        ctx.data_mut(|d| d.insert_temp(zoom_id(), (pass, zoom)));
+        // Existing kinetic scrolling remains owned by egui; gating wheel input does not
+        // suppress a scroll area's per-pass advancement of retained velocity.
     }
 
     /// egui's animations, and its scrolling to a place, take no time unless the window is to
@@ -148,8 +179,9 @@ pub(crate) fn animated(ctx: &egui::Context) -> bool {
     ctx.global_style().animation_time > 0.0
 }
 
+/// Return the stable egui id holding the last wheel-zoom input state.
 fn zoom_id() -> egui::Id {
-    egui::Id::new("pdfcraft-motion-wheel-zoom")
+    egui::Id::unique("pdfcraft-motion-wheel-zoom")
 }
 
 /// This pass's zoom factor from a pinch or ⌘/Ctrl with the wheel (1.0 for none): egui's
@@ -194,7 +226,7 @@ impl WheelReader {
         let mut modifiers = self.touch.unwrap_or_default();
         for event in events {
             match event {
-                Event::MouseWheel { unit, delta: step, phase, modifiers: latest } => match phase {
+                Event::MouseWheel { unit, delta: step, phase, modifiers: latest, .. } => match phase {
                     TouchPhase::Start => {
                         self.touch = Some(*latest);
                         modifiers = *latest;
@@ -256,7 +288,7 @@ mod tests {
     use std::rc::Rc;
 
     fn wheel(unit: MouseWheelUnit, delta: Vec2, phase: TouchPhase, modifiers: Modifiers) -> Event {
-        Event::MouseWheel { unit, delta, phase, modifiers }
+        Event::MouseWheel { unit, delta, phase, modifiers, source: egui::MouseWheelSource::Unknown }
     }
 
     fn notch(dy: f32, modifiers: Modifiers) -> Event {
@@ -505,6 +537,104 @@ mod tests {
             let eguis = ctx.input(|i| i.zoom_delta());
             assert_eq!(zoom_delta(ctx), eguis);
         });
+    }
+
+    /// With animation effects off, a real scroll area moves by one wheel step whether the frame
+    /// runs one pass or two (a `request_discard` from a sizing pass): the scroll area already
+    /// applied and stored the step in the first pass, so a later pass must not apply it again,
+    /// and must not replay the frame's raw wheel events either.
+    #[test]
+    fn two_pass_scroll_area_applies_one_wheel_step_like_a_single_pass() {
+        fn run(two_passes: bool) -> (Vec<Vec2>, Vec<usize>) {
+            let ctx = egui::Context::default();
+            let mut motion = Motion { reduced: true, ..Default::default() };
+            let mut offsets = Vec::new();
+            let mut wheel_events = Vec::new();
+            let raw = egui::RawInput {
+                time: Some(0.1),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 300.0))),
+                events: vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0)), notch(-1.0, Modifiers::NONE)],
+                ..Default::default()
+            };
+            let output = ctx.run_ui(raw, |ui| {
+                motion.begin_pass(ui.ctx(), AnimationEffects::System);
+                wheel_events.push(ui.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::MouseWheel { .. })).count()));
+                // Taller than the 300-point viewport, so one step stays far from the scroll
+                // limit and a doubled step could not be hidden by clamping.
+                let out = egui::ScrollArea::vertical().id_salt("motion-two-pass-scroll").auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_min_size(egui::vec2(100.0, 3000.0));
+                });
+                offsets.push(out.state.unclamped_offset());
+                if two_passes && ui.ctx().current_pass_index() == 0 {
+                    ui.ctx().request_discard("motion two-pass scroll regression");
+                }
+            });
+            output.drop_without_applying_deltas();
+            (offsets, wheel_events)
+        }
+
+        let (single, single_events) = run(false);
+        let (two, two_events) = run(true);
+
+        assert_eq!(single.len(), 1, "one frame, one pass");
+        assert_eq!(two.len(), 2, "the frame really ran two passes");
+        assert_eq!(single_events, vec![1], "one wheel event reaches the first pass");
+        assert_eq!(two_events, vec![1, 0], "raw wheel events are not replayed in the later pass");
+
+        let step = single[0].y;
+        assert!(step > 0.0, "the wheel step scrolled: {single:?}");
+        assert!((two[0].y - step).abs() < 0.01, "the first pass applies the whole step: single={step}, two-pass={two:?}");
+        assert!((two[1].y - step).abs() < 0.01, "the presented pass must not apply the same step again: single={step}, two-pass={two:?}");
+    }
+
+    /// With animation effects off, ctrl/⌘-wheel and pinch zoom reach a view's persisted zoom
+    /// once, whether the frame runs one pass or two (a `request_discard` from a sizing pass):
+    /// multiplying an accumulator by each pass's factor gives the single step either way. A
+    /// later pass gets a unit factor explicitly, and a frame with no wheel input resets to it.
+    #[test]
+    fn two_pass_zoom_applies_one_step_like_a_single_pass() {
+        /// One frame's `zoom_delta` readings, one per pass.
+        fn frame(ctx: &egui::Context, motion: &mut Motion, time: f64, events: Vec<Event>, two_passes: bool) -> Vec<f32> {
+            let raw = egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let mut zooms = Vec::new();
+            let output = ctx.run_ui(raw, |ui| {
+                motion.begin_pass(ui.ctx(), AnimationEffects::System);
+                zooms.push(zoom_delta(ui.ctx()));
+                if two_passes && ui.ctx().current_pass_index() == 0 {
+                    ui.ctx().request_discard("motion two-pass zoom regression");
+                }
+            });
+            output.drop_without_applying_deltas();
+            zooms
+        }
+
+        let line = egui::InputOptions::default().line_scroll_speed;
+        let ctrl_step = (egui::InputOptions::default().scroll_zoom_speed * line).exp();
+        for (name, events, step) in [("ctrl-wheel", vec![notch(1.0, Modifiers::COMMAND)], ctrl_step), ("pinch", vec![Event::Zoom(1.5)], 1.5)] {
+            assert!((step - 1.0).abs() > 0.01, "{name}: the factor is nontrivial: {step}");
+            let single = {
+                let ctx = egui::Context::default();
+                let mut motion = Motion { reduced: true, ..Default::default() };
+                frame(&ctx, &mut motion, 0.1, events.clone(), false)
+            };
+            let ctx = egui::Context::default();
+            let mut motion = Motion { reduced: true, ..Default::default() };
+            let two = frame(&ctx, &mut motion, 0.1, events, true);
+            assert_eq!(single.len(), 1, "{name}: one frame, one pass: {single:?}");
+            assert_eq!(two.len(), 2, "{name}: the frame really ran two passes: {two:?}");
+            let product = |zooms: &[f32]| zooms.iter().product::<f32>();
+            assert!((product(&single) - step).abs() < 1e-5, "{name}: one pass applies the step: {single:?}");
+            assert!((product(&two) - step).abs() < 1e-5, "{name}: two passes apply it once: {two:?}");
+            assert!((two[1] - 1.0).abs() < 1e-6, "{name}: a later pass zooms by nothing: {two:?}");
+            // The next frame's wheel reading starts over; the two-pass frame's factor is gone.
+            let after = frame(&ctx, &mut motion, 0.1 + 1.0 / 60.0, Vec::new(), false);
+            assert_eq!(after, vec![1.0], "{name}: the cached factor does not survive the frame");
+        }
     }
 
     #[test]

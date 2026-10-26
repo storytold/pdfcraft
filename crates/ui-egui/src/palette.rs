@@ -19,6 +19,11 @@ struct Hit {
 
 /// Where `needle` (folded with [`pdfcraft_render::text::fold_case`]) matches `hay`, for ranking.
 fn score(hay: &str, needle: &str) -> Option<usize> {
+    score_for_direction(hay, needle, crate::i18n::current().rtl())
+}
+
+/// Rank logical text, accepting reordered query words for right-to-left locales.
+fn score_for_direction(hay: &str, needle: &str, rtl: bool) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
@@ -26,10 +31,9 @@ fn score(hay: &str, needle: &str) -> Option<usize> {
     if let Some(p) = h.find(needle) {
         return Some(p);
     }
-    // A right-to-left language's labels are in display order (their words run the other way)
-    // while the query is in typing order, so several words match one by one.
-    if crate::i18n::current().rtl() && needle.contains(char::is_whitespace) {
-        let first = needle.split_whitespace().map(|word| h.find(word)).try_fold(usize::MAX, |first, p| p.map(|p| first.min(p)));
+    // Match the all-tools search: RTL queries may name the same words in another order.
+    if rtl && needle.contains(char::is_whitespace) {
+        let first = needle.split_whitespace().try_fold(usize::MAX, |first, word| h.find(word).map(|at| first.min(at)));
         if let Some(first) = first {
             return Some(first);
         }
@@ -39,8 +43,9 @@ fn score(hay: &str, needle: &str) -> Option<usize> {
     needle.chars().all(|c| it.any(|x| x == c)).then_some(100)
 }
 
+/// Draw the command palette and dispatch the chosen command or tool group.
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    let palette_rect_id = egui::Id::new("palette_rect");
+    let palette_rect_id = egui::Id::unique("palette_rect");
     if !app.palette_open {
         return;
     }
@@ -111,8 +116,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     hits.truncate(12);
     let (down, up) = ctx.input(|i| (i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::ArrowUp)));
     let selected = ctx.data_mut(|data| {
-        let id = egui::Id::new("palette_selected");
-        let query_id = egui::Id::new("palette_selected_query");
+        let id = egui::Id::unique("palette_selected");
+        let query_id = egui::Id::unique("palette_selected_query");
         let previous_query = data.get_temp::<String>(query_id);
         let selected =
             if previous_query.as_deref() == Some(&q) { data.get_temp::<usize>(id).unwrap_or(0) } else { 0 }.min(hits.len().saturating_sub(1));
@@ -143,7 +148,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     }
     let mut chosen: Option<(Option<&'static str>, Option<&'static str>)> = None;
-    let area_response = egui::Area::new(egui::Id::new("palette"))
+    let area_response = egui::Area::new(egui::Id::unique("palette"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(egui::pos2(screen.center().x, screen.top() + 96.0))
@@ -152,13 +157,15 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.set_width(560.0);
                 ui.horizontal(|ui| {
                     ui.add(icons::image("search", 18.0, t.text_muted));
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut app.palette_query)
-                            .hint_text(tl!("Search tools and commands…"))
-                            .frame(egui::Frame::NONE)
-                            .font(theme::regular(15.0))
-                            .desired_width(f32::INFINITY),
-                    );
+                    let r = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.palette_query)
+                                .hint_text(tl!("Search tools and commands…"))
+                                .frame(egui::Frame::NONE)
+                                .font(theme::regular(15.0))
+                                .desired_width(f32::INFINITY),
+                        )
+                        .accessible_name(tl!("Search tools and commands"));
                     // Enter runs the selected hit while the field is focused or relinquishing focus.
                     if (r.has_focus() || r.lost_focus())
                         && ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -181,7 +188,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     // Display is translated; matching above already considered both languages.
                     let shown = crate::i18n::command_label(&h.label);
                     let shown_detail = tl!(&h.detail).to_string();
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, h.ready, &shown));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, h.ready, &shown));
                     let fg = if h.ready { t.text } else { t.text_faint };
                     let detail_font = theme::regular(12.0);
                     let detail_max = (rect.width() * 0.42).clamp(0.0, 220.0);
@@ -226,8 +233,19 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod search {
-    use super::score;
+    use super::{score, score_for_direction};
     use pdfcraft_render::text::fold_case;
+
+    /// Word-order tolerance is RTL-only and still requires every requested word.
+    #[test]
+    fn rtl_palette_queries_accept_reordered_words_without_reversing_text() {
+        let label = "تنظيم الصفحات";
+        assert_eq!(score_for_direction(label, &fold_case("الصفحات تنظيم"), true), Some(0));
+        assert_eq!(score_for_direction(label, &fold_case("تنظيم الصفحات"), true), Some(0));
+        assert_eq!(score_for_direction(label, &fold_case("الصفحات مفقود"), true), None);
+        assert_eq!(score_for_direction(label, &fold_case("الصفحات تنظيم"), false), None);
+        assert_eq!(score_for_direction("Organize Pages", &fold_case("Pages Organize"), false), None);
+    }
 
     #[test]
     fn commands_match_in_any_case_with_turkish_i() {

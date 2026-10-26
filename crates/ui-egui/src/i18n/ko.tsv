@@ -162,6 +162,15 @@
 	Available	사용 가능
 	Ready	준비됨
 	Search tools and commands…	도구 및 명령 검색…
+
+# Accessible names for inputs that have no visible label.
+	Added text	추가한 텍스트
+	Link URL	링크 URL
+	Search tools and commands	도구 및 명령 검색
+	Text editing line	텍스트 편집 줄
+	Text to place	배치할 텍스트
+	Tooltip	도구 설명
+	Words or phrases to redact	민감 정보를 제거할 단어 또는 구문
 	No matching tools	일치하는 도구가 없습니다
 	Tool	도구
 	Command	명령
@@ -2682,6 +2691,14 @@ certificate	SHA-256 digest	SHA-256 다이제스트
 	Make properties default	속성을 기본값으로 설정
 	Pages selected	선택한 페이지
 	Page properties	페이지 속성
+	Create & Edit	만들기 및 편집
+	Review & Compare	검토 및 비교
+	Forms & Signatures	양식 및 서명
+	Protect & Standardize	보호 및 표준화
+	Customize & Automate	사용자 지정 및 자동화
+	No tools match your search.	검색과 일치하는 도구가 없습니다.
+	Expand all tools	모든 도구 펼치기
+	Collapse all tools	모든 도구 접기
 	The password must have at least 8 characters.	암호는 8자 이상이어야 합니다.
 theme	Appearance	모양
 	Zoom — type a percentage and press Enter	줌 — 백분율을 입력하고 Enter를 누르세요
@@ -2768,3 +2785,12 @@ theme	Appearance	모양
 	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
+@plural	{n} reply|{n} replies	답글 {n}개
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	페이지 도구
+	Insert pages from a file after the selection…	선택 영역 뒤에 파일에서 페이지 삽입…
+	Rotate the selected pages counterclockwise	선택한 페이지를 시계 반대 방향으로 회전
+	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
+	Extract the selected pages…	선택한 페이지 추출…
+	Delete the selected pages	선택한 페이지 삭제

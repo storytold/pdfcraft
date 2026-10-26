@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
-> **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M8, #3205 follow-up: labelled Italian international phone numbers with a slash match whole; estimates unchanged)
+> **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M10: Word table cells use the widths of their own grid columns; estimates unchanged)
@@ -165,10 +165,10 @@ Portuguese and Spanish vs the current union). Detail and script notes: [localiza
 | Language | Code | Strings | Status |
 |---|---|---|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 97.4% | partial (no Hans UI face in releases, #826) |
+| Simplified Chinese | `zh-hans` | 97.4% | partial (native LXGW WenKai Lite; no Hans face in the web build, #826) |
 | Spanish | `es` | 100% of current union | partial (dialogs / tooltips; no help) |
 | Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 100% | partial (layout not mirrored) |
+| Arabic | `ar` | 100% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
 | French | `fr` | 99.3% | partial |
 | Portuguese (Brazil) | `pt-br` | 100% of current union | partial |
 | Indonesian | `id` | 0% | none |
@@ -188,7 +188,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | Rank | Milestone | Estimate (h) |
 |---|---|---|
 | 0 | Convert and share: Create PDF from Office, Word export that keeps layout (#773) | 32–55 |
-| 1 | Backlog and platform: crash and wrong-result reports, Chinese UI face (#826) | 50–90 |
+| 1 | Backlog and platform: crash and wrong-result reports, Chinese web UI face (#826) | 50–90 |
 | 2 | Fidelity harness against Acrobat and the renderer decision (M2; owner decision on #841) | 110–190 |
 | 3 | Editing existing content (M7) | 100–180 |
 | 4 | OCR languages and Office export/import (M10) | 95–175 |
@@ -199,6 +199,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
+- **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
 
 - **2026-10-23 (M7, #4280):** Edit text names each standard stand-in font after its face (`PCEdTimesBold`, ...) instead of one shared `PCEdHelv`. Rewriting a bold paragraph whose subset lacks an accent no longer repoints the paragraphs set earlier in a regular stand-in at Times-Bold, and the editor's frame stays on the paragraph being edited. Pages saved by older builds keep their shared name and are not repaired. Estimates unchanged.
@@ -225,6 +227,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-20 (M3, #3535):** Escape with a menu open closes the menu and keeps the text selection; the next Escape clears it, as before. One keypress used to do both. A synthetic UI regression checks it. Estimates unchanged.
 - **2026-10-16 (M3, close prompt keyboard):** The "Save changes?" prompt opens with Save chosen (Enter saves, as before) and the arrow keys and Tab / Shift+Tab move the choice to Cancel or Don't save, shown with a focus ring; Enter or Space press the chosen button and Escape still cancels. Before, Enter always saved whatever was Tab-focused. Estimates unchanged.
 - **2026-10-21 (M3, #3808):** Page thumbnails in the Inspector can be resized independently from the document and Organize, with a slider, buttons and `thumbnail-zoom` control option. Selection, page following and reload are covered by regressions. Estimates unchanged.
+- **2026-10-22 (M5, comment threads):** Replies join the comment their `/IRT` references, not every comment sharing its `/NM`; PyMuPDF names each page's first comment `fitz-A0`, so all replies used to land under page 1. The Comments header counts comments without their replies, with the number of replies in small text under it (in every catalogue), and a reply's thread line runs from the avatar above it to its own. A reply to a reply shows in its thread in the panel too (it was listed nowhere), an `/IRT` that leads to no comment (itself, a loop, a pop-up, an unlisted object) leaves its annotation a comment of its own instead of hiding it (a status or checkmark that leads nowhere is listed nowhere), and a Replace Text caret isn't counted as a reply. The comment tools refuse an `id` several comments share instead of acting on the first (page 1's), and take `page` + `index` for those; `comment_list` reads a status or checkmark from the annotation it was set on, as the panel does, and reports a reply's own on the reply. UI, engine and automation regressions cover it. Estimates unchanged.
 - **2026-10-22 (M2, #3107 / PR #3438):** Inline-image parsing falls back to the existing EI heuristic when missing declared samples, headers or terminators exceed the content-window budget, instead of waiting for an impossible allocation. Exact-length parsing for available samples and ordinary large streamed images is retained. Estimates unchanged.
 - **2026-10-21 (M14, Brazilian Portuguese):** Completed the `pt-br` catalog against the current 2,674-key union, including signature validation and accessibility messages; no build or compilation run. Localization remains partial because help and unpredictable engine/OS error details are not translated.
 - **2026-10-21 (M14, #3557):** Preferences: the OK button stays below the scrolling settings instead of being the last thing in them, so it is in reach in a short window.
@@ -318,6 +321,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-15 (M12, XFA, #2574):** A `pageArea` with no `<occur>` repeats without limit instead of taking a subform's default of one use, so a later page area with `occur max="1"` is no longer drawn (with a copy of its fields) over every body page. Synthetic regression test; the page area's `occur min` (a once-only page of its own) is still not laid out, recorded in `form.xfa-dynamic`. Estimates unchanged.
 - **2026-10-14 (M12, reading colours, #2059):** Pending page backgrounds use the document's reading colour immediately, preventing white flashes while scrolling to uncached pages. A headless canvas regression covers three pending pages in every preset and a custom background. Estimates unchanged.
 - **2026-10-15 (community, M6, #2608):** In Prepare a form the selected field moves with the arrow keys: a point per press, ten with Shift, as the object nudge and dragging it do. Each press is one undo step ("Change field properties"), and the keys no longer turn the page while a field is selected. Estimates unchanged.
+- **2026-10-15 (M3, closable community card):** The ArtCraft community card on Home has a close button that hides it for the rest of the run; it returns on the next launch, and its links stay in the top bar's Discord button and the Help menu. A UI regression covers closing and the fresh-launch default. Estimates unchanged.
 - **2026-10-13 (community, M3, #1569 review):** Pixel-only Wayland wheel, wheel-tilt and continuous input use standalone moved events, so Ctrl zoom does not remain latched after the modifier is released (#991); vendored winit patch (13), with a policy test. Estimates unchanged.
 - **2026-10-15 (M14, #2383 candidate):** Device-limit requests now clamp unsupported maxima and minimum alignments before enabling the adapter's full 2D texture extent. This addresses the reported V3D request of 16 shader variables on an adapter supporting 15. Synthetic regressions fail before the clamp and pass afterward, along with the existing HiDPI case and Windows GPU-required application tests. Raspberry Pi startup remains unverified; milestone and overall estimates are unchanged.
 - **2026-10-12 (M6):** XFDF field import and data-file extraction join all text nodes in a value, preserving text after XML comments and processing instructions. Synthetic regressions cover Unicode, CDATA, empty values and PDF save/reopen. Estimates unchanged.
@@ -671,6 +675,8 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
 ## Revision history
+
+**2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 
 **2026-10-15 · minor:** M14/#2383 candidate: GPU device requests clamp unsupported limits while retaining the adapter texture extent. Synthetic V3D/downlevel regressions and Windows GPU-required tests pass; Raspberry Pi hardware remains unverified. Estimates unchanged.
 

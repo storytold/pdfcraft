@@ -8,6 +8,7 @@ use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS,
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::{PdfCraftApp, widgets};
 
@@ -234,20 +235,22 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 /// Redact tool input on a page. Presses on text are left to text selection (the selection is
 /// marked when it ends, see [`after_text`]); presses elsewhere draw a box. Returns `true` when
 /// the gesture is a box.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     over_text: impl Fn(Pos2) -> bool,
     view: &mut DocView,
 ) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let pointer = ptr.pos;
     if let Some((dp, start)) = view.redact_drag
         && dp == page
     {
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             view.redact_drag = None;
             let end = pointer.unwrap_or(start);
             let r = Rect::from_two_pos(start, end).intersect(xf.rect);
@@ -263,7 +266,7 @@ pub(crate) fn page_input(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     if resp.drag_started() {
-        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+        let origin = ptr.origin.unwrap_or(p);
         if !over_text(origin) {
             view.redact_drag = Some((page, origin));
             return true;
@@ -283,9 +286,9 @@ pub(crate) fn after_text(resp: &egui::Response, page: usize, info: &DocInfo, vie
     }
 }
 
-/// The box being drawn.
-pub(crate) fn paint(ui: &egui::Ui, painter: &egui::Painter, page: usize, view: &DocView) {
-    if let (Some((dp, start)), Some(p)) = (view.redact_drag, ui.input(|i| i.pointer.hover_pos()))
+/// The box being drawn, to the pages' `pointer`.
+pub(crate) fn paint(painter: &egui::Painter, page: usize, view: &DocView, pointer: Option<Pos2>) {
+    if let (Some((dp, start)), Some(p)) = (view.redact_drag, pointer)
         && dp == page
     {
         let r = Rect::from_two_pos(start, p);
@@ -385,7 +388,7 @@ pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) ->
     widgets::radio_value(ui, &mut d.mode, SearchMode::Phrase, tl!("Single word or phrase"));
     let mut enter = false;
     ui.add_enabled_ui(d.mode == SearchMode::Phrase, |ui| {
-        let r = ui.add(crate::widgets::line(&mut d.text).hint_text(tl!("Text to find")).desired_width(380.0));
+        let r = ui.add(crate::widgets::line(&mut d.text).hint_text(tl!("Text to find")).desired_width(380.0)).accessible_name(tl!("Text to find"));
         enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     });
     ui.add_space(6.0);
@@ -393,7 +396,8 @@ pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) ->
     let mut import = false;
     ui.add_enabled_ui(d.mode == SearchMode::Words, |ui| {
         egui::ScrollArea::vertical().id_salt("redact-words").max_height(120.0).show(ui, |ui| {
-            ui.add(egui::TextEdit::multiline(&mut d.words).hint_text(tl!("One word or phrase per line")).desired_width(380.0).desired_rows(4));
+            ui.add(egui::TextEdit::multiline(&mut d.words).hint_text(tl!("One word or phrase per line")).desired_width(380.0).desired_rows(4))
+                .accessible_name(tl!("Words or phrases to redact"));
         });
         ui.horizontal(|ui| {
             import = ui.button(tl!("Import list…")).clicked();

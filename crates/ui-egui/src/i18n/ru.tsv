@@ -177,6 +177,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Поиск инструментов и команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Добавленный текст
+	Link URL	URL-адрес ссылки
+	Search tools and commands	Поиск инструментов и команд
+	Text editing line	Строка редактирования текста
+	Text to place	Текст для размещения
+	Tooltip	Подсказка
+	Words or phrases to redact	Слова или фразы для скрытия
 	No matching tools	Нет подходящих инструментов
 	Tool	Инструмент
 	Command	Команда
@@ -2402,6 +2411,14 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Create & Edit	Создание и редактирование
+	Review & Compare	Рецензирование и сравнение
+	Forms & Signatures	Формы и подписи
+	Protect & Standardize	Защита и стандартизация
+	Customize & Automate	Настройка и автоматизация
+	No tools match your search.	Нет инструментов, соответствующих запросу.
+	Expand all tools	Развернуть все инструменты
+	Collapse all tools	Свернуть все инструменты
 	Attach a file…	Прикрепить файл…
 	Delete attachment	Удалить вложение
 	Attaching files is not available on the web yet	Прикрепление файлов в веб-версии пока недоступно
@@ -2444,3 +2461,12 @@ animation effects	Off	Выкл
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня
+@plural	{n} reply|{n} replies	{n} ответ|{n} ответа|{n} ответов
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Инструменты страниц
+	Insert pages from a file after the selection…	Вставить страницы из файла после выделения…
+	Rotate the selected pages counterclockwise	Повернуть выбранные страницы против часовой стрелки
+	Rotate the selected pages clockwise	Повернуть выбранные страницы по часовой стрелке
+	Extract the selected pages…	Извлечь выбранные страницы…
+	Delete the selected pages	Удалить выбранные страницы

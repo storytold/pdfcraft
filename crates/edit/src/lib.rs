@@ -57,7 +57,9 @@ pub struct HeaderFooter {
     /// Left, centre and right header text, then left, centre and right footer text. Tokens:
     /// `<<1>>` page number, `<<n>>` page count, `<<1 of n>>`, `<<1/n>>`, `<<Page 1>>`,
     /// `<<Page 1 of n>>`, dates `<<m/d/yyyy>>`, `<<mm/dd/yyyy>>`, `<<d/m/yyyy>>`, `<<yyyy-mm-dd>>`,
-    /// `<<yyyy/mm/dd>>`, `<<yyyy/m/d>>`, `<<m/d/yy>>`, `<<mmmm d, yyyy>>`, and Bates numbers `<<Bates Number#6#1#PRE#SUF>>`
+    /// `<<yyyy/mm/dd>>`, `<<yyyy/m/d>>`, `<<m/d/yy>>`, `<<mmmm d, yyyy>>`, the dotted day-first
+    /// dates of German-speaking and much of Central and Eastern Europe `<<dd.mm.yyyy>>`,
+    /// `<<d.m.yyyy>>`, `<<dd.mm.yy>>`, `<<d.m.yy>>`, and Bates numbers `<<Bates Number#6#1#PRE#SUF>>`
     /// (digits, start, prefix, suffix).
     pub text: [String; 6],
     /// The standard face the text is drawn in (#3754): Helvetica (the default), Times or Courier.
@@ -297,6 +299,10 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
             "d/m/yy" => format!("{d}/{m}/{:02}", y.rem_euclid(100)),
             "d/m/yyyy" => format!("{d}/{m}/{y}"),
             "dd/mm/yyyy" => format!("{d:02}/{m:02}/{y}"),
+            "d.m.yy" => format!("{d}.{m}.{:02}", y.rem_euclid(100)),
+            "d.m.yyyy" => format!("{d}.{m}.{y}"),
+            "dd.mm.yy" => format!("{d:02}.{m:02}.{:02}", y.rem_euclid(100)),
+            "dd.mm.yyyy" => format!("{d:02}.{m:02}.{y}"),
             "yyyy-mm-dd" => format!("{y}-{m:02}-{d:02}"),
             "yyyy/mm/dd" => format!("{y}/{m:02}/{d:02}"),
             "yyyy/m/d" => format!("{y}/{m}/{d}"),
@@ -1038,8 +1044,8 @@ pub use text::{
 };
 pub mod added;
 pub use added::{
-    Added, AddedImage, AddedText, Align, Content, Family, MarkerScan, add_content, delete_content, first_undrawable, list_added, scan_markers,
-    update_content,
+    Added, AddedImage, AddedText, Align, Content, Family, MarkerScan, add_content, delete_content, first_undrawable, isolate_content, list_added,
+    scan_markers, update_content,
 };
 
 #[cfg(test)]

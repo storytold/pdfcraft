@@ -884,37 +884,14 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 }
                 let b = bbox.unwrap_or_default();
                 changed = true;
-                if scope.covered(b) {
-                    scope.report.paths_removed += 1;
-                    if clips {
-                        // Keep the clipping, drop the painting.
-                        ops.extend(body);
-                        ops.push(Op::new("n", vec![]));
-                    }
-                } else if clips {
-                    // A clip-and-paint path can't be wrapped in q/Q without losing its clip:
-                    // paint it clipped, then set its clip with a no-op path.
-                    scope.report.paths_clipped += 1;
-                    if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
-                        let plain: Vec<Op> = body.iter().filter(|p| !p.is("W") && !p.is("W*")).cloned().collect();
-                        ops.push(Op::new("q", vec![]));
-                        ops.extend(c);
-                        ops.extend(plain);
-                        ops.push(op);
-                        ops.push(Op::new("Q", vec![]));
-                    }
+                scope.report.paths_removed += 1;
+                if scope.covered(b) && clips {
+                    // Keep the clipping, drop the painting.
                     ops.extend(body);
                     ops.push(Op::new("n", vec![]));
-                } else {
-                    scope.report.paths_clipped += 1;
-                    if let Some(c) = clip_out(scope.rects, &gs.ctm, b) {
-                        ops.push(Op::new("q", vec![]));
-                        ops.extend(c);
-                        ops.extend(body);
-                        ops.push(op);
-                        ops.push(Op::new("Q", vec![]));
-                    }
                 }
+                // Partial vector redaction must not retain underlying drawing commands
+                // behind clipping (F-008). Refuse partial clip retention and remove the path.
                 continue;
             }
             if !path.is_empty() {

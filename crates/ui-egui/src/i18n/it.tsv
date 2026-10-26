@@ -181,6 +181,15 @@
 	Available	Disponibile
 	Ready	Pronto
 	Search tools and commands…	Cerca strumenti e comandi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Testo aggiunto
+	Link URL	URL del collegamento
+	Search tools and commands	Cerca strumenti e comandi
+	Text editing line	Riga di modifica del testo
+	Text to place	Testo da posizionare
+	Tooltip	Descrizione comando
+	Words or phrases to redact	Parole o frasi da oscurare
 	No matching tools	Nessuno strumento corrispondente
 	Tool	Strumento
 	Command	Comando
@@ -2701,6 +2710,14 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Create & Edit	Crea e modifica
+	Review & Compare	Revisione e confronto
+	Forms & Signatures	Moduli e firme
+	Protect & Standardize	Proteggi e standardizza
+	Customize & Automate	Personalizza e automatizza
+	No tools match your search.	Nessuno strumento corrisponde alla ricerca.
+	Expand all tools	Espandi tutti gli strumenti
+	Collapse all tools	Comprimi tutti gli strumenti
 	Attach a file…	Allega un file…
 	Delete attachment	Elimina allegato
 	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web
@@ -2763,3 +2780,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
+@plural	{n} reply|{n} replies	{n} risposta|{n} risposte
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Strumenti pagina
+	Insert pages from a file after the selection…	Inserisci pagine da un file dopo la selezione…
+	Rotate the selected pages counterclockwise	Ruota le pagine selezionate in senso antiorario
+	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
+	Extract the selected pages…	Estrai le pagine selezionate…
+	Delete the selected pages	Elimina le pagine selezionate

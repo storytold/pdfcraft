@@ -1508,6 +1508,8 @@ fn top_fields(doc: &Document) -> Vec<(String, pdfcraft_cos::Dict)> {
         .collect()
 }
 
+/// Choice lists, a password, a signature and pictures in the template become their kinds of
+/// widget, and their AcroForm fields and image XObjects once written.
 #[test]
 fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
     let form = layout_xml(&fields_template("")).unwrap();
@@ -1570,7 +1572,11 @@ fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
     assert_eq!(opt[0].as_string().unwrap().to_text(), "English", "same shown text and value: a plain string");
     assert_eq!(field("other").int(b"Ff"), Some((1 << 17) | (1 << 18)), "an editable combo box");
     assert_eq!(field("pin").int(b"Ff"), Some(1 << 13), "a password field");
-    assert_eq!(field("sign").name(b"FT"), Some(b"Sig".as_slice()));
+    // The signature field is named by its SOM path, under a generated field for each step above it.
+    assert!(fields.iter().all(|(name, _)| name != "sign"));
+    let named = full_names(&doc);
+    let sign = named.iter().find(|(name, _)| name == "form[0].page1[0].sign[0]").map(|(_, d)| d).expect("named by its SOM path");
+    assert_eq!(sign.name(b"FT"), Some(b"Sig".as_slice()));
     let streams: Vec<pdfcraft_cos::Stream> = doc
         .object_numbers()
         .into_iter()
@@ -3009,6 +3015,213 @@ fn a_zero_caption_reserve_sizes_the_caption_as_none_does() {
     assert!((x_of("withZero") - x_of("without")).abs() < 0.01, "as without a reserve: {} {}", x_of("withZero"), x_of("without"));
 }
 
+/// The terminal fields by full name, down the field tree.
+fn full_names(doc: &Document) -> Vec<(String, Dict)> {
+    let root = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(root.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let mut todo: Vec<(Object, String)> =
+        doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().iter().map(|f| (f.clone(), String::new())).collect();
+    let mut out = Vec::new();
+    while let Some((f, prefix)) = todo.pop() {
+        let d = doc.resolve(&f).as_dict().unwrap().clone();
+        let t = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text()));
+        let name = match t {
+            Some(t) if prefix.is_empty() => t,
+            Some(t) => format!("{prefix}.{t}"),
+            None => prefix,
+        };
+        match d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            Some(kids) if kids.iter().any(|k| doc.resolve(k).as_dict().is_some_and(|k| k.contains(b"T"))) => {
+                todo.extend(kids.into_iter().map(|k| (k, name.clone())));
+            }
+            _ => out.push((name, d)),
+        }
+    }
+    out
+}
+
+/// A laid-out signature field is named by its SOM path, under a generated field for each step
+/// above it, as other viewers lay a dynamic form out again and find its signature by that name.
+/// Boxes in one subform share those fields; a new layout replaces them rather than adding more;
+/// taking the XFA out leaves them as ordinary fields.
+#[test]
+fn signature_fields_are_named_by_their_som_path() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">
+  <field name="name" w="3in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+  <field name="other" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+ <subform name="end" layout="tb" w="7.5in">
+  <field name="last" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 4, "name and the three signature fields");
+    let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let check = |doc: &Document| {
+        let top: Vec<String> = pdfcraft_forms_free_fields(doc).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(top.iter().filter(|n| *n == "form[0]").count(), 1, "one field for the root subform: {top:?}");
+        assert!(top.iter().any(|n| n == "name"), "other fields keep their names: {top:?}");
+        let named = full_names(doc);
+        for som in ["form[0].body[0].sign[0]", "form[0].body[0].other[0]", "form[0].end[0].last[0]"] {
+            let (_, d) = named.iter().find(|(name, _)| name == som).unwrap_or_else(|| panic!("{som} in {named:?}"));
+            assert_eq!(d.name(b"FT"), Some(b"Sig".as_slice()));
+            assert_eq!(fields_by_som(doc).get(som).map(String::as_str), Some(som), "the data finds it by its SOM path");
+        }
+        assert_eq!(named.len(), 4, "{named:?}");
+    };
+    check(&doc);
+    let body = |doc: &Document| {
+        let named = full_names(doc);
+        let parent = |som: &str| named.iter().find(|(name, _)| name == som).and_then(|(_, d)| d.get(b"Parent").and_then(Object::as_ref));
+        (parent("form[0].body[0].sign[0]"), parent("form[0].body[0].other[0]"))
+    };
+    let (a, b) = body(&doc);
+    assert!(a.is_some() && a == b, "the two boxes of one subform share its field");
+    // Laid out again: the same fields, not a second set.
+    let mut doc = doc;
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    check(&doc);
+    // The XFA taken out: ordinary fields with the same names, without the private key.
+    strip(&mut doc).unwrap();
+    let named = full_names(&doc);
+    assert!(named.iter().any(|(name, _)| name == "form[0].end[0].last[0]"), "{named:?}");
+    let top = pdfcraft_forms_free_fields(&doc);
+    let node = top.iter().find(|(name, _)| name == "form[0]").map(|(_, d)| d.clone()).expect("the root subform's field");
+    assert!(!node.contains(NODE_KEY));
+}
+
+/// The terminal field named `full`, down the field tree.
+fn field_ref(doc: &Document, full: &str) -> Option<pdfcraft_cos::ObjRef> {
+    let root = doc.get(doc.root()?);
+    let acro = doc.resolve(root.as_dict()?.get(b"AcroForm")?);
+    let mut todo: Vec<(pdfcraft_cos::ObjRef, String)> =
+        doc.resolve(acro.as_dict()?.get(b"Fields")?).as_array()?.iter().filter_map(Object::as_ref).map(|r| (r, String::new())).collect();
+    while let Some((r, prefix)) = todo.pop() {
+        let d = doc.get(r).as_dict()?.clone();
+        let t = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|t| t.to_text())).unwrap_or_default();
+        let name = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
+        if name == full {
+            return Some(r);
+        }
+        let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        todo.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, name.clone())));
+    }
+    None
+}
+
+/// A box signed on a laid-out form stays signed when the form is laid out again (as after a
+/// script adds a row): the new layout's field, named by the same SOM path, holds the same
+/// signature and is locked, and the old field is gone from the AcroForm.
+#[test]
+fn a_signature_on_a_laid_out_box_survives_a_new_layout() {
+    let mut doc = Document::open(Arc::new(shell(&fields_template("")))).unwrap();
+    render_into(&mut doc).unwrap();
+    let som = "form[0].page1[0].sign[0]";
+    let old = field_ref(&doc, som).expect("the box");
+    // Signed as signing does it: a signature dictionary as the field's value, and a picture.
+    let mut sig = Dict::new();
+    sig.set(b"Type".to_vec(), Object::name("Sig"));
+    let sig = doc.add(Object::Dict(sig));
+    let picture = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), b"0 0 1 rg 0 0 10 10 re f".to_vec())));
+    doc.update_dict(old, |d| {
+        d.set(b"V".to_vec(), Object::Ref(sig));
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(picture));
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    let new = field_ref(&doc, som).expect("still named by its SOM path");
+    assert_ne!(new, old, "a field of the new layout");
+    let d = doc.get(new).as_dict().unwrap().clone();
+    assert_eq!(d.get(b"V").and_then(Object::as_ref), Some(sig), "the same signature");
+    let shown = d.get(b"AP").map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").and_then(Object::as_ref)));
+    assert_eq!(shown, Some(picture), "and the same picture");
+    assert!(matches!(&*doc.get(picture), Object::Stream(_)), "which is still in the file");
+    assert!(matches!(&*doc.get(sig), Object::Dict(_)), "as is the signature");
+    assert_eq!(d.int(b"Ff").unwrap_or(0) & 1, 1, "a signed box is not signed again");
+    let top = pdfcraft_forms_free_fields(&doc);
+    assert_eq!(top.iter().filter(|(name, _)| name == "form[0]").count(), 1, "the old fields are gone");
+}
+
+/// A box right in the form's root subform, signed and then laid out again, keeps its signature
+/// and picture in the file: its field sits just under the one naming it, and the old fields that
+/// give way to the new layout's (freed when this session made them) take nothing it still uses.
+#[test]
+fn a_signed_box_in_the_root_subform_keeps_its_picture_through_a_new_layout() {
+    let xdp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb"><pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="sign" w="3in" h="1in"><ui><signature/></ui></field>
+</subform></template></xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let som = "form[0].sign[0]";
+    let old = field_ref(&doc, som).expect("the box");
+    let sig = doc.add(Object::Dict(Dict::new()));
+    let picture = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), b"0 0 1 rg 0 0 10 10 re f".to_vec())));
+    doc.update_dict(old, |d| {
+        d.set(b"V".to_vec(), Object::Ref(sig));
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(picture));
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    let new = field_ref(&doc, som).expect("still named by its SOM path");
+    let d = doc.get(new).as_dict().unwrap().clone();
+    let shown = d.get(b"AP").map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").and_then(Object::as_ref)));
+    assert_eq!(shown, Some(picture));
+    assert!(matches!(&*doc.get(picture), Object::Stream(_)), "the picture is still in the file");
+    assert!(matches!(&*doc.get(sig), Object::Dict(_)), "and the signature");
+}
+
+/// A field of the same pass keeps a signature field named by its SOM path from repeating its
+/// name, written before the box or after it: with a text field named `form[0]` (as a hostile
+/// template may name one), the box keeps its own name and no two fields share one.
+#[test]
+fn a_signature_field_does_not_repeat_a_name_another_field_has() {
+    let text = r#"<field name="form[0]" w="3in" h="0.3in"><ui><textEdit/></ui></field>"#;
+    let sign = r#"<field name="sign" w="3in" h="1in"><ui><signature/></ui></field>"#;
+    for (first, second) in [(text, sign), (sign, text)] {
+        let xdp = format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">{first}{second}</subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+        );
+        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut top: Vec<String> = pdfcraft_forms_free_fields(&doc).into_iter().map(|(name, _)| name).collect();
+        assert!(top.iter().any(|n| n == "sign"), "the box keeps its own name: {top:?}");
+        top.sort();
+        let len = top.len();
+        top.dedup();
+        assert_eq!(top.len(), len, "no name twice: {top:?}");
+    }
+}
+
+/// A signature box the file already holds a signature for shows that signature, the file's own
+/// objects, and is locked; the other box stays unsigned.
 #[test]
 fn a_signed_signature_box_shows_the_signature_the_file_holds() {
     let mut doc = Document::open(Arc::new(crate::fixtures::signed_shell())).unwrap();
@@ -3017,7 +3230,10 @@ fn a_signed_signature_box_shows_the_signature_the_file_holds() {
     let acro = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
     let fields = doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().clone();
     let laid: Vec<_> = fields.iter().map(|f| doc.resolve(f)).filter(|f| f.as_dict().unwrap().contains(SOM_KEY)).collect();
+    // The file has a field named `form[0]` already: the unsigned box keeps its own name rather
+    // than repeat that one.
     let (signed, unsigned) = (laid[0].as_dict().unwrap(), laid[1].as_dict().unwrap());
+    assert_eq!(unsigned.get(b"T").and_then(|t| t.as_string()).map(|t| t.to_text()).as_deref(), Some("other"));
     // The signature dictionary and the picture are the file's own objects, not copies.
     let value = doc.resolve(signed.get(b"V").unwrap());
     assert_eq!(value.as_dict().unwrap().name(b"Type"), Some(&b"Sig"[..]));
@@ -3350,6 +3566,7 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     ur.set(b"UR3".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
     doc.update_dict(root, |d| d.set(b"Perms".to_vec(), Object::Dict(ur))).unwrap();
     let r = strip(&mut doc).unwrap();
+    assert!(doc.full_save_required());
     assert_eq!(r.packets, vec!["template".to_string(), "datasets".to_string()]);
     assert_eq!(r.unbound_data, Some(0));
     assert_eq!((r.script_buttons, r.image_fields), (0, 1), "{r:?}");
@@ -3433,6 +3650,16 @@ fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
     let r = strip(&mut doc).unwrap();
     assert_eq!(r.field_keys, 2000);
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn strip_marks_document_as_requiring_full_save() {
+    use crate::pdf::strip;
+    let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(!doc.full_save_required());
+    strip(&mut doc).unwrap();
+    assert!(doc.full_save_required(), "stripping XFA packets must require a full save to prevent data exposure in incremental saves");
 }
 
 #[test]
@@ -3779,4 +4006,70 @@ fn faces_measure_text_at_their_standard_14_widths() {
     // A condensed face is narrower by its scale.
     let condensed = text::Face { h_scale: 0.8, ..face(text::Family::Times, true, false) };
     assert!((condensed.width(sample) - 0.8 * Std14::TimesBold.text_width(sample, 10.0)).abs() < 1e-9);
+}
+
+/// #3944: clearing XFA password values removes values typed into `<passwordEdit/>` fields from the
+/// datasets packet (including across repeating subforms), restores a field's template default
+/// `<value><text>…</text></value>` when it has one, and replaces the datasets stream in place so
+/// the typed password is not left in an unreferenced stream in the overlay.
+#[test]
+fn clear_password_values_removes_typed_passwords_from_datasets_in_place() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="user" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="pin" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+  <field name="preset" w="2in" h="0.3in"><ui><passwordEdit/></ui><value><text>0000</text></value></field>
+  <subform name="row" layout="lr-tb"><occur min="1" max="-1"/>
+   <field name="secret" w="2in" h="0.3in"><ui><passwordEdit/></ui></field>
+  </subform>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+<xfa:data><form><page1><user>Ada</user><pin>hunter2</pin><preset>9999</preset><row><secret>first</secret></row><row><secret>second</secret></row></page1></form></xfa:data>
+</xfa:datasets>
+</xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(has_password_values(&doc));
+    let cleared = clear_password_values(&mut doc).unwrap();
+    assert_eq!(cleared, 4);
+    assert!(!has_password_values(&doc), "only default and non-password values remain");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0);
+
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(packets.xdp.contains("<user>Ada</user>"), "non-password fields stay: {}", packets.xdp);
+    assert!(packets.xdp.contains("<preset>0000</preset>"), "template default restored: {}", packets.xdp);
+    for secret in ["hunter2", "9999", "first", "second"] {
+        assert!(!packets.xdp.contains(secret), "{secret} still in datasets: {}", packets.xdp);
+    }
+    let written = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(written)).unwrap();
+    for num in reopened.object_numbers() {
+        if let Object::Stream(st) = &*reopened.get(pdfcraft_cos::ObjRef::new(num, 0)) {
+            let decoded = st.decoded().unwrap_or_default();
+            let text = String::from_utf8_lossy(&decoded);
+            for secret in ["hunter2", "9999", "first", "second"] {
+                assert!(!text.contains(secret), "object {num} still holds {secret}: {text}");
+            }
+        }
+    }
+}
+
+/// #3944: a static XFA form whose AcroForm field sets the Password flag (`/Ff 8192`) also has its
+/// typed value cleared from the datasets packet.
+#[test]
+fn clear_password_values_clears_static_xfa_password_fields() {
+    let pdf = String::from_utf8(static_shell("<form1><page1><name>hunter2</name></page1></form1>"))
+        .unwrap()
+        .replace("/T (name[0])", "/T (name[0]) /Ff 8192");
+    let mut doc = Document::open(Arc::new(pdf.into_bytes())).unwrap();
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+    let packets = read_packets(&doc).unwrap().unwrap();
+    assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }

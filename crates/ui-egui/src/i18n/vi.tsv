@@ -1057,6 +1057,15 @@ theme	Appearance	Giao diện
 	Scroll tabs right	Cuộn các thẻ sang phải
 	Search comments	Tìm bình luận
 	Search tools and commands…	Tìm công cụ và lệnh…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Văn bản đã thêm
+	Link URL	URL của liên kết
+	Search tools and commands	Tìm công cụ và lệnh
+	Text editing line	Dòng chỉnh sửa văn bản
+	Text to place	Văn bản cần đặt
+	Tooltip	Chú giải công cụ
+	Words or phrases to redact	Từ hoặc cụm từ cần xóa
 	Searchable Image (Exact)	Ảnh có thể tìm kiếm (Chính xác)
 	Searching… {s} of {p} pages	Đang tìm… {s} trên {p} trang
 	Searching… {s}/{p}	Đang tìm… {s}/{p}
@@ -2676,6 +2685,14 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Create & Edit	Tạo và chỉnh sửa
+	Review & Compare	Xem xét và so sánh
+	Forms & Signatures	Biểu mẫu và chữ ký
+	Protect & Standardize	Bảo vệ và chuẩn hóa
+	Customize & Automate	Tùy chỉnh và tự động hóa
+	No tools match your search.	Không có công cụ nào khớp với tìm kiếm.
+	Expand all tools	Mở rộng tất cả công cụ
+	Collapse all tools	Thu gọn tất cả công cụ
 
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
@@ -2798,3 +2815,12 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+@plural	{n} reply|{n} replies	{n} câu trả lời
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Công cụ trang
+	Insert pages from a file after the selection…	Chèn trang từ tệp sau vùng chọn…
+	Rotate the selected pages counterclockwise	Xoay các trang đã chọn ngược chiều kim đồng hồ
+	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
+	Extract the selected pages…	Trích xuất các trang đã chọn…
+	Delete the selected pages	Xóa các trang đã chọn

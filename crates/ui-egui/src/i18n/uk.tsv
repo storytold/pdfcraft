@@ -182,6 +182,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Пошук інструментів і команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Доданий текст
+	Link URL	URL-адреса посилання
+	Search tools and commands	Пошук інструментів і команд
+	Text editing line	Рядок редагування тексту
+	Text to place	Текст для розміщення
+	Tooltip	Підказка
+	Words or phrases to redact	Слова або фрази для вилучення
 	No matching tools	Відповідних інструментів немає
 	Tool	Інструмент
 	Command	Команда
@@ -2511,6 +2520,14 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Create & Edit	Створення й редагування
+	Review & Compare	Рецензування й порівняння
+	Forms & Signatures	Форми й підписи
+	Protect & Standardize	Захист і стандартизація
+	Customize & Automate	Налаштування й автоматизація
+	No tools match your search.	Немає інструментів, що відповідають пошуку.
+	Expand all tools	Розгорнути всі інструменти
+	Collapse all tools	Згорнути всі інструменти
 	Attach a file…	Прикріпити файл…
 	Delete attachment	Видалити вкладення
 	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне
@@ -2553,3 +2570,12 @@ animation effects	Off	Вимкнено
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
+@plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Інструменти сторінок
+	Insert pages from a file after the selection…	Вставити сторінки з файлу після виділення…
+	Rotate the selected pages counterclockwise	Повернути вибрані сторінки проти годинникової стрілки
+	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
+	Extract the selected pages…	Витягнути вибрані сторінки…
+	Delete the selected pages	Видалити вибрані сторінки

@@ -313,11 +313,23 @@ mod tests {
     }
 
     fn wheel(unit: egui::MouseWheelUnit, dx: f32, dy: f32) -> egui::Event {
-        egui::Event::MouseWheel { unit, delta: egui::vec2(dx, dy), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE }
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(dx, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        }
     }
 
     fn shifted(unit: egui::MouseWheelUnit, dx: f32, dy: f32) -> egui::Event {
-        egui::Event::MouseWheel { unit, delta: egui::vec2(dx, dy), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::SHIFT }
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(dx, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::SHIFT,
+            source: egui::MouseWheelSource::Unknown,
+        }
     }
 
     #[test]
@@ -379,6 +391,7 @@ mod tests {
         assert_eq!(input.page, egui::vec2(-1.0, 0.0));
     }
 
+    /// Check that NaN, zero, negative or infinite scales and non-wheel events add nothing.
     #[test]
     fn invalid_scales_and_events_contribute_nothing() {
         use egui::MouseWheelUnit::Line;
@@ -386,8 +399,13 @@ mod tests {
             let input = accumulate(&[wheel(Line, 0.0, -1.0)], bad, false);
             assert_eq!(input.line, egui::Vec2::ZERO, "line scale {bad}");
         }
-        let zoom =
-            egui::Event::MouseWheel { unit: Line, delta: egui::vec2(0.0, -1.0), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::COMMAND };
+        let zoom = egui::Event::MouseWheel {
+            unit: Line,
+            delta: egui::vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Unknown,
+        };
         let key = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         let input = accumulate(&[zoom, key, wheel(Line, 0.0, f32::NAN)], 100.0, false);
         assert_eq!(input, FrameInput::default());

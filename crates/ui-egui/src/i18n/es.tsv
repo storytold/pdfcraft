@@ -180,6 +180,15 @@
 	Available	Disponible
 	Ready	Listo
 	Search tools and commands…	Buscar herramientas y comandos…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texto añadido
+	Link URL	URL del enlace
+	Search tools and commands	Buscar herramientas y comandos
+	Text editing line	Línea de edición de texto
+	Text to place	Texto que colocar
+	Tooltip	Información sobre herramientas
+	Words or phrases to redact	Palabras o frases que censurar
 	No matching tools	Ninguna herramienta coincide
 	Tool	Herramienta
 	Command	Comando
@@ -2632,6 +2641,14 @@ animation effects	Off	Desactivados
 	Make properties default	Usar como propiedades predeterminadas
 	Pages selected	Páginas seleccionadas
 	Page properties	Propiedades de página
+	Create & Edit	Crear y editar
+	Review & Compare	Revisar y comparar
+	Forms & Signatures	Formularios y firmas
+	Protect & Standardize	Proteger y estandarizar
+	Customize & Automate	Personalizar y automatizar
+	No tools match your search.	Ninguna herramienta coincide con la búsqueda.
+	Expand all tools	Expandir todas las herramientas
+	Collapse all tools	Contraer todas las herramientas
 	Font	Fuente
 	Bulleted list	Lista con viñetas
 	Numbered list	Lista numerada
@@ -2854,3 +2871,12 @@ theme	Appearance	Aspecto
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoy
+@plural	{n} reply|{n} replies	{n} respuesta|{n} respuestas
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Herramientas de página
+	Insert pages from a file after the selection…	Insertar páginas de un archivo después de la selección…
+	Rotate the selected pages counterclockwise	Girar las páginas seleccionadas en sentido antihorario
+	Rotate the selected pages clockwise	Girar las páginas seleccionadas en sentido horario
+	Extract the selected pages…	Extraer las páginas seleccionadas…
+	Delete the selected pages	Eliminar las páginas seleccionadas

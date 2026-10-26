@@ -12,6 +12,7 @@ use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -245,6 +246,9 @@ pub struct LineEditor {
     size: f32,
     /// Take the keyboard focus on the next frame.
     pub(crate) focus: bool,
+    /// Whether the text box had the keyboard at the end of the editor's last frame
+    /// ([`lost_focus_once`]).
+    had_focus: bool,
     /// The Format text panel's values, and what the paragraph had (to send only changes).
     pub look: pdfcraft_engine::AddedText,
     look0: pdfcraft_engine::AddedText,
@@ -467,6 +471,19 @@ pub struct ImageSelection {
     settled: Option<(Rect, Rect)>,
 }
 
+impl ImageSelection {
+    /// Cancel an in-progress text, rotation or crop drag and restore the crop it was previewing.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        self.drag = None;
+        self.turning = false;
+        if let Some(crop) = &mut self.crop
+            && let Some((_, _, before)) = crop.drag.take()
+        {
+            crop.keep = before;
+        }
+    }
+}
+
 /// Cropping a page image: the handles trim instead of resizing, the part that will go is
 /// dimmed, Enter or Done applies and Esc or Cancel leaves it.
 #[derive(Clone, Debug, PartialEq)]
@@ -497,6 +514,7 @@ fn crop_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     view: &mut DocView,
@@ -506,12 +524,12 @@ fn crop_input(
 ) -> bool {
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
-    let hover_pos = ui.input(|inp| inp.pointer.hover_pos());
+    let hover_pos = ptr.pos;
     let keep_screen = |keep: [f64; 4]| xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
     // A drag in progress moves a grip; the box stays inside the picture and at least 6 px.
     if allow_interaction
         && resp.drag_started()
-        && let Some(o) = ui.input(|inp| inp.pointer.press_origin())
+        && let Some(o) = ptr.origin
     {
         let k = keep_screen(mode.keep);
         let grip = crop_handles(k).iter().position(|h| h.distance(o) < 8.0).or_else(|| k.contains(o).then_some(8));
@@ -558,7 +576,7 @@ fn crop_input(
         max.x = max.x.clamp(min.x + min_w, b.max.x);
         max.y = max.y.clamp(min.y + min_h, b.max.y);
         mode.keep = user_box(xf, info, page, Rect::from_min_max(min, max));
-        if resp.drag_stopped() || !ui.input(|inp| inp.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             mode.drag = None;
         }
     }
@@ -664,7 +682,7 @@ fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::Texture
 
 /// Once a selected corner or the rotate knob is grabbed, text under it cannot take over the gesture. The same
 /// applies after the pointer leaves the image/page while dragging.
-pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) -> bool {
+pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, ptr: &PagePointer, page: usize, info: &DocInfo, view: &DocView) -> bool {
     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
     if selection.drag.is_some() {
         return true;
@@ -672,7 +690,7 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, inf
     let Some(image) = view.edit_images.get(&page).and_then(|(_, images)| images.get(selection.index)) else { return false };
     let Some(rect) = image.visible_rect else { return false };
     let b = xf.user_rect(info, page, rect.map(|v| v as f32));
-    let p = ui.input(|i| if i.pointer.primary_down() { i.pointer.press_origin() } else { i.pointer.hover_pos() });
+    let p = if ptr.primary_down { ptr.origin } else { ptr.pos };
     let knob = rotate_knob(b, ui.clip_rect()).0;
     p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), knob].iter().any(|c| c.distance(p) < 8.0))
 }
@@ -800,6 +818,7 @@ pub(crate) fn image_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     images: &[pdfcraft_engine::PageImage],
@@ -809,7 +828,7 @@ pub(crate) fn image_input(
 ) -> bool {
     let boxes: Vec<Rect> = images.iter().map(|im| im.visible_rect.map_or(Rect::NOTHING, |r| xf.user_rect(info, page, r.map(|v| v as f32)))).collect();
     let painter = ui.painter();
-    let hover_pos = ui.input(|i| i.pointer.hover_pos());
+    let hover_pos = ptr.pos;
     let image_contains = |index: usize, point: Pos2| {
         let (x, y) = xf.screen_to_view(point);
         let Some(p) = info.pages.get(page) else { return false };
@@ -853,7 +872,7 @@ pub(crate) fn image_input(
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
         let b = boxes[i];
         if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()) {
-            return crop_input(ui, resp, xf, page, info, view, i, b, allow_interaction);
+            return crop_input(ui, resp, xf, ptr, page, info, view, i, b, allow_interaction);
         }
         let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
         let handles = |rect: Rect| {
@@ -903,10 +922,9 @@ pub(crate) fn image_input(
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
         }
-        let origin = ui.input(|i| i.pointer.press_origin());
         if allow_interaction
             && resp.drag_started()
-            && let Some(o) = origin
+            && let Some(o) = ptr.origin
             && o.distance(knob) < 8.0
         {
             if let Some(s) = view.image_selection.as_mut() {
@@ -915,7 +933,7 @@ pub(crate) fn image_input(
             }
         } else if allow_interaction
             && resp.drag_started()
-            && let Some(o) = origin
+            && let Some(o) = ptr.origin
         {
             let corner = corners.iter().position(|c| c.distance(o) < 8.0);
             if corner.is_some() || image_contains(i, o) {
@@ -942,7 +960,7 @@ pub(crate) fn image_input(
             painter.rect(label, CornerRadius::same(3), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
             painter.galley(label.center() - galley.size() / 2.0, galley, ACCENT);
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
                     s.turning = false;
@@ -1000,7 +1018,7 @@ pub(crate) fn image_input(
                 painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
                 handles(preview);
             }
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
                     let norm = |r: Rect| {
@@ -1194,6 +1212,7 @@ fn open_editor(
         max_width,
         size: (l.size as f32 * scale).clamp(8.0, 72.0),
         focus: true,
+        had_focus: false,
         look: look_of(l),
         look0: look_of(l),
         family_chosen: false,
@@ -1209,6 +1228,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     doc: &pdfcraft_engine::Document,
     lines: &[pdfcraft_engine::TextBlock],
@@ -1256,7 +1276,7 @@ pub(crate) fn page_input(
     if let Some(d) = view.block_drag.filter(|d| d.page == page)
         && let (Some(b), Some(l)) = (boxes.get(d.block).copied(), lines.get(d.block))
     {
-        let p = ui.input(|i| i.pointer.interact_pos()).unwrap_or(d.start);
+        let p = ptr.pos.unwrap_or(d.start);
         let dx = p.x - d.start.x;
         let preview = match d.grip {
             Grip::Move => b.translate(p - d.start),
@@ -1269,7 +1289,7 @@ pub(crate) fn page_input(
             draw_handles(preview);
         }
         ui.ctx().set_cursor_icon(if resizing { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Move });
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+        if resp.drag_stopped() || !ptr.any_down {
             view.block_drag = None;
             let (from, to) = (user_box(xf, info, page, b), user_box(xf, info, page, preview));
             let edit = if resizing {
@@ -1301,13 +1321,13 @@ pub(crate) fn page_input(
     // quick flick has left the edge by then.
     if resp.drag_started()
         && active.is_none()
-        && let Some(o) = ui.input(|i| i.pointer.press_origin())
+        && let Some(o) = ptr.origin
         && let Some((block, grip)) = grab_at(&boxes, o, upright)
     {
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
-    let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some(p) = ptr.within(xf.rect) else { return false };
     let Some((hit, grip)) = grab_at(&boxes, p, upright) else { return false };
     if active != Some(hit) {
         painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
@@ -1553,8 +1573,9 @@ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: 
 
 /// The inline editor; returns the edit once the text is applied.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
-    // Clicks outside the document (the Format text panel) keep the paragraph open.
-    let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
+    // Clicks outside the document (the Format text panel) keep the paragraph open. Where the
+    // click landed is `interact_pos`: `latest_pos` is gone on the frame a tap lifts.
+    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
@@ -1607,7 +1628,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
     // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::new("edit-text-line"))
+    egui::Area::new(egui::Id::unique("edit-text-line"))
         .order(egui::Order::Foreground)
         .fade_in(false)
         .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
@@ -1669,7 +1690,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let output = egui::TextEdit::multiline(&mut ed.text)
-                    .id(egui::Id::new("edit-text-line-input"))
+                    .id(egui::Id::unique("edit-text-line-input"))
                     .font(font.clone())
                     .margin(egui::Margin::ZERO)
                     .layouter(&mut layouter)
@@ -1678,6 +1699,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .desired_width(width)
                     .desired_rows(rows)
                     .show(ui);
+                // The editor paints over the page with no visible label; name it for assistive tech.
+                output.response.response.clone().accessible_name(tl!("Text editing line"));
                 if ed.has_changes() {
                     if background_ready {
                         reveal = true;
@@ -1700,11 +1723,12 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     r.request_focus();
                     ed.focus = false;
                 }
+                let lost = lost_focus_once(&r, &mut ed.had_focus);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
                 if esc {
                     done = Some(false);
-                } else if apply || (r.lost_focus() && !outside && !hold) {
+                } else if apply || (lost && !outside && !hold) {
                     done = Some(true);
                 }
             });
@@ -1737,6 +1761,16 @@ pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
         text: ed.text,
         style,
     })
+}
+
+/// Whether an editor's text box `r` lost the keyboard this frame, given whether it `had` it at
+/// the end of the editor's last frame (updated here). egui's `lost_focus` holds for a second
+/// frame as well, and an editor that judges a click away by where the click landed must judge it
+/// once, on the click's frame: on the next, a tap's position is gone (egui-winit sends
+/// `PointerGone` with every touch release) and a mouse may have moved on.
+pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
+    let has = r.has_focus();
+    std::mem::replace(had, has) && !has
 }
 
 /// Caret colour that stays visible on a field filled with `fill`: black on light fills, white on dark ones.
@@ -1796,6 +1830,7 @@ mod tests {
             max_width: 400.0,
             size: block.size as f32,
             focus: true,
+            had_focus: false,
             look: look_of(&block),
             look0: look_of(&block),
             family_chosen: false,

@@ -86,7 +86,7 @@ fn radio(ui: &mut egui::Ui, t: &Tokens, on: bool, label: &str) -> egui::Response
     }
     ui.painter().text(egui::pos2(rect.left() + 26.0, rect.center().y), egui::Align2::LEFT_CENTER, tl!(label), theme::regular(14.0), t.text);
     let info = tl!(label).to_string();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, info.clone()));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, info.clone()));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

@@ -172,6 +172,15 @@
 	Available	พร้อมใช้งาน
 	Ready	พร้อมใช้
 	Search tools and commands…	ค้นหาเครื่องมือและคำสั่ง…
+
+# Accessible names for inputs that have no visible label.
+	Added text	ข้อความที่เพิ่ม
+	Link URL	URL ของลิงก์
+	Search tools and commands	ค้นหาเครื่องมือและคำสั่ง
+	Text editing line	บรรทัดแก้ไขข้อความ
+	Text to place	ข้อความที่จะวาง
+	Tooltip	คำแนะนำเครื่องมือ
+	Words or phrases to redact	คำหรือวลีที่จะปิดทับ
 	No matching tools	ไม่มีเครื่องมือที่ตรงกัน
 	Tool	เครื่องมือ
 	Command	คำสั่ง
@@ -2686,6 +2695,14 @@ key	Space	Space
 	Make properties default	ตั้งคุณสมบัติเป็นค่าเริ่มต้น
 	Pages selected	หน้าที่เลือก
 	Page properties	คุณสมบัติหน้า
+	Create & Edit	สร้างและแก้ไข
+	Review & Compare	ตรวจทานและเปรียบเทียบ
+	Forms & Signatures	แบบฟอร์มและลายเซ็น
+	Protect & Standardize	ป้องกันและกำหนดมาตรฐาน
+	Customize & Automate	ปรับแต่งและทำงานอัตโนมัติ
+	No tools match your search.	ไม่มีเครื่องมือที่ตรงกับการค้นหาของคุณ
+	Expand all tools	ขยายเครื่องมือทั้งหมด
+	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
 
@@ -2694,3 +2711,12 @@ theme	Appearance	ลักษณะที่ปรากฏ
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
+@plural	{n} reply|{n} replies	การตอบกลับ {n} รายการ
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	เครื่องมือหน้า
+	Insert pages from a file after the selection…	แทรกหน้าจากไฟล์หลังส่วนที่เลือก…
+	Rotate the selected pages counterclockwise	หมุนหน้าที่เลือกทวนเข็มนาฬิกา
+	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
+	Extract the selected pages…	แยกหน้าที่เลือกออก…
+	Delete the selected pages	ลบหน้าที่เลือก

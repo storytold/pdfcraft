@@ -159,7 +159,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut choice = None;
     let mut laid = None;
     egui::Window::new(tl!("Text Field Table"))
-        .id(egui::Id::new("field_table_window"))
+        .id(egui::Id::unique("field_table_window"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -255,15 +255,20 @@ fn body(ui: &mut egui::Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[For
         for (c, column) in d.table.columns.iter_mut().enumerate() {
             let width = layout.cells.as_ref().ok().and_then(|cells| cells.get(c)).map(|cell| cell.rect[2] - cell.rect[0]);
             let share = shares.get(c).copied().unwrap_or_default();
+            let mut column_label_response = None;
             ui.horizontal(|ui| {
-                ui.label(RichText::new(column_label(c)).strong());
+                let label = ui.label(RichText::new(column_label(c)).strong());
+                column_label_response = Some(label.id);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let size = width.map_or_else(|| "—".to_owned(), |w| format!("{w:.1} pt · {:.0}%", share * 100.0));
                     ui.label(RichText::new(size).color(t.text_muted).size(11.0));
                 });
             });
             let full = ui.available_width();
-            ui.add(widgets::line(&mut column.pattern).desired_width(full).id_salt(("field table column", c)));
+            let pattern = ui.add(widgets::line(&mut column.pattern).desired_width(full).id_salt(("field table column", c)));
+            if let Some(label) = column_label_response {
+                pattern.labelled_by(label);
+            }
             ui.add_space(4.0);
         }
     };
@@ -375,7 +380,7 @@ fn column_dividers(ui: &mut egui::Ui, d: &mut FieldTableDraft, bar: Rect, ends: 
     let mut active = None;
     for (i, &x) in ends.iter().enumerate().take(n.saturating_sub(1)) {
         let hit = Rect::from_min_max(pos2(x - reach, bar.top()), pos2(x + reach, bar.bottom()));
-        let resp = ui.interact(hit, ui.id().with(("field table divider", i)), Sense::click_and_drag());
+        let resp = ui.interact(hit, ui.scope_id().with(("field table divider", i)), Sense::click_and_drag());
         let share = d.shares().get(i).copied().unwrap_or_default();
         resp.widget_info(|| egui::WidgetInfo::slider(true, (share * 100.0).round(), column_label(i)));
         let mut delta = f64::from(resp.drag_delta().x) / f64::from(bar.width());
@@ -469,7 +474,7 @@ mod tests {
             |ui| {
                 let other = ui.button("Other control");
                 if let Some(i) = focus {
-                    ui.memory_mut(|memory| memory.request_focus(ui.id().with(("field table divider", i))));
+                    ui.memory_mut(|memory| memory.request_focus(ui.scope_id().with(("field table divider", i))));
                 } else {
                     other.request_focus();
                 }

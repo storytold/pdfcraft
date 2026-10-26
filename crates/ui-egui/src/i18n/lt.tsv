@@ -1067,6 +1067,15 @@
 	Scroll tabs right	Slinkti korteles dešinėn
 	Search comments	Ieškoti komentaruose
 	Search tools and commands…	Ieškoti įrankių ir komandų…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Pridėtas tekstas
+	Link URL	Saito URL
+	Search tools and commands	Ieškoti įrankių ir komandų
+	Text editing line	Teksto redagavimo eilutė
+	Text to place	Tekstas, kurį reikia įdėti
+	Tooltip	Patarimas
+	Words or phrases to redact	Šalinami žodžiai ar frazės
 	Searchable Image (Exact)	Paveikslėlis su tiksliu atpažinimu
 	Searching… {s} of {p} pages	Ieškoma… {s} iš {p} puslapių
 	Searching… {s}/{p}	Ieškoma… {s}/{p}
@@ -2739,6 +2748,14 @@ key	Space	Tarpas
 	Make properties default	Nustatyti ypatybes kaip numatytąsias
 	Pages selected	Pasirinkti puslapiai
 	Page properties	Puslapio ypatybės
+	Create & Edit	Kūrimas ir redagavimas
+	Review & Compare	Peržiūra ir palyginimas
+	Forms & Signatures	Formos ir parašai
+	Protect & Standardize	Apsauga ir standartizavimas
+	Customize & Automate	Pritaikymas ir automatizavimas
+	No tools match your search.	Paieškos neatitinka joks įrankis.
+	Expand all tools	Išskleisti visus įrankius
+	Collapse all tools	Suskleisti visus įrankius
 
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
@@ -2792,3 +2809,12 @@ theme	Appearance	Išvaizda
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
+@plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Puslapių įrankiai
+	Insert pages from a file after the selection…	Įterpti puslapius iš failo po pasirinkimo…
+	Rotate the selected pages counterclockwise	Pasukti pasirinktus puslapius prieš laikrodžio rodyklę
+	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
+	Extract the selected pages…	Išskleisti pasirinktus puslapius…
+	Delete the selected pages	Ištrinti pasirinktus puslapius

@@ -162,6 +162,15 @@
 	Available	उपलब्ध
 	Ready	तैयार
 	Search tools and commands…	टूल और कमांड खोजें…
+
+# Accessible names for inputs that have no visible label.
+	Added text	जोड़ा गया टेक्स्ट
+	Link URL	लिंक का URL
+	Search tools and commands	टूल और कमांड खोजें
+	Text editing line	टेक्स्ट संपादन पंक्ति
+	Text to place	रखने के लिए टेक्स्ट
+	Tooltip	टूलटिप
+	Words or phrases to redact	रेडैक्ट करने के लिए शब्द या वाक्यांश
 	No matching tools	कोई मेल खाता टूल नहीं
 	Tool	टूल
 	Command	कमांड
@@ -2682,6 +2691,14 @@ certificate	SHA-256 digest	SHA-256 डाइजेस्ट
 	Make properties default	गुण डिफ़ॉल्ट बनाएँ
 	Pages selected	चयनित पृष्ठ
 	Page properties	पृष्ठ गुण
+	Create & Edit	बनाएँ और संपादित करें
+	Review & Compare	समीक्षा और तुलना करें
+	Forms & Signatures	फ़ॉर्म और हस्ताक्षर
+	Protect & Standardize	सुरक्षित और मानकीकृत करें
+	Customize & Automate	अनुकूलित और स्वचालित करें
+	No tools match your search.	आपकी खोज से कोई टूल मेल नहीं खाता।
+	Expand all tools	सभी टूल विस्तृत करें
+	Collapse all tools	सभी टूल समेटें
 	The password must have at least 8 characters.	पासवर्ड में कम से कम 8 वर्ण होने चाहिए।
 theme	Appearance	स्वरूप
 	Zoom — type a percentage and press Enter	ज़ूम — प्रतिशत टाइप करें और Enter दबाएँ
@@ -2768,3 +2785,12 @@ theme	Appearance	स्वरूप
 	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
 	Delete attachment	अनुलग्नक हटाएँ
 	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+@plural	{n} reply|{n} replies	{n} जवाब
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	पृष्ठ उपकरण
+	Insert pages from a file after the selection…	चयन के बाद किसी फ़ाइल से पृष्ठ डालें…
+	Rotate the selected pages counterclockwise	चयनित पृष्ठों को वामावर्त घुमाएँ
+	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
+	Extract the selected pages…	चयनित पृष्ठ निकालें…
+	Delete the selected pages	चयनित पृष्ठ हटाएँ

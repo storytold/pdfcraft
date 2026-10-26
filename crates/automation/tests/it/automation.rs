@@ -252,6 +252,19 @@ fn doc_info_reports_the_open_destination() {
         "{open}"
     );
     assert_eq!(open["destination"]["zoom"].as_f64(), Some(2.0));
+    // The initial view reads the named destination's page, and choosing page 1 replaces it (ISO
+    // 32000-2 §12.3.2.4): one undo step, kept by the save.
+    let page = |a: &mut Automation, doc: u64| ok(a, "doc_info", json!({ "doc": doc }))["open_destination"]["page"].clone();
+    assert_eq!(ok(&mut a, "doc_initial_view", json!({ "doc": doc }))["initial_view"]["page"], 2);
+    assert_eq!(ok(&mut a, "doc_initial_view", json!({ "doc": doc, "page": 1 }))["initial_view"]["page"], 1);
+    assert_eq!(page(&mut a, doc), 1);
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(page(&mut a, doc), 2);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert_eq!(page(&mut a, doc), 1);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "named-page1.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "named-page1.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page(&mut a, saved), 1);
     let doc = ok(&mut a, "doc_open", json!({ "path": "script.pdf" }))["doc"].as_u64().unwrap();
     assert!(ok(&mut a, "doc_info", json!({ "doc": doc }))["open_destination"].is_null());
 }
@@ -2119,6 +2132,83 @@ fn nested_replies_stay_in_the_listing() {
     let root = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "ROOT_NOTE").unwrap().clone();
     let replies: Vec<&str> = root["replies"].as_array().unwrap().iter().filter_map(|r| r["contents"].as_str()).collect();
     assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
+}
+
+/// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
+/// page `fitz-A0`. A shared id is refused rather than taken to mean page 1's comment.
+#[test]
+fn replies_thread_by_reference_when_ids_repeat_across_pages() {
+    let dir = workdir("repeated-ids");
+    // Contributor-original PDF, shaped like PyMuPDF output.
+    std::fs::write(
+        dir.join("fitz.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R 7 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Alpha) /Contents (COVER) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Beta) /Contents (SECOND) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (ANSWER) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "fitz.pdf" }))["doc"].as_u64().unwrap();
+    let replies = |a: &mut Automation| -> Vec<(String, Vec<String>)> {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        list["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let mut texts: Vec<String> =
+                    c["replies"].as_array().unwrap().iter().filter_map(|r| r["contents"].as_str().map(String::from)).collect();
+                texts.sort();
+                (c["contents"].as_str().unwrap().to_string(), texts)
+            })
+            .collect()
+    };
+    assert_eq!(replies(&mut a), [("COVER".into(), vec![]), ("SECOND".into(), vec!["ANSWER".to_string()])]);
+    let refused = err(&mut a, "comment_reply", json!({ "doc": doc, "id": "fitz-A0", "text": "LATER" }));
+    assert!(refused.to_string().contains("several comments"), "{refused}");
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "page": 2, "index": 1, "text": "LATER" }));
+    assert_eq!(replies(&mut a), [("COVER".into(), vec![]), ("SECOND".into(), vec!["ANSWER".to_string(), "LATER".to_string()])]);
+}
+
+/// A status or checkmark belongs to the annotation its `/IRT` names: one set on a reply is not
+/// its comment's, as the Comments panel shows it, and is reported on the reply. One whose
+/// annotation can't be found is not a comment of its own.
+#[test]
+fn a_checkmark_on_a_reply_is_not_its_comments() {
+    let dir = workdir("reply-checkmark");
+    // Contributor-original PDF: a comment, a reply, a checkmark and a status on the reply, and a
+    // status whose annotation (object 9) doesn't exist.
+    std::fs::write(
+        dir.join("checked.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [100 100 120 120] /T (Alpha) /Contents (COMMENT) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 4 0 R /T (Beta) /Contents (REPLY) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Marked /State /Marked >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Review /State /Accepted >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [200 20 220 40] /F 30 /IRT 9 0 R /T (Gamma) /StateModel /Review /State /Rejected >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "checked.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1, "{list}");
+    let c = &list["comments"][0];
+    assert_eq!((&c["marked"], &c["status"]), (&json!(false), &Value::Null), "{c}");
+    assert_eq!(c["replies"].as_array().map(Vec::len), Some(1), "the reply, not its states: {c}");
+    let reply = &c["replies"][0];
+    assert_eq!((&reply["marked"], &reply["status"]), (&json!(true), &json!("Accepted")), "{reply}");
 }
 
 #[test]
@@ -4394,6 +4484,12 @@ fn adding_content_through_tools() {
     assert!(text.contains("DRAFT") && !text.contains("CONFIDENTIAL"), "{text}");
     // Image tools: rotate, flip, crop, replace.
     ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "rotate": 90, "flip_h": true, "crop": [0.1, 0, 0.1, 0] }));
+    // One side may trim most of the picture; together an axis keeps at least 5 %.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "crop": [0.7, 0, 0, 0] }));
+    assert!(matches!(
+        a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 2, "crop": [0.6, 0, 0.4, 0] })),
+        Err(ToolError::InvalidArgs(_))
+    ));
     ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "image": "logo.png" }));
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["dirty"], true);
     assert!(matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 2, "rotate": 45 })), Err(ToolError::InvalidArgs(_))));
@@ -5765,6 +5861,28 @@ fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     assert!(inked(60, 110), "the strokes are drawn");
 }
 
+/// Signing a laid-out XFA form's signature box through the tools signs the field named by its
+/// SOM path, which is how another viewer, laying the form out again, finds the signature; the
+/// signed file reopens with the signature intact and on that field.
+#[test]
+fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
+    let dir = workdir("xfa-sign");
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(""))).unwrap();
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let som = "form[0].page1[0].sign[0]";
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(fields["fields"].as_array().unwrap().iter().any(|f| f["name"] == som), "{fields}");
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": som, "out": "signed.pdf" }));
+    let signed = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "sign_list", json!({ "doc": signed }));
+    let s = list["signatures"].as_array().unwrap().iter().find(|s| s["signed"] == true).cloned().unwrap_or_else(|| panic!("{list}"));
+    assert_eq!(s["field"], som, "{s}");
+    assert_eq!(s["status"], "unknown", "intact, the signer not trusted: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
@@ -6771,12 +6889,79 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }
 
+/// #4158: a word set in italic inside a sentence ("Before *Chevron* after.") reaches Word as an
+/// italic run of the sentence's paragraph, not as a paragraph of its own between two halves.
 #[test]
-fn hundreds_of_xfa_calculations_open_and_recalculate_within_their_budgets() {
+fn exporting_to_word_keeps_an_italic_word_inside_its_sentence() {
+    let dir = workdir("italic-run-word");
+    let content = "BT /F1 12 Tf 72 700 Td (Before ) Tj /F2 12 Tf (Chevron) Tj /F1 12 Tf ( after.) Tj ET \
+BT /F1 12 Tf 72 640 Td (A paragraph further down.) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("opinion.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "opinion.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "opinion.docx" }));
+    let zip = std::fs::read(dir.join("opinion.docx")).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    // The paragraphs that hold text, each as its runs: (text, italic).
+    let paragraphs: Vec<Vec<(String, bool)>> = xml
+        .split("<w:p>")
+        .skip(1)
+        .map(|p| {
+            let p = p.split_once("</w:p>").map_or(p, |(inside, _)| inside);
+            p.split("<w:r>")
+                .skip(1)
+                .filter_map(|r| Some((r.split_once("<w:t xml:space=\"preserve\">")?.1.split_once("</w:t>")?.0.to_string(), r.contains("<w:i/>"))))
+                .collect::<Vec<_>>()
+        })
+        .filter(|runs| !runs.is_empty())
+        .collect();
+    let sentence = paragraphs.iter().find(|p| p.iter().any(|(t, _)| t.contains("Before"))).unwrap_or_else(|| panic!("{xml}"));
+    assert_eq!(sentence.len(), 3, "one paragraph, three runs: {xml}");
+    assert_eq!(sentence.iter().map(|(t, _)| t.as_str()).collect::<String>(), "Before Chevron after.", "{xml}");
+    assert_eq!(sentence.iter().map(|(_, i)| *i).collect::<Vec<_>>(), [false, true, false], "{xml}");
+    assert_eq!(paragraphs.len(), 2, "{xml}");
+}
+
+/// Hundreds of calculations run on opening and again after a change through the tools. The
+/// time limits are raised so that a busy machine does not stop them (the engine's tests check
+/// that the limits stop them).
+#[test]
+fn hundreds_of_xfa_calculations_open_and_recalculate_through_tools() {
     let dir = workdir("xfa-many");
     let (sections, rows) = (10, 20);
     std::fs::write(dir.join("many.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::many_calculations_template(sections, rows))).unwrap();
-    let mut a = auto(&dir);
+    let mut a = auto(&dir).with_xfa_time_scale(100);
     let started = std::time::Instant::now();
     let opened = ok(&mut a, "doc_open", json!({ "path": "many.pdf" }));
     let open_took = started.elapsed();
@@ -7199,7 +7384,8 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     let dir = workdir("xfa-print-buttons");
     let template = pdfcraft_xfa::fixtures::repeated_print_button_template();
     std::fs::write(dir.join("print.pdf"), pdfcraft_xfa::fixtures::shell(&template)).unwrap();
-    let mut a = auto(&dir);
+    // Raised time limits: a busy machine does not stop the click scripts this checks.
+    let mut a = auto(&dir).with_xfa_time_scale(100);
     let doc = ok(&mut a, "doc_open", json!({ "path": "print.pdf" }))["doc"].as_u64().unwrap();
     let check = |a: &mut Automation, doc| {
         let fields = ok(a, "form_fields", json!({ "doc": doc }));
@@ -7224,7 +7410,8 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
 fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     let dir = workdir("xfa-scripts");
     std::fs::write(dir.join("scripted.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();
-    let mut a = auto(&dir);
+    // Raised time limits: a busy machine does not stop the scripts this checks.
+    let mut a = auto(&dir).with_xfa_time_scale(100);
     let doc = ok(&mut a, "doc_open", json!({ "path": "scripted.pdf" }))["doc"].as_u64().unwrap();
     let field = |a: &mut Automation, n: &str| {
         let f = ok(a, "form_fields", json!({ "doc": doc }));

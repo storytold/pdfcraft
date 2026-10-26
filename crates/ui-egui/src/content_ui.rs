@@ -8,6 +8,7 @@ use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::widgets;
 
@@ -90,6 +91,11 @@ pub struct ContentView {
 }
 
 impl ContentView {
+    /// Forget an in-progress pointer grab for content editing.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        self.grab = None;
+    }
+
     pub(crate) fn finish_draft(&mut self, added: &[Added]) -> Option<Edit> {
         self.draft.take().and_then(|d| finish(self, d, added))
     }
@@ -117,6 +123,10 @@ pub(crate) struct MoveBackground {
     key: Option<(u64, usize, usize)>,
     renderer: Option<pdfcraft_render::RenderPool>,
     texture: Option<egui::TextureHandle>,
+    /// The item alone on a transparent page: the pixels that follow the pointer. The page's own
+    /// raster has whatever the item covers in its box too, which must stay where it is (#4464).
+    item_renderer: Option<pdfcraft_render::RenderPool>,
+    item: Option<egui::TextureHandle>,
     tag: Option<u64>,
     /// The item's display-space box when the gesture started.
     from: Option<[f64; 4]>,
@@ -129,7 +139,12 @@ pub(crate) struct MoveBackground {
 
 impl MoveBackground {
     pub fn pending(&self) -> bool {
-        self.renderer.is_some() && self.texture.is_none()
+        self.renderer.is_some() && self.item_renderer.is_some() && (self.texture.is_none() || self.item.is_none())
+    }
+
+    /// Both rasters are in: the page without the item, and the item alone.
+    fn ready(&self) -> bool {
+        self.texture.is_some() && self.item.is_some()
     }
 
     pub fn prepare(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, cv: &ContentView, scale: f32) {
@@ -144,6 +159,7 @@ impl MoveBackground {
             *self = Self { key, ..Default::default() };
             if let Some((_, page, index)) = key {
                 self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
+                self.item_renderer = doc.added_content_alone(page, index).ok().map(|p| p.renderer());
                 self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
                 self.picture = picture(page, index);
             }
@@ -151,39 +167,60 @@ impl MoveBackground {
         if self.settling.is_some() {
             return;
         }
-        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let (Some((_, page, _)), Some(renderer), Some(item_renderer)) = (self.key, self.renderer.as_ref(), self.item_renderer.as_ref()) else {
+            return;
+        };
         let Some(p) = doc.info.pages.get(page) else { return };
         let max_side = ctx.input(|i| i.max_texture_side) as f32;
         let scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
         let tag = (scale * 1000.0) as u64;
         if self.tag != Some(tag) {
-            renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            for r in [renderer, item_renderer] {
+                r.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            }
             self.tag = Some(tag);
         }
-        if let Some(out) = renderer.try_recv() {
+        if self.receive(ctx, tag) && self.pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    /// Takes in the rasters rendered at `tag`. `false` when either failed: the preview is then
+    /// dropped whole, including rasters in from an earlier scale.
+    fn receive(&mut self, ctx: &egui::Context, tag: u64) -> bool {
+        let (Some(renderer), Some(item_renderer)) = (self.renderer.as_ref(), self.item_renderer.as_ref()) else {
+            return false;
+        };
+        let mut failed = false;
+        for (r, slot, name) in
+            [(renderer, &mut self.texture, "added-content-move-background"), (item_renderer, &mut self.item, "added-content-move-item")]
+        {
+            let Some(out) = r.try_recv() else { continue };
             if out.error.is_some() {
-                // Without a background the item stays put while dragged, as before.
-                self.renderer = None;
-                return;
-            }
-            if out.request.tag == tag {
-                self.texture = Some(ctx.load_texture(
-                    "added-content-move-background",
+                failed = true;
+            } else if out.request.tag == tag {
+                *slot = Some(ctx.load_texture(
+                    name,
                     crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
                     egui::TextureOptions::LINEAR,
                 ));
             }
         }
-        if self.pending() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        if failed {
+            // Without both rasters the item stays put while dragged, as before.
+            self.renderer = None;
+            self.item_renderer = None;
+            self.texture = None;
+            self.item = None;
         }
+        !failed
     }
 
     /// The move was applied: keep the preview, now at the new generation, until the page is
     /// rendered again. Any other edit ends it.
     pub fn committed(&mut self, edit: &Edit, generation: u64) {
         match edit {
-            Edit::UpdateContent { page, index, content } if self.texture.is_some() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
+            Edit::UpdateContent { page, index, content } if self.ready() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
                 self.key = Some((generation, *page, *index));
                 self.settling = Some(content.rect());
             }
@@ -197,26 +234,17 @@ impl MoveBackground {
         }
     }
 
-    /// The page without the moving item, then the item's pixels taken from `page_tex` (the page
-    /// as rendered, item included where it was) at the dragged or applied position.
-    #[allow(clippy::too_many_arguments)]
-    pub fn paint(
-        &self,
-        ui: &egui::Ui,
-        painter: &egui::Painter,
-        xf: &PageXform,
-        page: usize,
-        info: &DocInfo,
-        cv: &ContentView,
-        page_tex: Option<egui::TextureId>,
-    ) {
-        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
+    /// The page without the moving item, then the item's own pixels (from its raster alone, so
+    /// nothing it covered comes along) at the dragged (to the pages' `pointer`) or applied
+    /// position.
+    pub fn paint(&self, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, cv: &ContentView, pointer: Option<Pos2>) {
+        let (Some((_, kp, _)), Some(background), Some(item), Some(from)) = (self.key, &self.texture, &self.item, self.from) else { return };
         if kp != page {
             return;
         }
         let r = screen_rect(xf, info, page, from);
         let to = if let Some((_, grab, start)) = cv.grab {
-            let Some(p) = ui.input(|i| i.pointer.hover_pos()) else { return };
+            let Some(p) = pointer else { return };
             dragged(r, grab, p - start, self.picture)
         } else if let Some(to) = self.settling {
             let to = screen_rect(xf, info, page, to);
@@ -229,7 +257,7 @@ impl MoveBackground {
         xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
         // A pixel around the box, so its edges come along.
         let (r, to) = (r.expand(1.0), to.expand(1.0));
-        let mut mesh = egui::Mesh::with_texture(page_tex);
+        let mut mesh = egui::Mesh::with_texture(item.id());
         for (a, b) in [
             (r.left_top(), to.left_top()),
             (r.right_top(), to.right_top()),
@@ -302,14 +330,12 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
 }
 
 /// Added text and images keep pointer ownership over a form field while editing content.
-pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
+pub(crate) fn select_grabs(xf: &PageXform, ptr: &PagePointer, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
     let cv = &view.content;
     if cv.grab.is_some_and(|(grab_page, _, _)| grab_page == page) {
         return true;
     }
-    let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
-        return false;
-    };
+    let Some(p) = ptr.within(xf.rect) else { return false };
     on_page(added, page).into_iter().any(|(index, item)| {
         let rect = screen_rect(xf, info, page, item.content.rect());
         rect.expand(2.0).contains(p)
@@ -324,6 +350,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     added: &[Added],
@@ -333,13 +360,13 @@ pub(crate) fn page_input(
     view: &mut DocView,
 ) -> bool {
     let mut consumed = false;
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let pointer = ptr.pos;
     let cv = &mut view.content;
     if let Some((gp, grab, start)) = cv.grab
         && gp == page
     {
         consumed = true;
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             cv.grab = None;
             let end = pointer.unwrap_or(start);
             if let Some((sp, si)) = cv.selected
@@ -408,7 +435,7 @@ pub(crate) fn page_input(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
     }
     if resp.drag_started() {
-        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+        let origin = ptr.origin.unwrap_or(p);
         if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(origin) <= 6.0)) {
             cv.grab = Some((page, Grab::Corner(left, top), origin));
             consumed = true;
@@ -450,10 +477,18 @@ pub(crate) fn page_input(
     consumed || hit.is_some() && resp.is_pointer_button_down_on()
 }
 
-/// Outlines of added items (hover and selection with handles) and the box being dragged.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) {
+/// Outlines of added items (hover and selection with handles) and the box being dragged, the
+/// pages' `pointer` over them.
+pub(crate) fn paint_page(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    added: &[Added],
+    view: &DocView,
+    pointer: Option<Pos2>,
+) {
     let cv = &view.content;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
     for (i, a) in on_page(added, page) {
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
@@ -555,7 +590,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it. Over
     // the page, so only where the document shows: text scrolled under the mode bar or a side
     // panel must leave them their pointer (#2755).
-    egui::Area::new(egui::Id::new(("added-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("added-text", view.id.0)))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(at)
@@ -589,7 +624,10 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .font(font.clone())
                     .desired_width(width)
                     .desired_rows(1)
-                    .horizontal_align(halign)
+                    .align(egui::Align2::new(halign, egui::Align::TOP))
+                    // Keep the page editor's original inset; the theme's larger button padding
+                    // otherwise shifts narrow right-aligned boxes away from their text edge.
+                    .margin(egui::Margin::symmetric(4, 2))
                     .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
                     .text_color(Color32::from_rgb(cr, cg, cb))
                     .hint_text(tl!("Type text"))
@@ -597,7 +635,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 if letter_spacing != 0.0 {
                     edit = edit.layouter(&mut spaced);
                 }
-                let resp = ui.add(edit);
+                let resp = ui.add(edit).accessible_name(tl!("Added text"));
                 if t.focus {
                     resp.request_focus();
                     t.focus = false;
@@ -935,19 +973,28 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
         }
     });
     ui.label(egui::RichText::new(tl!("Crop (% trimmed from each side)")).small().color(t.text_muted));
-    let mut crop = img.crop.map(|v| (v * 100.0).round());
+    let most = (1.0 - pdfcraft_engine::AddedImage::MIN_CROP_KEEP) * 100.0;
+    // Unrounded: a side the user doesn't touch keeps its stored value, also one read from a file.
+    let shown = img.crop.map(|v| v * 100.0);
+    let mut crop = shown;
     let mut changed = false;
     ui.horizontal(|ui| {
         for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
             ui.label(label);
-            // Applied when the drag ends, so a drag is one undo step.
-            let r = ui.add(egui::DragValue::new(&mut crop[k]).range(0.0..=45.0).speed(0.5).suffix("%"));
+            // Up to what the opposite side leaves. Applied when the drag ends: one undo step.
+            let room = (most - crop.get((k + 2) % 4).copied().unwrap_or(0.0)).max(0.0);
+            let Some(side) = crop.get_mut(k) else { continue };
+            let r = ui.add(egui::DragValue::new(side).range(0.0..=room).clamp_existing_to_range(false).speed(0.5).suffix("%"));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
         }
     });
     if changed {
         let mut i = img.clone();
-        i.crop = crop.map(|v| v / 100.0);
+        for (stored, (now, was)) in i.crop.iter_mut().zip(crop.iter().zip(&shown)) {
+            if now != was {
+                *stored = now / 100.0;
+            }
+        }
         if i.crop != img.crop {
             out = Some(ImageAction::Update(AddedContent::Image(i)));
         }
@@ -1013,6 +1060,35 @@ mod tests {
         assert!(i.flip_h && !i.flip_v, "Flip horizontal mirrors left and right");
         let i = flipped("Flip vertical");
         assert!(i.flip_v && !i.flip_h, "Flip vertical mirrors top and bottom");
+    }
+
+    /// #4464: both rasters were in at one scale and a render at a new scale failed. The rasters
+    /// from the old scale must go too, or the item keeps following the pointer although the
+    /// preview gave up.
+    #[test]
+    fn failed_rerender_drops_the_rasters_from_the_earlier_scale() {
+        let ctx = egui::Context::default();
+        let texture = |name| Some(ctx.load_texture(name, egui::ColorImage::filled([1, 1], Color32::WHITE), egui::TextureOptions::LINEAR));
+        // Bytes no parser accepts: every render answers with an error.
+        let pool = || {
+            let pool = pdfcraft_render::RenderPool::new_inline(std::sync::Arc::new(b"not a pdf".to_vec()), Default::default());
+            pool.set_queue(vec![pdfcraft_render::RenderRequest { page: 0, scale: 2.0, tag: 2000, ..Default::default() }]);
+            pool
+        };
+        let mut mb = MoveBackground {
+            key: Some((0, 0, 0)),
+            renderer: Some(pool()),
+            texture: texture("background"),
+            item_renderer: Some(pool()),
+            item: texture("item"),
+            tag: Some(2000),
+            from: Some([0.0, 0.0, 10.0, 10.0]),
+            ..Default::default()
+        };
+        assert!(mb.ready(), "both rasters from the earlier scale are in");
+        assert!(!mb.receive(&ctx, 2000), "the new scale's renders fail");
+        assert!(mb.texture.is_none() && mb.item.is_none(), "no raster is left to draw the moving item from");
+        assert!(!mb.ready() && !mb.pending());
     }
 
     /// #4245: the page counts the spacing after a line's last character too, so a line that fits

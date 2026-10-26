@@ -12,6 +12,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::comments;
+use crate::page_pointer::PagePointer;
 use crate::theme;
 use crate::widgets;
 
@@ -150,6 +151,13 @@ pub struct PrepareView {
 }
 
 impl PrepareView {
+    /// Cancel a preparation marquee without injecting the terminal pointer release that Escape does.
+    pub(crate) fn cancel_pointer_gesture(&mut self) {
+        cancel_marquee(self);
+        // Unlike Escape, control cancellation never injects a terminal pointer release.
+        self.ignore_release = false;
+    }
+
     /// Unique field names: selecting several widgets of one radio group still edits one field.
     pub fn names(&self) -> Vec<String> {
         let mut names = Vec::new();
@@ -242,6 +250,7 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     form: &[FormField],
@@ -250,7 +259,7 @@ pub(crate) fn page_input(
     view: &mut DocView,
 ) -> Outcome {
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let pointer = ptr.pos;
     let prep = &mut view.prepare;
 
     if prep.marquee_before.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -259,7 +268,7 @@ pub(crate) fn page_input(
         return out;
     }
     if prep.ignore_release {
-        if !ui.input(|i| i.pointer.primary_down()) {
+        if !ptr.primary_down {
             prep.ignore_release = false;
         }
         out.consumed = true;
@@ -271,7 +280,7 @@ pub(crate) fn page_input(
         && gp == page
     {
         out.consumed = true;
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+        if resp.drag_stopped() || !ptr.primary_down {
             prep.grab = None;
             let end = pointer.unwrap_or(start);
             match grab {
@@ -337,7 +346,7 @@ pub(crate) fn page_input(
     if let Some(tool) = tool {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         if resp.drag_started() || resp.clicked() {
-            let origin = ui.input(|i| i.pointer.press_origin()).filter(|o| xf.rect.contains(*o)).unwrap_or(p);
+            let origin = ptr.origin.filter(|o| xf.rect.contains(*o)).unwrap_or(p);
             prep.grab = Some((page, Grab::Draw(origin), origin));
             out.consumed = true;
             if resp.clicked() {
@@ -393,7 +402,7 @@ pub(crate) fn page_input(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
     }
     if resp.drag_started() {
-        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+        let origin = ptr.origin.unwrap_or(p);
         if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(origin) <= 6.0)) {
             prep.grab = Some((page, Grab::Corner(left, top), origin));
             out.consumed = true;
@@ -538,10 +547,19 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 }
 
 /// Fields with their light-blue fill and name tags, the selection with its handles, and the
-/// rectangle being drawn or dragged.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
+/// rectangle being drawn or dragged to the pages' `pointer`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn paint_page(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    form: &[FormField],
+    view: &DocView,
+    pointer: Option<Pos2>,
+) {
     let prep = &view.prepare;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
     let zoom = xf.zoom().clamp(0.5, 3.0);
     for f in form {
@@ -1360,6 +1378,7 @@ const SEPARATORS: [&str; 5] = ["1,234.56", "1234.56", "1.234,56", "1234,56", "1'
 const NEGATIVES: [&str; 4] = ["-1,234.01", "1,234.01 (red)", "(1,234.01)", "(1,234.01) (red)"];
 const SPECIALS: [&str; 5] = ["Zip Code", "Zip Code + 4", "Phone Number", "Social Security Number", "Arbitrary Mask"];
 
+/// Draw the field-format editor for the selected category and its options.
 fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     let cat = category(&d.format);
     let mut picked = cat;
@@ -1472,8 +1491,8 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
                         ui.selectable_value(p, pr.to_string(), pr);
                     }
                 });
-                ui.label(tl!("Custom:"));
-                ui.add(crate::widgets::line(p).desired_width(120.0));
+                let custom = ui.label(tl!("Custom:"));
+                ui.add(crate::widgets::line(p).desired_width(120.0)).labelled_by(custom.id);
             });
         }
         Format::Special(n) => {
@@ -1497,8 +1516,8 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Mask:"));
-                ui.add(crate::widgets::line(m).desired_width(160.0));
+                let mask = ui.label(tl!("Mask:"));
+                ui.add(crate::widgets::line(m).desired_width(160.0)).labelled_by(mask.id);
             });
             ui.label(egui::RichText::new(tl!("9 digit, A letter, O letter or digit, X any character")).small().color(t.text_faint));
             if idx < 4 {

@@ -184,6 +184,15 @@
 	Available	使用可能
 	Ready	使用可能
 	Search tools and commands…	ツールとコマンドを検索…
+
+# Accessible names for inputs that have no visible label.
+	Added text	追加したテキスト
+	Link URL	リンクの URL
+	Search tools and commands	ツールとコマンドを検索
+	Text editing line	テキスト編集行
+	Text to place	配置するテキスト
+	Tooltip	ツールチップ
+	Words or phrases to redact	墨消しする単語または語句
 	No matching tools	該当するツールがありません
 	Tool	ツール
 	Command	コマンド
@@ -2489,6 +2498,14 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Create & Edit	作成と編集
+	Review & Compare	レビューと比較
+	Forms & Signatures	フォームと署名
+	Protect & Standardize	保護と標準化
+	Customize & Automate	カスタマイズと自動化
+	No tools match your search.	検索に一致するツールはありません。
+	Expand all tools	すべてのツールを展開
+	Collapse all tools	すべてのツールを折りたたむ
 	Attach a file…	ファイルを添付…
 	Delete attachment	添付ファイルを削除
 	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません
@@ -2531,3 +2548,12 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+@plural	{n} reply|{n} replies	{n} 件の返信
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	ページツール
+	Insert pages from a file after the selection…	選択範囲の後にファイルからページを挿入…
+	Rotate the selected pages counterclockwise	選択したページを反時計回りに回転
+	Rotate the selected pages clockwise	選択したページを時計回りに回転
+	Extract the selected pages…	選択したページを抽出…
+	Delete the selected pages	選択したページを削除

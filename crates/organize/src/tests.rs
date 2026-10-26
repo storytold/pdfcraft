@@ -2460,10 +2460,89 @@ fn an_unchanged_opening_destination_keeps_its_position_and_name() {
         assert_eq!(crate::initial_view(&doc), crate::InitialView { hide_toolbar: true, ..v.clone() });
         // A changed magnification writes a destination of its own.
         let mut doc = doc;
-        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitPage, ..v }).unwrap();
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitWidth, ..v }).unwrap();
         let catalog = doc.get(root).as_dict().cloned().unwrap();
         assert_ne!(catalog.get(b"OpenAction"), Some(&action));
-        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitPage);
+        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitWidth);
+    }
+}
+
+/// A document whose `/OpenAction` is `action`, with the named destination `there` (page 3 at
+/// 200%) in the catalog `/Dests` and `here` (page 1, fit) in a `/Names /Dests` tree.
+fn doc_opening_at(action: Object) -> Document {
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let page3 = Object::Ref(pdfcraft_cos::ObjRef::new(6, 0));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page3, Object::name("XYZ"), Object::Null, Object::Null, Object::Int(2)]));
+    let mut tree = pdfcraft_cos::Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("here")), Object::Array(vec![page1, Object::name("Fit")])]));
+    let mut names = pdfcraft_cos::Dict::new();
+    names.set(b"Dests".to_vec(), Object::Dict(tree));
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"OpenAction".to_vec(), action);
+        c.set(b"Dests".to_vec(), Object::Dict(dests));
+        c.set(b"Names".to_vec(), Object::Dict(names));
+    })
+    .unwrap();
+    doc
+}
+
+fn open_action(doc: &Document) -> Option<Object> {
+    doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"OpenAction").cloned())
+}
+
+/// ISO 32000-2 §12.3.2.4: a named destination stands for the explicit one it names. Choosing
+/// page 1 in Document Properties on a document that opens at a named destination elsewhere
+/// writes a destination to page 1; it used to read the name as page 1 and change nothing.
+#[test]
+fn choosing_page_one_replaces_a_named_opening_destination() {
+    use crate::view::Magnification;
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let mut goto = pdfcraft_cos::Dict::new();
+    goto.set(b"S".to_vec(), Object::name("GoTo"));
+    goto.set(b"D".to_vec(), Object::name("there"));
+    for action in [Object::Dict(goto), Object::name("there"), Object::String(PdfString::text("there"))] {
+        let mut doc = doc_opening_at(action.clone());
+        // The dialog shows where the document really opens.
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (2, Magnification::Percent(200.0)), "{action:?}");
+        // Page 1 at the same magnification: an explicit destination to page 1.
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, ..v.clone() }).unwrap();
+        let written = Object::Array(vec![page1.clone(), Object::name("XYZ"), Object::Null, Object::Null, Object::Real(2.0)]);
+        assert_eq!(open_action(&doc), Some(written), "{action:?}");
+        let reopened = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&reopened), crate::InitialView { page: 0, ..v.clone() }, "{action:?}");
+        // Page 1 at the default magnification: no opening action, so the first page opens.
+        let mut doc = doc_opening_at(action.clone());
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, magnification: Magnification::Default, ..v }).unwrap();
+        assert_eq!(open_action(&doc), None, "{action:?}");
+        assert_eq!(crate::initial_view(&save_and_reopen(&doc)).page, 0, "{action:?}");
+    }
+}
+
+/// A named opening destination that already goes to the chosen page and magnification is kept,
+/// and so is one that names nothing (it reads as page 1) until another page is chosen.
+#[test]
+fn a_named_opening_destination_is_kept_while_it_still_holds() {
+    use crate::view::Magnification;
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    for (action, magnification) in
+        [(Object::String(PdfString::text("here")), Magnification::FitPage), (Object::name("nowhere"), Magnification::Default)]
+    {
+        let mut doc = doc_opening_at(action.clone());
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (0, magnification), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        assert_eq!(open_action(&doc), Some(action.clone()), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 1, ..v.clone() }).unwrap();
+        let kind = if magnification == Magnification::FitPage { "Fit" } else { "XYZ" };
+        assert_eq!(
+            open_action(&doc).as_ref().and_then(Object::as_array).map(|a| (a.first().cloned(), a.get(1).cloned())),
+            Some((Some(page2.clone()), Some(Object::name(kind)))),
+            "{action:?}"
+        );
     }
 }
 

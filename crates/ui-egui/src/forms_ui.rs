@@ -9,11 +9,12 @@
 
 use std::collections::HashSet;
 
-use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -42,6 +43,9 @@ pub struct Focus {
     /// The text the calendar last saw, so it moves to a typed date once, when the typing becomes
     /// a whole date, and otherwise keeps the month its arrows turned to.
     pub calendar_text: Option<String>,
+    /// Whether the text box had the keyboard at the end of the editor's last frame
+    /// ([`crate::edit_text_ui::lost_focus_once`]).
+    pub(crate) had_focus: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,6 +124,7 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar: None,
         calendar_rect: None,
         calendar_text: None,
+        had_focus: false,
     }
 }
 
@@ -165,14 +170,14 @@ pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     xf: &PageXform,
+    ptr: &PagePointer,
     page: usize,
     info: &DocInfo,
     form: &[FormField],
     allowed: bool,
     view: &mut DocView,
 ) -> FieldPointer {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return FieldPointer::Away };
+    let Some(p) = ptr.within(xf.rect) else { return FieldPointer::Away };
     let hit = form.iter().find_map(|f| {
         f.widgets
             .iter()
@@ -202,7 +207,7 @@ pub(crate) fn page_input(
     }
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
-    let pressed = f.kind == FormFieldKind::Text && usable && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
+    let pressed = f.kind == FormFieldKind::Text && usable && resp.is_pointer_button_down_on() && ptr.pressed().is_some();
     if pressed && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
         commit(view, form);
         view.forms.focus = Some(Focus { press: Some(p), ..open_focus(f, wi) });
@@ -234,7 +239,7 @@ pub(crate) fn page_input(
         // The press already committed the previous field and opened this one (above), unless
         // press and release came in one frame. Committing again would re-run a validation that
         // refused the value on the press.
-        FormFieldKind::Text if !ui.input(|i| i.pointer.primary_pressed()) => {
+        FormFieldKind::Text if ptr.pressed().is_none() => {
             // An editor opened by the press cannot be hit until a frame has laid it out: the
             // release lands on the page and would take its focus away.
             if let Some(x) = view.forms.focus.as_mut().filter(|x| x.name == f.name && x.widget == wi) {
@@ -317,7 +322,7 @@ pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
 #[allow(clippy::too_many_arguments)]
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, form: &[FormField], f: &FormField, w: &FormWidget, rect: Rect, zoom: f32, widget: usize) {
     let mut enter = false;
-    egui::Area::new(egui::Id::new(("form-editor", view.id.0)))
+    egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -335,8 +340,9 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, form: &[FormField], f: 
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(egui::Id::new(("form-field", view.id.0, &f.name, widget)));
-            let r = ui.add_sized(rect.size(), te);
+                .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
+            // The form field's own logical name; not a visual/preordered label.
+            let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
             if std::mem::take(&mut fx.request_focus) {
                 r.request_focus();
                 // Entered with Tab: typing replaces the value.
@@ -376,7 +382,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
         fx.calendar_text = Some(fx.text.clone());
     }
     let mut picked = None;
-    let area = egui::Area::new(egui::Id::new(("date-picker", view.id.0)))
+    let area = egui::Area::new(egui::Id::unique(("date-picker", view.id.0)))
         .order(egui::Order::Foreground)
         .fixed_pos(field.left_bottom() + vec2(0.0, 2.0))
         .show(ctx, |ui| {
@@ -475,9 +481,16 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
     picked
 }
 
-/// Paint focus and hover frames on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+/// Paint focus and hover frames on a page, the pages' `pointer` over it.
+pub(crate) fn paint_page(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    form: &[FormField],
+    view: &DocView,
+    pointer: Option<Pos2>,
+) {
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
@@ -644,6 +657,10 @@ pub(crate) fn overlay(
         return None;
     };
     let rect = widget_rect(&xf, info, page, w.rect);
+    // Whether a click this frame landed outside the field. Where it landed is `interact_pos`: a
+    // tap's release comes with `PointerGone` (egui-winit sends one with every touch release, and
+    // winit reports Windows pen input as touch), which clears `hover_pos`.
+    let clicked_outside = || ctx.input(|i| i.pointer.any_click() && !i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
     let zoom = xf.zoom();
     let t = Tokens::get(ctx);
     let mut edit = None;
@@ -656,7 +673,7 @@ pub(crate) fn overlay(
             // Over the page, so only where the document shows: a field scrolled under the mode bar
             // or a side panel must leave them their pointer (#2755). It stays on its field, cut off
             // as the page is, rather than pushed back into the window.
-            egui::Area::new(egui::Id::new(("form-editor", view.id.0)))
+            egui::Area::new(egui::Id::unique(("form-editor", view.id.0)))
                 .fade_in(false)
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.min)
@@ -681,7 +698,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(egui::Id::new(("form-field", view.id.0, &f.name, focus.widget)));
+                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -689,11 +706,14 @@ pub(crate) fn overlay(
                         te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
                     }
                     let mut laid_out = None;
-                    let r = ui.add_sized(rect.size(), |ui: &mut egui::Ui| {
-                        let out = te.show(ui);
-                        laid_out = Some((out.galley, out.galley_pos));
-                        out.response.response
-                    });
+                    let r = ui
+                        .add_sized(rect.size(), |ui: &mut egui::Ui| {
+                            let out = te.show(ui);
+                            laid_out = Some((out.galley, out.galley_pos));
+                            out.response.response
+                        })
+                        // The form field's own logical name; not a visual/preordered label.
+                        .accessible_name(f.name.clone());
                     if let (Some(tb), Some(before)) = (text_box, before)
                         && fx.text != before
                     {
@@ -730,6 +750,7 @@ pub(crate) fn overlay(
                             st.store(ui.ctx(), r.id);
                         }
                     }
+                    let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
                     let (enter, esc, tab, shift) = ui.input(|i| {
                         (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift)
                     });
@@ -737,7 +758,7 @@ pub(crate) fn overlay(
                         close = true;
                     } else if tab {
                         next = Some(!shift);
-                    } else if r.lost_focus()
+                    } else if lost
                         && (!multiline || !enter)
                         && !fx.calendar_rect.is_some_and(|c| ui.input(|i| i.pointer.interact_pos().is_some_and(|p| c.contains(p))))
                     {
@@ -767,7 +788,7 @@ pub(crate) fn overlay(
             if editable_combo(f) {
                 combo_editor(ctx, view, form, f, w, rect, zoom, focus.widget);
             }
-            let resp = egui::Area::new(egui::Id::new(("form-choices", view.id.0)))
+            let resp = egui::Area::new(egui::Id::unique(("form-choices", view.id.0)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
                 .show(ctx, |ui| {
@@ -785,9 +806,7 @@ pub(crate) fn overlay(
                         });
                     });
                 });
-            let clicked_away = ctx.input(|i| i.pointer.any_click())
-                && !resp.response.contains_pointer()
-                && !ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
+            let clicked_away = !resp.response.contains_pointer() && clicked_outside();
             let (tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Tab), i.modifiers.shift));
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
@@ -821,18 +840,17 @@ pub(crate) fn overlay(
                     edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export]) });
                 }
             }
-            let clicked_away = ctx.input(|i| i.pointer.any_click()) && !ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
-            if clicked_away {
+            if clicked_outside() {
                 close = true;
             }
         }
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::new(("form-field", view.id.0, &f.name, focus.widget));
+            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
-            let area = egui::Area::new(egui::Id::new(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
+            let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
             area.fixed_pos(rect.min).show(ctx, |ui| {
                 let r = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
                 if let Some(fx) = view.forms.focus.as_mut()
@@ -859,8 +877,7 @@ pub(crate) fn overlay(
                     None
                 }
             });
-            let clicked_away = ctx.input(|i| i.pointer.any_click() && !i.pointer.hover_pos().is_some_and(|p| rect.contains(p)));
-            if esc || clicked_away {
+            if esc || clicked_outside() {
                 close = true;
             } else if tab {
                 next = Some(!shift);

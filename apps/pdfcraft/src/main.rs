@@ -41,7 +41,6 @@ mod reopen;
 mod settings;
 mod single_instance;
 mod text_scale;
-mod updates;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
@@ -195,6 +194,11 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 }
 
 fn main() -> eframe::Result {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::PDFCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Last-resort guard (AGENTS.md §4): commands, edits, opens and saves catch panics and report
@@ -357,6 +361,9 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
+    // PdfCraft installs its own last-resort system face (`PDFCRAFT_SYSTEM_FONTS`); eframe's
+    // provider would read every installed face, including proprietary ones, into every UI pass.
+    native.system_font_fallback = false;
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
@@ -416,16 +423,17 @@ fn app_creator<'a>(
         {
             app.motion.source = Some(motion::source());
         }
-        app.update_source = Some(std::sync::Arc::new(updates::latest_release));
+        app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
-            // winit's Quit (⌘Q) ends the process without asking about unsaved changes (#1136). This
-            // menu's Quit closes the window instead, so `guard_quit` asks, as for the close button.
-            if let Err(e) = craft_quit::install_app_menu(&cc.egui_ctx, "PdfCraft") {
-                log::warn!("couldn't install the app menu, so ⌘Q quits without asking to save: {e}");
+            // The native menu bar. Its Quit (⌘Q) closes the window rather than ending the process as
+            // winit's does (#1136), so `guard_quit` asks about unsaved changes, as for the close
+            // button.
+            if !app.install_native_menu(&cc.egui_ctx) {
+                log::warn!("couldn't install the macOS menu bar; the menus stay in the window");
             }
         }
         if let Some(server) = instance {
@@ -795,6 +803,41 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
 
 #[cfg(test)]
 mod tests {
+    /// The lockfile package block for `name`, or a panic naming the missing package.
+    fn locked_package(root: &std::path::Path, name: &str) -> String {
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
+        lock.split("[[package]]")
+            .find(|p| p.contains(&format!("\nname = \"{name}\"\n")))
+            .map(str::to_owned)
+            .unwrap_or_else(|| panic!("{name} is not in Cargo.lock"))
+    }
+
+    /// Interim graph check for the window stack while the reviewed fork revision is not yet
+    /// published. The old `vendor/winit` / `vendor/egui-wgpu` path patches were removed from the
+    /// published manifest; local integration supplies the reviewed worktrees through an external
+    /// Cargo config patch. A git source must name the public storytold fork; a path source is the
+    /// local integration graph. Behaviour (surface fitting, error scopes, scroll phases) is tested
+    /// directly elsewhere; the retained vendor copies keep provenance until the fork revision is
+    /// pinned. No public revision is invented here.
+    fn assert_window_stack_graph(root: &std::path::Path, name: &str, version: &str) -> String {
+        let package = locked_package(root, name);
+        assert!(package.contains(&format!("\nversion = \"{version}\"\n")), "{name} must resolve to {version}: {package}");
+        if let Some(source) = package.lines().find_map(|line| line.strip_prefix("source = ")) {
+            assert!(source.contains("github.com/storytold/"), "{name} must come from the reviewed storytold fork once published, not {source}");
+            assert!(
+                source.split(|c: char| !c.is_ascii_hexdigit()).any(|part| part.len() == 40),
+                "{name} must pin the fork's 40-character revision, not {source}"
+            );
+        }
+        // A path patch has no `source =` in Cargo.lock. The local integration config is the only
+        // allowed path source; a machine-local path must never be in the published manifest,
+        // which the root-manifest assertion below checks. A path entry carries no remote identity
+        // to verify, so this test does not claim the resolved code is the published fork.
+        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("root Cargo.toml");
+        assert!(!manifest.contains(&format!("{name} = {{ path = \"vendor/")), "vendor/{name} must not be a published path patch");
+        package
+    }
+
     use pdfcraft_ui_egui::control::Endpoint;
 
     fn endpoint() -> std::io::Result<Endpoint> {
@@ -1063,28 +1106,19 @@ mod tests {
         }
     }
 
+    /// Regression test: the lockfile resolves egui-wgpu 0.37.0 through an allowed source, the root manifest
+    /// does not path-patch the vendor copy, and that copy stays as provenance for the surface-fit patch.
     #[test]
-    fn egui_wgpu_carries_the_surface_size_fit() {
-        // Issue #577: egui-wgpu 0.36.2 configures a window's surface at the window's size, and
+    fn vendor_provenance_egui_wgpu_surface_fit_identity() {
+        // Issue #577: egui-wgpu configured a window's surface at the window's size, and
         // `Surface::configure` panics when that's beyond the device's `max_texture_dimension_2d`
-        // (emilk/egui#8361). vendor/egui-wgpu fits it within the limit. A dependency bump that
-        // resolves egui-wgpu from crates.io again, or a re-vendored copy without the patch, would
-        // bring the crash back: re-apply the patch, or drop the copy once an egui release has a
-        // fix (vendor/README.md).
+        // (emilk/egui#8361). The reviewed egui 0.37 worktree carries E2 (`surface_fit`); the
+        // behavioural test above exercises it. The old 0.36 vendor copy is retained for
+        // provenance only and is no longer a published path patch, so reading it would not prove
+        // what the app runs.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
-        let egui_wgpu = lock.split("[[package]]").find(|p| p.contains("\nname = \"egui-wgpu\"\n")).expect("egui-wgpu is in Cargo.lock");
-        assert!(!egui_wgpu.contains("\nsource = "), "egui-wgpu must resolve to vendor/egui-wgpu, not:{egui_wgpu}");
-        // `surface_fit` is tested above; these keep it in the paths that size a surface.
-        let painter = std::fs::read_to_string(root.join("vendor/egui-wgpu/src/winit.rs")).unwrap().replace("\r\n", "\n");
-        for patch in [
-            "let (width, height, render_scale) = surface_fit(window_width, window_height, max_side);",
-            "let (fit_width, fit_height, _) = surface_fit(width, height, self.max_surface_side());",
-            "pixels_per_point: pixels_per_point * surface_state.render_scale,",
-            "old_state.window_width,\n            old_state.window_height,",
-        ] {
-            assert!(painter.contains(patch), "vendor/egui-wgpu lost its surface size patch: {patch}");
-        }
+        assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
+        assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
     }
 
     #[test]
@@ -1140,24 +1174,20 @@ mod tests {
         assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "outer: {caught:?}");
     }
 
+    /// Regression test: the lockfile resolves egui-wgpu 0.37.0 through an allowed source, the root manifest
+    /// does not path-patch the vendor copy, and that copy stays as provenance for the catch-errors patch.
     #[test]
-    fn egui_wgpu_returns_a_surface_it_cannot_configure_as_an_error() {
-        // Issue #519: `catch_errors` is tested above; this keeps it around the first configure of
-        // every new window's surface, and its error reaching eframe as `WgpuError` (eframe then
-        // returns `Error::Wgpu`, which `main` retries with OpenGL). Without it a failed configure
-        // panics before the app is created, and the OpenGL retry never runs.
+    fn vendor_provenance_egui_wgpu_catch_errors_identity() {
+        // Issue #519: E3 (`catch_errors`) is tested above against a real device. The reviewed 0.37
+        // worktree carries it around the first configure of every new window's surface, and its
+        // error reaches eframe as `WgpuError` (eframe then returns `Error::Wgpu`, which `main`
+        // retries with OpenGL). Without it a failed configure panics before the app is created.
+        // `catch_errors` is exercised against a real device in the test above and below; the
+        // graph check makes sure the app runs the reviewed 0.37 worktree (the retained vendor
+        // copy is not read as proof of behaviour).
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
-        let egui_wgpu = lock.split("[[package]]").find(|p| p.contains("\nname = \"egui-wgpu\"\n")).expect("egui-wgpu is in Cargo.lock");
-        assert!(!egui_wgpu.contains("\nsource = "), "egui-wgpu must resolve to vendor/egui-wgpu, not:{egui_wgpu}");
-        let painter = std::fs::read_to_string(root.join("vendor/egui-wgpu/src/winit.rs")).unwrap().replace("\r\n", "\n");
-        let add_surface = painter.split("async fn add_surface(").nth(1).and_then(|s| s.split("\n    fn ").next()).expect("add_surface");
-        for patch in [
-            "let installed = catch_errors(&device, || {\n            self.install_surface(surface, viewport_id, size.width, size.height, false);\n        })",
-            "return Err(crate::WgpuError::ConfigureSurface(error));",
-        ] {
-            assert!(add_surface.contains(patch), "vendor/egui-wgpu lost its surface configure patch: {patch}");
-        }
+        assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
+        assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
     }
 
     #[test]
@@ -1191,6 +1221,8 @@ mod tests {
         }
     }
 
+    /// Regression test: winit resolves to 0.30.13 without a published vendor path patch, the retained copy
+    /// still carries the W1 Windows 11 monitor-scale fix, and its upstream base is recorded.
     #[test]
     fn winit_carries_the_windows_11_monitor_scale_fix() {
         // Issue #324: winit 0.30.13 as released nudges a window dragged onto a monitor with another
@@ -1199,13 +1231,23 @@ mod tests {
         // dependency bump that resolves winit from crates.io again, or a re-vendored copy without
         // the patch, would silently bring the bug back: re-apply the patch, or drop the copy once a
         // winit 0.30 release has the fix (vendor/README.md).
+        // W1 (and W2–W13) were audited against the reviewed winit worktree: the vendor rows in
+        // `vendor/README.md` match the fork's PATCHES.md entries W1–W13. The vendor source is no
+        // longer a published path patch, so this checks the actual graph, not the old copy.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
-        let winit = lock.split("[[package]]").find(|p| p.contains("\nname = \"winit\"\n")).expect("winit is in Cargo.lock");
-        assert!(!winit.contains("\nsource = "), "winit must resolve to vendor/winit, not:{winit}");
-        let dpi_changed = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/windows/event_loop.rs")).unwrap();
-        let patch = "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {\n                new_outer_rect = suggested_rect;";
-        assert!(dpi_changed.contains(patch), "vendor/winit lost its WM_DPICHANGED patch");
+        assert_window_stack_graph(&root, "winit", "0.30.13");
+        let event_loop = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/windows/event_loop.rs")).unwrap();
+        // The audited W1 hunk itself, not merely the file's presence: Windows 11 applies the
+        // rect Windows suggests, while Windows 10 keeps the old adjustment.
+        for marker in [
+            "PdfCraft patch: from Windows 11 (build 22000) on, apply the rect Windows suggests",
+            "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {",
+            "new_outer_rect = suggested_rect;",
+        ] {
+            assert!(event_loop.contains(marker), "vendor/winit lost the W1 monitor-scale patch: {marker}");
+        }
+        let provenance = std::fs::read_to_string(root.join("vendor/winit/.cargo_vcs_info.json")).unwrap();
+        assert!(provenance.contains("e9809ef54b18499bb4f2cac945719ecc2a61061b"), "vendor/winit keeps its upstream base provenance");
     }
 
     const NVIDIA: (u32, u32) = (0x10de, 0x2684);

@@ -195,7 +195,7 @@ enum Availability {
 fn row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability, menu: bool) -> egui::Response {
     let ready = availability == Availability::Ready && ui.is_enabled();
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), if ready { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ready, label));
     let press = theme::Press::track(ui, &resp);
     if ready {
         press.wash(ui, rect, 6, false);

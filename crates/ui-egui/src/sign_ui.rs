@@ -10,6 +10,7 @@ use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatu
 
 use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
+use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
@@ -151,9 +152,16 @@ pub struct SignView {
 }
 
 /// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, info: &pdfcraft_render::DocInfo, view: &mut DocView) {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
-    let origin = ui.input(|i| i.pointer.press_origin());
+pub(crate) fn page_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    xf: &PageXform,
+    ptr: &PagePointer,
+    page: usize,
+    info: &pdfcraft_render::DocInfo,
+    view: &mut DocView,
+) {
+    let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
@@ -670,6 +678,7 @@ fn error(ui: &mut egui::Ui, err: &Option<String>) {
     }
 }
 
+/// Draw the digital-ID chooser, including unusable certificates and removal confirmation.
 fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Sign with a Digital ID");
     ui.label(tl!("Choose the digital ID that you want to use for signing:"));
@@ -682,7 +691,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             let selected = d.selected == Some(i);
             let usable = e.unusable.is_none();
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, usable, selected, &e.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, usable, selected, &e.name));
             let fill = if selected {
                 t.accent_soft
             } else if resp.hovered() && usable {
