@@ -10,15 +10,19 @@ impl Automation {
     fn image_page(a: &Args) -> Result<pdfcraft_engine::ImagePage> {
         let turn = a.opt_bool("page_turn")?.unwrap_or(true);
         let bad = || ToolError::InvalidArgs("page_size must be a paper name or [width, height] in points".into());
-        match a.get("page_size") {
-            None | Some(Value::Null) => Ok(pdfcraft_engine::ImagePage::Image),
-            Some(Value::String(s)) => Ok(pdfcraft_engine::ImagePage::fixed(super::printing::paper_named(Some(s))?.1, turn)),
+        let page = match a.get("page_size") {
+            None | Some(Value::Null) => pdfcraft_engine::ImagePage::Image,
+            Some(Value::String(s)) => pdfcraft_engine::ImagePage::fixed(super::printing::paper_named(Some(s))?.1, turn),
             Some(Value::Array(v)) if v.len() == 2 => {
                 let side = |i: usize| v.get(i).and_then(Value::as_f64).ok_or_else(bad);
-                Ok(pdfcraft_engine::ImagePage::fixed((side(0)?, side(1)?), turn))
+                pdfcraft_engine::ImagePage::fixed((side(0)?, side(1)?), turn)
             }
-            Some(_) => Err(bad()),
-        }
+            Some(_) => return Err(bad()),
+        };
+        // A page the creator cannot make is the caller's argument being wrong, not a conversion
+        // failure, and refusing it here is what keeps mode "separate" from making out_dir first.
+        page.check().map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+        Ok(page)
     }
 
     pub(crate) fn doc_create(&mut self, a: &Args) -> Result<Value> {

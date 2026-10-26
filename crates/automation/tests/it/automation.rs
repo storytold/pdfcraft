@@ -9465,9 +9465,12 @@ fn image_pages_go_on_a_chosen_paper_size_through_every_create_tool() {
     let one = ok(&mut a, "doc_open", json!({ "path": "out/a_page_1.pdf" }))["doc"].as_u64().unwrap();
     assert!(close(size(&mut a, one, 0), A4));
 
-    // A size that is not a paper name or a pair of points is refused, by every tool that takes
-    // one and in both of doc_create_multiple's modes, before anything is written.
-    for bad in [json!("A9"), json!([300]), json!(["a", "b"]), json!(5), json!({})] {
+    // A size no page can be is refused the same way: not a paper name, not a pair of points, or
+    // a pair outside the 3 to 14400 points a PDF page may be (ISO 32000-2 Annex C). Checked for
+    // every tool that takes one and in both of doc_create_multiple's modes, because "separate"
+    // makes out_dir before it converts anything and a size reported only by the conversion would
+    // leave the folder behind.
+    for bad in [json!("A9"), json!([300]), json!(["a", "b"]), json!(5), json!({}), json!([14401, 792]), json!([612, 2]), json!([-612, 792])] {
         for (tool, args) in [
             ("doc_create", json!({ "from": "images", "paths": shots, "page_size": bad.clone() })),
             ("doc_create_multiple", json!({ "paths": shots, "page_size": bad.clone(), "out": "refused.pdf" })),

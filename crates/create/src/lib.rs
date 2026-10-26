@@ -684,7 +684,12 @@ impl ImagePage {
         Self::Fixed { width: size.0, height: size.1, turn }
     }
 
-    fn check(self) -> Result<(), CreateError> {
+    /// Refuse a page this crate cannot make.
+    ///
+    /// Public so a caller that acts before converting can refuse the size before the side effect:
+    /// `doc_create_multiple` in mode "separate" makes `out_dir` first, and an out-of-range size
+    /// reported only by the conversion would leave the folder behind.
+    pub fn check(self) -> Result<(), CreateError> {
         let Self::Fixed { width, height, .. } = self else { return Ok(()) };
         if !(width.is_finite() && height.is_finite() && (3.0..=MAX_SIDE).contains(&width) && (3.0..=MAX_SIDE).contains(&height)) {
             return Err(CreateError::Invalid(format!("the page must be between 3 and {MAX_SIDE} points on each side")));

@@ -276,7 +276,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "out": save_out.clone(),
                     "open": open.clone(),
                     "out_dir": { "type": "string", "description": "Folder for mode \"separate\"." },
-                    "page_size": { "type": ["string", "array"], "items": { "type": "number", "minimum": 3 }, "minItems": 2, "maxItems": 2, "description": "For image files: put each image on a sheet of this size instead of a page as large as the image. A paper name (A4, Letter, Legal, Tabloid, A0-A6, ARCH A-E, ANSI C-E) or [width, height] in points; the image is scaled to fit and centred." },
+                    "page_size": { "type": ["string", "array"], "items": { "type": "number", "minimum": 3, "maximum": 14400 }, "minItems": 2, "maxItems": 2, "description": "For image files: put each image on a sheet of this size instead of a page as large as the image. A paper name (A4, Letter, Legal, Tabloid, A0-A6, ARCH A-E, ANSI C-E) or [width, height] in points, each between 3 and 14400 (the largest a PDF page may be); the image is scaled to fit and centred." },
                     "page_turn": { "type": "boolean", "description": "With page_size: turn the sheet to match each image's orientation, so a landscape photo gets a landscape page (default true)." },
                 }),
                 &["paths"],
@@ -1340,7 +1340,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "width": { "type": "number", "minimum": 3 },
                 "height": { "type": "number", "minimum": 3 },
                 "name": { "type": "string", "description": "Name for the new document (default derived from the source)." },
-                "page_size": { "type": ["string", "array"], "items": { "type": "number", "minimum": 3 }, "minItems": 2, "maxItems": 2, "description": "For image files: put each image on a sheet of this size instead of a page as large as the image. A paper name (A4, Letter, Legal, Tabloid, A0-A6, ARCH A-E, ANSI C-E) or [width, height] in points; the image is scaled to fit and centred." },
+                "page_size": { "type": ["string", "array"], "items": { "type": "number", "minimum": 3, "maximum": 14400 }, "minItems": 2, "maxItems": 2, "description": "For image files: put each image on a sheet of this size instead of a page as large as the image. A paper name (A4, Letter, Legal, Tabloid, A0-A6, ARCH A-E, ANSI C-E) or [width, height] in points, each between 3 and 14400 (the largest a PDF page may be); the image is scaled to fit and centred." },
                 "page_turn": { "type": "boolean", "description": "With page_size: turn the sheet to match each image's orientation, so a landscape photo gets a landscape page (default true)." },
 
             }),
