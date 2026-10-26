@@ -180,6 +180,13 @@ fn family_of(base_font: &str) -> FontFamily {
 }
 
 impl Document {
+    /// A displayed box (from the top-left, y down) in the engine's display space for added items:
+    /// the same page as shown, but measured up from the bottom-left.
+    fn to_display_space(&self, page: usize, view: [f64; 4]) -> Result<[f64; 4], String> {
+        let height = f64::from(self.page_info(page)?.height);
+        Ok([view[0], height - view[3], view[2], height - view[1]])
+    }
+
     fn page_info(&self, page: usize) -> Result<&pdfcraft_render::PageInfo, String> {
         self.doc()?.info.pages.get(page).ok_or_else(|| format!("page {} does not exist", page.saturating_add(1)))
     }
@@ -244,13 +251,14 @@ impl Document {
         let view = checked(view)?;
         match target.kind {
             Kind::Added => {
+                let rect = self.to_display_space(page, view)?;
                 let content = match self.added_content(page, target.index)? {
                     AddedContent::Text(mut t) => {
-                        t.rect = view;
+                        t.rect = rect;
                         AddedContent::Text(t)
                     }
                     AddedContent::Image(mut i) => {
-                        i.rect = view;
+                        i.rect = rect;
                         AddedContent::Image(i)
                     }
                 };
@@ -271,7 +279,7 @@ impl Document {
 
     /// Adds a text box over `view` (the width wraps the text; the height follows it).
     pub fn add_text(&mut self, page: usize, view: [f64; 4], text: &str, style: &TextStyle) -> Result<(), String> {
-        let rect = checked(view)?;
+        let rect = self.to_display_space(page, checked(view)?)?;
         let added = style.apply_to(AddedText { rect, text: text.to_string(), ..AddedText::default() });
         self.apply(Edit::AddText { page, text: added })
     }
@@ -279,7 +287,7 @@ impl Document {
     /// Adds a picture (PNG, JPEG, TIFF, GIF or BMP) over `view`, or at its natural size in the middle
     /// of the page when there is no box.
     pub fn add_image(&mut self, page: usize, name: &str, bytes: &[u8], view: Option<[f64; 4]>) -> Result<(), String> {
-        let rect = view.map(checked).transpose()?;
+        let rect = view.map(checked).transpose()?.map(|v| self.to_display_space(page, v)).transpose()?;
         self.apply(Edit::AddImage { page, rect, name: name.to_string(), bytes: Arc::new(bytes.to_vec()) })
     }
 
@@ -402,6 +410,10 @@ mod tests {
         let added: Vec<Value> = objects(&doc).into_iter().filter(|o| o["kind"] == "added").collect();
         assert_eq!(added.len(), 1);
         assert_eq!(added[0]["text"], "Added words");
+        // it lands where the box was asked for: 40 points from the top of the page, not from the bottom
+        let v = view_of(&added[0]);
+        assert!((v[1] - 40.0).abs() < 8.0, "near the top edge asked for: {v:?}");
+        assert!((v[0] - 20.0).abs() < 8.0, "near the left edge asked for: {v:?}");
         assert_eq!(added[0]["style"]["bold"], true);
         assert_eq!(added[0]["style"]["size"], 18.0);
         let target = Target { kind: Kind::Added, index: 0 };
@@ -429,6 +441,7 @@ mod tests {
         let image = list.iter().find(|o| o["type"] == "image").expect("the image is listed");
         assert_eq!(image["kind"], "added");
         let before = view_of(image);
+        assert!((before[1] - 200.0).abs() < 2.0 && (before[3] - 260.0).abs() < 2.0, "the picture is where it was put: {before:?}");
         let target = Target { kind: Kind::Added, index: image["index"].as_u64().expect("index") as usize };
 
         doc.move_objects(0, &[target], 10.0, 20.0).expect("moves");
@@ -441,6 +454,7 @@ mod tests {
         doc.resize_object(0, target, [100.0, 200.0, 190.0, 290.0]).expect("resizes");
         let sized = view_of(objects(&doc).iter().find(|o| o["type"] == "image").expect("still there"));
         assert!((sized[2] - sized[0] - 90.0).abs() < 0.5, "90 wide: {sized:?}");
+        assert!((sized[1] - 200.0).abs() < 1.0 && (sized[3] - 290.0).abs() < 1.0, "and 90 tall, where asked: {sized:?}");
 
         doc.delete_object(0, target).expect("deletes");
         assert!(objects(&doc).iter().all(|o| o["type"] != "image"));
