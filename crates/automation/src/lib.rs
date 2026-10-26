@@ -19,6 +19,7 @@ mod batch;
 mod comments;
 mod content;
 mod conventions;
+mod cursor_coords;
 pub mod file_access;
 mod forms;
 mod layers;
@@ -967,6 +968,7 @@ impl Automation {
             "comments_hide" => self.comments_hide(&a)?,
             "layer_set" => self.layer_set(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,
+            "view_cursor_coordinates" => self.view_cursor_coordinates(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,

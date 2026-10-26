@@ -2257,3 +2257,35 @@ fn the_pages_panel_tools_are_off_without_page_editing_permission() {
     assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
 }
+
+/// Cursor coordinates floating window (View ▸ Show/Hide ▸ Cursor Coordinates, `Ctrl+Y` / `⌘Y`)
+/// toggles on and off, stays visible across frames, and renders coordinate and dimension readouts.
+#[test]
+fn cursor_coordinates_floating_window_toggles_and_renders() {
+    let mut h = harness(&[]);
+    h.run_steps(4);
+    assert!(!h.state().show_cursor_coordinates);
+
+    // Toggle on via command.
+    assert!(h.state_mut().execute("view.cursor_coordinates"));
+    h.run_steps(4);
+    assert!(h.state().show_cursor_coordinates);
+
+    // The floating window title and controls are visible.
+    h.get_by_label("Cursor Coordinates");
+    h.get_by_label("Width:");
+    h.get_by_label("Height:");
+    h.get_by_label("Origin:");
+    h.get_by_label("Unit:");
+
+    // Toggle off via command.
+    assert!(h.state_mut().execute("view.cursor_coordinates"));
+    h.run_steps(4);
+    assert!(!h.state().show_cursor_coordinates);
+
+    // Toggle on via shortcut ⌘Y / Ctrl+Y.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+    h.run_steps(4);
+    assert!(h.state().show_cursor_coordinates);
+    h.get_by_label("Cursor Coordinates");
+}

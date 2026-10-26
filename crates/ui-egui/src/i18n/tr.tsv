@@ -2553,3 +2553,11 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+# Cursor coordinates (view.cursor-coordinates)
+	Show/Hide	Göster/Gizle
+	Cursor coordinates	İmleç koordinatları
+	Cursor Coordinates	İmleç Koordinatları
+	Origin:	Başlangıç:
+	Bottom-left	Sol alt
+	Top-left	Sol üst
+	Unit:	Birim:
