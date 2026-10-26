@@ -54,6 +54,8 @@ impl Automation {
         }
         // (page, quads) per mark.
         let mut marks: Vec<(usize, Vec<[f64; 8]>)> = Vec::new();
+        // Searched pages whose text stops at the content budget: what is past the cut is not marked (#3504).
+        let mut cut: Vec<Value> = Vec::new();
         let chosen = [
             a.get("rect").is_some(),
             a.get("find").is_some(),
@@ -108,6 +110,9 @@ impl Automation {
             let texts = self.page_texts(id, &pages)?;
             let info = self.doc(a)?.info.clone();
             for (&p, text) in pages.iter().zip(&texts) {
+                if text.truncated {
+                    cut.push(json!(format!("page {}: {}, so the text after it was not searched and is not marked", p + 1, crate::CONTENT_CUT)));
+                }
                 let hits: Vec<(Option<usize>, _)> = match pattern {
                     Some(pat) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
                     None => needles
@@ -127,7 +132,12 @@ impl Automation {
                 }
             }
             if marks.is_empty() {
-                return Err(failed("nothing matched, so nothing was marked"));
+                let why = cut.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ");
+                return Err(failed(if why.is_empty() {
+                    "nothing matched, so nothing was marked".to_owned()
+                } else {
+                    format!("nothing matched, so nothing was marked ({why})")
+                }));
             }
         }
         let count = marks.len();
@@ -149,6 +159,7 @@ impl Automation {
         if a.get("words").is_some() {
             out["matched_words"] = json!(matched_words.iter().map(|(w, n)| json!({ "word": w, "marked": n })).collect::<Vec<_>>());
         }
+        crate::push_warnings(&mut out, cut);
         Ok(out)
     }
 

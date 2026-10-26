@@ -395,7 +395,16 @@ fn render_page<'a>(
 fn finish(req: RenderRequest, start: Stopwatch, r: Result<Output, (String, bool)>, warnings: Vec<RenderWarning>) -> RenderedPage {
     let millis = start.millis();
     match r {
-        Ok((width, height, rgba, text)) => RenderedPage { request: req, width, height, rgba, error: None, text, warnings, millis },
+        Ok((width, height, rgba, text)) => {
+            // Text read up to a cut says so itself, so the flag survives every cache (#3504).
+            let text = match text {
+                Some(t) if warnings.contains(&RenderWarning::ContentTruncated) => {
+                    Some(Arc::new(crate::text::PageText { truncated: true, ..Arc::unwrap_or_clone(t) }))
+                }
+                t => t,
+            };
+            RenderedPage { request: req, width, height, rgba, error: None, text, warnings, millis }
+        }
         Err((e, _)) => RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(e), text: None, warnings, millis },
     }
 }
@@ -5176,6 +5185,23 @@ trailer << /Root 1 0 R >>
         let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a content bomb must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the cut content is observable");
+    }
+
+    /// Text extraction reads the page through the same budget as drawing, and says so too (#3504):
+    /// the text after the cut is missing, so a caller must be able to tell the text is partial.
+    #[test]
+    fn text_extraction_reports_the_content_budget_cut() {
+        let bomb = zlib_zeros(hayro::hayro_syntax::MAX_DECODED_STREAM + (32 << 20));
+        let pdf = one_page_pdf(&bomb, "/Filter /FlateDecode");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a content bomb must not stall text extraction");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the cut text is observable");
+        assert!(page.text.is_some_and(|t| t.truncated), "and the text itself says it is partial");
     }
 
     /// A stream read in pieces of any size gives the same bytes: stored and dynamic blocks, and in

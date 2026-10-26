@@ -743,6 +743,85 @@ fn file_writing_tools_are_not_read_only() {
     }
 }
 
+/// A PDF of `objs` (numbered from 1, object 1 the catalog), which may hold binary stream data.
+fn pdf_of_bytes(objs: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #3504: a page whose content inflates past the renderer's budget gives only the text before the
+/// cut. The text tools say so: text_extract warns, text_find is not complete, and search-based
+/// redaction says what it could not search, so a redaction never looks complete when it is not.
+#[test]
+fn text_tools_report_a_page_cut_at_the_content_budget() {
+    let dir = workdir("content-cut");
+    // 270 MiB of spaces between the two lines: past the 256 MiB budget, from a stream of a few
+    // hundred KB (so the 64× expansion allowance doesn't lift the budget over it).
+    let mut content = b"BT /F1 24 Tf 20 250 Td (EARLY) Tj ET\n".to_vec();
+    content.resize(content.len() + (270 << 20), b' ');
+    content.extend_from_slice(b"\nBT /F1 24 Tf 20 150 Td (LATE) Tj ET");
+    let raw = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &content).raw;
+    drop(content);
+    let mut stream = format!("<< /Length {} /Filter /FlateDecode >>\nstream\n", raw.len()).into_bytes();
+    stream.extend_from_slice(&raw);
+    stream.extend_from_slice(b"\nendstream");
+    let cut = pdf_of_bytes(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+        stream,
+    ]);
+    std::fs::write(dir.join("cut.pdf"), cut).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "cut.pdf" }))["doc"].as_u64().unwrap();
+    let warned = |v: &Value| {
+        v["warnings"]
+            .as_array()
+            .is_some_and(|w| w.iter().any(|w| w.as_str().is_some_and(|w| w.starts_with("page 1: content past the page's safety budget was skipped"))))
+    };
+
+    let extracted = ok(&mut a, "text_extract", json!({ "doc": doc }));
+    let text = extracted["pages"][0]["text"].as_str().unwrap();
+    assert!(text.contains("EARLY") && !text.contains("LATE"), "the text stops at the cut: {text}");
+    assert!(warned(&extracted), "{extracted}");
+
+    // From the cache now: the text still knows it is partial.
+    for query in ["EARLY", "LATE"] {
+        let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": query }));
+        assert_eq!(found["count"], u64::from(query == "EARLY"), "{found}");
+        assert_eq!(found["complete"], false, "{query}: the text after the cut was not searched: {found}");
+        assert_eq!(found["warning_count"], 1, "{found}");
+        assert_eq!(found["warnings"][0]["page"], 1, "{found}");
+    }
+
+    let marked = ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "EARLY" }));
+    assert_eq!(marked["marked"], 1);
+    assert!(warned(&marked), "a search redaction says what it could not search: {marked}");
+    let missed = err(&mut a, "redact_mark", json!({ "doc": doc, "find": "LATE" })).to_string();
+    assert!(missed.contains("page 1: content past the page's safety budget was skipped"), "{missed}");
+
+    // A page within budget says nothing.
+    let whole = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert!(ok(&mut a, "text_extract", json!({ "doc": whole })).get("warnings").is_none());
+    let found = ok(&mut a, "text_find", json!({ "doc": whole, "query": "Page 2" }));
+    assert_eq!((found["count"].clone(), found["complete"].clone(), found["warning_count"].clone()), (json!(1), json!(true), json!(0)), "{found}");
+    assert!(ok(&mut a, "redact_mark", json!({ "doc": whole, "find": "Page 2" })).get("warnings").is_none());
+}
+
 #[test]
 fn open_inspect_render_and_find() {
     let dir = workdir("inspect");

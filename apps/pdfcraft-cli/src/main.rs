@@ -468,6 +468,8 @@ fn text(args: &[String]) -> Result<(), CliError> {
             stdout_line(format_args!("\u{c}"))?;
         }
         stdout_line(format_args!("{}", out.text.map(|t| t.plain_text()).unwrap_or_default()))?;
+        // The text after a cut is missing, as on the rendered page (#3504).
+        print_render_warnings(p + 1, &out.warnings);
     }
     if failed.is_empty() {
         Ok(())
@@ -743,7 +745,13 @@ fn render(args: &[String]) -> Result<(), CliError> {
     };
     std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
     let _ = writeln!(std::io::stderr().lock(), "rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
-    for warning in &p.warnings {
+    print_render_warnings(page, &p.warnings);
+    Ok(())
+}
+
+/// Say on stderr what made page `page` (1-based) partial, for `render` and `text` alike.
+fn print_render_warnings(page: usize, warnings: &[pdfcraft_render::RenderWarning]) {
+    for warning in warnings {
         match warning {
             pdfcraft_render::RenderWarning::ContentTruncated => {
                 let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: content past the page's safety budget was skipped");
@@ -754,7 +762,6 @@ fn render(args: &[String]) -> Result<(), CliError> {
             }
         }
     }
-    Ok(())
 }
 
 /// Child-process body for `check`: prints one JSON line.

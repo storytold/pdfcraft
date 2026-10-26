@@ -16,6 +16,11 @@ fn fixture(n: usize) -> Vec<u8> {
         let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
     }
+    pdf_of(&objs)
+}
+
+/// A PDF file of `objs`, numbered from 1, with object 1 as the catalog.
+fn pdf_of(objs: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -47,6 +52,45 @@ fn text_of_a_selected_page_that_cannot_be_read_fails() {
     assert!(!out.status.success(), "a page that cannot be read must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("page 9"), "the failing page must be named: {stderr}");
+}
+
+/// #3504: a page whose content inflates past the renderer's budget is read only up to the cut, so
+/// `text` says so on stderr with the same warning `render` gives. A page within budget says nothing.
+#[test]
+fn text_warns_when_the_content_budget_cut_the_page() {
+    // 270 MiB of spaces between the two lines: past the 256 MiB budget, from a stream of a few
+    // hundred KB (so the 64× expansion allowance doesn't lift the budget over it).
+    let mut content = b"BT /F1 24 Tf 20 250 Td (EARLY) Tj ET\n".to_vec();
+    content.resize(content.len() + (270 << 20), b' ');
+    content.extend_from_slice(b"\nBT /F1 24 Tf 20 150 Td (LATE) Tj ET");
+    let raw = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &content).raw;
+    drop(content);
+    let mut stream = format!("<< /Length {} /Filter /FlateDecode >>\nstream\n", raw.len()).into_bytes();
+    stream.extend_from_slice(&raw);
+    stream.extend_from_slice(b"\nendstream");
+    let path = tmp("cut.pdf");
+    std::fs::write(
+        &path,
+        pdf_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+            stream,
+        ]),
+    )
+    .unwrap();
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "a partial page is still text: {}", String::from_utf8_lossy(&out.stderr));
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("EARLY") && !stdout.contains("LATE"), "the text stops at the cut: {stdout}");
+    assert!(stderr.contains("warning: page 1: content past the page's safety budget was skipped"), "{stderr}");
+
+    let whole = tmp("whole.pdf");
+    std::fs::write(&whole, fixture(1)).unwrap();
+    let out = Command::new(BIN).args(["text", whole.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("warning"), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 #[test]

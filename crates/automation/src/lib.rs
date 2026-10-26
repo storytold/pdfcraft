@@ -110,6 +110,25 @@ use file_access::foreign_share;
 use text_cache::TextCache;
 
 type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
+
+/// Why a page's text is partial: its content was cut at the renderer's budget (#3504).
+const CONTENT_CUT: &str = "content past the page's safety budget was skipped";
+
+/// Append `extra` to the result's `warnings`, starting the list if there is none.
+fn push_warnings(out: &mut Value, extra: Vec<Value>) {
+    if extra.is_empty() {
+        return;
+    }
+    if let Some(o) = out.as_object_mut() {
+        match o.get_mut("warnings").and_then(Value::as_array_mut) {
+            Some(w) => w.extend(extra),
+            None => {
+                o.insert("warnings".into(), Value::Array(extra));
+            }
+        }
+    }
+}
+
 const FIND_MAX_WARNINGS: usize = 100;
 const FIND_MAX_WARNING_BYTES: usize = 1024;
 
@@ -2177,8 +2196,16 @@ impl Automation {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),
         };
+        let cut: Vec<Value> = pages
+            .iter()
+            .zip(&texts)
+            .filter(|(_, t)| t.truncated)
+            .map(|(p, _)| json!(format!("page {}: {CONTENT_CUT}, so the text after it is missing", p + 1)))
+            .collect();
         let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
-        Ok(json!({ "pages": out }))
+        let mut out = json!({ "pages": out });
+        push_warnings(&mut out, cut);
+        Ok(out)
     }
 
     /// Matches in document order, extracting page text in growing batches and stopping as soon as
@@ -2223,6 +2250,13 @@ impl Automation {
                         continue;
                     }
                 };
+                // The page's text after a cut is not searched, so the search is not complete (#3504).
+                if text.truncated {
+                    warning_count += 1;
+                    if warnings.len() < FIND_MAX_WARNINGS {
+                        warnings.push(json!({ "page": p + 1, "error": format!("{CONTENT_CUT}, so the text after it was not searched"), "error_truncated": false }));
+                    }
+                }
                 let skip_here = if p == start { skip } else { 0 };
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.

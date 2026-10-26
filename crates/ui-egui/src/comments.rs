@@ -2380,7 +2380,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let n = glyphs.len();
-        PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n] }
+        PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n], truncated: false }
     }
 
     fn near(a: Option<([f32; 2], f32)>, b: ([f32; 2], f32)) -> bool {

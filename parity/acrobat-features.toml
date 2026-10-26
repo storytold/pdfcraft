@@ -142,8 +142,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/filters/src/flate.rs::bomb_is_bounded", "crates/filters/src/lib.rs::limit_applies_to_intermediate_buffers"]
-notes = ""
+evidence = ["crates/filters/src/flate.rs::bomb_is_bounded", "crates/filters/src/lib.rs::limit_applies_to_intermediate_buffers", "crates/render/src/raster.rs::text_extraction_reports_the_content_budget_cut", "apps/pdfcraft-cli/tests/it/text.rs::text_warns_when_the_content_budget_cut_the_page", "crates/automation/tests/it/automation.rs::text_tools_report_a_page_cut_at_the_content_budget"]
+notes = "A page cut at the renderer's content budget says so: `render` and `text` warn, `PageText::truncated` is set, text_extract and search redact_mark warn, and text_find is not complete (#3504). Still missing: the renderer stops at 256 MiB per page while the cos readers (edit, export, redaction apply) allow 1 GiB per stream, so they can read text the page view and search never see; the app's Find and export don't show the cut yet."
 
 [[feature]]
 id = "core.open-rc4"
