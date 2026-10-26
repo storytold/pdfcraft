@@ -1,0 +1,323 @@
+# Hebrew (he) catalog for PdfCraft. Columns: context<TAB>source<TAB>translation.
+#
+# Catalog strings stay in logical (typing) order. The existing egui 0.37 fork performs
+# right-to-left shaping/reordering; do not reverse or pre-shape Hebrew here.
+# Placeholders such as {name} must stay unchanged. Product names (PdfCraft, PDF, Acrobat,
+# JavaScript, Discord) stay as written in the source. Trailing ellipses are preserved.
+#
+	Menu	תפריט
+	File	קובץ
+	Edit	עריכה
+	Pages	עמודים
+	View	תצוגה
+	Help	עזרה
+	Preferences	העדפות
+	Preferences…	העדפות…
+	Interface language	שפת הממשק
+	Interface size	גודל הממשק
+	Auto ({percent}%)	אוטומטי ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	המצב האוטומטי מתאים את גודל הטקסט להגדרת המערכת. העמודים תמיד מוצגים ברזולוציה המלאה של המסך.
+	Identity	פרטי זהות
+	Name on new comments	שם שיופיע בהערות חדשות
+	Hide hover previews for highlights without comment text	הסתרת תצוגה מקדימה במעבר עכבר מעל סימונים שאין בהם טקסט הערה
+	Open…	פתיחה…
+	Open Recent	פתיחת קבצים אחרונים
+	Clear Recent Files	ניקוי רשימת הקבצים האחרונים
+	Remove from Recent	הסרה מהאחרונים
+	Remove {name} from Recent	הסרת {name} מהאחרונים
+	Pin folder to Home…	הצמדת תיקייה למסך הבית…
+	Folders	תיקיות
+	Pin a folder…	הצמדת תיקייה…
+	Pin a folder to Home	הצמדת תיקייה למסך הבית
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	הצמדת תיקייה תציג כאן את קובצי ה־PDF החדשים שבה, למשל תיקייה שבה הסורק שומר קבצים או תיקייה המסונכרנת עם כונן ענן.
+	Unpin	ביטול הצמדה
+	Unpin {folder}	ביטול ההצמדה של {folder}
+	Looking for PDFs…	מחפש קובצי PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	התיקייה אינה זמינה כרגע. ייתכן שהועברה, או שהכונן שלה או הסנכרון לענן אינם מחוברים.
+	No PDFs in this folder yet	אין עדיין קובצי PDF בתיקייה הזו
+	Show less	הצג פחות
+	Show {n} more	הצג עוד {n}
+	The newest {n} of {total} PDFs	{n} קובצי ה־PDF החדשים ביותר מתוך {total}
+	Pinned folders need the desktop app	הצמדת תיקיות זמינה רק ביישום למחשב
+	Choose a folder on this computer to pin	בחר תיקייה במחשב הזה להצמדה
+	{folder} is already pinned to Home	{folder} כבר מוצמדת למסך הבית
+	You can pin up to {n} folders. Unpin one first.	אפשר להצמיד עד {n} תיקיות. בטל תחילה הצמדה של תיקייה קיימת.
+	Pinned {folder} to Home	{folder} הוצמדה למסך הבית
+	No recent files	אין קבצים אחרונים
+	New blank PDF	קובץ PDF ריק חדש
+	Create PDF from file…	יצירת PDF מקובץ…
+	Create PDF from images…	יצירת PDF מתמונות…
+	Create PDF from multiple files…	יצירת PDF ממספר קבצים…
+	Create separate PDFs…	יצירת קובצי PDF נפרדים…
+	Create PDF from clipboard	יצירת PDF מהלוח
+	Combine files…	שילוב קבצים…
+	Save	שמירה
+	Save as…	שמירה בשם…
+	Close file	סגירת קובץ
+	Close all	סגירת הכול
+	Revert	חזרה לגרסה השמורה
+	Print…	הדפסה…
+	Document properties…	מאפייני המסמך…
+	Undo	ביטול פעולה
+	Redo	ביצוע חוזר
+	Find…	חיפוש…
+	Advanced search…	חיפוש מתקדם…
+	Copy pages	העתקת עמודים
+	Cut pages	גזירת עמודים
+	Paste pages	הדבקת עמודים
+	Fit visible	התאמה לתצוגה
+	Marquee zoom	הגדלה באמצעות סימון אזור
+	Take a snapshot	צילום תמונת מצב
+	Column select	בחירת עמודה
+	Full screen mode	מצב מסך מלא
+	Read mode	מצב קריאה
+	Next tab	הלשונית הבאה
+	Previous tab	הלשונית הקודמת
+	Switch light / dark theme	מעבר בין ערכת נושא בהירה לכהה
+	Comments panel	חלונית הערות
+	Form fields panel	חלונית שדות טופס
+	Clear form	ניקוי הטופס
+	Find tools and commands…	חיפוש כלים ופקודות…
+	Zoom	זום
+	Actual size	גודל ממשי
+	Zoom to page level	התאמה לגודל העמוד
+	Fit to width	התאמה לרוחב
+	Display theme	ערכת תצוגה
+	Side panels	חלוניות צד
+	Enable Acrobat JavaScript	הפעלת JavaScript של Acrobat
+	OK	אישור
+	Join our Discord	הצטרפות לשרת Discord שלנו
+	Close	סגירה
+	Next / previous match	התוצאה הבאה / הקודמת
+	Copy selected text	העתקת הטקסט שנבחר
+	Double-click	לחיצה כפולה
+	Select a word	בחירת מילה
+	Clear selection / close find	ביטול הבחירה / סגירת החיפוש
+	Zoom in / out (also pinch or {key}-scroll)	הגדלה / הקטנה (גם באמצעות צביטה או גלילה עם {key})
+	Rotate view	סיבוב התצוגה
+	First / last page	העמוד הראשון / האחרון
+	Previous / next page	העמוד הקודם / הבא
+	Delete selected pages (Organize)	מחיקת העמודים שנבחרו (ארגון)
+	Select all pages (Organize)	בחירת כל העמודים (ארגון)
+	Home	בית
+	Open	פתיחה
+	Open a PDF ({key})	פתיחת PDF ({key})
+	Dark gray theme	ערכת נושא אפורה כהה
+	Light theme	ערכת נושא בהירה
+	Appearance mode	מצב מראה
+	Light	בהיר
+	Dark	כהה
+	Active	פעיל
+	Dark theme	ערכת נושא כהה
+	Appearance settings…	הגדרות מראה…
+	All tools	כל הכלים
+	Read	קריאה
+	Convert	המרה
+	E-Sign	חתימה אלקטרונית
+	Print ({key})	הדפסה ({key})
+	Save ({key})	שמירה ({key})
+	Document properties ({key})	מאפייני המסמך ({key})
+	Find tools and commands	חיפוש כלים ופקודות
+	Fit to height	התאמה לגובה
+	Zoom in	הגדלה
+	Zoom out	הקטנה
+	Rotate view clockwise	סיבוב התצוגה עם כיוון השעון
+	Rotate view counterclockwise	סיבוב התצוגה נגד כיוון השעון
+	Page navigation	ניווט בין עמודים
+	Previous view	התצוגה הקודמת
+	Next view	התצוגה הבאה
+	Page display	תצוגת עמוד
+	Continuous scrolling	גלילה רציפה
+	Show gaps between pages	הצגת רווחים בין עמודים
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	הסתרת הרווחים מחברת את קצות העמודים. השוליים בתוך קובץ ה־PDF אינם משתנים.
+	Two-page view	תצוגת שני עמודים
+	Single page	עמוד יחיד
+	Show cover page in two-page view	הצגת עמוד השער בנפרד בתצוגת שני עמודים
+	Use system setting	שימוש בהגדרות המערכת
+	Light gray	אפור בהיר
+	Dark gray	אפור כהה
+	Comments	הערות
+	Bookmarks	סימניות
+	Fields	שדות
+	Layers	שכבות
+	Attachments	קבצים מצורפים
+	Signatures	חתימות
+	Accessibility Checker	בודק נגישות
+	Search	חיפוש
+	Compare	השוואה
+	Page thumbnails	תמונות ממוזערות של עמודים
+	Form fields	שדות טופס
+	Zoom out ({key})	הקטנה ({key})
+	Zoom in ({key})	הגדלה ({key})
+	Rotate view clockwise ({key})	סיבוב התצוגה עם כיוון השעון ({key})
+	Toggle fit page / fit width	מעבר בין התאמה לעמוד להתאמה לרוחב
+	Next page	העמוד הבא
+	Previous page	העמוד הקודם
+	Current page — type a page number or label (such as iv) and press Enter	עמוד נוכחי — הקלד מספר עמוד או תווית (כמו iv) והקש Enter
+	Zoom — type a percentage and press Enter	זום — הקלד אחוז והקש Enter
+	Welcome to PdfCraft	ברוכים הבאים ל־PdfCraft
+	An open-source PDF workbench — local, private, and scriptable.	סביבת עבודה בקוד פתוח לקובצי PDF — מקומית, פרטית וניתנת לתכנות.
+	Join the ArtCraft community	הצטרפות לקהילת ArtCraft
+	Get help, share feedback and follow development on Discord.	אפשר לקבל עזרה, לשלוח משוב ולעקוב אחר הפיתוח ב־Discord.
+	Recommended tools	כלים מומלצים
+	Use now	שימוש כעת
+	Open file	פתיחת קובץ
+	Recent	אחרונים
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	קבצים שתפתח ב־PdfCraft יופיעו כאן. אפשר לגרור PDF לכל מקום בחלון כדי לפתוח אותו.
+	Privacy	פרטיות
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft פועל גם ללא חיבור לאינטרנט. אין איסוף נתוני שימוש, אין צורך בחשבון ואין עיבוד בענן, אלא אם מוסיפים ספק.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	סקריפטים פועלים בסביבה מבודדת ללא גישה לקבצים או לרשת. גם כש־JavaScript כבוי, פונקציות format, validate ו־calculate הסטנדרטיות של Acrobat ממשיכות לפעול.
+	Back to all tools	חזרה לכל הכלים
+	Close panel	סגירת החלונית
+	View less	הצג פחות
+	View more	הצג עוד
+	Available	זמין
+	Ready	מוכן
+	Search tools and commands…	חיפוש כלים ופקודות…
+	Added text	טקסט שנוסף
+	Link URL	כתובת URL של הקישור
+	Search tools and commands	חיפוש כלים ופקודות
+	Text editing line	שורת עריכת טקסט
+	Text to place	טקסט להוספה
+	Tooltip	תיאור כלי
+	Words or phrases to redact	מילים או ביטויים להשחרה
+	No matching tools	לא נמצאו כלים תואמים
+	Tool	כלי
+	Command	פקודה
+	Add a sticky note	הוספת פתק נדבק
+	Add a text box	הוספת תיבת טקסט
+	Highlight text	הדגשת טקסט
+	Underline text	קו תחתון לטקסט
+	Strikethrough text	קו חוצה לטקסט
+	Squiggly underline text	קו תחתון גלי לטקסט
+	Draw freehand	ציור ביד חופשית
+	Draw a line	ציור קו
+	Draw an arrow	ציור חץ
+	Draw a rectangle	ציור מלבן
+	Draw an oval	ציור אליפסה
+	Draw a polygon	ציור מצולע
+	Draw connected lines	ציור קווים מחוברים
+	Draw a cloud	ציור ענן
+	Add a callout	הוספת הערת הסבר
+	Insert text	הוספת טקסט
+	Replace text	החלפת טקסט
+	Attach a file	צירוף קובץ
+	Erase drawings	מחיקת ציורים
+	Flatten comments	השטחת ההערות
+	Import comments…	ייבוא הערות…
+	Add a stamp	הוספת חותמת
+	Export all comments to data file…	ייצוא כל ההערות לקובץ נתונים…
+	Hide all comments	הסתרת כל ההערות
+	Summarize comments	סיכום ההערות
+	Import form data…	ייבוא נתוני טופס…
+	Export form data…	ייצוא נתוני טופס…
+	PDF/A…	PDF/A…
+	Action Wizard…	אשף פעולות…
+	Prepare for distribution…	הכנה להפצה…
+	Optimize scanned documents…	מיטוב מסמכים סרוקים…
+	Compare files…	השוואת קבצים…
+	Detect form fields	זיהוי שדות טופס
+	Merge data files into spreadsheet…	מיזוג קובצי נתונים לגיליון אלקטרוני…
+	Flatten form fields	השטחת שדות הטופס
+	Prepare a form	הכנת טופס
+	Tab order: by rows	סדר מעבר בין שדות: לפי שורות
+	Tab order: by columns	סדר מעבר בין שדות: לפי עמודות
+	Tab order: by document structure	סדר מעבר בין שדות: לפי מבנה המסמך
+	Add text	הוספת טקסט
+	Edit text & images	עריכת טקסט ותמונות
+	Date	תאריך
+	Signature	חתימה
+	Text	טקסט
+	Link	קישור
+	Attach file	צירוף קובץ
+	Delete	מחק
+	Insert	הוסף
+	Strikethrough	קו חוצה
+	Preview	תצוגה מקדימה
+	Cancel	ביטול
+	Don't save	אל תשמור
+	Clear	ניקוי
+	Password	סיסמה
+	Print	הדפס
+	Previous month	החודש הקודם
+	Next month	החודש הבא
+	January	ינואר
+	February	פברואר
+	March	מרץ
+	April	אפריל
+	May	מאי
+	June	יוני
+	July	יולי
+	August	אוגוסט
+	September	ספטמבר
+	October	אוקטובר
+	November	נובמבר
+	December	דצמבר
+	Done	בוצע
+	Export…	ייצוא…
+	Options	אפשרויות
+	No color	ללא צבע
+	Custom	מותאם אישית
+	Check for updates	חיפוש עדכונים
+	Download	הורדה
+	Later	מאוחר יותר
+	Add	הוספה
+	Name	שם
+	Email Address	כתובת דואר אלקטרוני
+	Country/Region	מדינה/אזור
+	Browse…	עיון…
+	Back	חזרה
+	Appearance	מראה
+	General	כללי
+	Remove	הסר
+	Off	כבוי
+	Size	גודל
+	Right	ימין
+	Document	מסמך
+	Reply	השב
+	Properties…	מאפיינים…
+	More options	אפשרויות נוספות
+	Accepted	התקבל
+	Yellow	צהוב
+	Pink	ורוד
+	Blue	כחול
+	Green	ירוק
+	Bottom	למטה
+	Encrypt	הצפנה
+	Discard	בטל
+	All	הכול
+	From	מאת
+	Security	אבטחה
+	Fonts	גופנים
+	Subject	נושא
+	Location	מיקום
+	Yes	כן
+	No	לא
+	Language	שפה
+	Unlock…	ביטול נעילה…
+	Unlock	ביטול נעילה
+	Export	ייצוא
+	Sign	חתימה
+	Dismiss	בטל
+	Cut	גזור
+	Copy	העתק
+	Rename	שנה שם
+	Move up	העבר למעלה
+	Move down	העבר למטה
+	None	ללא
+	List	רשימה
+	Your name	השם שלך
+	About	אודות
+	Company	חברה
+	Create	צור
+	Open link	פתח קישור
+	Show	הצג
+	Tags	תגיות
+	Word count	ספירת מילים
+	Words	מילים
+	Mobile	נייד
+	Side by side	זה לצד זה
+	Bulleted list	רשימת תבליטים
+	Numbered list	רשימה ממוספרת
+	Columns	עמודות
+	Today	היום
