@@ -68,6 +68,11 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// Draw a CID font of an Adobe CJK collection that the PDF does not embed with one face already
+    /// installed on this machine (see `system_font`). Off by default and on only for the pool that
+    /// draws the viewer: exports, printing and OCR render without it, so nothing drawn with an
+    /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+    pub system_fonts: bool,
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
@@ -76,10 +81,13 @@ pub struct RenderConfig {
 impl RenderConfig {
     fn settings(&self) -> InterpreterSettings {
         let standard = InterpreterSettings::default().font_resolver;
+        let system_fonts = self.system_fonts;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| {
+                japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
+            }),
             ..InterpreterSettings::default()
         }
     }
@@ -110,6 +118,14 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         }
     }?;
     Some((Arc::new(face.bytes), 0))
+}
+
+/// An installed face for a CID font of an Adobe CJK collection that the PDF doesn't embed and
+/// craft-fonts has no face for (Traditional and Simplified Chinese, Korean, and Japanese in a
+/// build without craft-fonts). `None` for every other font.
+fn system_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    crate::system_font::fallback(f)
 }
 
 #[derive(Debug, PartialEq)]
@@ -7753,6 +7769,65 @@ trailer << /Root 1 0 R >>
             }
             // 日本 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
             assert!(inked > 300, "{base_font}: 日本 is drawn ({inked} dark pixels)");
+        }
+    }
+
+    /// Chinese and Korean CID fonts that aren't embedded (Adobe-CNS1 `MSung-Light`, Adobe-GB1
+    /// `STSong-Light`, Adobe-Korea1 `HYGoThic-Medium`; Acrobat also writes Japanese `KozGoPr6N`
+    /// text boxes without the font) drew nothing, because craft-fonts has only Japanese faces.
+    /// They now draw in a face already installed on the machine, read at runtime. A machine
+    /// without such a face draws nothing, as before, so each check is skipped there.
+    #[test]
+    fn non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face() {
+        use hayro::hayro_interpret::font::FallbackFontQuery;
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        // (base font, collection, ordering, encoding, UCS-2 code units of the text)
+        let cases = [
+            ("MSung-Light", CidFamily::AdobeCNS1, "CNS1", "UniCNS-UCS2-H", "7E419AD45B57"), // 繁體字
+            ("STSong-Light", CidFamily::AdobeGB1, "GB1", "UniGB-UCS2-H", "72698D448DF7"),   // 物资跷 (common Simplified)
+            ("HYGoThic-Medium", CidFamily::AdobeKorea1, "Korea1", "UniKS-UCS2-H", "D55CAE00"), // 한글
+        ];
+        for (base_font, family, ordering, encoding, code) in cases {
+            let query = FontQuery::Fallback(FallbackFontQuery {
+                post_script_name: Some(base_font.into()),
+                character_collection: Some(CharacterCollection { family, supplement: 2 }),
+                ..FallbackFontQuery::default()
+            });
+            if super::system_fallback(&query).is_none() {
+                eprintln!("no installed face for {base_font} (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+                continue;
+            }
+            let content = format!("BT /F1 40 Tf 5 15 Td <{code}> Tj ET");
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /{encoding} /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let pdf = Arc::new(pdf.into_bytes());
+            let ink = |config: RenderConfig| {
+                let mut r = PageRenderer::new(pdf.clone(), config);
+                let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+                assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+                p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count()
+            };
+            // Two to four glyphs at 40 pt cover several hundred dark pixels; a blank run has none.
+            let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
+            assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
+            // Off by default: exports, printing and OCR render without an installed font, so
+            // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+            let saved = ink(RenderConfig::default());
+            assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
         }
     }
 
