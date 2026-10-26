@@ -2284,6 +2284,7 @@ key	Space	Välilyönti
 	Reload documents when their files change on disk	Lataa asiakirjat uudelleen, kun niiden tiedostot muuttuvat levyllä
 	Don't show again	Älä näytä uudelleen
 	Show a notice when a document is secured	Näytä ilmoitus, kun asiakirja on suojattu
+	Show validation marks over signed signatures	Näytä vahvistusmerkinnät allekirjoitettujen allekirjoitusten päällä
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tämä tiedosto muuttui levyllä. Lataa se uudelleen nähdäksesi uuden version; tallentamattomat muutokset menetetään.
 	Reload	Lataa uudelleen
 	Couldn't reload {name}: {e}	Kohdetta {name} ei voitu ladata uudelleen: {e}

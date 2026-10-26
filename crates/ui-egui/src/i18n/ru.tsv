@@ -2126,6 +2126,7 @@
 	Reload documents when their files change on disk	Перезагружать документы при изменении их файлов на диске
 	Don't show again	Больше не показывать
 	Show a notice when a document is secured	Показывать уведомление, когда документ защищён
+	Show validation marks over signed signatures	Показывать отметки проверки поверх поставленных подписей
 	Always use my default zoom and page layout	Всегда использовать мой масштаб и макет страницы по умолчанию
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Этот файл был изменён на диске. «Перезагрузить» покажет новую версию и отбросит несохранённые изменения; «Сохранить» заменит её этой версией.
 	Reload	Перезагрузить

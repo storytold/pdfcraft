@@ -2342,6 +2342,7 @@ key	Space	Preslednica
 	Reload documents when their files change on disk	Znova naloži dokumente, ko se njihove datoteke na disku spremenijo
 	Don't show again	Ne prikaži več
 	Show a notice when a document is secured	Prikaži obvestilo, ko je dokument zaščiten
+	Show validation marks over signed signatures	Prikaži oznake preverjanja nad podpisanimi podpisi
 	Always use my default zoom and page layout	Vedno uporabi moje privzeto povečanje in postavitev strani
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži

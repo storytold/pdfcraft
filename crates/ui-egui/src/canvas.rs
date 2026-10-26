@@ -2894,6 +2894,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
     let show_secured_notice = app.show_secured_notice;
+    let show_signature_badges = app.show_signature_badges;
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
@@ -4105,8 +4106,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             // Validation is viewer chrome over the signer's original artwork, which
             // may still say "Signature Not Verified". These badges never enter document
-            // streams, image/text exports, vector printing or Print as Image.
-            for badge in signature_badges(&doc.signatures, i) {
+            // streams, image/text exports, vector printing or Print as Image. Preferences can
+            // turn them off, leaving the signer's artwork uncovered (#4221).
+            let badges = if show_signature_badges { signature_badges(&doc.signatures, i) } else { Vec::new() };
+            for badge in badges {
                 let [x0, y0, x1, y1] = badge.rect;
                 let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
                 let (icon, color) = crate::sign_ui::signature_status_style(badge.status);

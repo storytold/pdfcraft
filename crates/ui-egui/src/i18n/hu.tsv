@@ -2335,6 +2335,7 @@ key	Space	Szóköz
 	Reload documents when their files change on disk	Dokumentumok újratöltése, ha a fájljuk megváltozik a lemezen
 	Don't show again	Ne jelenjen meg újra
 	Show a notice when a document is secured	Értesítés megjelenítése, ha egy dokumentum védett
+	Show validation marks over signed signatures	Érvényesítési jelek megjelenítése az aláírt aláírások felett
 	Always use my default zoom and page layout	Mindig az alapértelmezett nagyításom és oldalelrendezésem használata
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ez a fájl megváltozott a lemezen. Az Újratöltés az új változatot mutatja, és eldobja a nem mentett módosításokat; a Mentés erre a változatra cseréli le.
 	Reload	Újratöltés

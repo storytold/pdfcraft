@@ -2338,6 +2338,7 @@ key	Space	Espaço
 	Reload documents when their files change on disk	Recarregar documentos quando os arquivos mudarem no disco
 	Don't show again	Não mostrar novamente
 	Show a notice when a document is secured	Mostrar um aviso quando um documento estiver protegido
+	Show validation marks over signed signatures	Mostrar marcas de validação sobre as assinaturas aplicadas
 	Always use my default zoom and page layout	Sempre usar meu zoom e layout da página padrão
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Este arquivo foi alterado no disco. Recarregar mostra a nova versão e descarta suas alterações não salvas; Salvar a substitui por esta versão.
 	Reload	Recarregar

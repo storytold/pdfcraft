@@ -2153,6 +2153,7 @@ action wizard	Start	Inicia
 	Reload documents when their files change on disk	Torna a carregar els documents quan els seus fitxers canviïn al disc
 	Don't show again	No ho tornis a mostrar
 	Show a notice when a document is secured	Mostra un avís quan un document està protegit
+	Show validation marks over signed signatures	Mostra marques de validació sobre les signatures signades
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Aquest fitxer ha canviat al disc. Torna'l a carregar per veure'n la versió nova; es perdran els canvis sense desar.
 	Reload	Torna a carregar
 	Couldn't reload {name}: {e}	No s'ha pogut tornar a carregar {name}: {e}

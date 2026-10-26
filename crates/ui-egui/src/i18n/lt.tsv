@@ -977,6 +977,7 @@
 	Reload documents when their files change on disk	Iš naujo įkelti dokumentus, kai pasikeičia jų failai diske
 	Don't show again	Daugiau nerodyti
 	Show a notice when a document is secured	Rodyti pranešimą, kai dokumentas apsaugotas
+	Show validation marks over signed signatures	Rodyti patvirtinimo žymes ant pasirašytų parašų
 	Always use my default zoom and page layout	Visada naudoti mano numatytąjį mastelį ir puslapio išdėstymą
 	Remove checkmark	Pašalinti varnelę
 	Remove invalid links and bookmarks	Pašalinti netinkamus saitus ir žymeles

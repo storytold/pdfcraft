@@ -2358,6 +2358,7 @@ key	Space	Пробіл
 	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
 	Don't show again	Більше не показувати
 	Show a notice when a document is secured	Показувати сповіщення, коли документ захищено
+	Show validation marks over signed signatures	Показувати позначки перевірки над поставленими підписами
 	Always use my default zoom and page layout	Завжди використовувати мій типовий масштаб і макет сторінок
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Цей файл змінено на диску. «Перезавантажити» покаже нову версію й відкине незбережені зміни; «Зберегти» замінить її цією версією.
 	Reload	Перезавантажити

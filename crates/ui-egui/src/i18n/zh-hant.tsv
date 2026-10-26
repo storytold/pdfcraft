@@ -2210,6 +2210,7 @@ key	Space	空格
 	Reload documents when their files change on disk	檔案在磁碟上變更時重新載入對應的文件
 	Don't show again	不再顯示
 	Show a notice when a document is secured	文件已加密時顯示通知
+	Show validation marks over signed signatures	在已簽署的簽名上顯示驗證標記
 	Always use my default zoom and page layout	一律使用我的預設縮放與頁面佈局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此檔案已在磁碟上變更。「重新載入」會顯示新版本並捨棄未儲存的變更；「儲存」則會以此版本取代它。
 	Reload	重新載入

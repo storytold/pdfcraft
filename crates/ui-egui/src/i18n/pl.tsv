@@ -2316,6 +2316,7 @@ key	Space	Spacja
 	Reload documents when their files change on disk	Wczytuj ponownie dokumenty, gdy ich pliki zmienią się na dysku
 	Don't show again	Nie pokazuj ponownie
 	Show a notice when a document is secured	Pokazuj powiadomienie, gdy dokument jest zabezpieczony
+	Show validation marks over signed signatures	Pokazuj znaczniki weryfikacji nad złożonymi podpisami
 	Always use my default zoom and page layout	Zawsze używaj mojego domyślnego powiększenia i układu stron
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ten plik zmienił się na dysku. Wczytaj ponownie pokazuje nową wersję i odrzuca niezapisane zmiany; Zapisz zastępuje ją tą wersją.
 	Reload	Wczytaj ponownie

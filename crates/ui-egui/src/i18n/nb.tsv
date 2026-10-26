@@ -935,6 +935,7 @@
 	Reload documents when their files change on disk	Last inn dokumenter på nytt når filene endres på disk
 	Don't show again	Ikke vis igjen
 	Show a notice when a document is secured	Vis et varsel når et dokument er sikret
+	Show validation marks over signed signatures	Vis valideringsmerker over signerte signaturer
 	Remove checkmark	Fjern hake
 	Remove invalid links and bookmarks	Fjern ugyldige lenker og bokmerker
 	Remove page	Fjern side

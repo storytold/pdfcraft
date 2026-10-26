@@ -2333,6 +2333,7 @@ key	Space	Boşluk
 	Reload documents when their files change on disk	Diskteki dosyaları değiştiğinde belgeleri yeniden yükle
 	Don't show again	Bir daha gösterme
 	Show a notice when a document is secured	Bir belge güvenli olduğunda bildirim göster
+	Show validation marks over signed signatures	İmzalanmış imzaların üzerinde doğrulama işaretlerini göster
 	Always use my default zoom and page layout	Her zaman varsayılan yakınlaştırmamı ve sayfa düzenimi kullan
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Bu dosya diskte değişti. Yeniden yükle yeni sürümü gösterir ve kaydedilmemiş değişikliklerinizi atar; Kaydet onu bu sürümle değiştirir.
 	Reload	Yeniden yükle

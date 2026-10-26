@@ -6300,8 +6300,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.panel"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/ui-egui/tests/it/signing.rs::certifying_without_a_visible_signature", "crates/ui-egui/src/canvas.rs::signature_badges_keep_signed_visible_widgets_on_the_page"]
-notes = "signed/valid, problems, invalid and certified bars; visible signed widgets also carry a separate viewer validation overlay. Trust and explicit validation invalidate view caches without editing document artwork; baked appearance captions remain unchanged."
+evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/ui-egui/tests/it/signing.rs::certifying_without_a_visible_signature", "crates/ui-egui/src/canvas.rs::signature_badges_keep_signed_visible_widgets_on_the_page", "crates/ui-egui/tests/it/signing.rs::the_validation_marks_over_signatures_can_be_turned_off"]
+notes = "signed/valid, problems, invalid and certified bars; visible signed widgets also carry a separate viewer validation overlay, which Preferences can turn off for every document (#4221, --signature-badges; kept in the settings) without changing validation or the Signatures panel. Trust and explicit validation invalidate view caches without editing document artwork; baked appearance captions remain unchanged."
 
 [[feature]]
 id = "sign.signature-properties"

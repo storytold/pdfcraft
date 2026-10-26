@@ -2211,6 +2211,7 @@ action wizard	Start	شروع
 	Reload documents when their files change on disk	بار‌گذاری مجدد سند‌ها وقتی فایل‌هایشان روی دیسک تغییر می‌کنند
 	Don't show again	دیگر نشان نده
 	Show a notice when a document is secured	نمایش اعلان وقتی سند محافظت شده است
+	Show validation marks over signed signatures	نمایش نشانه‌های اعتبارسنجی روی امضا‌های ثبت‌شده
 	Always use my default zoom and page layout	همیشه از بزرگنمایی و طرح‌بندی صفحهٔ پیش‌فرض من استفاده کن
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	این فایل روی دیسک تغییر کرد. «بار‌گذاری مجدد» نسخهٔ جدید را نشان می‌دهد و تغییرات ذخیره‌نشدهٔ شما را از دست می‌دهد؛ «ذخیره» آن را با این نسخه جایگزین می‌کند.
 	Reload	بار‌گذاری مجدد

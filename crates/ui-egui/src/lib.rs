@@ -737,6 +737,10 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: draw the validation outline and mark over signed signature widgets. Off
+    /// leaves the signer's own appearance uncovered; validation and the Signatures panel are
+    /// unchanged (#4221). Kept in the settings.
+    pub show_signature_badges: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
@@ -1159,6 +1163,7 @@ impl PdfCraftApp {
             quit_session: None,
             reload_changed_files: true,
             show_secured_notice: true,
+            show_signature_badges: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
@@ -2692,6 +2697,7 @@ impl PdfCraftApp {
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["show_signature_badges"] = serde_json::Value::Bool(self.show_signature_badges);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -2742,6 +2748,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
+        }
+        if let Some(on) = v["show_signature_badges"].as_bool() {
+            self.show_signature_badges = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
@@ -3204,6 +3213,14 @@ impl PdfCraftApp {
                     "true" => true,
                     "false" => false,
                     _ => return Err("secured-notice must be true or false".into()),
+                };
+            }
+            // `--signature-badges false`: no validation outline and mark over signed signatures.
+            ("signature-badges", _) => {
+                self.show_signature_badges = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("signature-badges must be true or false".into()),
                 };
             }
             ("system-title-bar", _) => {

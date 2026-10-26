@@ -143,6 +143,7 @@
 	Reload documents when their files change on disk	Znovu načítat dokumenty při změně jejich souborů na disku
 	Don't show again	Znovu nezobrazovat
 	Show a notice when a document is secured	Zobrazit upozornění, když je dokument zabezpečený
+	Show validation marks over signed signatures	Zobrazovat značky ověření přes podepsané podpisy
 	Always use my default zoom and page layout	Vždy používat mé výchozí zvětšení a rozvržení stránky
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tento soubor se na disku změnil. Znovu načíst zobrazí novou verzi a zahodí neuložené změny; Uložit ji nahradí touto verzí.
 	Reload	Znovu načíst

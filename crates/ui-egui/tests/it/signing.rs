@@ -687,3 +687,90 @@ fn signing_preserves_destination_opening_attributes() {
     assert_eq!(xattr::get(&dest, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// #4221: the validation outline and mark drawn over a signed signature widget can be turned off
+/// in Preferences (or `--signature-badges false`), leaving the signer's own appearance uncovered;
+/// the signature stays valid and the setting is kept.
+#[test]
+fn the_validation_marks_over_signatures_can_be_turned_off() {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let digital_id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("contract.pdf", None, std::sync::Arc::new(FIXTURE.to_vec()), None).unwrap();
+    let widget = [20.0, 20.0, 180.0, 60.0];
+    let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some(widget), ..Default::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    let (bytes, cert) = (signed.to_vec(), digital_id.certificate.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("contract.pdf", None, bytes).expect("opens");
+        app.session.set_trusted_certificates(vec![cert]);
+        app
+    });
+    h.run_steps(4);
+    // The outline is a rectangle stroked just outside the widget's box on screen.
+    let outlines = |h: &Harness<'static, PdfCraftApp>| {
+        let (a, b) = (at(h, widget[0] as f32, widget[3] as f32), at(h, widget[2] as f32, widget[1] as f32));
+        let boxed = egui::Rect::from_two_pos(a, b);
+        h.output()
+            .shapes
+            .iter()
+            .filter(|c| match &c.shape {
+                egui::Shape::Rect(r) => r.stroke.width == 1.5 && (r.rect.min - boxed.min).length() < 1.0 && (r.rect.max - boxed.max).length() < 1.0,
+                _ => false,
+            })
+            .count()
+    };
+    // The status mark is the Valid icon, tinted green and centred on the widget.
+    let green = egui::Color32::from_rgb(0x2D, 0x9D, 0x78);
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        let (a, b) = (at(h, widget[0] as f32, widget[3] as f32), at(h, widget[2] as f32, widget[1] as f32));
+        let centre = egui::Rect::from_two_pos(a, b).center();
+        h.output()
+            .shapes
+            .iter()
+            .filter(|c| (c.shape.visual_bounding_rect().center() - centre).length() < 2.0)
+            .filter(|c| match &c.shape {
+                egui::Shape::Mesh(m) => m.vertices.iter().any(|v| v.color == green),
+                egui::Shape::Rect(r) => r.fill == green,
+                _ => false,
+            })
+            .count()
+    };
+    // Hovering the mark shows the verdict.
+    let hover_says_valid = |h: &mut Harness<'static, PdfCraftApp>| {
+        let centre = at(h, (widget[0] + widget[2]) as f32 / 2.0, (widget[1] + widget[3]) as f32 / 2.0);
+        h.hover_at(centre);
+        h.run_steps(2);
+        h.query_by_label("Signature is valid").is_some()
+    };
+    let status = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().signatures.iter().find(|x| x.signed).map(|x| x.status)
+    };
+    assert!(h.state().show_signature_badges, "on by default");
+    assert_eq!(status(&h), Some(SignatureStatus::Valid));
+    assert_eq!(outlines(&h), 1, "the valid signature is outlined");
+    assert!(marks(&h) > 0, "and carries the status mark");
+    assert!(hover_says_valid(&mut h), "whose hover gives the verdict");
+
+    h.state_mut().set_option("signature-badges", "false").unwrap();
+    h.run_steps(2);
+    assert_eq!(outlines(&h), 0, "no outline once the marks are off");
+    assert_eq!(marks(&h), 0, "no status mark either");
+    assert!(!hover_says_valid(&mut h), "and no hover over where it was");
+    assert_eq!(status(&h), Some(SignatureStatus::Valid), "validation is unchanged");
+    h.get_by_label("Signed and all signatures are valid.");
+
+    // Kept in the settings, and turned back on.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(!restored.show_signature_badges);
+    h.state_mut().set_option("signature-badges", "true").unwrap();
+    h.run_steps(2);
+    assert_eq!(outlines(&h), 1);
+    assert!(marks(&h) > 0);
+    assert!(hover_says_valid(&mut h));
+    assert_eq!(h.state_mut().set_option("signature-badges", "maybe"), Err("signature-badges must be true or false".into()));
+}

@@ -2210,6 +2210,7 @@ action wizard	Start	Iniciar
 	Reload documents when their files change on disk	Recargar los documentos cuando sus archivos cambien en el disco
 	Don't show again	No volver a mostrar
 	Show a notice when a document is secured	Mostrar un aviso cuando un documento está protegido
+	Show validation marks over signed signatures	Mostrar marcas de validación sobre las firmas firmadas
 	Always use my default zoom and page layout	Usar siempre mi zoom y presentación de página predeterminados
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Este archivo cambió en el disco. Recargar muestra la versión nueva y descarta los cambios sin guardar; Guardar la reemplaza por esta versión.
 	Reload	Recargar

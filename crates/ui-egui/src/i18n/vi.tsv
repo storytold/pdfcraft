@@ -971,6 +971,7 @@ theme	Appearance	Giao diện
 	Reload documents when their files change on disk	Tải lại tài liệu khi tệp của chúng thay đổi trên đĩa
 	Don't show again	Không hiển thị lại
 	Show a notice when a document is secured	Hiển thị thông báo khi tài liệu được bảo mật
+	Show validation marks over signed signatures	Hiển thị dấu xác thực trên các chữ ký đã ký
 	Always use my default zoom and page layout	Luôn dùng thu phóng và bố cục trang mặc định của tôi
 	Remove checkmark	Bỏ dấu kiểm
 	Remove invalid links and bookmarks	Gỡ các liên kết và dấu trang không hợp lệ

@@ -2357,6 +2357,7 @@ key	Space	مسافة
 	Reload documents when their files change on disk	إعادة تحميل المستندات عند تغيّر ملفاتها على القرص
 	Don't show again	عدم الإظهار مرة أخرى
 	Show a notice when a document is secured	إظهار إشعار عندما يكون المستند مؤمَّنًا
+	Show validation marks over signed signatures	إظهار علامات التحقق فوق التوقيعات الموقَّعة
 	Always use my default zoom and page layout	استخدام التكبير وتخطيط الصفحة الافتراضيين دائمًا
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	تغيّر هذا الملف على القرص. «إعادة التحميل» تعرض النسخة الجديدة وتُسقط تغييراتك غير المحفوظة؛ و«حفظ» يستبدلها بهذه النسخة.
 	Reload	إعادة تحميل

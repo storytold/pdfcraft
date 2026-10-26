@@ -2242,6 +2242,7 @@ signature pad	Type	พิมพ์
 	Reload documents when their files change on disk	โหลดเอกสารใหม่เมื่อไฟล์บนดิสก์เปลี่ยนแปลง
 	Don't show again	ไม่ต้องแสดงอีก
 	Show a notice when a document is secured	แสดงการแจ้งเตือนเมื่อเอกสารมีการรักษาความปลอดภัย
+	Show validation marks over signed signatures	แสดงเครื่องหมายการตรวจสอบบนลายเซ็นที่ลงนามแล้ว
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	ไฟล์นี้เปลี่ยนแปลงบนดิสก์ โหลดใหม่เพื่อดูรุ่นใหม่ การเปลี่ยนแปลงที่ยังไม่ได้บันทึกจะหายไป
 	Reload	โหลดใหม่
 	Couldn't reload {name}: {e}	โหลด {name} ใหม่ไม่ได้: {e}

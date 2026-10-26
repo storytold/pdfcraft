@@ -2279,6 +2279,7 @@ key	Space	Hapësirë
 	Reload documents when their files change on disk	Ringarko dokumentet kur skedarët e tyre ndryshojnë në disk
 	Don't show again	Mos e shfaq më
 	Show a notice when a document is secured	Shfaq një njoftim kur një dokument është i siguruar
+	Show validation marks over signed signatures	Shfaq shenjat e vërtetimit mbi nënshkrimet e vendosura
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ky skedar ndryshoi në disk. Ringarkojeni për të parë versionin e ri; ndryshimet tuaja të paruajtura do të humbasin.
 	Reload	Ringarko
 	Couldn't reload {name}: {e}	Nuk u ringarkua {name}: {e}
