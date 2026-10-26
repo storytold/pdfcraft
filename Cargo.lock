@@ -4576,6 +4576,7 @@ dependencies = [
  "async-channel",
  "futures-lite",
  "rustix 1.1.5",
+ "tempfile",
  "zbus",
 ]
 

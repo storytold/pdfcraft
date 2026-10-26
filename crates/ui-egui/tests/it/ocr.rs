@@ -170,6 +170,31 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
     }
 }
 
+/// #572: recognizing several files never replaces a file already at the output name, including
+/// the input's own file run in place, or an earlier run's output.
+#[test]
+fn recognize_text_in_multiple_files_never_replaces_an_existing_output() {
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-ui-clobber-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = scan();
+    std::fs::write(dir.join("one.pdf"), &original).unwrap();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.ocr_draft.language = "la".into();
+    app.run_inline = true;
+    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+    app.use_files(pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan())]);
+    assert!(app.ocr_batch.is_none(), "finished");
+    assert_eq!(std::fs::read(dir.join("one.pdf")).unwrap(), original, "the existing file is untouched");
+    let numbered = std::fs::read(dir.join("one (2).pdf")).unwrap();
+    assert!(numbered.len() > original.len(), "the searchable copy got the next free name instead");
+}
+
 /// #1028: "Also recognize pages that already have text" reads a picture on a page that has its own
 /// text, without adding that text a second time.
 #[test]

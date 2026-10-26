@@ -16,7 +16,6 @@ pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
-tempfile = "3.27"
 base64 = { version = "0.23", optional = true }
 
 
@@ -32,6 +31,7 @@ flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+tempfile = "3.27"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rustix = { version = "1", features = ["fs"] }

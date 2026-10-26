@@ -389,8 +389,10 @@ fn recognize_files(
                 }
                 let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
                 let saved = r.and_then(|r| {
+                    // Never replaces a file: a taken name (the source itself, run in place, or an
+                    // earlier run's output) gets a number such as " (2)" instead (#572).
                     #[cfg(not(target_arch = "wasm32"))]
-                    crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
+                    pdfcraft_platform::staging::publish(&dir.join(&name), &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
                     crate::editing::download(&name, &r.bytes)?;
                     Ok(r.words())
