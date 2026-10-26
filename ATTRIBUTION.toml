@@ -3381,6 +3381,20 @@ kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
 sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
 
+[[fetched]]
+file = "text-recognition-fr.rten"
+url = "https://raw.githubusercontent.com/storytold/pdfcraft-models/main/text-recognition-fr.rten"
+title = "Latin & French text recognition model"
+author = "Baidu PaddlePaddle contributors (PP-OCRv3 Latin, Apache-2.0)"
+source = "https://github.com/PaddlePaddle/PaddleOCR (PP-OCRv3 Latin recognition model, converted to rten format)"
+licence = "Apache-2.0"
+licence_url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+licence_sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+kind = "model"
+usage = "Scan & OCR: reads French and Latin text with accents (cargo xtask models)"
+sha256 = "97173ff8ff23ec9dccbf0cf766e2f535a975b677ac4aaf73140f51e65af2f85e"
+
+
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"

@@ -180,3 +180,9 @@ sync_github_name = true
 [people.dotCooCoo]
 real_name = "Robert Lee"
 sync_github_name = true
+
+[people.francoiscn]
+real_name = "Francois C. N."
+display_name = "Francois C. N."
+sync_github_name = false
+

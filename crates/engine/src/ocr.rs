@@ -77,21 +77,32 @@ impl OcrPage {
     }
 }
 
-/// The recogniser, loaded once (it takes a moment) and shared.
-pub fn engine() -> Result<Arc<Ocr>, String> {
-    static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
-    let mut slot = OCR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(o) = slot.as_ref() {
+/// The recogniser for `lang`, loaded once (it takes a moment) and shared.
+pub fn engine_for_language(lang: &str) -> Result<Arc<Ocr>, String> {
+    static ENGINES: Mutex<Option<std::collections::HashMap<String, Arc<Ocr>>>> = Mutex::new(None);
+    let mut slot = ENGINES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = slot.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(o) = map.get(lang) {
         return Ok(o.clone());
     }
-    let o = Arc::new(Ocr::find().map_err(|e| e.to_string())?);
-    *slot = Some(o.clone());
+    let o = Arc::new(Ocr::find_for_lang(lang).map_err(|e| e.to_string())?);
+    map.insert(lang.to_string(), o.clone());
     Ok(o)
 }
 
-/// Whether the recognition models are installed.
+/// The recogniser, loaded once (it takes a moment) and shared.
+pub fn engine() -> Result<Arc<Ocr>, String> {
+    engine_for_language("en")
+}
+
+/// Whether the recognition models for English are installed.
 pub fn available() -> bool {
-    Models::find().is_some()
+    available_for_language("en")
+}
+
+/// Whether the recognition models for `lang` are installed.
+pub fn available_for_language(lang: &str) -> bool {
+    Models::find_for_lang(lang).is_some()
 }
 
 /// Everything recognition needs from a document, detached from the session.
@@ -213,7 +224,7 @@ impl Session {
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
-        let ocr = engine()?;
+        let ocr = engine_for_language(&job.settings.language)?;
         let found = job.run(&ocr, |_, _| true);
         self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
         Ok(found)

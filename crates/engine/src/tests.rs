@@ -4538,6 +4538,25 @@ fn recognize_text_reads_the_euro_sign() {
     assert!(text.contains("€250"), "{text}");
 }
 
+/// End-to-end OCR recognition on a rendered scan with French accented words.
+#[test]
+fn recognize_text_reads_french_accents() {
+    if !ocr::available_for_language("fr") {
+        eprintln!("skipped: French OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Liberté, égalité, fraternité et français").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 300.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let settings = ocr::OcrSettings { language: "fr".into(), ..ocr::OcrSettings::default() };
+    s.recognize_text(id, &[], settings).unwrap();
+    let text = page_texts(&s, id)[0].clone();
+    assert!(text.contains("Liberté"), "expected accented word 'Liberté', got: {text}");
+}
+
 const SYNTHETIC_SCAN_DPI: f64 = 300.0;
 
 /// A scan of the OCR sentence at the source page's physical size, without a text layer.

@@ -618,7 +618,7 @@ impl Automation {
             )));
         }
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
-        let ocr = pdfcraft_engine::ocr::engine().map_err(failed)?;
+        let ocr = pdfcraft_engine::ocr::engine_for_language(&settings.language).map_err(failed)?;
         let mut out = Vec::new();
         for p in paths {
             let name = input_file_name(p);

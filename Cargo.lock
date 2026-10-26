@@ -4340,6 +4340,7 @@ dependencies = [
  "ocrs",
  "pdfcraft-fonts",
  "rten",
+ "rten-tensor",
  "thiserror 2.0.21",
 ]
 

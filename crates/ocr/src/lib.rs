@@ -17,14 +17,19 @@ pub use pdfcraft_fonts::helvetica_width;
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.rten";
 pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
+pub const RECOGNITION_MODEL_FR: &str = "text-recognition-fr.rten";
 
-/// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
-/// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
-/// `€`, which made a scanned "€250" read as "E250".
+/// The default English recognition model's alphabet, as it was trained (ocrs-models'
+/// `DEFAULT_ALPHABET`): its output classes follow this order. The ocrs crate's own copy has an `E`
+/// where the training had `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The French and multilingual Latin recognition model's alphabet, covering all French accented
+/// letters (à, â, é, è, ê, ë, î, ï, ô, ù, û, ü, ÿ, ç, œ, æ, «, ») and Latin punctuation.
+pub const ALPHABET_FR: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_`abcdefghijklmnopqrstuvwxyz{}¡£§ª«\u{ad}°²³´µ·º»¿ÀÁÂÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖÚÜÝßàáâãäåæçèéêëìíîïñòóôõöøùúûüýąĆćČčĐđęıŁłōŒœŠšŸŽžʒβδεзṠ‘€™ ";
+
+/// The languages the models read (ISO 639-1).
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("fr", "French")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -40,24 +45,39 @@ pub enum OcrError {
     EmptyImage,
 }
 
-/// Where the two model files are.
+/// Where the model files are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
     pub detection: PathBuf,
     pub recognition: PathBuf,
+    pub language: String,
 }
 
 impl Models {
-    /// The models in `dir`, if both files are there.
+    /// The default English models in `dir`, if both files are there.
     pub fn in_dir(dir: &Path) -> Option<Models> {
-        let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
+        Self::in_dir_for_lang(dir, "en")
+    }
+
+    /// The models in `dir` for `lang`, if both detection and language recognition files are there.
+    pub fn in_dir_for_lang(dir: &Path, lang: &str) -> Option<Models> {
+        let rec = match lang {
+            "fr" => RECOGNITION_MODEL_FR,
+            _ => RECOGNITION_MODEL,
+        };
+        let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(rec), language: lang.to_string() };
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
-    /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
+    /// Look for the default English models: `$PDFCRAFT_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
-        Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+        Self::find_for_lang("en")
+    }
+
+    /// Look for the models for `lang` in the search directories.
+    pub fn find_for_lang(lang: &str) -> Option<Models> {
+        Self::search_dirs().iter().find_map(|d| Self::in_dir_for_lang(d, lang))
     }
 
     /// The directories [`Models::find`] looks in, in order.
@@ -109,12 +129,15 @@ pub struct Ocr {
 }
 
 impl Ocr {
+    /// Load the text detection and recognition models from `models`, configuring the appropriate
+    /// alphabet for the target language (such as [`ALPHABET_FR`] for French).
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
+        let alphabet = if models.language == "fr" { ALPHABET_FR } else { ALPHABET };
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
         let params = ocrs::OcrEngineParams {
             detection_model: Some(load(&models.detection)?),
             recognition_model: Some(load(&models.recognition)?),
-            alphabet: Some(ALPHABET.into()),
+            alphabet: Some(alphabet.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
@@ -123,7 +146,12 @@ impl Ocr {
 
     /// Load the models found by [`Models::find`].
     pub fn find() -> Result<Ocr, OcrError> {
-        Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+        Self::find_for_lang("en")
+    }
+
+    /// Load the models for `lang` found by [`Models::find_for_lang`].
+    pub fn find_for_lang(lang: &str) -> Result<Ocr, OcrError> {
+        Self::load(&Models::find_for_lang(lang).ok_or(OcrError::NoModels)?)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
@@ -201,10 +229,11 @@ fn ink_extent(text: &str) -> (f64, f64) {
     let tall = text
         .chars()
         .any(|c| c.is_uppercase() || c.is_ascii_digit() || "bdfhijklt!?/\\()[]{}|'\"#$%&@".contains(c) || (c.is_alphabetic() && !c.is_ascii()));
-    let low = text.chars().any(|c| "gjpqy()[]{}|_".contains(c));
+    let low = text.chars().any(|c| "gjpqyç()[]{}|_".contains(c));
     (if tall { CAP_HEIGHT } else { X_HEIGHT }, if low { -DESCENT } else { 0.0 })
 }
 
+/// Format a float with up to four decimal places, trimming trailing zeros.
 fn num(v: f64) -> String {
     let s = format!("{:.4}", if v.abs() < 1e-9 { 0.0 } else { v });
     let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -262,6 +291,10 @@ mod tests {
     #[test]
     fn the_model_alphabet_fits_the_text_layer_font() {
         assert_eq!(pdfcraft_fonts::first_undrawable(ALPHABET), None);
+        // All French letters and punctuation in ALPHABET_FR fit in the WinAnsi text layer font.
+        const FRENCH_SUBSET: &str =
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789àáâäçèéêëìíîïñòóôöùúûüýÀÂÄÇÈÉÊËÎÏÔÖÙÛÜŸœŒæÆ«»'\".,;:!?- ()€";
+        assert_eq!(pdfcraft_fonts::first_undrawable(FRENCH_SUBSET), None);
     }
 
     #[test]
@@ -303,6 +336,7 @@ mod tests {
         assert_eq!(ink_extent("402337"), (CAP_HEIGHT, 0.0));
         assert_eq!(ink_extent("sun"), (X_HEIGHT, 0.0));
         assert_eq!(ink_extent("gap"), (X_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("français"), (CAP_HEIGHT, -DESCENT));
         assert_eq!(ink_extent("Gallus.Ze@camtel.cm"), (CAP_HEIGHT, 0.0));
         assert_eq!(ink_extent("Corporation"), (CAP_HEIGHT, -DESCENT));
         assert_eq!(ink_extent("--"), (BOX_EM - DESCENT, -DESCENT));
@@ -381,6 +415,20 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+    }
+
+    /// End to end on rendered text with the French model when installed.
+    #[test]
+    fn reads_rendered_text_french() {
+        let Some(models) = Models::find_for_lang("fr") else {
+            eprintln!("skipped: French OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        let (w, h, px) = test_image::hello();
+        let lines = ocr.recognize(&px, w, h).unwrap();
+        let text: Vec<String> = lines.iter().map(Line::text).collect();
+        assert!(text.iter().any(|t| t.contains("HELL") || t.contains("WOR")), "{text:?}");
     }
 
     mod test_image {

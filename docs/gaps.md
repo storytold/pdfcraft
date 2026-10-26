@@ -161,16 +161,15 @@ update the numbers.
   (`AGENTS.md` §4).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
 
-### 7. OCR reads only unaccented Latin
+### 7. OCR language coverage and document enhancements
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
+- **Missing:** non-Latin scripts (CJK, Arabic, Cyrillic) and additional European languages; editable-text output; deskew, rotation,
   despeckle, background and camera clean-up; MRC compression; pluggable engines; OCR in the
   browser; scanner input.
-- **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
-  accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
+- **Evidence:** `ocr.ocr-languages` partial (English unaccented Latin and French accented Latin are supported; other languages pending); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
   (Dutch). Acrobat ships on-device recognition for dozens of languages.
 - **Impact:** scanned documents are a core Pro workflow outside English.
-- **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
+- **Estimate:** 35–65 h, partly blocked on openly licensed models. **Doc:**
   [file-format-parity.md](file-format-parity.md).
 
 ### 8. Office export weak, Office import absent

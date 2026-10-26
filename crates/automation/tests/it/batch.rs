@@ -200,6 +200,24 @@ fn batch_ocr_uses_existing_models_or_reports_the_missing_models_per_file() {
     }
 }
 
+/// Verify batch OCR uses the French OCR model and settings when configured with "language": "fr".
+#[test]
+fn batch_ocr_uses_french_model_when_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let report = result(&mut auto, json!({"paths":["page.pdf"],"steps":["ocr"],"language":"fr","out_dir":"out"}));
+    if pdfcraft_engine::ocr::available_for_language("fr") {
+        assert_eq!(report["completed"], 1, "{report}");
+        assert_eq!(report["files"][0]["steps"][0]["skipped_pages"], 1);
+        assert!(dir.path().join("out/page.pdf").exists());
+    } else {
+        assert_eq!(report["failed"], 1, "{report}");
+        assert!(report["files"][0]["error"].as_str().unwrap().contains("model"), "{report}");
+        assert!(!dir.path().join("out/page.pdf").exists());
+    }
+}
+
 #[test]
 fn batch_output_collisions_are_safe_under_concurrent_writers() {
     let dir = tempfile::tempdir().unwrap();

@@ -6580,8 +6580,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "Language choice exists, but the models read only the Latin alphabet without accents (English)."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/engine/src/tests.rs::recognize_text_reads_french_accents"]
+notes = "Language choice exists: English and French (reads accented characters and cedillas)."
 
 [[feature]]
 id = "ocr.searchable-image"

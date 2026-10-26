@@ -21,6 +21,7 @@ struct Recipe<'a> {
 }
 
 impl<'a> Recipe<'a> {
+    /// Parse batch recipe arguments, verifying step sequence and associated options.
     fn parse(auto: &Automation, args: &'a Args) -> Result<Self> {
         let steps = args.strs("steps")?;
         if steps.is_empty() || steps.len() > 3 {
@@ -57,11 +58,13 @@ impl<'a> Recipe<'a> {
         Ok(Self { steps, images, ocr: auto.ocr_settings(args)? })
     }
 
+    /// Check whether `path` has an extension accepted by this recipe's steps.
     fn accepts(&self, path: &Path) -> bool {
         let extension = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
         extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
     }
 
+    /// Process a single input file through the configured batch recipe steps.
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {
         // A fresh session per file bounds retained document state and never touches caller tabs.
         let mut session = Session::new();
@@ -78,7 +81,7 @@ impl<'a> Recipe<'a> {
             match *step {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
-                    let engine = ocr::engine().map_err(failed)?;
+                    let engine = ocr::engine_for_language(&self.ocr.language).map_err(failed)?;
                     let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
@@ -103,7 +106,7 @@ impl<'a> Recipe<'a> {
     }
 }
 
-// Windows junctions are reparse points too; do not descend into them as ordinary folders.
+/// Check whether `metadata` represents a symlink or Windows reparse point junction.
 fn linked(metadata: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
     {
@@ -140,6 +143,7 @@ struct Discovery {
 }
 
 impl Discovery {
+    /// Recursively discover input files matching batch discovery limits.
     fn walk(&mut self, path: &Path, relative: &Path, out: &Path, recursive: bool, depth: usize) -> Result<()> {
         self.visited += 1;
         if self.visited > MAX_ENTRIES || depth > MAX_DEPTH {
@@ -175,6 +179,7 @@ impl Discovery {
 }
 
 impl Automation {
+    /// Run a batch recipe (convert, ocr, optimize) across multiple files or directories.
     pub(crate) fn doc_batch(&self, args: &Args) -> Result<Value> {
         let recipe = Recipe::parse(self, args)?;
         let recursive = args.opt_bool("recursive")?.unwrap_or(false);
