@@ -95,6 +95,7 @@ const TITLES: &[&str] = &[
     "Rotate view",
     "Page navigation",
     "Page display",
+    "Show/Hide",
     "Side panels",
     "Display theme",
     "Tools",
@@ -166,6 +167,7 @@ const DISPLAY: &[&str] = &[
     "view.fit_one_page",
 ];
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
+const SHOW_HIDE: &[&str] = &["view.rulers"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
 const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
@@ -330,6 +332,7 @@ impl PdfCraftApp {
             Node::submenu(tl!("Rotate view"), list(&[ROTATE_CW, ROTATE_CCW], &mut used)),
             Node::submenu(tl!("Page navigation"), list(NAVIGATION, &mut used)),
             Node::submenu(tl!("Page display"), list(DISPLAY, &mut used)),
+            Node::submenu(tl!("Show/Hide"), list(SHOW_HIDE, &mut used)),
             Node::Separator,
         ];
         view.extend(list(PANES, &mut used));
@@ -489,6 +492,7 @@ impl PdfCraftApp {
             "view.read_mode" => Some(self.mode == crate::Mode::Read),
             "view.side_panel" => Some(self.right.is_some()),
             "view.tools_pane" => Some(self.left_open),
+            "view.rulers" => Some(self.show_rulers),
             "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
             "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
             "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),

@@ -130,6 +130,7 @@ pub struct CommandSpec {
     pub icon: &'static str,
 }
 
+/// Shorthand to construct a [`CommandSpec`] that stays active in text fields.
 const fn c(
     id: &'static str,
     label: &'static str,
@@ -247,6 +248,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         Nothing,
         "panel-left",
     ),
+    c("view.rulers", "Rulers", VIEW, Some(Shortcut::cmd("R")), Document, "ruler"),
     c("ui.dock.reset", "Reset side panels", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),

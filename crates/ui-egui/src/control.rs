@@ -1398,6 +1398,7 @@ impl Host for crate::PdfCraftApp {
         self.request_quit(ctx)
     }
 
+    /// Return the full JSON state of the application for headless UI automation.
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -1435,6 +1436,7 @@ impl Host for crate::PdfCraftApp {
                 "raster_memory": v.raster_memory(),
                 "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
+                "rulers": self.show_rulers,
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
                 "pages_on_screen": v.visible_page_rects().iter().map(|(p, r)| json!({ "page": p + 1, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
@@ -1482,6 +1484,7 @@ impl Host for crate::PdfCraftApp {
             "right_panel": self.right.map(|r| format!("{r:?}")),
             "dialog": self.dialog.map(|d| format!("{d:?}")),
             "palette_open": self.palette_open,
+            "rulers": self.show_rulers,
             "theme": format!("{:?}", self.theme),
             "theme_preference": self.theme_preference,
             "language": self.language,

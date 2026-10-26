@@ -1166,7 +1166,7 @@ impl DocView {
     }
 
     /// Where `page` is drawn this frame, with its coordinate mapping.
-    pub(crate) fn page_xform(&self, page: usize) -> Option<PageXform> {
+    pub fn page_xform(&self, page: usize) -> Option<PageXform> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
     }
 
@@ -4680,6 +4680,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
         quick_bar(app, avail, ui);
+    }
+    if app.show_rulers && !app.full_screen {
+        let next_unit = app.views.get(index).and_then(|v| crate::rulers::draw_rulers(ui, v, avail, app.units, &t));
+        if let Some(u) = next_unit {
+            app.units = u;
+        }
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);

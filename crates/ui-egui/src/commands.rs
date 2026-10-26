@@ -112,6 +112,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Execute a registered command by id without panic guarding.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -285,6 +286,9 @@ impl PdfCraftApp {
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.rulers" => {
+                self.show_rulers = !self.show_rulers;
+            }
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return v.view_history(id == "view.next_view");

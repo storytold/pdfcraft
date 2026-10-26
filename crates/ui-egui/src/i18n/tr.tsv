@@ -2541,7 +2541,6 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
-
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
 @plural	{n} reply|{n} replies	{n} yanıt
@@ -2553,3 +2552,5 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+	Show/Hide	Göster/Gizle
+	Rulers	Cetveller

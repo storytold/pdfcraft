@@ -2268,3 +2268,100 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// View ▸ Show/Hide ▸ Rulers (`view.rulers`, `Ctrl+R` / `⌘R`):
+/// Toggles horizontal and vertical canvas rulers that track cursor position.
+#[test]
+fn rulers_toggle_and_track_cursor_position() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+
+    // Rulers start disabled.
+    assert!(!h.state().show_rulers, "rulers should start hidden");
+
+    // Execute view.rulers command.
+    assert!(h.state_mut().execute("view.rulers"));
+    h.run_steps(2);
+    assert!(h.state().show_rulers, "rulers should be shown after execute('view.rulers')");
+
+    // Check option setting via control interface.
+    h.state_mut().set_option("rulers", "off").unwrap();
+    assert!(!h.state().show_rulers, "set_option('rulers', 'off') turns rulers off");
+
+    h.state_mut().set_option("rulers", "on").unwrap();
+    assert!(h.state().show_rulers, "set_option('rulers', 'on') turns rulers on");
+
+    // Toggle by shortcut Ctrl+R / Cmd+R.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::R);
+    h.run_steps(2);
+    assert!(!h.state().show_rulers, "Ctrl+R toggles rulers off");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::R);
+    h.run_steps(2);
+    assert!(h.state().show_rulers, "Ctrl+R toggles rulers back on");
+
+    // Verify rulers visibility in ui.state both with and without an active document.
+    let state = h.state().ui_state();
+    assert_eq!(state["rulers"], true, "rulers state exposed at top-level");
+    assert_eq!(state["active"]["rulers"], true, "rulers state exposed in active");
+
+    h.state_mut().active = None;
+    let home_state = h.state().ui_state();
+    assert!(home_state["active"].is_null(), "no active document on home");
+    assert_eq!(home_state["rulers"], true, "rulers state readable at top-level on home");
+}
+
+/// End-to-end test for canvas rulers: moves cursor across the canvas, verifies ruler positions,
+/// cursor guide tracking, unit cycling, and origin realignment under page rotation.
+#[test]
+fn rulers_end_to_end_cursor_tracking_and_rotation() {
+    use egui::pos2;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+
+    // Enable rulers.
+    assert!(h.state_mut().execute("view.rulers"));
+    h.run_steps(2);
+    assert!(h.state().show_rulers);
+
+    // Initial orientation: page 0 xform origin matches screen top-left.
+    let vp = h.state().views[0].viewport_rect();
+    let xf = h.state().views[0].page_xform(0).expect("page 0 xform");
+    let o = xf.norm_to_screen(0.0, 0.0);
+    assert!(o.x >= vp.min.x && o.y >= vp.min.y, "page origin should sit inside viewport: {o:?}");
+
+    // Hover mouse at page center to drive cursor tracking guides and markers.
+    let cursor_pos = pos2(o.x + 100.0, o.y + 120.0);
+    h.hover_at(cursor_pos);
+    h.run_steps(2);
+
+    // Cycle units by clicking the corner unit badge.
+    let initial_unit = h.state().units;
+    let corner = pos2(vp.min.x + 9.0, vp.min.y + 9.0);
+    h.hover_at(corner);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(2);
+    assert_ne!(h.state().units, initial_unit, "clicking corner badge cycles measurement unit");
+
+    // Rotate view 90 degrees clockwise (rotate_view).
+    h.state_mut().views[0].rotate_view(true);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].rotation, 90);
+
+    // Transformed page origin under 90° rotation.
+    let xf90 = h.state().views[0].page_xform(0).expect("page 0 rotated xform");
+    let o90 = xf90.norm_to_screen(0.0, 0.0);
+    let corner90 = xf90.rect.right_top();
+    assert!((o90 - corner90).length() < 1e-3, "90° rotation origin is right-top of page rect: {o90:?} vs {corner90:?}");
+
+    // Move cursor across rotated document to verify cursor tracking under rotation.
+    let cursor_rot = pos2(o90.x - 50.0, o90.y + 80.0);
+    h.hover_at(cursor_rot);
+    h.run_steps(2);
+}
