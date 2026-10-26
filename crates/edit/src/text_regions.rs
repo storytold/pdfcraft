@@ -116,6 +116,9 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 text: String::new(),
                 editor_text: String::new(),
                 spans: Vec::new(),
+                align: crate::added::Align::Left,
+                leading: 0.0,
+                row_rects: Vec::new(),
                 rect,
                 base_font: first.base_font.clone(),
                 size: first.size,
@@ -161,9 +164,37 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         block.text.push_str(row_text.trim_matches(paragraph_separator));
         block.rect = union(block.rect, rect);
+        block.row_rects.push(rect);
         block.rows.push(row);
     }
+    for block in &mut blocks {
+        (block.align, block.leading) = row_layout(&block.rows, lines, block.size);
+    }
     blocks
+}
+
+/// How a paragraph's rows line up (by their left edges, centres or right edges, in the text's own
+/// frame) and the distance between successive baselines. A single row is `Left` with no leading.
+fn row_layout(rows: &[Vec<usize>], lines: &[TextLine], size: f64) -> (crate::added::Align, f64) {
+    use crate::added::Align;
+    let frames: Vec<[f64; 4]> = rows.iter().filter_map(|row| frame_row_rect(row, lines)).collect();
+    let (Some(first), Some(last)) = (frames.first(), frames.last()) else { return (Align::Left, 0.0) };
+    if frames.len() < 2 {
+        return (Align::Left, 0.0);
+    }
+    let tol = (size * 0.25).max(1.0);
+    let near = |f: &dyn Fn(&[f64; 4]) -> f64| frames.iter().all(|r| (f(r) - f(first)).abs() <= tol);
+    let align = if near(&|r| r[0]) {
+        Align::Left
+    } else if near(&|r| (r[0] + r[2]) / 2.0) {
+        Align::Center
+    } else if near(&|r| r[2]) {
+        Align::Right
+    } else {
+        Align::Left
+    };
+    let leading = (last[3] - first[3]).abs() / (frames.len() - 1) as f64;
+    (align, if leading.is_finite() { leading } else { 0.0 })
 }
 
 /// Shape in the source or an explicitly registered matching full face. Never use interface fonts.

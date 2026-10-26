@@ -275,6 +275,13 @@ pub struct TextBlock {
     pub editor_text: String,
     /// Byte ranges in `editor_text` and their source line indexes.
     pub spans: Vec<(std::ops::Range<usize>, usize)>,
+    /// How the rows line up: left, centre or right (`Left` for a single row, which has nothing to
+    /// line up against).
+    pub align: crate::added::Align,
+    /// The distance between successive rows' baselines in user space (0 for a single row).
+    pub leading: f64,
+    /// Each row's own rectangle in user space, one per entry of `rows`.
+    pub row_rects: Vec<[f64; 4]>,
     /// Every line is invisible text (rendering mode 3): an OCR layer over a scanned image, whose
     /// pixels show the words. A rewrite draws the new text visibly (see [`BlockStyle::cover`]).
     pub invisible: bool,

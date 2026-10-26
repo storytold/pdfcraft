@@ -24,12 +24,41 @@ pub struct Block {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// The PDF `/BaseFont` of the text (empty when unknown). Word output names the matching family
+    /// so the text is set in a face of the source's widths, not Word's default one.
+    pub font: String,
     /// Text fill colour as sRGB components in 0..=1 (black when unknown).
     pub color: [f64; 3],
     /// Counterclockwise baseline angle in user space (degrees).
     pub rotation: f64,
     /// Explicit structure level: Some(0) is body, Some(1..=6) is a heading; None infers from size.
     pub heading_level: Option<u8>,
+    /// How the source lays the paragraph out (see [`Layout`]).
+    pub layout: Layout,
+}
+
+/// How the lines of a paragraph line up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// The source's line structure for a paragraph. Formats that place text at fixed positions use it
+/// to keep the source's line breaks, alignment and line pitch; flowing formats ignore it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Layout {
+    /// The text of each source row (empty when unknown, or for a single row).
+    pub lines: Vec<String>,
+    pub align: Align,
+    /// Distance between successive baselines in points (0 when unknown).
+    pub leading: f64,
+    /// Where each source row sits, `[x0, y0, x1, y1]` on the page, y up, like [`Block::rect`]
+    /// (empty when unknown). When there is one per row, fixed-position formats place each row on
+    /// its own, so no row depends on how the reader wraps or spaces lines.
+    pub rects: Vec<[f64; 4]>,
 }
 
 /// An image of a page.
@@ -45,12 +74,68 @@ pub struct Image {
     pub rotation: f64,
 }
 
+/// A filled rectangle of a page (a table's cell background, a shaded band).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fill {
+    /// [x0, y0, x1, y1] on the displayed page in points (y up).
+    pub rect: [f64; 4],
+    /// sRGB components in 0..=1.
+    pub color: [f64; 3],
+}
+
+/// A horizontal or vertical line of a page (a table border, a rule): `rect` has no extent across
+/// it, `width` is its thickness.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rule {
+    /// [x0, y0, x1, y1] on the displayed page in points (y up).
+    pub rect: [f64; 4],
+    pub width: f64,
+    /// sRGB components in 0..=1.
+    pub color: [f64; 3],
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub width: f64,
     pub height: f64,
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
+    /// Filled rectangles, in drawing order (later ones are painted over earlier ones).
+    pub fills: Vec<Fill>,
+    /// Ruling lines, in drawing order.
+    pub rules: Vec<Rule>,
+    /// Dots, wedges and other outlines that are not rectangles or straight lines, in drawing order.
+    pub shapes: Vec<Shape>,
+}
+
+/// One segment of a [`Shape`]; points are on the displayed page in points (y up).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Seg {
+    Move([f64; 2]),
+    Line([f64; 2]),
+    /// A cubic Bezier: two control points, then the end point.
+    Curve([f64; 2], [f64; 2], [f64; 2]),
+    Close,
+}
+
+/// A filled and/or stroked outline of a page: a bullet dot, a rating light, a pie wedge.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    /// [x0, y0, x1, y1] box of every point of `path` on the displayed page in points (y up).
+    pub rect: [f64; 4],
+    pub path: Vec<Seg>,
+    /// sRGB components in 0..=1, when filled.
+    pub fill: Option<[f64; 3]>,
+    /// Line colour (sRGB, 0..=1) and thickness in points, when the outline is drawn.
+    pub stroke: Option<([f64; 3], f64)>,
+}
+
+/// One side of a cell the source draws a line along.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Border {
+    /// Thickness in points.
+    pub width: f64,
+    pub color: [f64; 3],
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -61,9 +146,15 @@ pub struct Cell {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// The PDF `/BaseFont` of the cell's text (empty when unknown).
+    pub font: String,
     /// Text fill colour as sRGB components in 0..=1.
     pub color: [f64; 3],
     pub span: usize,
+    /// The background the source paints under the cell, when it paints one.
+    pub fill: Option<[f64; 3]>,
+    /// Lines the source draws along the cell's top, left, bottom and right edges.
+    pub borders: [Option<Border>; 4],
 }
 
 /// A table detected from the page's text layout: rows of cells, and the left edge of each
@@ -73,6 +164,8 @@ pub struct Table {
     pub rect: [f64; 4],
     pub cols: Vec<f64>,
     pub rows: Vec<Vec<Cell>>,
+    /// Per row, the lowest and highest edge of its text (y up).
+    pub spans: Vec<[f64; 2]>,
 }
 
 /// What goes into the output, in order.
@@ -237,15 +330,30 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         let right = used.iter().map(|&i| blocks[i].rect[2]).fold(f64::MIN, f64::max) + COL_TOL;
         let mut rows_out = Vec::new();
         let mut slots: Vec<Option<Cell>> = vec![None; ncols];
+        let mut spans = Vec::new();
         for row in run.drain(..) {
             for slot in slots.iter_mut() {
                 *slot = None;
             }
+            spans.push([
+                row.iter().map(|(_, bi)| blocks[*bi].rect[1]).fold(f64::MAX, f64::min),
+                row.iter().map(|(_, bi)| blocks[*bi].rect[3]).fold(f64::MIN, f64::max),
+            ]);
             for (_ci, bi) in row {
                 let b = &blocks[bi];
                 let Some(slot) = edges.iter().position(|e| (*e - b.rect[0]).abs() <= COL_TOL) else { continue };
                 let span = edges[slot + 1..].iter().filter(|e| **e > b.rect[0] + COL_TOL && **e < b.rect[2] - COL_TOL).count() + 1;
-                let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, color: b.color, span };
+                let cell = Cell {
+                    text: b.text.trim().to_string(),
+                    size: b.size,
+                    bold: b.bold,
+                    italic: b.italic,
+                    font: b.font.clone(),
+                    color: b.color,
+                    span,
+                    fill: None,
+                    borders: [None; 4],
+                };
                 match &mut slots[slot] {
                     Some(c) => {
                         c.text.push(' ');
@@ -266,7 +374,17 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                     }
                     None => {
                         column += 1;
-                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span: 1 });
+                        materialized.push(Cell {
+                            text: String::new(),
+                            size: 11.0,
+                            bold: false,
+                            italic: false,
+                            font: String::new(),
+                            color: [0.0; 3],
+                            span: 1,
+                            fill: None,
+                            borders: [None; 4],
+                        });
                     }
                 }
             }
@@ -281,7 +399,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
             right,
             used.iter().map(|&i| blocks[i].rect[3]).fold(f64::MIN, f64::max),
         ];
-        out.push(Table { rect, cols: edges, rows: rows_out });
+        out.push(Table { rect, cols: edges, rows: rows_out, spans });
     };
     // Runs of consecutive multi-column rows are tables. Rows on either side of a run that
     // hold a single cell wide enough to span two columns (a header band, a totals row) join
@@ -337,6 +455,146 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     (out, consumed)
 }
 
+fn is_white(c: [f64; 3]) -> bool {
+    c.iter().all(|v| v.is_nan() || *v >= 0.98)
+}
+
+/// The most cell and rule comparisons [`style_table`] makes for one table, so a page with
+/// thousands of lines over a huge grid stays quick.
+const STYLE_BUDGET: usize = 4_000_000;
+
+/// The index of the interval in `spans` that holds `v`, the one `v` is closest to the middle of.
+fn nearest_span(spans: &[[f64; 2]], v: f64) -> Option<usize> {
+    spans
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s[0] <= v && v <= s[1])
+        .min_by(|a, b| (v - (a.1[0] + a.1[1]) / 2.0).abs().total_cmp(&(v - (b.1[0] + b.1[1]) / 2.0).abs()))
+        .map(|(i, _)| i)
+}
+
+/// Give a detected table the borders and backgrounds its page draws. The grid is only inferred
+/// from the text, so a line is attached to a cell edge only when it runs along it (between the
+/// text of two rows, beside a column's left edge, or just outside the table's first and last
+/// row and column) and covers the cell; a cell is shaded only when a fill covers where its text
+/// starts. Lines that merely align with the text are not turned into borders.
+pub(crate) fn style_table(t: &mut Table, fills: &[Fill], rules: &[Rule]) {
+    let (n, nrows) = (t.cols.len(), t.rows.len());
+    if n == 0 || nrows == 0 || t.spans.len() != nrows || (fills.is_empty() && rules.is_empty()) {
+        return;
+    }
+    let mut edges = t.cols.clone();
+    edges.push(t.rect[2]);
+    let size = t.rows.iter().flatten().map(|c| c.size).filter(|s| s.is_finite()).fold(0.0, f64::max);
+    let margin = (size * 0.8).clamp(4.0, 14.0);
+    // Where a horizontal line between rows k-1 and k (or above the first, below the last) may be.
+    let horizontal: Vec<[f64; 2]> = (0..=nrows)
+        .map(|k| match (k.checked_sub(1).and_then(|p| t.spans.get(p)), t.spans.get(k)) {
+            (Some(above), Some(below)) => {
+                let (a, b) = (below[1], above[0]);
+                [a.min(b) - 1.0, a.max(b) + 1.0]
+            }
+            (None, Some(first)) => [first[1] - 1.0, first[1] + margin],
+            (Some(last), None) => [last[0] - margin, last[0] + 1.0],
+            (None, None) => [f64::NAN; 2],
+        })
+        .collect();
+    // Where a vertical line on the left of column j (right of the last, for j = n) may be.
+    let vertical: Vec<[f64; 2]> = (0..=n)
+        .map(|j| {
+            let at = edges.get(j).copied().unwrap_or(f64::NAN);
+            if j == 0 {
+                [at - 12.0, at + 1.0]
+            } else if j == n {
+                [at - COL_TOL - 1.0, at + 12.0]
+            } else {
+                let gap = at - edges.get(j - 1).copied().unwrap_or(f64::NAN);
+                [at - (gap / 2.0).clamp(1.0, 12.0), at + 1.0]
+            }
+        })
+        .collect();
+    // The grid columns each cell covers, and the middle of each row.
+    let columns: Vec<Vec<[usize; 2]>> = t
+        .rows
+        .iter()
+        .map(|row| {
+            let mut c = 0usize;
+            row.iter()
+                .map(|cell| {
+                    let at = [c.min(n), c.saturating_add(cell.span.max(1)).min(n)];
+                    c = c.saturating_add(cell.span.max(1));
+                    at
+                })
+                .collect()
+        })
+        .collect();
+    let middle: Vec<f64> = t.spans.iter().map(|s| (s[0] + s[1]) / 2.0).collect();
+    let mut budget = STYLE_BUDGET;
+    for rule in rules {
+        let border = Some(Border { width: rule.width, color: rule.color });
+        let (dx, dy) = (rule.rect[2] - rule.rect[0], rule.rect[3] - rule.rect[1]);
+        if dy <= dx {
+            let Some(k) = nearest_span(&horizontal, (rule.rect[1] + rule.rect[3]) / 2.0) else { continue };
+            for (row, side) in [(k.checked_sub(1), 2usize), (Some(k), 0)] {
+                let Some(row) = row.filter(|r| *r < nrows) else { continue };
+                let (Some(cells), Some(cols)) = (t.rows.get_mut(row), columns.get(row)) else { continue };
+                budget = budget.saturating_sub(cells.len().max(1));
+                for (cell, [a, b]) in cells.iter_mut().zip(cols) {
+                    let centre = (edges.get(*a).copied().unwrap_or(f64::NAN) + edges.get(*b).copied().unwrap_or(f64::NAN)) / 2.0;
+                    if rule.rect[0] <= centre + 1.0 && rule.rect[2] >= centre - 1.0 {
+                        cell.borders[side] = border;
+                    }
+                }
+            }
+        } else {
+            let Some(j) = nearest_span(&vertical, (rule.rect[0] + rule.rect[2]) / 2.0) else { continue };
+            for (row, cells) in t.rows.iter_mut().enumerate() {
+                if budget == 0 {
+                    break;
+                }
+                budget = budget.saturating_sub(1);
+                let y = middle.get(row).copied().unwrap_or(f64::NAN);
+                if !(rule.rect[1] - 1.0 <= y && y <= rule.rect[3] + 1.0) {
+                    continue;
+                }
+                for (cell, [a, b]) in cells.iter_mut().zip(columns.get(row).map(Vec::as_slice).unwrap_or_default()) {
+                    if *b == j {
+                        cell.borders[3] = border;
+                    }
+                    if *a == j {
+                        cell.borders[1] = border;
+                    }
+                }
+            }
+        }
+        if budget == 0 {
+            break;
+        }
+    }
+    for (row, cells) in t.rows.iter_mut().enumerate() {
+        let y = middle.get(row).copied().unwrap_or(f64::NAN);
+        for (cell, [a, _]) in cells.iter_mut().zip(columns.get(row).map(Vec::as_slice).unwrap_or_default()) {
+            if budget == 0 {
+                return;
+            }
+            budget = budget.saturating_sub(fills.len().max(1));
+            let x = edges.get(*a).copied().unwrap_or(f64::NAN) + 1.0;
+            cell.fill = fills
+                .iter()
+                .rev()
+                .find(|f| f.rect[0] - 0.5 <= x && x <= f.rect[2] && f.rect[1] - 0.5 <= y && y <= f.rect[3] + 0.5)
+                .map(|f| f.color)
+                .filter(|c| !is_white(*c));
+        }
+    }
+}
+
+/// The fill painted over the middle of `rect`, if one is and it is not white (the page).
+fn background(fills: &[Fill], rect: [f64; 4]) -> Option<[f64; 3]> {
+    let (x, y) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+    fills.iter().rev().find(|f| f.rect[0] <= x && x <= f.rect[2] && f.rect[1] <= y && y <= f.rect[3]).map(|f| f.color).filter(|c| !is_white(*c))
+}
+
 fn items(pages: &[Page]) -> Vec<Item<'_>> {
     let body = body_size(pages);
     let mut out = Vec::new();
@@ -353,7 +611,10 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
             .filter(|(bi, _)| !consumed.get(*bi).copied().unwrap_or(false))
             .map(|(_, b)| (b.rect[3], b.rect[0], Item::Para(b, level(b, body))))
             .collect();
-        parts.extend(tables.into_iter().map(|t| (t.rect[3], t.rect[0], Item::Table(t))));
+        parts.extend(tables.into_iter().map(|mut t| {
+            style_table(&mut t, &p.fills, &p.rules);
+            (t.rect[3], t.rect[0], Item::Table(t))
+        }));
         parts.extend(p.images.iter().map(|im| (im.rect[3], im.rect[0], Item::Img(im))));
         parts.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
         out.extend(parts.into_iter().map(|x| x.2));
@@ -433,7 +694,14 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-                        let style = hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                        let style = match (hex(c.color), c.fill) {
+                            (colour, Some(f)) => {
+                                let colour = colour.map_or(String::new(), |h| format!("color:#{h};"));
+                                format!(" style=\"{colour}background:#{}\"", hex6(f))
+                            }
+                            (Some(h), None) => format!(" style=\"color:#{h}\""),
+                            (None, None) => String::new(),
+                        };
                         s.push_str(&format!("<td{span}{style}>{body}</td>"));
                     }
                     s.push_str("</tr>\n");
@@ -463,9 +731,145 @@ pub(crate) fn hex(c: [f64; 3]) -> Option<String> {
     (r | g | b != 0).then(|| format!("{r:02X}{g:02X}{b:02X}"))
 }
 
+/// The real character for a code of the Symbol font (Adobe's Symbol encoding), for the codes
+/// documents use in practice: Greek letters, arrows, operators and the bullet.
+fn symbol_char(code: u8) -> Option<char> {
+    const UPPER: [char; 26] =
+        ['Α', 'Β', 'Χ', 'Δ', 'Ε', 'Φ', 'Γ', 'Η', 'Ι', 'ϑ', 'Κ', 'Λ', 'Μ', 'Ν', 'Ο', 'Π', 'Θ', 'Ρ', 'Σ', 'Τ', 'Υ', 'ς', 'Ω', 'Ξ', 'Ψ', 'Ζ'];
+    const LOWER: [char; 26] =
+        ['α', 'β', 'χ', 'δ', 'ε', 'φ', 'γ', 'η', 'ι', 'ϕ', 'κ', 'λ', 'μ', 'ν', 'ο', 'π', 'θ', 'ρ', 'σ', 'τ', 'υ', 'ϖ', 'ω', 'ξ', 'ψ', 'ζ'];
+    Some(match code {
+        0x41..=0x5A => UPPER[usize::from(code - 0x41)],
+        0x61..=0x7A => LOWER[usize::from(code - 0x61)],
+        0x22 => '∀',
+        0x24 => '∃',
+        0x2D => '−',
+        0x40 => '≅',
+        0xA2 => '′',
+        0xA3 => '≤',
+        0xA5 => '∞',
+        0xAB => '↔',
+        0xAC => '←',
+        0xAD => '↑',
+        0xAE => '→',
+        0xAF => '↓',
+        0xB0 => '°',
+        0xB1 => '±',
+        0xB2 => '″',
+        0xB3 => '≥',
+        0xB4 => '×',
+        0xB5 => '∝',
+        0xB6 => '∂',
+        0xB7 => '•',
+        0xB8 => '÷',
+        0xB9 => '≠',
+        0xBA => '≡',
+        0xBB => '≈',
+        0xBC => '…',
+        0xD6 => '√',
+        0xDE => '⇒',
+        0xDB => '⇔',
+        0xE5 => '∑',
+        0xF2 => '∫',
+        _ => return None,
+    })
+}
+
+/// The real character for a code of Wingdings (the bullet and tick marks Word draws).
+fn wingdings_char(code: u8) -> Option<char> {
+    Some(match code {
+        0x6C => '●',
+        0x6E => '■',
+        0x6F => '□',
+        0x71 => '❑',
+        0x75 => '◆',
+        0x76 => '❖',
+        0xA7 => '▪',
+        0xA8 => '◻',
+        0xD8 => '➢',
+        0xFB => '✗',
+        0xFC => '✓',
+        0xFE => '☑',
+        _ => return None,
+    })
+}
+
+/// Symbol and Wingdings characters (Word bullets, tick marks, Greek letters) reach a PDF's text
+/// as private-use code points (U+F020..=U+F0FF, the font's code plus 0xF000). In any other font
+/// those draw as unrelated glyphs or boxes, so each is replaced by the real Unicode character
+/// when it is one of the well-known ones; the font name picks the table (Symbol, or Wingdings
+/// and ZapfDingbats bullets), and an unnamed font gets only the unambiguous bullets. Other
+/// characters are left alone.
+pub fn symbols_to_unicode(font: &str, text: &str) -> String {
+    if !text.chars().any(|c| ('\u{F020}'..='\u{F0FF}').contains(&c)) {
+        return text.to_string();
+    }
+    let name = font.to_ascii_lowercase();
+    text.chars()
+        .map(|c| {
+            let Some(code) = u32::from(c).checked_sub(0xF000).and_then(|v| u8::try_from(v).ok()).filter(|v| *v >= 0x20) else { return c };
+            let found = if name.contains("wingdings") || name.contains("dingbats") {
+                wingdings_char(code)
+            } else if name.contains("symbol") {
+                symbol_char(code)
+            } else {
+                // Without a font name only the bullets nobody uses for anything else.
+                match code {
+                    0xB7 => symbol_char(code),
+                    0xA7 | 0xD8 | 0xFC => wingdings_char(code),
+                    _ => None,
+                }
+            };
+            found.unwrap_or(c)
+        })
+        .collect()
+}
+
+/// The Word font family for a PDF `/BaseFont`, or `None` to leave the choice to Word (no font
+/// named, or a symbol font whose glyphs no other family has). Subset tags (`ABCDEF+`), style
+/// suffixes (`-Bold`, `,Italic`) and the `MT`/`PSMT` foundry suffixes are dropped, the PDF's
+/// standard-14 names become their Word equivalents, and run-together names are spaced
+/// (`TimesNewRoman` is `Times New Roman`).
+pub(crate) fn font_family(base_font: &str) -> Option<String> {
+    let name = base_font.trim();
+    let name = match name.split_once('+') {
+        Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+        _ => name,
+    };
+    let stem = name.split(['-', ',']).next().unwrap_or_default().trim();
+    let stem = ["PSMT", "MT", "PS"]
+        .iter()
+        .find_map(|suffix| stem.strip_suffix(suffix))
+        .filter(|rest| ["Arial", "TimesNewRoman", "CourierNew"].iter().any(|known| rest.starts_with(known)))
+        .unwrap_or(stem);
+    let family = match stem.to_ascii_lowercase().as_str() {
+        "" | "symbol" | "zapfdingbats" => return None,
+        "helvetica" | "arial" => "Arial".to_string(),
+        "times" | "timesroman" | "timesnewroman" => "Times New Roman".to_string(),
+        "courier" | "couriernew" => "Courier New".to_string(),
+        _ => {
+            let mut spaced = String::with_capacity(stem.len() + 4);
+            let mut prev = ' ';
+            for c in stem.chars().filter(|c| !c.is_control()).take(64) {
+                if prev.is_ascii_lowercase() && c.is_ascii_uppercase() {
+                    spaced.push(' ');
+                }
+                spaced.push(c);
+                prev = c;
+            }
+            spaced
+        }
+    };
+    (!family.trim().is_empty()).then_some(family)
+}
+
 /// A formatted text run (shared by paragraphs and table cells).
-fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
+fn run_xml(text: &str, size: f64, bold: bool, italic: bool, font: &str, color: [f64; 3]) -> String {
     let mut rpr = String::new();
+    if let Some(family) = font_family(font) {
+        let family = esc(&family);
+        rpr.push_str(&format!("<w:rFonts w:ascii=\"{family}\" w:hAnsi=\"{family}\" w:eastAsia=\"{family}\" w:cs=\"{family}\"/>"));
+    }
     if bold {
         rpr.push_str("<w:b/>");
     }
@@ -480,8 +884,37 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> 
     format!("<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>", esc(text))
 }
 
-/// One Word table: explicit absent borders (alignment alone cannot prove PDF rules), a grid sized
-/// from the detected column edges, `gridSpan` for spanning cells, empty cells for holes.
+/// The colour as `RRGGBB` (black included, for the places a missing colour would not mean black).
+pub(crate) fn hex6(c: [f64; 3]) -> String {
+    let [r, g, b] = rgb8(c);
+    format!("{r:02X}{g:02X}{b:02X}")
+}
+
+/// A paragraph's or cell's background as the Word `w:shd` element.
+fn shd_xml(c: [f64; 3]) -> String {
+    format!("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{}\"/>", hex6(c))
+}
+
+/// The Word `w:tcBorders` of a cell (empty when the source draws no line along it).
+fn tc_borders(borders: &[Option<Border>; 4]) -> String {
+    if borders.iter().all(Option::is_none) {
+        return String::new();
+    }
+    let mut s = String::from("<w:tcBorders>");
+    for (side, border) in ["top", "left", "bottom", "right"].iter().zip(borders) {
+        if let Some(b) = border {
+            // Eighths of a point: a hairline is 2, Word's thickest line is 96.
+            let sz = if b.width.is_finite() { (b.width * 8.0).round().clamp(2.0, 96.0) as i64 } else { 4 };
+            s.push_str(&format!("<w:{side} w:val=\"single\" w:sz=\"{sz}\" w:space=\"0\" w:color=\"{}\"/>", hex6(b.color)));
+        }
+    }
+    s.push_str("</w:tcBorders>");
+    s
+}
+
+/// One Word table: explicit absent borders (alignment alone cannot prove PDF rules) except along
+/// the lines the page draws, a grid sized from the detected column edges, `gridSpan` for spanning
+/// cells, the page's background colours, empty cells for holes.
 fn docx_table(t: &Table) -> String {
     let mut edges = t.cols.clone();
     edges.push(t.rect[2]);
@@ -500,9 +933,11 @@ fn docx_table(t: &Table) -> String {
         for c in row {
             let span = if c.span > 1 { format!("<w:gridSpan w:val=\"{}\"/>", c.span) } else { String::new() };
             let w: i64 = widths.iter().take(c.span.min(widths.len())).sum();
+            let borders = tc_borders(&c.borders);
+            let shading = c.fill.map_or(String::new(), shd_xml);
             s.push_str(&format!(
-                "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
-                run_xml(&c.text, c.size, c.bold, c.italic, c.color)
+                "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}{borders}{shading}</w:tcPr><w:p>{}</w:p></w:tc>",
+                run_xml(&c.text, c.size, c.bold, c.italic, &c.font, c.color)
             ));
         }
         // Pad the grid so every row covers all columns (Word rejects short rows).
@@ -560,6 +995,9 @@ fn layout_number(n: f64) -> f64 {
     if n.is_finite() { n.clamp(-1584.0, 1584.0) } else { 0.0 }
 }
 
+/// Most background and line shapes one positioned Word page draws.
+const MAX_SHAPES: usize = 8192;
+
 /// Most images a Word export embeds, and most image bytes (the zip writer has 32-bit sizes and
 /// a 16-bit entry count; a hostile PDF must not be able to overflow them).
 const MAX_MEDIA: usize = 1000;
@@ -590,12 +1028,97 @@ fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>
     )
 }
 
+/// Most path segments one shape writes; a longer outline is cut off.
+const MAX_SHAPE_SEGS: usize = 4096;
+
+/// A freeform VML shape (`v:shape` with a path) for `sh`, placed on the page. The path is in
+/// hundredths of a point, from the shape's top-left corner.
+fn shape_xml(page_height: f64, id: usize, sh: &Shape) -> String {
+    const K: f64 = 100.0;
+    let (w, h) = (layout_number(sh.rect[2] - sh.rect[0]).max(0.25), layout_number(sh.rect[3] - sh.rect[1]).max(0.25));
+    let (x, y) = (layout_number(sh.rect[0]), layout_number(page_height - sh.rect[3]));
+    let top = layout_number(sh.rect[3]);
+    let pt = |p: &[f64; 2]| format!("{},{}", ((layout_number(p[0]) - x) * K).round() as i64, ((top - layout_number(p[1])) * K).round() as i64);
+    let mut path = String::new();
+    for seg in sh.path.iter().take(MAX_SHAPE_SEGS) {
+        match seg {
+            Seg::Move(p) => path.push_str(&format!("m {} ", pt(p))),
+            Seg::Line(p) => path.push_str(&format!("l {} ", pt(p))),
+            Seg::Curve(a, b, c) => path.push_str(&format!("c {},{},{} ", pt(a), pt(b), pt(c))),
+            Seg::Close => path.push_str("x "),
+        }
+    }
+    path.push('e');
+    let fill = sh.fill.map_or(String::from(" filled=\"f\""), |c| format!(" fillcolor=\"#{}\"", hex6(c)));
+    let line = sh.stroke.map_or(String::from(" stroked=\"f\""), |(c, wd)| {
+        format!(" stroked=\"t\" strokecolor=\"#{}\" strokeweight=\"{:.2}pt\"", hex6(c), layout_number(wd).clamp(0.1, 72.0))
+    });
+    format!(
+        "<w:r><w:pict><v:shape id=\"Shape{id}\" style=\"position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;z-index:-3;mso-position-horizontal-relative:page;mso-position-vertical-relative:page\" coordsize=\"{},{}\" path=\"{path}\"{fill}{line}><w10:wrap type=\"none\"/></v:shape></w:pict></w:r>",
+        (w * K).round() as i64,
+        (h * K).round() as i64,
+    )
+}
+
 fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize) -> String {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
     let mut s = String::from("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
     let body = body_size(std::slice::from_ref(page)).max(1.0);
+    // A paragraph with a rectangle for each of its rows is set row by row: every row sits where
+    // the source had it, so the rows cannot drift into each other whatever line height, spacing or
+    // wrapping Word applies, and a row's own alignment is its position.
+    let mut shapes: Vec<std::borrow::Cow<'_, Block>> = Vec::new();
     for b in &page.blocks {
+        let rows = &b.layout.lines;
+        if b.rotation.abs() <= 0.1 && rows.len() > 1 && b.layout.rects.len() == rows.len() {
+            for (row, rect) in rows.iter().zip(&b.layout.rects) {
+                if !row.trim().is_empty() {
+                    shapes.push(std::borrow::Cow::Owned(Block {
+                        text: row.clone(),
+                        rect: *rect,
+                        layout: Layout { align: b.layout.align, ..Layout::default() },
+                        ..b.clone()
+                    }));
+                }
+            }
+        } else {
+            shapes.push(std::borrow::Cow::Borrowed(b));
+        }
+    }
+    // The source's backgrounds and lines, as shapes behind the text (negative z-order, so below
+    // text at 1), in the order the page paints them.
+    let boxes = page
+        .fills
+        .iter()
+        .filter(|f| !is_white(f.color))
+        .map(|f| (f.rect, f.color, -5))
+        .chain(page.rules.iter().map(|r| {
+            let half = layout_number(r.width).clamp(0.25, 72.0) / 2.0;
+            let rect = if r.rect[3] - r.rect[1] <= r.rect[2] - r.rect[0] {
+                [r.rect[0], r.rect[1] - half, r.rect[2], r.rect[3] + half]
+            } else {
+                [r.rect[0] - half, r.rect[1], r.rect[2] + half, r.rect[3]]
+            };
+            (rect, r.color, -4)
+        }))
+        .take(MAX_SHAPES);
+    for (rect, color, z) in boxes {
+        *shape_id = shape_id.saturating_add(1);
+        let (w, h) = (layout_number(rect[2] - rect[0]).max(0.25), layout_number(rect[3] - rect[1]).max(0.25));
+        let (x, y) = (layout_number(rect[0]), layout_number(page.height - rect[3]));
+        s.push_str(&format!(
+            "<w:r><w:pict><v:rect id=\"Box{}\" style=\"position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;z-index:{z};mso-position-horizontal-relative:page;mso-position-vertical-relative:page\" fillcolor=\"#{}\" stroked=\"f\"><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>",
+            shape_id,
+            hex6(color)
+        ));
+    }
+    // Dots and wedges over the backgrounds, still behind the text.
+    for sh in page.shapes.iter().take(MAX_SHAPES) {
+        *shape_id = shape_id.saturating_add(1);
+        s.push_str(&shape_xml(page.height, *shape_id, sh));
+    }
+    for b in shapes.iter().map(|b| b.as_ref()) {
         *shape_id = shape_id.saturating_add(1);
         let rotation = layout_number(-b.rotation).rem_euclid(360.0);
         let (sin, cos) = rotation.to_radians().sin_cos();
@@ -613,14 +1136,106 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         let w = layout_number(w).max(1.0);
         let (x, y) = (layout_number(b.rect[0] + (bw - w) / 2.0), layout_number(page.height - b.rect[3] + (bh - h) / 2.0));
         let z = if b.size >= 2.0 * body { -2 } else { 1 };
-        let style = format!(
-            "position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;rotation:{rotation:.3};z-index:{z};mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
-        );
+        // Word sets text slightly wider than the PDF's own font metrics (hinting, kerning,
+        // rounding, or a substitute face), and the box is exactly as wide as the source text, so the
+        // last character or word would wrap onto a new line. Give upright text slack on the side(s)
+        // the text can grow into: to the right of left-aligned text, both sides of centred text,
+        // to the left of right-aligned text. The source's rows stay as they were (a paragraph's
+        // own line breaks, not Word's re-wrapping, whose different line count would run into the
+        // text below), at the source's line pitch.
+        let upright = b.rotation.abs() <= 0.1;
+        let rows = &b.layout.lines;
+        let multi = upright && rows.len() > 1;
+        let align = if upright { b.layout.align } else { Align::Left };
+        let (x, w) = if upright {
+            let pad = if align == Align::Left { (b.size.max(1.0) * 0.5 + w * 0.04).min(72.0) } else { (b.size.max(1.0) + w * 0.15).min(200.0) };
+            match align {
+                Align::Left => (x, w + pad),
+                Align::Center => (x - pad, w + 2.0 * pad),
+                Align::Right => (x - pad, w + pad),
+            }
+        } else {
+            (x, w)
+        };
+        let (x, w) = (layout_number(x), layout_number(w).max(1.0));
+        // Word sets a line as tall as its own font's metrics make it, and puts the baseline in it
+        // accordingly, so text lands a few points above or below where the PDF drew it: over the
+        // rule of the box it sits in. Pin the line height instead (the source's own, for a single
+        // line; its pitch for a paragraph) and move the shape so the first baseline is where the
+        // PDF had it. Word puts about four fifths of an exact-height line above the baseline.
+        let natural = b.size.max(1.0);
+        let (line_height, y) = if !upright {
+            (None, y)
+        } else if multi {
+            let lead = b.layout.leading;
+            if lead.is_finite() && lead >= natural * 0.8 {
+                let lead = lead.min(natural * 6.0);
+                // The first row's own box: the block less the pitch of the rows below it.
+                let first = bh - (rows.len().saturating_sub(1)) as f64 * lead;
+                let first = if first.is_finite() && first >= natural * 0.5 { first } else { lead };
+                (Some(lead), layout_number(y + ((first - lead) * 0.8).clamp(-natural, natural)))
+            } else {
+                (None, y)
+            }
+        } else {
+            let line = bh.clamp(natural, natural * 2.0);
+            (Some(line), layout_number(y + ((bh - line) * 0.8).clamp(-natural, natural)))
+        };
+        // A line of left-aligned text never wraps. Centred and right-aligned text keeps its box width,
+        // which it needs to stay aligned.
+        let no_wrap = upright && align == Align::Left && (multi || bh <= b.size.max(1.0) * 1.9);
+        let wrap = if no_wrap { ";mso-wrap-style:none" } else { "" };
+        // Text turned a quarter (the label down the side of a table) is a box the size of the text
+        // as it sits on the page, with the text flowing vertically in it: the shape itself is not
+        // rotated, so no viewer can wrap it into a column of single characters.
+        let quarter = if (rotation - 270.0).abs() < 0.5 {
+            Some(true)
+        } else if (rotation - 90.0).abs() < 0.5 {
+            Some(false)
+        } else {
+            None
+        };
+        let (style, flow) = if let Some(bottom_to_top) = quarter {
+            let size = b.size.max(1.0);
+            let pad = (size * 0.5 + bh * 0.04).min(72.0);
+            let top = layout_number(page.height - b.rect[3]);
+            let (across, length) = (bw.max(size * 1.2), bh + pad);
+            // The text starts at the bottom of a bottom-to-top box and at the top of the other,
+            // and has room to grow past its far end.
+            let y = if bottom_to_top { top - pad } else { top };
+            let (x, y) = (layout_number(b.rect[0]), layout_number(y));
+            let direction = if bottom_to_top { "layout-flow:vertical;mso-layout-flow-alt:bottom-to-top;" } else { "layout-flow:vertical;" };
+            (
+                format!(
+                    "position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{across:.3}pt;height:{length:.3}pt;z-index:{z};mso-wrap-style:none;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
+                ),
+                format!("{direction}mso-wrap-style:none"),
+            )
+        } else {
+            (
+                format!(
+                    "position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;rotation:{rotation:.3};z-index:{z}{wrap};mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
+                ),
+                format!("mso-fit-shape-to-text:t{wrap}"),
+            )
+        };
         let heading =
             b.heading_level.filter(|level| (1..=6).contains(level)).map_or(String::new(), |level| format!("<w:pStyle w:val=\"Heading{level}\"/>"));
+        let pitch =
+            line_height.map_or(String::new(), |h| format!(" w:line=\"{}\" w:lineRule=\"exact\"", (h * 20.0).round().clamp(20.0, 31680.0) as i64));
+        let jc = match align {
+            Align::Left => "",
+            Align::Center => "<w:jc w:val=\"center\"/>",
+            Align::Right => "<w:jc w:val=\"right\"/>",
+        };
+        let text = if multi {
+            rows.iter().map(|row| run_xml(row, b.size, b.bold, b.italic, &b.font, b.color)).collect::<Vec<_>>().join("<w:r><w:br/></w:r>")
+        } else {
+            run_xml(&b.text, b.size, b.bold, b.italic, &b.font, b.color)
+        };
         s.push_str(&format!(
-            "<w:r><w:pict><v:rect id=\"Text{}\" style=\"{style}\" filled=\"f\" stroked=\"f\"><v:textbox inset=\"0,0,0,0\" style=\"mso-fit-shape-to-text:t\"><w:txbxContent><w:p><w:pPr>{heading}<w:spacing w:before=\"0\" w:after=\"0\"/></w:pPr>{}</w:p></w:txbxContent></v:textbox><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>",
-            shape_id, run_xml(&b.text, b.size, b.bold, b.italic, b.color)
+            "<w:r><w:pict><v:rect id=\"Text{}\" style=\"{style}\" filled=\"f\" stroked=\"f\"><v:textbox inset=\"0,0,0,0\" style=\"{flow}\"><w:txbxContent><w:p><w:pPr>{heading}<w:spacing w:before=\"0\" w:after=\"0\"{pitch}/>{jc}</w:pPr>{text}</w:p></w:txbxContent></v:textbox><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>",
+            shape_id
         ));
     }
     for im in &page.images {
@@ -676,7 +1291,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut media: Vec<(String, &Image)> = Vec::new();
     // Word needs a paragraph between adjacent tables and after the last one in the body.
     let mut after_table = false;
-    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic, b.color);
+    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic, &b.font, b.color);
     let mut shape_id = 0usize;
     for (page_index, page) in pages.iter().enumerate() {
         let (pw, _) = word_page_size(page);
@@ -685,10 +1300,24 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
             body.push_str(&positioned_page(page, &mut media, &mut shape_id));
             after_table = false;
         } else {
+            // Dots and wedges are page-anchored, so a 1 pt paragraph carries them without moving
+            // the flowing text.
+            if !page.shapes.is_empty() {
+                body.push_str("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
+                for sh in page.shapes.iter().take(MAX_SHAPES) {
+                    shape_id = shape_id.saturating_add(1);
+                    body.push_str(&shape_xml(page.height, shape_id, sh));
+                }
+                body.push_str("</w:p>");
+            }
             for it in items(std::slice::from_ref(page)) {
                 match &it {
                     Item::Para(b, lvl) => {
-                        let style = if (1..=6).contains(lvl) { format!("<w:pPr><w:pStyle w:val=\"Heading{lvl}\"/></w:pPr>") } else { String::new() };
+                        let heading = if (1..=6).contains(lvl) { format!("<w:pStyle w:val=\"Heading{lvl}\"/>") } else { String::new() };
+                        // Text over a coloured band keeps the band, or light text would vanish.
+                        let shading = background(&page.fills, b.rect).map_or(String::new(), shd_xml);
+                        let style =
+                            if heading.is_empty() && shading.is_empty() { String::new() } else { format!("<w:pPr>{heading}{shading}</w:pPr>") };
                         body.push_str(&format!("<w:p>{style}{}</w:p>", run(b)));
                     }
                     Item::Table(t) => {
@@ -901,9 +1530,11 @@ mod tests {
             size,
             bold,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: Layout::default(),
         };
         Page {
             width: 612.0,
@@ -921,6 +1552,7 @@ mod tests {
                 size: [200.0, 150.0],
                 rotation: 0.0,
             }],
+            ..Page::default()
         }
     }
 
@@ -983,9 +1615,11 @@ mod tests {
             size: 100.0,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.8; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: Layout::default(),
         });
         p.images = page().images;
         let xml = part(&docx(&[p], "Invoice"), "word/document.xml");
@@ -1018,11 +1652,30 @@ mod tests {
     }
 
     #[test]
+    fn word_quarter_turned_table_text_flows_vertically_in_an_unrotated_box() {
+        // A label down the side of a table, 11 pt text running bottom to top over 48 pt, is a
+        // 12.65 x 48 pt box. Rotating a box that size and wrapping it is what made each character
+        // land on its own line.
+        let mut up = block("Side label", 70.0, 610.0, 82.65, 658.3);
+        up.rotation = 90.0;
+        let mut down = block("Other label", 40.0, 610.0, 52.65, 660.0);
+        down.rotation = -90.0;
+        let page = Page { width: 612.0, height: 792.0, blocks: vec![up, down], images: Vec::new(), ..Page::default() };
+        let xml = part(&docx(&[page], "Table"), "word/document.xml");
+        assert_eq!(xml.matches("layout-flow:vertical").count(), 2, "{xml}");
+        assert_eq!(xml.matches("mso-layout-flow-alt:bottom-to-top").count(), 1, "{xml}");
+        assert!(!xml.contains("rotation:"), "quarter turns are not rotated shapes: {xml}");
+        assert!(xml.contains(">Side label</w:t>"), "{xml}");
+        let wide = xml.find("height:").and_then(|i| xml[i + 7..].split("pt").next()?.parse::<f64>().ok()).unwrap_or(0.0);
+        assert!(wide > 48.3, "room for the text to grow along its line: {wide}");
+    }
+
+    #[test]
     fn positioned_word_text_keeps_explicit_heading_levels() {
         let mut heading = block("Small heading", 72.0, 650.0, 180.0, 662.0);
         heading.rotation = 45.0;
         heading.heading_level = Some(5);
-        let page = Page { width: 612.0, height: 792.0, blocks: vec![heading], images: Vec::new() };
+        let page = Page { width: 612.0, height: 792.0, blocks: vec![heading], images: Vec::new(), ..Page::default() };
         let xml = part(&docx(&[page], "Tagged"), "word/document.xml");
         assert!(xml.contains("<w:txbxContent>"), "{xml}");
         assert!(xml.contains("<w:pStyle w:val=\"Heading5\"/>"), "{xml}");
@@ -1057,9 +1710,11 @@ mod tests {
             size: f64::NAN,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: Layout::default(),
         });
         let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
         assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
@@ -1103,6 +1758,236 @@ mod tests {
     }
 
     #[test]
+    fn word_text_keeps_the_source_font_and_single_lines_do_not_wrap() {
+        for (pdf, word) in [
+            ("ABCDEF+TimesNewRomanPS-BoldMT", Some("Times New Roman")),
+            ("Helvetica-Oblique", Some("Arial")),
+            ("ArialMT", Some("Arial")),
+            ("Arial,Bold", Some("Arial")),
+            ("Courier", Some("Courier New")),
+            ("SegoeUI-Semibold", Some("Segoe UI")),
+            ("OpenSans-Regular", Some("Open Sans")),
+            ("Symbol", None),
+            ("", None),
+        ] {
+            assert_eq!(font_family(pdf).as_deref(), word, "{pdf}");
+        }
+        let mut p = table_page();
+        p.blocks[0].font = "ABCDEF+Calibri-Bold".into();
+        p.blocks[0].rect = [72.0, 620.0, 192.0, 632.0];
+        let xml = part(&docx(std::slice::from_ref(&p), "Fonts"), "word/document.xml");
+        assert!(xml.contains("<w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"Calibri\" w:cs=\"Calibri\"/>"), "{xml}");
+        assert_eq!(xml.matches("<w:rFonts ").count(), 1, "unnamed fonts are left to Word: {xml}");
+        // Positioned (overlap) pages: a one-line block never wraps, a tall one still does.
+        let mut shape = page();
+        shape.blocks[2].rotation = 30.0;
+        shape.blocks[0].font = "Verdana".into();
+        shape.blocks.push(Block { rect: [72.0, 100.0, 300.0, 160.0], ..block("Several rows of text in a paragraph", 0.0, 0.0, 1.0, 1.0) });
+        let xml = part(&docx(&[shape], "Shapes"), "word/document.xml");
+        assert!(xml.contains("w:ascii=\"Verdana\""), "{xml}");
+        // The box is wider than the source text (428 pt), so Word's slightly wider text still fits.
+        assert!(xml.contains("width:450.620pt"), "text boxes need slack to the right: {xml}");
+        assert!(xml.contains("mso-fit-shape-to-text:t;mso-wrap-style:none"), "single lines must not wrap: {xml}");
+        assert!(xml.contains("mso-fit-shape-to-text:t\""), "multi-row blocks keep wrapping: {xml}");
+    }
+
+    #[test]
+    fn word_positioned_text_keeps_source_rows_alignment_and_line_pitch() {
+        let mut shape = page();
+        shape.blocks[2].rotation = 30.0; // forces the positioned layout
+        let rows = Layout { lines: vec!["Line one".into(), "Line two".into()], align: Align::Center, leading: 14.0, rects: Vec::new() };
+        shape.blocks.push(Block { rect: [100.0, 300.0, 300.0, 326.0], layout: rows, ..block("Line one Line two", 0.0, 0.0, 1.0, 1.0) });
+        let xml = part(&docx(&[shape], "Rows"), "word/document.xml");
+        // Source rows stay rows, at the source's pitch, centred, in a box with slack on both sides.
+        assert!(xml.contains("Line one</w:t></w:r><w:r><w:br/></w:r><w:r><w:rPr>"), "{xml}");
+        assert!(xml.contains("w:line=\"280\" w:lineRule=\"exact\"/><w:jc w:val=\"center\"/>"), "{xml}");
+        assert!(xml.contains("margin-left:58.000pt") && xml.contains("width:284.000pt"), "{xml}");
+    }
+
+    #[test]
+    fn word_positioned_rows_with_rectangles_become_one_shape_each_at_their_own_place() {
+        let mut shape = page();
+        shape.blocks[2].rotation = 30.0; // forces the positioned layout
+        let rows = Layout {
+            lines: vec!["First row".into(), "Second".into()],
+            align: Align::Center,
+            leading: 14.0,
+            rects: vec![[100.0, 330.0, 200.0, 342.0], [120.0, 316.0, 180.0, 328.0]],
+        };
+        shape.blocks.push(Block { rect: [100.0, 316.0, 200.0, 342.0], layout: rows, ..block("First row Second", 0.0, 0.0, 1.0, 1.0) });
+        let xml = part(&docx(&[shape], "Rows"), "word/document.xml");
+        assert!(!xml.contains("First row Second") && !xml.contains("<w:br/>"), "rows are not one paragraph: {xml}");
+        let first = xml.split("<v:rect").find(|s| s.contains("First row")).unwrap_or_default();
+        let second = xml.split("<v:rect").find(|s| s.contains("Second")).unwrap_or_default();
+        // 792 - 342 = 450 and 792 - 328 = 464 from the top: each row keeps its own height.
+        assert!(first.contains("margin-top:450.000pt"), "{first}");
+        assert!(second.contains("margin-top:464.000pt"), "{second}");
+        assert!(first.contains("<w:jc w:val=\"center\"/>") && second.contains("<w:jc w:val=\"center\"/>"));
+    }
+
+    #[test]
+    fn word_positioned_single_lines_pin_their_height_and_first_baseline() {
+        let mut shape = page();
+        shape.blocks[2].rotation = 30.0; // forces the positioned layout
+        // A 30 pt box around 12 pt text: Word's own line would sit higher or lower in it than the
+        // PDF drew it, so the line is fixed at 24 pt and the shape moved down by 80% of the 6 pt left over.
+        shape.blocks.push(Block { rect: [100.0, 300.0, 200.0, 330.0], ..block("Boxed", 0.0, 0.0, 1.0, 1.0) });
+        let xml = part(&docx(&[shape], "Lines"), "word/document.xml");
+        let shape_xml = xml.split("<v:rect").find(|s| s.contains("Boxed")).unwrap_or_default();
+        assert!(shape_xml.contains("margin-top:466.800pt"), "{shape_xml}");
+        assert!(shape_xml.contains("w:line=\"480\" w:lineRule=\"exact\""), "{shape_xml}");
+    }
+
+    #[test]
+    fn word_tables_keep_the_borders_and_backgrounds_the_page_draws() {
+        let grey = [0.8, 0.8, 0.8];
+        let line = |rect: [f64; 4]| Rule { rect, width: 1.0, color: [0.0; 3] };
+        let mut p = table_page();
+        // No lines or fills: no borders or shading are invented.
+        let plain = part(&docx(std::slice::from_ref(&p), "Bill"), "word/document.xml");
+        assert!(!plain.contains("<w:tcBorders>") && !plain.contains("<w:shd "), "{plain}");
+
+        p.fills = vec![Fill { rect: [0.0, 0.0, 612.0, 792.0], color: [1.0; 3] }, Fill { rect: [60.0, 614.0, 500.0, 640.0], color: grey }];
+        p.rules = vec![
+            line([68.0, 636.0, 500.0, 636.0]),  // above the header row
+            line([68.0, 610.0, 500.0, 610.0]),  // under the header row
+            line([228.0, 526.0, 228.0, 636.0]), // between the first two columns
+            line([300.0, 200.0, 400.0, 200.0]), // far from the table: not a border
+        ];
+        let xml = part(&docx(std::slice::from_ref(&p), "Bill"), "word/document.xml");
+        // The three header cells are shaded; the white page fill is not drawn.
+        assert_eq!(xml.matches("w:fill=\"CCCCCC\"").count(), 3, "{xml}");
+        assert!(!xml.contains("w:fill=\"FFFFFF\""), "{xml}");
+        assert!(xml.contains("<w:tcBorders><w:top w:val=\"single\""), "{xml}");
+        assert!(xml.contains("<w:left w:val=\"single\"") && xml.contains("<w:bottom w:val=\"single\""), "{xml}");
+        // Header row (3 cells) and the first-column cells of the rows below it carry borders;
+        // the rule far below is not one of them.
+        let bordered = xml.matches("<w:tcBorders>").count();
+        assert!((3..=9).contains(&bordered), "{bordered} bordered cells: {xml}");
+        let h = html(std::slice::from_ref(&p), "Bill");
+        assert!(h.contains("background:#CCCCCC"), "{h}");
+    }
+
+    #[test]
+    fn word_paragraphs_over_a_band_keep_its_colour() {
+        let mut p = page();
+        p.fills = vec![Fill { rect: [0.0, 0.0, 612.0, 792.0], color: [0.1, 0.2, 0.5] }];
+        let xml = part(&docx(&[p], "Band"), "word/document.xml");
+        assert!(xml.contains("<w:pPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"1A3380\"/></w:pPr>"), "{xml}");
+    }
+
+    #[test]
+    fn word_positioned_pages_draw_backgrounds_and_rules_as_shapes_behind_the_text() {
+        let mut shape = page();
+        shape.blocks[2].rotation = 30.0; // forces the positioned layout
+        shape.fills =
+            vec![Fill { rect: [50.0, 700.0, 250.0, 740.0], color: [0.8, 0.8, 0.8] }, Fill { rect: [0.0, 0.0, 10.0, 10.0], color: [1.0; 3] }];
+        shape.rules = vec![Rule { rect: [50.0, 695.0, 250.0, 695.0], width: 2.0, color: [1.0, 0.0, 0.0] }];
+        let xml = part(&docx(&[shape], "Shapes"), "word/document.xml");
+        // 792 - 740 = 52 from the top; the rule is centred on its line (792 - 696 = 96).
+        let band = xml.split("<v:rect").find(|s| s.contains("fillcolor=\"#CCCCCC\"")).unwrap_or_default();
+        assert!(band.contains("margin-top:52.000pt") && band.contains("width:200.000pt") && band.contains("height:40.000pt"), "{band}");
+        assert!(band.contains("z-index:-5") && band.contains("stroked=\"f\""), "{band}");
+        let rule = xml.split("<v:rect").find(|s| s.contains("fillcolor=\"#FF0000\"")).unwrap_or_default();
+        assert!(rule.contains("margin-top:96.000pt") && rule.contains("height:2.000pt"), "{rule}");
+        assert!(!xml.contains("fillcolor=\"#FFFFFF\""), "the white page fill is not drawn: {xml}");
+    }
+
+    #[test]
+    fn a_page_with_a_hostile_number_of_lines_and_fills_stays_bounded() {
+        let mut p = table_page();
+        p.fills = (0..50_000).map(|i| Fill { rect: [0.0, i as f64, 612.0, i as f64 + 20.0], color: [0.5; 3] }).collect();
+        p.rules = (0..50_000).map(|i| Rule { rect: [60.0, i as f64, 500.0, i as f64], width: 1.0, color: [0.0; 3] }).collect();
+        let started = std::time::Instant::now();
+        let d = docx(std::slice::from_ref(&p), "Hostile");
+        assert!(d.starts_with(b"PK"));
+        let mut shape = p.clone();
+        shape.blocks[0].rotation = 30.0;
+        let xml = part(&docx(&[shape], "Hostile"), "word/document.xml");
+        assert!(xml.matches("<v:rect").count() < 9000, "{} shapes", xml.matches("<v:rect").count());
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn word_draws_dots_and_wedges_as_freeform_shapes_behind_the_text() {
+        // A page that would flow, with a green dot and a stroked red wedge on it.
+        let mut p = page();
+        p.shapes = vec![
+            Shape {
+                rect: [100.0, 700.0, 110.0, 710.0],
+                path: vec![
+                    Seg::Move([110.0, 705.0]),
+                    Seg::Curve([110.0, 707.76], [107.76, 710.0], [105.0, 710.0]),
+                    Seg::Line([100.0, 700.0]),
+                    Seg::Close,
+                ],
+                fill: Some([0.0, 1.0, 0.0]),
+                stroke: None,
+            },
+            Shape {
+                rect: [200.0, 600.0, 250.0, 650.0],
+                path: vec![Seg::Move([200.0, 600.0]), Seg::Line([250.0, 650.0])],
+                fill: None,
+                stroke: Some(([1.0, 0.0, 0.0], 3.0)),
+            },
+        ];
+        let xml = part(&docx(&[p], "Dots"), "word/document.xml");
+        // 792 - 710 = 82 from the top. The path is in hundredths of a point from the top-left
+        // corner: (110, 705) is (1000, 500); the curve ends at (105, 710) = (500, 0).
+        let dot = xml.split("<v:shape").find(|s| s.contains("fillcolor=\"#00FF00\"")).unwrap_or_default();
+        assert!(dot.contains("margin-left:100.000pt") && dot.contains("margin-top:82.000pt"), "{dot}");
+        assert!(dot.contains("width:10.000pt") && dot.contains("height:10.000pt") && dot.contains("coordsize=\"1000,1000\""), "{dot}");
+        assert!(dot.contains("path=\"m 1000,500 c 1000,224,776,0,500,0 l 0,1000 x e\"") && dot.contains("stroked=\"f\""), "{dot}");
+        assert!(dot.contains("z-index:-3"), "{dot}");
+        let wedge = xml.split("<v:shape").find(|s| s.contains("strokecolor=\"#FF0000\"")).unwrap_or_default();
+        assert!(wedge.contains("filled=\"f\"") && wedge.contains("strokeweight=\"3.00pt\"") && wedge.contains("stroked=\"t\""), "{wedge}");
+        assert!(xml.contains("Body text after the picture"), "the page's text is still there: {xml}");
+    }
+
+    #[test]
+    fn a_flowing_table_page_keeps_flowing_and_still_draws_its_dots() {
+        let mut p = table_page();
+        p.shapes = vec![Shape {
+            rect: [100.0, 700.0, 110.0, 710.0],
+            path: vec![Seg::Move([110.0, 705.0]), Seg::Line([100.0, 700.0]), Seg::Close],
+            fill: Some([1.0, 0.0, 0.0]),
+            stroke: None,
+        }];
+        assert!(!positioned(&p));
+        let xml = part(&docx(&[p], "Flow"), "word/document.xml");
+        assert!(xml.contains("<v:shape") && xml.contains("fillcolor=\"#FF0000\""), "{xml}");
+        assert!(xml.contains("<w:tbl>") && !xml.contains("v:textbox"), "the table still flows as a table");
+    }
+
+    #[test]
+    fn a_page_with_hostile_shapes_stays_bounded_and_finite() {
+        let mut p = page();
+        p.shapes = (0..50_000)
+            .map(|i| Shape {
+                rect: [f64::NAN, f64::INFINITY, 1e300, -1e300],
+                path: vec![Seg::Move([f64::NAN, 1e300]), Seg::Curve([f64::INFINITY; 2], [1e300; 2], [i as f64; 2]), Seg::Close],
+                fill: Some([2.0, -1.0, f64::NAN]),
+                stroke: Some(([0.0; 3], f64::NAN)),
+            })
+            .collect();
+        let xml = part(&docx(&[p], "Hostile"), "word/document.xml");
+        assert!(xml.matches("<v:shape").count() <= MAX_SHAPES);
+        assert!(!xml.contains("NaN") && !xml.contains("inf"), "numbers stay finite");
+    }
+
+    #[test]
+    fn symbol_and_wingdings_private_use_characters_become_real_ones() {
+        // Word's bullets: Symbol U+F0B7, Wingdings U+F0A7 / U+F0D8 / U+F0FC.
+        assert_eq!(symbols_to_unicode("ABCDEF+Symbol", "\u{F0B7} item \u{F061}\u{F062}"), "• item αβ");
+        assert_eq!(symbols_to_unicode("Wingdings", "\u{F0A7}\u{F0FC}\u{F0D8}"), "▪✓➢");
+        // No font name: only the unambiguous bullets; letters stay as they are.
+        assert_eq!(symbols_to_unicode("", "\u{F0B7}\u{F061}"), "•\u{F061}");
+        // Ordinary text, other private-use characters and unknown codes are untouched.
+        assert_eq!(symbols_to_unicode("Arial", "plain \u{E000} text"), "plain \u{E000} text");
+        assert_eq!(symbols_to_unicode("Symbol", "\u{F0FF}\u{F100}"), "\u{F0FF}\u{F100}");
+    }
+
+    #[test]
     fn rtf_escapes_and_sizes() {
         let mut p = page();
         p.blocks.push(Block {
@@ -1111,9 +1996,11 @@ mod tests {
             size: 10.0,
             bold: false,
             italic: true,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: Layout::default(),
         });
         let r = rtf(&[p]);
         assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
@@ -1129,9 +2016,11 @@ mod tests {
             size: 11.0,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: Layout::default(),
         };
         Page {
             width: 612.0,
@@ -1153,12 +2042,15 @@ mod tests {
                     size: 11.0,
                     bold: false,
                     italic: false,
+                    font: String::new(),
                     color: [0.0; 3],
                     rotation: 0.0,
                     heading_level: None,
+                    layout: Layout::default(),
                 },
             ],
             images: Vec::new(),
+            ..Page::default()
         }
     }
 
@@ -1213,9 +2105,11 @@ mod tests {
                     size: 11.0,
                     bold: false,
                     italic: false,
+                    font: String::new(),
                     color: [0.0; 3],
                     rotation: 0.0,
                     heading_level: None,
+                    layout: Layout::default(),
                 }
             })
             .collect();
@@ -1241,14 +2135,17 @@ mod tests {
                             size: 8.0,
                             bold: false,
                             italic: false,
+                            font: String::new(),
                             color: [0.0; 3],
                             rotation: 0.0,
                             heading_level: None,
+                            layout: Layout::default(),
                         }
                     })
                 })
                 .collect(),
             images: Vec::new(),
+            ..Page::default()
         };
         let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
         assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -1257,7 +2154,18 @@ mod tests {
     }
 
     fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-        Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, heading_level: None }
+        Block {
+            text: t.into(),
+            rect: [x0, y0, x1, y1],
+            size: 12.0,
+            bold: false,
+            italic: false,
+            font: String::new(),
+            color: [0.0; 3],
+            rotation: 0.0,
+            heading_level: None,
+            layout: Layout::default(),
+        }
     }
 
     /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -1283,6 +2191,7 @@ mod tests {
                 block("conducted during a WGP tournament.", 164.3, 502.0, 352.5, 516.6),
             ],
             images: Vec::new(),
+            ..Page::default()
         };
         let h = html(std::slice::from_ref(&p), "Regulations");
         assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -1302,7 +2211,7 @@ mod tests {
             blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
             blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
         let h = html(std::slice::from_ref(&p), "Event");
         assert!(!h.contains("<table>"), "sentences became a table: {h}");
         assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -1319,7 +2228,7 @@ mod tests {
             blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
             blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ..Page::default() };
         let h = html(std::slice::from_ref(&p), "Prizes");
         assert!(h.contains("<table>"), "the prize table was lost: {h}");
         assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -1333,9 +2242,11 @@ mod tests {
             size: 11.0,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: Layout::default(),
         };
         let p = Page {
             width: 612.0,
@@ -1347,6 +2258,7 @@ mod tests {
                 para("Second right block, still a tall flowing paragraph rather than a cell.", 320.0, 400.0),
             ],
             images: Vec::new(),
+            ..Page::default()
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");

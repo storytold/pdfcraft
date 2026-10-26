@@ -68,12 +68,12 @@ impl PageImage {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct ClipPath {
+pub(crate) struct ClipPath {
     path: Arc<BezPath>,
     even_odd: bool,
 }
 
-fn streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
+pub(crate) fn streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -93,11 +93,11 @@ fn streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
 }
 
 /// The page's streams joined into the one stream they are: an operator may span two of them.
-fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
+pub(crate) fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
     Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
 }
 
-fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
+pub(crate) fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
@@ -108,28 +108,28 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
         .unwrap_or_default()
 }
 
-fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
+pub(crate) fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     (r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]).then_some(r)
 }
 
 #[derive(Clone)]
-struct Placement {
-    matrix: Matrix,
-    clip: [f64; 4],
-    clips: Vec<ClipPath>,
+pub(crate) struct Placement {
+    pub(crate) matrix: Matrix,
+    pub(crate) clip: [f64; 4],
+    pub(crate) clips: Vec<ClipPath>,
 }
 
 /// Path coordinates are transformed when constructed; q/Q save clips, not the current path.
-struct ImageState {
-    placement: Placement,
+pub(crate) struct ImageState {
+    pub(crate) placement: Placement,
     stack: Vec<Placement>,
-    path: BezPath,
+    pub(crate) path: BezPath,
     pending_clip: Option<bool>,
 }
 
 impl ImageState {
-    fn new(matrix: Matrix, clip: [f64; 4], clips: Vec<ClipPath>) -> Self {
+    pub(crate) fn new(matrix: Matrix, clip: [f64; 4], clips: Vec<ClipPath>) -> Self {
         Self { placement: Placement { matrix, clip, clips }, stack: Vec::new(), path: BezPath::new(), pending_clip: None }
     }
 
@@ -138,7 +138,7 @@ impl ImageState {
         Point::new(x, y)
     }
 
-    fn apply(&mut self, op: &Op) -> Result<(), EditError> {
+    pub(crate) fn apply(&mut self, op: &Op) -> Result<(), EditError> {
         if matches!(op.op.as_slice(), b"cm" | b"m" | b"l" | b"c" | b"v" | b"y" | b"re")
             && op.operands.iter().any(|v| v.as_f64().is_some_and(|v| !v.is_finite() || v.abs() > 1e12))
         {

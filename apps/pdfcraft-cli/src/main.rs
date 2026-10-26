@@ -60,6 +60,8 @@ pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JS
                                                           (includes any declared PDF/A or PDF/UA level)
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+pdfcraft-cli export <file.pdf> --out out.docx [--password PW]   Word (.docx), PowerPoint (.pptx), HTML (.html) or RTF (.rtf),
+                                                          chosen by --out's extension
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
                       (options run in order; page numbers refer to the document after the earlier options)
@@ -96,6 +98,7 @@ fn main() -> ExitCode {
         Some("info") => info(&args[1..]),
         Some("render") => render(&args[1..]),
         Some("text") => text(&args[1..]),
+        Some("export") => export(&args[1..]),
         Some("edit") => edit(&args[1..]),
         Some("combine") => combine(&args[1..]),
         Some("extract") => extract(&args[1..]),
@@ -238,6 +241,7 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 const INFO_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", takes_value: true }];
 const AUDIT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", takes_value: true }];
 const TEXT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--page", takes_value: true }, OptionSpec { name: "--password", takes_value: true }];
+const EXPORT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--out", takes_value: true }, OptionSpec { name: "--password", takes_value: true }];
 const COMBINE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--out", takes_value: true }];
 const EXTRACT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--out", takes_value: true },
@@ -410,6 +414,35 @@ fn text(args: &[String]) -> Result<(), CliError> {
     } else {
         Err(format!("text: page(s) {} could not be read", failed.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")).into())
     }
+}
+
+/// Export a PDF to Word, PowerPoint, HTML or RTF, the format chosen by `--out`'s extension.
+///
+/// The same export as the app's File ▸ Export and the `doc_export_office` tool. Like `text`, it
+/// copies the document's content out, so it honours the document's copy permission.
+fn export(args: &[String]) -> Result<(), CliError> {
+    use pdfcraft_engine::compare::OfficeFormat;
+    validate_options("export", args, EXPORT_OPTIONS)?;
+    let path = *positional(args).first().ok_or("export: missing file")?;
+    let out = flag(args, "--out").ok_or("export: missing --out (.docx, .pptx, .html or .rtf)")?;
+    let ext = Path::new(out).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let format = OfficeFormat::from_extension(&ext).ok_or_else(|| format!("export: --out {out:?} must end in .docx, .pptx, .html or .rtf"))?;
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let doc = session.get(id).ok_or("export: the document could not be opened")?;
+    doc.check_copying()
+        .map_err(|_| "export: the document's permissions don't allow copying its content; pass the owner password with --password to export it")?;
+    let export = doc.export_office_checked(format);
+    write_pdf(Path::new(out), &export.bytes)?;
+    // Text left out to keep a hostile page bounded is said, not silent.
+    if !export.truncated_pages.is_empty() {
+        let pages = export.truncated_pages.iter().map(|p| p.saturating_add(1).to_string()).collect::<Vec<_>>().join(", ");
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "export: forms nested too deeply, or too many forms, on page(s) {pages} were left out: their text and images are missing from the export"
+        );
+    }
+    Ok(())
 }
 
 /// The most pages one `A-B` range may name: a bound on what a typed range can allocate.

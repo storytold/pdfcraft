@@ -854,6 +854,8 @@ mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre};
+pub mod vector;
+pub use vector::{PageFill, PageRule, PageShape, PageVectors, PathSeg as PagePathSeg, reading_vectors};
 pub mod bidi;
 pub mod indic;
 mod linebreak;

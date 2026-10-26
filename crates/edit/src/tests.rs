@@ -2933,6 +2933,43 @@ fn stream(dict: &str, data: &str) -> String {
     format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
 }
 
+/// Export keeps a paragraph's rows where the source put them: how they line up (left edges,
+/// centres or right edges) and the distance between baselines are read from the rows' geometry.
+#[test]
+fn reading_blocks_report_row_alignment_and_pitch() {
+    // Courier sets every character 7.2 pt wide at 12 pt: 4 characters are 28.8 pt, 12 are 86.4 pt.
+    let paragraph = |x: [f64; 3]| {
+        let content = (0..3)
+            .map(|i| format!("BT /F1 12 Tf {} {} Td ({}) Tj ET", x[i], 700 - 14 * i as i32, ["aaaa", "aaaaaaaaaaaa", "aaaaaaaa"][i]))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            &stream("", &content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+        ]);
+        let blocks = text::reading_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1, "one paragraph of three rows: {blocks:?}");
+        blocks.into_iter().next().unwrap()
+    };
+    // Widths 28.8, 86.4 and 57.6 pt.
+    let left = paragraph([100.0, 100.0, 100.0]);
+    let centre = paragraph([185.6, 156.8, 171.2]);
+    let right = paragraph([271.2, 213.6, 242.4]);
+    assert_eq!(left.align, Align::Left);
+    assert_eq!(centre.align, Align::Center);
+    assert_eq!(right.align, Align::Right);
+    for block in [&left, &centre, &right] {
+        assert!((block.leading - 14.0).abs() < 0.01, "{block:?}");
+        assert_eq!(block.editor_text.split('\n').count(), 3);
+        assert_eq!(block.row_rects.len(), 3, "a rectangle for each row: {block:?}");
+        // Rows are 14 pt apart (their boxes' tops are at 700, 686 and 672 plus the ascent).
+        assert!((block.row_rects[0][1] - block.row_rects[1][1] - 14.0).abs() < 0.01, "{block:?}");
+    }
+}
+
 /// #314: text and images drawn by (nested) form XObjects are read for export, placed through
 /// every form matrix and set in each form's own fonts; editing still sees only the page's text.
 #[test]
@@ -2988,6 +3025,123 @@ fn reading_follows_form_xobjects() {
     let own = images::page_images(&doc, 0).unwrap();
     assert_eq!(own.len(), 1, "{own:?}");
     assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
+}
+
+/// Export to Word keeps table borders and cell backgrounds: shaded rectangles and ruling lines are
+/// read with their colour, in user space, whether drawn on the page, as a thin fill or in a form.
+#[test]
+fn reading_vectors_reports_fills_and_rules() {
+    let page = stream(
+        "",
+        "q 0.8 0.9 1 rg 10 700 100 20 re f Q\n\
+         1 0 0 RG 2 w 10 690 m 110 690 l S\n\
+         0 0 0 RG 0 w 10 680 100 -20 re S\n\
+         0 1 0 rg 20 600 80 0.5 re f\n\
+         q 1 0 0 1 0 -100 cm /Fm1 Do Q\n\
+         1 1 1 rg 0 0 50 50 re f\n\
+         0 0 1 rg 300 300 m 350 300 l 325 340 l f",
+    );
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 612 792]", "0 0 0 1 k 200 500 60 30 re f");
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Fm1 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        &form,
+    ]);
+    let v = reading_vectors(&doc, 0).unwrap();
+    let close = |a: f64, b: f64| (a - b).abs() < 0.01;
+    // The shaded band, the form's black box (CMYK black, moved down 100) and the white square;
+    // not the triangle.
+    assert_eq!(v.fills.len(), 3, "{v:?}");
+    assert_eq!(v.fills[0].rect, [10.0, 700.0, 110.0, 720.0]);
+    assert!(close(v.fills[0].color[0], 0.8) && close(v.fills[0].color[2], 1.0), "{v:?}");
+    assert_eq!(v.fills[1].rect, [200.0, 400.0, 260.0, 430.0]);
+    assert_eq!(v.fills[1].color, [0.0; 3]);
+    assert_eq!(v.fills[2].color, [1.0; 3]);
+    // A 2 pt red line; the four edges of the stroked box (hairline); and the thin fill.
+    let line = v.rules[0];
+    assert_eq!(line.rect, [10.0, 690.0, 110.0, 690.0]);
+    assert!(close(line.width, 2.0) && line.color == [1.0, 0.0, 0.0], "{line:?}");
+    assert_eq!(v.rules.len(), 6, "{v:?}");
+    assert!(v.rules.iter().any(|r| r.rect == [10.0, 660.0, 10.0, 680.0]));
+    let thin = v.rules.last().unwrap();
+    assert!(thin.rect[0] == 20.0 && thin.rect[2] == 100.0 && close(thin.rect[1], 600.25) && thin.color == [0.0, 1.0, 0.0], "{thin:?}");
+}
+
+/// Export to Word keeps bullet dots, rating lights and chart wedges: filled polygons and any path
+/// with a curve are read as shapes with their outline, colour and stroke; rectangles are not.
+#[test]
+fn reading_vectors_reports_dots_wedges_and_polygons_as_shapes() {
+    let page = stream(
+        "",
+        "0 1 0 rg 55 50 m 55 52.76 52.76 55 50 55 c 47.24 55 45 52.76 45 50 c 47.24 45 47.24 45 50 45 c 52.76 45 55 47.24 55 50 c f\n\
+         0 0 1 rg 300 300 m 350 300 l 325 340 l f\n\
+         1 0 0 rg 0 0 1 RG 3 w 200 200 m 250 200 l 250 220 230 250 200 250 c h B\n\
+         0.5 g 10 10 20 20 re f",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        &page,
+    ]);
+    let v = reading_vectors(&doc, 0).unwrap();
+    assert_eq!(v.fills.len(), 1, "only the rectangle: {v:?}");
+    assert_eq!(v.shapes.len(), 3, "{v:?}");
+    let dot = &v.shapes[0];
+    assert_eq!(dot.fill, Some([0.0, 1.0, 0.0]));
+    assert_eq!(dot.stroke, None);
+    assert_eq!(dot.rect, [45.0, 45.0, 55.0, 55.0]);
+    assert_eq!(dot.path.len(), 6, "move, four curves, close: {dot:?}");
+    assert!(matches!(dot.path[1], crate::vector::PathSeg::Curve(..)) && matches!(dot.path[5], crate::vector::PathSeg::Close));
+    let triangle = &v.shapes[1];
+    assert_eq!(triangle.fill, Some([0.0, 0.0, 1.0]));
+    assert_eq!(triangle.path.len(), 4, "{triangle:?}");
+    let wedge = &v.shapes[2];
+    assert_eq!(wedge.fill, Some([1.0, 0.0, 0.0]));
+    assert_eq!(wedge.stroke, Some(([0.0, 0.0, 1.0], 3.0)));
+}
+
+/// Shapes are capped in count and in size: a million dots, or one outline of a million segments,
+/// cannot exhaust memory.
+#[test]
+fn reading_vectors_bounds_shapes() {
+    let dot = "5 0 m 5 3 3 5 0 5 c 0 0 5 5 5 0 c f\n";
+    let mut content = dot.repeat(crate::vector::MAX_VECTORS + 500);
+    content.push_str("0 0 m ");
+    content.push_str(&"1 1 l ".repeat(5000));
+    content.push_str("f\n");
+    let page = stream("", &content);
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        &page,
+    ]);
+    assert_eq!(reading_vectors(&doc, 0).unwrap().shapes.len(), crate::vector::MAX_VECTORS);
+    let long = stream("", &format!("0 0 m {}f\n", "1 1 l 2 5 l ".repeat(2000)));
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        &long,
+    ]);
+    assert!(reading_vectors(&doc, 0).unwrap().shapes.is_empty(), "an outline past the segment cap is not read");
+}
+
+/// A page that draws a million rectangles reads as far as the cap and stops.
+#[test]
+fn reading_vectors_is_bounded() {
+    let content = "1 0 0 rg 0 0 10 10 re f\n".repeat(crate::vector::MAX_VECTORS + 500);
+    let page = stream("", &content);
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        &page,
+    ]);
+    assert_eq!(reading_vectors(&doc, 0).unwrap().fills.len(), crate::vector::MAX_VECTORS);
 }
 
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but

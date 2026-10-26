@@ -206,15 +206,32 @@ impl crate::Document {
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
                         let f = b.base_font.to_ascii_lowercase();
+                        let family = b.base_font.clone();
+                        let symbols = |t: &str| pdfcraft_export::symbols_to_unicode(&family, t);
                         pdfcraft_export::Block {
-                            text: b.text,
+                            text: symbols(&b.text),
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
                             bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
                             italic: f.contains("italic") || f.contains("oblique"),
+                            font: b.base_font,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
                             heading_level: b.heading_level,
+                            layout: pdfcraft_export::Layout {
+                                lines: if b.rows.len() > 1 { b.editor_text.split('\n').map(|row| symbols(row.trim())).collect() } else { Vec::new() },
+                                align: match b.align {
+                                    pdfcraft_edit::Align::Center => pdfcraft_export::Align::Center,
+                                    pdfcraft_edit::Align::Right => pdfcraft_export::Align::Right,
+                                    _ => pdfcraft_export::Align::Left,
+                                },
+                                leading: b.leading * unit,
+                                rects: if b.rows.len() > 1 && b.row_rects.len() == b.rows.len() {
+                                    b.row_rects.iter().map(|r| visible_rect(*r)).collect()
+                                } else {
+                                    Vec::new()
+                                },
+                            },
                         }
                     })
                     .collect();
@@ -232,7 +249,39 @@ impl crate::Document {
                         })
                     })
                     .collect();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images }
+                // The ruling lines and filled rectangles: table borders and cell backgrounds.
+                let vectors = pdfcraft_edit::reading_vectors(cos, i).unwrap_or_default();
+                let fills = vectors.fills.iter().map(|f| pdfcraft_export::Fill { rect: visible_rect(f.rect), color: f.color }).collect();
+                let rules = vectors
+                    .rules
+                    .iter()
+                    .map(|r| pdfcraft_export::Rule { rect: visible_rect(r.rect), width: r.width * unit, color: r.color })
+                    .collect();
+                // Dots, wedges and other outlines, with their points on the visible page.
+                let point = |p: [f64; 2]| {
+                    let a = info.user_to_view(p[0] as f32, p[1] as f32);
+                    [a[0] as f64, (info.height - a[1]) as f64]
+                };
+                let shapes = vectors
+                    .shapes
+                    .iter()
+                    .map(|s| pdfcraft_export::Shape {
+                        rect: visible_rect(s.rect),
+                        path: s
+                            .path
+                            .iter()
+                            .map(|seg| match *seg {
+                                pdfcraft_edit::PagePathSeg::Move(p) => pdfcraft_export::Seg::Move(point(p)),
+                                pdfcraft_edit::PagePathSeg::Line(p) => pdfcraft_export::Seg::Line(point(p)),
+                                pdfcraft_edit::PagePathSeg::Curve(a, b, c) => pdfcraft_export::Seg::Curve(point(a), point(b), point(c)),
+                                pdfcraft_edit::PagePathSeg::Close => pdfcraft_export::Seg::Close,
+                            })
+                            .collect(),
+                        fill: s.fill,
+                        stroke: s.stroke.map(|(c, w)| (c, w * unit)),
+                    })
+                    .collect();
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, fills, rules, shapes }
             })
             .collect();
         (pages, truncated)

@@ -367,9 +367,11 @@ mod tests {
                     size: 28.0,
                     bold: true,
                     italic: false,
+                    font: String::new(),
                     color: [0.1, 0.2, 0.3],
                     rotation: 0.0,
                     heading_level: None,
+                    layout: crate::Layout::default(),
                 },
                 Block {
                     text: "Revenue grew 25% year over year across all regions.".into(),
@@ -377,9 +379,11 @@ mod tests {
                     size: 14.0,
                     bold: false,
                     italic: false,
+                    font: String::new(),
                     color: [0.0; 3],
                     rotation: 0.0,
                     heading_level: None,
+                    layout: crate::Layout::default(),
                 },
                 Block {
                     text: "Operational expenses remained flat.".into(),
@@ -387,9 +391,11 @@ mod tests {
                     size: 14.0,
                     bold: false,
                     italic: true,
+                    font: String::new(),
                     color: [0.0; 3],
                     rotation: 0.0,
                     heading_level: None,
+                    layout: crate::Layout::default(),
                 },
             ],
             images: vec![Image {
@@ -399,6 +405,7 @@ mod tests {
                 size: [228.0, 150.0],
                 rotation: 0.0,
             }],
+            ..Page::default()
         }
     }
 
@@ -510,9 +517,11 @@ mod tests {
             size: 12.0,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: crate::Layout::default(),
         };
         let table_page = Page {
             width: 612.0,
@@ -526,6 +535,7 @@ mod tests {
                 cell("100%", 200.0, 320.0),
             ],
             images: Vec::new(),
+            ..Page::default()
         };
         let bytes = pptx(&[sample_page(), table_page], "Two");
         let parts = entries(&bytes);
@@ -611,9 +621,11 @@ mod tests {
             size,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: crate::Layout::default(),
         };
         let mut blocks = vec![huge("Title", f64::MAX, 500.0)];
         for k in 0..40 {
@@ -624,7 +636,7 @@ mod tests {
         let images = (0..40)
             .map(|k| Image { ext: "png", bytes: vec![0; 4], rect: [0.0, -1e300, 1e-300, 1e300 - k as f64], size: [1.0, 1.0], rotation: 0.0 })
             .collect();
-        let p = Page { width: f64::MAX, height: f64::NAN, blocks, images };
+        let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, ..Page::default() };
         let bytes = pptx(&[p], "Hostile");
         let slide = part(&bytes, "ppt/slides/slide1.xml");
         assert!(slide.contains("Title") && slide.contains("<p:pic>"), "the slide is still written");
@@ -677,9 +689,11 @@ mod tests {
             size: sz,
             bold: false,
             italic: false,
+            font: String::new(),
             color: [0.0; 3],
             rotation: 0.0,
             heading_level: None,
+            layout: crate::Layout::default(),
         };
         let p = Page {
             width: 720.0,
@@ -692,9 +706,11 @@ mod tests {
                     size: 20.0,
                     bold: true,
                     italic: false,
+                    font: String::new(),
                     color: [0.0; 3],
                     rotation: 0.0,
                     heading_level: None,
+                    layout: crate::Layout::default(),
                 },
                 // Table where one cell has a very large number (e.g. 36 pt callout in the table)
                 cell("Metric", 72.0, 400.0, 100.0, 12.0),
@@ -705,6 +721,7 @@ mod tests {
                 cell("100%", 200.0, 320.0, 100.0, 12.0),
             ],
             images: Vec::new(),
+            ..Page::default()
         };
         let bytes = pptx(&[p], "Table Check");
         let slide_xml = part(&bytes, "ppt/slides/slide1.xml");

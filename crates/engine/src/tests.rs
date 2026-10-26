@@ -3973,6 +3973,114 @@ trailer <</Root 1 0 R>>
 }
 
 #[test]
+fn exporting_office_files_keeps_table_borders_backgrounds_and_symbol_bullets() {
+    // A shaded header row with ruling lines around a 2x2 grid, and a Word bullet: Symbol code
+    // 0xB7, which a ToUnicode map gives as the private-use U+F0B7.
+    let content = "0.8 0.8 0.8 rg 60 700 300 20 re f 0 g \
+0.5 w 60 722 m 360 722 l S 60 698 m 360 698 l S 60 676 m 360 676 l S 60 676 m 60 722 l S 200 676 m 200 722 l S 360 676 m 360 722 l S \
+BT /F1 11 Tf 72 706 Td (Item) Tj 140 0 Td (Qty) Tj ET \
+BT /F1 11 Tf 72 684 Td (Bolts) Tj 140 0 Td (12) Tj ET \
+BT /F2 11 Tf 72 600 Td <B7> Tj /F1 11 Tf 14 0 Td (A bullet item that is long enough to be the body size.) Tj ET";
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <B7> <F0B7> endbfchar endcmap end end";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol /FirstChar 183 /LastChar 183 /Widths [460] /ToUnicode 7 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    for (i, o) in objs.iter().enumerate() {
+        pdf.push_str(&format!("{} 0 obj\n{o}\nendobj\n", i + 1));
+    }
+    pdf.push_str("trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let mut s = Session::new();
+    let id = s.open("table.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let page = &d.export_pages()[0];
+    assert_eq!(page.fills.len(), 1, "{:?}", page.fills);
+    assert_eq!(page.rules.len(), 6, "{:?}", page.rules);
+    let docx = d.export_office(compare::OfficeFormat::Docx);
+    assert!(docx.starts_with(b"PK"));
+    let html = String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap();
+    assert!(html.contains('•') && !html.contains('\u{F0B7}'), "the Symbol bullet is a real bullet: {html}");
+}
+
+#[test]
+fn exporting_office_files_keeps_dots_and_wedges() {
+    // A green rating dot beside a label and a red filled wedge: filled curves, not rectangles.
+    let content = "0 1 0 rg 55 50 m 55 52.76 52.76 55 50 55 c 47.24 55 45 52.76 45 50 c 47.24 45 47.24 45 50 45 c 52.76 45 55 47.24 55 50 c f \
+BT /F1 11 Tf 62 46 Td (Low risk) Tj ET \
+1 0 0 rg 200 200 m 250 200 l 250 220 230 250 200 250 c f";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    for (i, o) in objs.iter().enumerate() {
+        pdf.push_str(&format!("{} 0 obj\n{o}\nendobj\n", i + 1));
+    }
+    pdf.push_str("trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let mut s = Session::new();
+    let id = s.open("dots.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let page = &d.export_pages()[0];
+    assert_eq!(page.shapes.len(), 2, "{:?}", page.shapes);
+    // On the displayed page, y runs up from the bottom edge: the dot is at (45..55, 45..55).
+    let dot = &page.shapes[0];
+    assert_eq!(dot.fill, Some([0.0, 1.0, 0.0]));
+    assert!(dot.rect.iter().zip([45.0, 45.0, 55.0, 55.0]).all(|(a, b)| (a - b).abs() < 0.01), "{:?}", dot.rect);
+    assert_eq!(dot.path.len(), 6, "{:?}", dot.path);
+    assert!(d.export_office(compare::OfficeFormat::Docx).starts_with(b"PK"));
+}
+
+#[test]
+fn exporting_office_files_keeps_rotated_table_text_rotated() {
+    // A label turned a quarter, in a narrow cell down the side of a table, however the PDF
+    // turns it, is one rotated run, which Word gets as a vertical text box.
+    for (n, side) in [
+        "BT /F1 11 Tf 0 1 -1 0 80 610 Tm (Side label) Tj ET",
+        "q 0 1 -1 0 80 610 cm BT /F1 11 Tf 0 0 Td (Side label) Tj ET Q",
+        "BT /F1 1 Tf 0 11 -11 0 80 610 Tm (Side label) Tj ET",
+        "BT /F1 11 Tf 0 -1 1 0 70 700 Tm (Side label) Tj ET",
+        "BT /F1 11 Tf 0 1 -1 0 80 610 Tm [(S) 0 (ide) 0 ( label)] TJ ET",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let content = format!(
+            "0.5 w 60 600 m 360 600 l S 60 700 m 360 700 l S 60 600 m 60 700 l S 90 600 m 90 700 l S 360 600 m 360 700 l S \
+{side} BT /F1 11 Tf 100 650 Td (Upright cell) Tj ET"
+        );
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        ];
+        let mut pdf = String::from("%PDF-1.4\n");
+        for (i, o) in objs.iter().enumerate() {
+            pdf.push_str(&format!("{} 0 obj\n{o}\nendobj\n", i + 1));
+        }
+        pdf.push_str("trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        let mut s = Session::new();
+        let id = s.open("rotated.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+        let d = s.get(id).unwrap();
+        let page = &d.export_pages()[0];
+        let label = page.blocks.iter().find(|b| b.text == "Side label").unwrap_or_else(|| panic!("variant {n}: {:?}", page.blocks));
+        assert!((label.rotation.abs() - 90.0).abs() < 0.1, "variant {n}: {}", label.rotation);
+        assert!(label.rect[3] - label.rect[1] > 3.0 * (label.rect[2] - label.rect[0]), "variant {n}: a tall, narrow box {:?}", label.rect);
+        assert!(d.export_office(compare::OfficeFormat::Docx).starts_with(b"PK"));
+    }
+}
+
+#[test]
 fn exporting_office_files_keeps_text_colour() {
     // #526: a dark green heading came out black in Word.
     let content = "BT /F1 24 Tf 0.05 0.23 0.18 rg 72 700 Td (Annual Report) Tj ET \
