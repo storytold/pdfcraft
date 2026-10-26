@@ -674,6 +674,26 @@
 	The value is shown as typed.	הערך מוצג כפי שהוקלד.
 	Decimal places:	מספר ספרות אחרי הנקודה העשרונית:
 	Separator style:	סגנון מפרידים:
+	Currency symbol:	סמל המטבע:
+	Before the number	לפני המספר
+	Negative number style:	תבנית מספר שלילי:
+	Format:	תבנית:
+	Custom:	מותאם אישית:
+	Zip Code	מיקוד
+	Zip Code + 4	מיקוד + 4
+	Phone Number	מספר טלפון
+	Social Security Number	מספר ביטוח לאומי
+	Arbitrary Mask	מסכה מותאמת
+	Mask:	מסכה:
+	9 digit, A letter, O letter or digit, X any character	9 ספרה, A אות, O אות או ספרה, X כל תו
+	Example: {sample}	דוגמה: {sample}
+	Field value is not validated	ערך השדה אינו עובר אימות
+	Field value is in range:	ערך השדה בטווח:
+	Add an Action	הוספת פעולה
+	Select Trigger:	בחירת אירוע מפעיל:
+	Mouse Up	שחרור לחצן העכבר
+	Mouse Down	לחיצה על לחצן העכבר
+	Mouse Enter	כניסת מצביע העכבר
 	Mouse Exit	יציאה עם העכבר
 	On Focus	בעת קבלת מיקוד
 	On Blur	בעת איבוד מיקוד
@@ -921,3 +941,179 @@
 	Validity ends	סיום התוקף
 	Public key	מפתח ציבורי
 	Key usage	שימוש במפתח
+	Not present	לא קיים
+	Self-signed	חתימה עצמית
+	Edit Action	עריכת פעולה
+	New Action	פעולה חדשה
+	Action name:	שם הפעולה:
+	Description:	תיאור:
+	Steps	שלבים
+	Add the steps this action runs, in order.	הוסף את שלבי הפעולה לפי סדר הביצוע.
+	Add Step	הוספת שלב
+	An action with this name already exists.	כבר קיימת פעולה בשם זה.
+	New Action…	פעולה חדשה…
+	Edit…	עריכה…
+	Add watermark	הוספת סימן מים
+	Add header	הוספת כותרת עליונה
+	Add footer	הוספת כותרת תחתונה
+	Set document title	הגדרת כותרת המסמך
+	Run a JavaScript	הרצת JavaScript
+	Prepare for Distribution	הכנה להפצה
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	הסרת מידע מוסתר והשטחת הערות ושדות טופס, כדי שהנמענים יראו את העמודים בלבד.
+	Optimize Scanned Documents	מיטוב מסמכים סרוקים
+	Make scans searchable, then make them smaller.	הפיכת סריקות לניתנות לחיפוש ולאחר מכן הקטנתן.
+	Add Page Numbers	הוספת מספרי עמודים
+	Number every page in the footer.	הוספת מספר לכל עמוד בכותרת התחתונה.
+	Mark as Confidential	סימון כסודי
+	A diagonal CONFIDENTIAL watermark on every page.	הוספת סימן מים CONFIDENTIAL באלכסון בכל עמוד.
+	Sanitize Documents	ניקוי מסמכים
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	הסרת מידע מוסתר, מטא־נתונים, סקריפטים ותוכן מוטמע, וכתיבה מחדש של הקבצים.
+	Type text	הקלדת טקסט
+	Text to insert	הטקסט להוספה
+	Replacement text	טקסט חלופי
+	Edit text…	עריכת טקסט…
+	Add a sticky note here	הוספת פתק נדבק כאן
+	{kind} Properties	מאפייני {kind}
+	Appearance	מראה
+	General	כללי
+	Review History	היסטוריית סקירה
+	This comment's appearance can't be changed yet.	עדיין אי אפשר לשנות את מראה ההערה הזו.
+	Icon	סמל
+	Thickness	עובי
+	Modified	שונה
+	No status has been set.	לא הוגדר מצב.
+	Compare Files	השוואת קבצים
+	Old file:	הקובץ הישן:
+	Open the older version first	פתח תחילה את הגרסה הישנה
+	New file:	הקובץ החדש:
+	Text is compared word by word; the differences are shown on the new file.	הטקסטים מושווים מילה אחר מילה; ההבדלים מוצגים בקובץ החדש.
+	Compare this file with an older version: Compare files… in All tools.	להשוואת הקובץ לגרסה ישנה: בחר „השוואת קבצים…” תחת „כל הכלים”.
+	No differences in the text.	אין הבדלים בטקסט.
+	{n} {kind}	{n} {kind}
+	Inserted	נוסף
+	Deleted	נמחק
+	Replaced	הוחלף
+	Visual	חזותי
+	Mark as comments	סימון כהערות
+	Report…	דוח…
+	{kind} · page {p}	{kind} · עמוד {p}
+	Set Alternate Text	הגדרת טקסט חלופי
+	This document has no tagged figures.	אין במסמך זה איורים מתויגים.
+	 on page {p}	 בעמוד {p}
+	Figure {i} of {n}{page}	איור {i} מתוך {n}{page}
+	No preview	אין תצוגה מקדימה
+	Alternate text	טקסט חלופי
+	Describe the figure	תיאור האיור
+	Decorative figure	איור דקורטיבי
+	Previous figure	האיור הקודם
+	Next figure	האיור הבא
+	Save & Close	שמירה וסגירה
+	Accessibility Checker Options	אפשרויות בודק הנגישות
+	Report Options	אפשרויות דוח
+	Create accessibility report	יצירת דוח נגישות
+	Page Range	טווח עמודים
+	All pages in document	כל עמודי המסמך
+	Checking Options ({on} of 32 in all categories)	אפשרויות בדיקה ({on} מתוך 32 בכל הקטגוריות)
+	Show this dialog when the Checker starts	הצגת תיבת דו־שיח זו בעת הפעלת הבודק
+	Select All	בחירת הכול
+	Clear All	ניקוי הכול
+	Start Checking	התחלת הבדיקה
+	This document hasn't been checked yet.	המסמך עדיין לא נבדק.
+	No issues found	לא נמצאו בעיות
+	1 issue	בעיה אחת
+	{n} issues	{n} בעיות
+	{label} (1 issue)	{label} (בעיה אחת)
+	{label} ({n} issues)	{label} ({n} בעיות)
+	Check again	בדיקה חוזרת
+	Report	דוח
+	Show the accessibility report	הצגת דוח הנגישות
+	Collapse	כיווץ
+	Expand	הרחבה
+	{rule} - {status}	{rule} - {status}
+	Passed	עבר
+	Failed	נכשל
+	Needs manual check	נדרשת בדיקה ידנית
+	Skipped	דולג
+	Fix	תיקון
+	Skip Rule	דילוג על הכלל
+	Explain	הסבר
+	Check Again	בדיקה חוזרת
+	Show Report	הצגת הדוח
+	Options…	אפשרויות…
+	Go to the page	מעבר לעמוד
+	Page Content	תוכן העמוד
+	Forms	טפסים
+	Tables	טבלאות
+	Lists	רשימות
+	Headings	כותרות
+	Accessibility permission flag	דגל הרשאת נגישות
+	Accessibility permission flag is set	דגל הרשאת הנגישות מוגדר
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	הגדרות האבטחה חייבות לאפשר לטכנולוגיה מסייעת לקרוא את התוכן ("Enable text access for screen reader devices"). שנה את הגדרות האבטחה של המסמך כדי לאפשר זאת.
+	Image-only PDF	PDF שמכיל תמונות בלבד
+	Document is not image-only PDF	המסמך אינו PDF שמכיל תמונות בלבד
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	אי אפשר להקריא או לחפש בעמודים שמכילים תמונות של טקסט בלבד. השתמש בזיהוי טקסט (OCR) כדי להוסיף שכבת טקסט.
+	Document is tagged PDF	המסמך הוא PDF מתויג
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	תגיות מעניקות למסמך מבנה לוגי שטכנולוגיה מסייעת יכולה לעקוב אחריו. תייג את המסמך (תיוג PDF אוטומטי).
+	Logical Reading Order	סדר קריאה לוגי
+	Document structure provides a logical reading order	מבנה המסמך מספק סדר קריאה לוגי
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	בדוק שהתגיות נקראות לפי הסדר שבו קורא רואה היה קורא. השתמש בכלי סדר הקריאה או בחלונית התגיות כדי לתקן זאת.
+	Primary language	שפה ראשית
+	Text language is specified	שפת הטקסט מוגדרת
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	קוראי מסך בוחרים את הקול לפי שפת המסמך. הגדר זאת במאפייני המסמך > מתקדם > שפה.
+	Document title is showing in title bar	כותרת המסמך מוצגת בשורת הכותרת
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	החלון צריך להציג כותרת משמעותית ולא את שם הקובץ. הגדר כותרת ובחר תצוגה ראשונית > הצג: כותרת המסמך.
+	Bookmarks are present in large documents	במסמכים גדולים קיימות סימניות
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	מסמכים שאורכם יותר מ־20 עמודים זקוקים לסימניות לניווט. הוסף סימניות למקטעים העיקריים.
+	Color contrast	ניגודיות צבעים
+	Document has appropriate color contrast	ניגודיות הצבעים במסמך מתאימה
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	הניגודיות בין הטקסט לרקע צריכה להיות מספקת לאנשים עם ראייה ירודה. בדוק את הצבעים חזותית או בעזרת כלי לבדיקת ניגודיות.
+	Tagged content	תוכן מתויג
+	All page content is tagged	כל תוכן העמוד מתויג
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	כל מה שמופיע בעמוד חייב להיות מתויג או מסומן כפריט דקורטיבי (קישוט, כותרות עליונות ותחתונות). תייג את התוכן שאינו מתויג.
+	Tagged annotations	הערות מתויגות
+	All annotations are tagged	כל ההערות מתויגות
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	הערות, קישורים ושדות חייבים להופיע בעץ התגיות כדי שיוכרזו. תייג את ההערות.
+	Tab order	סדר מעבר בין שדות
+	Tab order is consistent with structure order	סדר המעבר בין שדות תואם לסדר המבני
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	בעמודים עם קישורים, הערות או שדות, המעבר באמצעות Tab צריך להתבצע לפי סדר המבנה. התיקון מגדיר לכל עמוד את סדר המעבר כ„שימוש במבנה המסמך”.
+	Character encoding	קידוד תווים
+	Reliable character encoding is provided	קידוד התווים אמין
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	גופנים צריכים למפות את התווים שלהם ל־Unicode כדי שאפשר יהיה לקרוא ולהעתיק את הטקסט. תקן את הגופנים או צור את ה־PDF מחדש.
+	Tagged multimedia	מולטימדיה מתויגת
+	All multimedia objects are tagged	כל אובייקטי המולטימדיה מתויגים
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	יש לתייג וידאו, שמע ותוכן עשיר כדי שיוכלו להיות מוכרזים. תייג את הערות המולטימדיה.
+	Screen flicker	הבהוב מסך
+	Page will not cause screen flicker	העמוד אינו גורם להבהוב מסך
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	אנימציה מהבהבת עלולה לגרום להתקפים. בדוק סקריפטים ומדיה לאיתור הבהובים.
+	Scripts	סקריפטים
+	No inaccessible scripts	אין סקריפטים שאינם נגישים
+	Timed responses	תגובות מוגבלות בזמן
+	Page does not require timed responses	העמוד אינו מחייב תגובה בתוך זמן מוגדר
+	People may need more time to respond. Check that nothing has a time limit.	אנשים עשויים להזדקק לזמן נוסף לתגובה. בדוק שאין מגבלת זמן.
+	Navigation links	קישורי ניווט
+	Navigation links are not repetitive	קישורי הניווט אינם חוזרים על עצמם
+	Repeated navigation links should be skippable. Check links that appear on every page.	יש לאפשר לדלג על קישורי ניווט חוזרים. בדוק קישורים שמופיעים בכל עמוד.
+	Tagged form fields	שדות טופס מתויגים
+	All form fields are tagged	כל שדות הטופס מתויגים
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	שדות טופס חייבים להיות בעץ התגיות (תגיות Form) כדי שיוכרזו. תייג את שדות הטופס.
+	Field descriptions	תיאורי שדות
+	All form fields have description	לכל שדות הטופס יש תיאור
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	לכל שדה דרוש תיאור כלי שמסביר מה להזין. הוסף אותו במאפייני השדה > כללי > תיאור כלי.
+	Figures alternate text	טקסט חלופי לאיורים
+	Figures require alternate text	איורים זקוקים לטקסט חלופי
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	לתמונות דרוש טקסט חלופי שמתאר אותן, או שיש לסמן אותן כדקורטיביות. הוסף טקסט חלופי לכל איור.
+	Nested alternate text	טקסט חלופי מקונן
+	Alternate text that will never be read	טקסט חלופי שלא יוקרא לעולם
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	טקסט חלופי בתוך רכיב שכבר מוגדר לו טקסט חלופי לא יוקרא. הסר את הטקסט החלופי הפנימי.
+	Associated with content	משויך לתוכן
+	Alternate text must be associated with some content	יש לשייך טקסט חלופי לתוכן
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	טקסט חלופי ברכיב שאינו משויך לתוכן בעמוד לעולם לא יגיע לקורא. הסר אותו או קשר את הרכיב לתוכן.
+	Hides annotation	מסתיר הערה
+	Alternate text should not hide annotation	טקסט חלופי לא אמור להסתיר הערה
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	טקסט חלופי ברכיב שמכיל קישור או שדה מסתיר את ההערה מטכנולוגיה מסייעת. העבר את הטקסט החלופי.
+	Other elements alternate text	טקסט חלופי לרכיבים אחרים
+	Other elements that require alternate text	רכיבים אחרים שזקוקים לטקסט חלופי
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	נוסחאות ורכיבים דומים שאינם טקסט זקוקים לטקסט חלופי. הוסף להם טקסט חלופי.
+	Rows	שורות
+	TR must be a child of Table, THead, TBody, or TFoot	TR חייב להיות רכיב בן של Table, THead, TBody או TFoot
+	Table cells belong in a row. Fix the table's tags.	תאי טבלה צריכים להיות משויכים לשורה. תקן את תגיות הטבלה.
