@@ -199,6 +199,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-25 · M0:** Rebased onto main `86a4120a` (egui 0.37 and shared side panels). Simplified four conditions in image scanning, comb-field borders, comparison shading and initial-view navigation, plus two author-name fallbacks introduced by the migration, to remove six Clippy warnings without changing behavior. Native-only worker state, save-dialog helpers, installed-font variants, and locale parsing are excluded from production Wasm builds to remove ten remaining unused/dead-code warnings; portable test helpers remain available, and worker-only tests use matching native gates. Readiness and parity estimates unchanged.
+
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.

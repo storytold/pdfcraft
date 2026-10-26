@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
-exclude = ["vendor"]
+exclude = ["vendor", ".work"]
 default-members = ["crates/*", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask"]
 
 [workspace.package]

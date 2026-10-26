@@ -187,12 +187,14 @@ fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors 
 /// its scale, tile or tag: the canvas tags every zoom level and tile anew, so a wider key would
 /// let one pathological page tie up a worker for the full watchdog limit per zoom and per tile
 /// (exhausting worker replacements) and re-parse the document for every new request.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct RequestFailureKey {
     page: usize,
     kind: RequestKind,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<RenderRequest> for RequestFailureKey {
     fn from(req: RenderRequest) -> Self {
         Self { page: req.page, kind: req.kind }
@@ -253,6 +255,7 @@ struct AtomicRenderStats {
 }
 
 impl AtomicRenderStats {
+    #[cfg(not(target_arch = "wasm32"))]
     fn record_request(&self, req: RenderRequest) {
         self.render_requests.fetch_add(1, Ordering::Relaxed);
         if req.tile.is_some() {
@@ -557,6 +560,7 @@ struct Shared {
     busy: Mutex<Vec<Option<Busy>>>,
     /// Exact requests the watchdog gave up on: answered with an error at once, so a pathological
     /// request cannot trap every worker in turn while other scales, tiles, or generations remain usable.
+    #[cfg(not(target_arch = "wasm32"))]
     stuck: Mutex<std::collections::HashSet<RequestFailureKey>>,
     stats: AtomicRenderStats,
     /// Per worker id: set to stop that worker's render at its next content operator once nobody
@@ -731,8 +735,11 @@ pub struct RenderPool {
     shared: Arc<Shared>,
     wake: Mutex<Vec<SyncSender<()>>>,
     results: ResultReceiver,
+    #[cfg(not(target_arch = "wasm32"))]
     results_tx: Arc<WorkQueue>,
+    #[cfg(not(target_arch = "wasm32"))]
     bytes: Arc<Vec<u8>>,
+    #[cfg(not(target_arch = "wasm32"))]
     config: RenderConfig,
     _workers: Mutex<Vec<JoinHandle<()>>>,
     stuck_after: std::time::Duration,
@@ -751,14 +758,18 @@ impl RenderPool {
     fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool) -> Self {
         let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
         let shared = Arc::new(Shared::default());
+        #[cfg(not(target_arch = "wasm32"))]
         let results_tx = shared.queue.clone();
         let results = ResultReceiver(shared.queue.clone());
         let mut pool = Self {
             shared,
             wake: Mutex::new(Vec::new()),
             results,
+            #[cfg(not(target_arch = "wasm32"))]
             results_tx,
+            #[cfg(not(target_arch = "wasm32"))]
             bytes: bytes.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
             config: config.clone(),
             _workers: Mutex::new(Vec::new()),
             stuck_after: STUCK_AFTER,
@@ -2072,6 +2083,7 @@ mod tests {
         }
         assert!(indexed[0] > 180, "the palette red must not render near black: {indexed:?}");
     }
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
         use super::*;
@@ -2104,6 +2116,7 @@ mod tests {
         assert!(pool.try_recv().is_none());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_request_being_rendered_is_not_rendered_again() {
         use super::*;
@@ -2273,6 +2286,7 @@ mod tests {
         assert!(pool.try_recv().is_none(), "obsolete request A did not publish a stale result");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn re_sent_queues_render_each_page_once() {
         use super::*;
@@ -2508,6 +2522,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
+    #[cfg(not(target_arch = "wasm32"))]
     const ONE_PAGE_TWICE: &[u8] = b"%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >> endobj
@@ -3482,6 +3497,7 @@ trailer << /Root 1 0 R >>
         assert!(pool.try_recv().is_none());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn dropping_the_pool_cancels_its_renders() {
         const TEXT: &[u8] = b"%PDF-1.7
@@ -3514,6 +3530,7 @@ trailer << /Root 1 0 R >>
         assert!(!blue(&settings) && glyphs(&settings) == 0, "once the pool is gone, interpretation stops before drawing");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_watchdog_stops_the_render_it_gives_up_on() {
         let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
