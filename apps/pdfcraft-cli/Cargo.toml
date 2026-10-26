@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-cli"
-description = "PdfCraft command-line tool: inspect, render and robustness-check PDFs"
+description = "PdfCraft command-line tool: inspect, render, view and robustness-check PDFs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -26,11 +26,13 @@ base64 = "0.23"
 [dev-dependencies]
 # Decodes `render` output in tests/it/owner_password.rs; already a dependency of the engine.
 png = "0.18"
+proptest = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-# `geteuid` for `ui`'s control-file owner check: safe, so no `unsafe` libc call here.
+# `geteuid` for `ui`'s control-file owner check, and the terminal's size and raw mode for `view`
+# (`termios`): safe, so no `unsafe` libc call here.
 # Already in Cargo.lock through the GUI crates.
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["process", "termios"] }
 
 [build-dependencies]
 # VERSIONINFO for pdfcraft-cli.exe; build.rs only uses it when targeting Windows.

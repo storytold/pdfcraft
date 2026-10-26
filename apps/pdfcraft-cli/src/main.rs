@@ -20,6 +20,8 @@
 #[cfg(feature = "mcp")]
 mod automation_args;
 mod batch;
+#[cfg(unix)]
+mod view;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -59,6 +61,13 @@ const USAGE: &str = concat!(
 pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
                                                           (includes any declared PDF/A or PDF/UA level)
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
+pdfcraft-cli view   <file.pdf> [--pages 1,3-5] [--zoom auto|width|N] [--pager | --no-pager]
+                      [--compression auto|fast|small] [--protocol auto|kitty] [--password PW]
+                                                           show pages in this terminal: kitty, Ghostty, WezTerm
+                                                           (kitty graphics protocol, tmux too; macOS, Linux and FreeBSD);
+                                                           more than a page opens a pager, two pages side by side when
+                                                           the window is wide enough; - and + zoom out to rows of pages
+                                                           and in to the window's width
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
@@ -112,6 +121,10 @@ fn main() -> ExitCode {
         None => Err(format!("usage:\n{USAGE}").into()),
         Some("info") => info(&args[1..]),
         Some("render") => render(&args[1..]),
+        #[cfg(unix)]
+        Some("view") => view::run(&args[1..]),
+        #[cfg(not(unix))]
+        Some("view") => Err("view: needs a Unix terminal (macOS, Linux or FreeBSD); `render --out page.png` writes an image file".into()),
         Some("text") => text(&args[1..]),
         Some("edit") => edit(&args[1..]),
         Some("combine") => combine(&args[1..]),
@@ -476,7 +489,8 @@ fn text(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// The most pages one `A-B` range may name: a bound on what a typed range can allocate.
+/// The most pages one `A-B` range, or a whole list, may name: a bound on what a typed list can
+/// allocate (repeating a range must not multiply it).
 const MAX_RANGE: usize = 1_000_000;
 
 /// 1-based pages ("1,3,5-8": single pages and inclusive ranges, in the order given) → 0-based
@@ -494,8 +508,12 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
                 if to - from >= MAX_RANGE {
                     return Err(format!("bad page range {item:?}: more than {MAX_RANGE} pages"));
                 }
+                if out.len().saturating_add(to - from + 1) > MAX_RANGE {
+                    return Err(format!("bad page list: more than {MAX_RANGE} pages in all"));
+                }
                 out.extend(from - 1..to);
             }
+            None if out.len() >= MAX_RANGE => return Err(format!("bad page list: more than {MAX_RANGE} pages in all")),
             None => out.push(number(item, item)? - 1),
         }
     }
@@ -695,6 +713,42 @@ fn parse_dpi(value: &str) -> Result<f32, String> {
         .ok_or_else(|| format!("bad --dpi: expected a positive number of dots per inch, got {value:?}"))
 }
 
+/// `render` always writes a file; where `view` exists, the error points to it for the terminal.
+#[cfg(unix)]
+const RENDER_MISSING_OUT: &str = "render: missing --out (.png, .jpg, .tif or .pam); to show the page in this terminal, use `pdfcraft-cli view`";
+#[cfg(not(unix))]
+const RENDER_MISSING_OUT: &str = "render: missing --out (.png, .jpg, .tif or .pam)";
+
+/// What `render` and `view` draw for a file, as the app draws it.
+struct Displayed {
+    /// The display copy the renderer reads: comments missing their /AP streams are drawn, and a
+    /// dynamic XFA form is laid out. The CLI must agree with the app (and with independent
+    /// viewers) while keeping the file it reads intact.
+    bytes: Arc<Vec<u8>>,
+    /// The password for the renderer, which takes only the user password of R2–R4 files: for one
+    /// opened with its owner password, the user password that recovers.
+    password: Option<String>,
+    /// The displayed document's pages and the rest (a laid-out form's, not its placeholder's),
+    /// or why the renderer can't open the file.
+    #[cfg_attr(not(unix), expect(dead_code, reason = "only `view`, which is Unix-only, reads it"))]
+    info: Result<pdfcraft_render::DocInfo, String>,
+}
+
+/// [`Displayed`] for the file `bytes` read from `path`, opened with `password` (either one).
+/// `command` names the caller in errors.
+fn displayed(command: &str, path: &str, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<Displayed, CliError> {
+    // `Session::open` and the display copy take either password; the renderer doesn't.
+    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    let info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string());
+    if info.as_ref().is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
+        let doc = session.get(id).ok_or_else(|| format!("{command}: the document could not be opened"))?;
+        return Ok(Displayed { bytes: doc.display.clone(), password: render_password, info: Ok(doc.info.clone()) });
+    }
+    Ok(Displayed { bytes: pdfcraft_engine::display_bytes_for(bytes, password), password: render_password, info })
+}
+
 fn render(args: &[String]) -> Result<(), CliError> {
     validate_options("render", args, RENDER_OPTIONS)?;
     let path = *positional(args, RENDER_OPTIONS).first().ok_or("render: missing file")?;
@@ -702,7 +756,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
         flag(args, "--page").unwrap_or("1").parse().ok().filter(|page| *page > 0).ok_or("bad --page: expected a positive page number")?;
     let page_index = page - 1;
     let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("96"))?;
-    let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
+    let out = flag(args, "--out").ok_or(RENDER_MISSING_OUT)?;
     // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
     let format = match Path::new(out).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).as_deref() {
         Some("png") => Some(ImageFormat::Png),
@@ -711,22 +765,11 @@ fn render(args: &[String]) -> Result<(), CliError> {
         Some("pam") => None,
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
-    // The app renders a display copy that draws comments missing their /AP streams; the CLI
-    // must agree with it (and with independent viewers), while keeping the file it reads intact.
-    let bytes = read(path)?;
-    let password = flag(args, "--password");
-    // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
-    // copy take either.
-    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
-    let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
-        let mut session = pdfcraft_engine::Session::new();
-        let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
-        session.get(id).ok_or("render: the document could not be opened")?.display.clone()
-    } else {
-        pdfcraft_engine::display_bytes_for(bytes, password)
-    };
-    let mut r =
-        PageRenderer::new(display, RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() });
+    let display = displayed("render", path, read(path)?, flag(args, "--password"))?;
+    let mut r = PageRenderer::new(
+        display.bytes,
+        RenderConfig { password: display.password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() },
+    );
     let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
     if let Some(e) = p.error {
         return Err(e.into());
@@ -1214,7 +1257,17 @@ fn current_uid() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::control_file_problem;
+    use super::{MAX_RANGE, control_file_problem, page_list};
+
+    #[test]
+    fn a_page_list_is_bounded_in_all_not_just_per_range() {
+        assert_eq!(page_list("1,3-5"), Ok(vec![0, 2, 3, 4]));
+        let full = format!("1-{MAX_RANGE}");
+        assert_eq!(page_list(&full).map(|pages| pages.len()), Ok(MAX_RANGE));
+        // Repeating a range that is allowed on its own would multiply what it allocates.
+        assert!(page_list(&format!("{full},{full}")).is_err_and(|e| e.contains("in all")), "two full ranges");
+        assert!(page_list(&format!("{full},7")).is_err_and(|e| e.contains("in all")), "a full range and a page");
+    }
 
     #[test]
     fn a_control_file_must_be_yours_and_private() {

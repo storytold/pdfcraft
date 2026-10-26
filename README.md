@@ -273,11 +273,12 @@ Press <kbd>⌘K</kbd> to search every tool and command, or browse the **All tool
 - **Native on macOS, Windows, Linux and FreeBSD**, and **in the browser** through WebAssembly, from the same Rust codebase. Windows builds come for x64, x86 and ARM64 (Windows on ARM, no emulation); every ARM64 change is tested on ARM64 hardware in CI.
 - **Private by design.** Documents never leave your machine. There's no account, no telemetry and no cloud processing.
 - **Engine first.** Parsing, rendering and editing live in reusable library crates. The interface is one swappable layer on top.
-- **Scriptable.** The `pdfcraft-cli` tool (see [Built for agents, too](#built-for-agents-too)) covers inspecting, rendering, extracting text, editing, combining, extracting pages and splitting. Robustness sweeps run on the same engine as the app.
+- **Scriptable.** The `pdfcraft-cli` tool (see [Built for agents, too](#built-for-agents-too)) covers inspecting, rendering, extracting text, editing, combining, extracting pages and splitting. Robustness sweeps run on the same engine as the app. In kitty, Ghostty and WezTerm, `pdfcraft-cli view` shows pages right in the terminal ([guide](docs/cli-view.md)).
 
 ```sh
 pdfcraft-cli info  form.pdf                                  # structure as JSON
 pdfcraft-cli text  paper.pdf --page 3                        # reading-order text
+pdfcraft-cli view  paper.pdf                                 # page through it in the terminal, like less
 pdfcraft-cli edit  in.pdf --rotate 1,2:90 --delete 5 --title "Q3" --out out.pdf
 ```
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
 
-fn fixture(test: &str) -> PathBuf {
+pub(crate) fn fixture(test: &str) -> PathBuf {
     let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
 <template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb">

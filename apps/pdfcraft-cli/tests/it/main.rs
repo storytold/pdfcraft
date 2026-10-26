@@ -21,4 +21,7 @@ mod stdout;
 mod text;
 mod ui_control;
 mod version_resource;
+mod view;
+mod view_pager;
+mod view_tmux;
 mod xfa;

@@ -4145,6 +4145,7 @@ dependencies = [
  "pdfcraft-preflight",
  "pdfcraft-render",
  "png 0.18.1",
+ "proptest",
  "rustix 1.1.5",
  "serde_json",
  "winresource",
