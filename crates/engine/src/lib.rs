@@ -1438,6 +1438,8 @@ pub enum Edit {
     InsertPagesFrom {
         name: String,
         bytes: Arc<Vec<u8>>,
+        /// Credentials for an already opened source snapshot; never persisted.
+        password: Option<String>,
         pages: Option<Vec<usize>>,
         at: usize,
         /// How a form field whose name the document already uses is kept separate.
@@ -2564,8 +2566,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
-        Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
-            let src = open_source(name, bytes)?;
+        Edit::InsertPagesFrom { name, bytes, password, pages, at, field_conflicts } => {
+            let src = open_source_with(name, bytes, password.as_deref())?;
             let pages = match pages {
                 Some(p) => p.clone(),
                 None => (0..pdfcraft_organize::page_count(&src)?).collect(),

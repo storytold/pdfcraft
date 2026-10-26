@@ -41,6 +41,7 @@ pub mod canvas;
 mod chrome;
 mod combine_grid;
 mod image_pick;
+mod page_transfer;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
@@ -405,6 +406,8 @@ pub struct DuplicateDraft {
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
 #[derive(Clone, Debug)]
 pub struct PageClip {
+    /// Reopen credentials for the in-memory snapshot.
+    pub password: Option<String>,
     /// The document the pages were copied from: pasting back into it keeps field names.
     pub from: DocId,
     pub name: String,
@@ -894,6 +897,7 @@ pub struct PdfCraftApp {
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
+    pub(crate) page_drag: Option<page_transfer::PageDrag>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
@@ -1248,6 +1252,7 @@ impl PdfCraftApp {
             optimize_run: None,
             progress_notice: None,
             page_clipboard: None,
+            page_drag: None,
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
@@ -3782,6 +3787,7 @@ impl eframe::App for PdfCraftApp {
             window_controls::resize_edges(&ctx);
         }
         chrome::tab_strip(self, ui);
+        self.prepare_page_drag(&ctx);
         chrome::mode_bar(self, ui);
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
@@ -3804,6 +3810,7 @@ impl eframe::App for PdfCraftApp {
             }
         });
         self.process_pending_edits();
+        self.finish_page_drag(&ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);

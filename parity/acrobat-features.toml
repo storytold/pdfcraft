@@ -2892,11 +2892,11 @@ title = "Drag pages between documents"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/organize_drag.rs::dragging_selected_pages_to_another_tab_copies_them_as_one_undo_step", "crates/ui-egui/tests/it/organize_drag.rs::a_source_edit_during_a_cross_tab_page_drag_cancels_the_transfer", "crates/ui-egui/tests/it/organize_drag.rs::escape_during_a_cross_tab_page_drag_keeps_both_documents", "crates/ui-egui/tests/it/organize_drag.rs::dragging_password_protected_pages_uses_the_open_source_credentials", "crates/ui-egui/tests/it/organize_drag.rs::opening_a_drag_target_grid_clears_a_stale_selection_even_if_cancelled"]
+notes = "Organize grid: hold selected pages over another open tab, then drop into its grid at the indicated gap. Copies the current unsaved pages (including authenticated encrypted sources) in one undo step, keeps the source unchanged and renames colliding form fields through InsertPagesFrom. Escape, a changed source, blocked permissions or a release outside the grid cancels. Same-window tabs only; dragging selected pages between native windows or from the sidebar is not implemented. "
 
 [[feature]]
 id = "organize.page-range-selection"

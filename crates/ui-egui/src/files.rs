@@ -608,6 +608,7 @@ impl PdfCraftApp {
             match converted {
                 Ok((pages, bytes)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {
+                        password: None,
                         name,
                         bytes,
                         pages: None,

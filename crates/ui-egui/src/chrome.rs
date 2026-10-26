@@ -171,8 +171,19 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         ui.close();
                                     }
                                 });
-                                if response.clicked() {
+                                let page_drop_tab = app.dragging_pages_to(id)
+                                    && !egui::Popup::is_any_open(ui.ctx())
+                                    && !app.modal_open()
+                                    && !app.palette_open
+                                    && ui.input(|input| {
+                                        input.pointer.primary_down()
+                                            && input.pointer.interact_pos().is_some_and(|p| response.rect.intersect(ui.clip_rect()).contains(p))
+                                    });
+                                if response.clicked() || page_drop_tab {
                                     app.active = Some(i);
+                                    if page_drop_tab && !app.views[i].organize {
+                                        app.views[i].open_organize();
+                                    }
                                 }
                                 // A middle click closes the tab, as in Acrobat and browsers (#1853);
                                 // unsaved changes ask first, as the close button does.

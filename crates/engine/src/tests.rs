@@ -986,6 +986,7 @@ fn reset_layers_returns_to_the_files_visibility() {
     };
     assert!(s.set_layer_state(id, &[(LayerOp::On, (6, 0))], true));
     let edit = Edit::InsertPagesFrom {
+        password: None,
         name: "b.pdf".into(),
         bytes: Arc::new(other),
         pages: None,
@@ -1061,6 +1062,7 @@ fn combine_extract_split_and_insert_from_file() {
     s.apply(
         id,
         Edit::InsertPagesFrom {
+            password: None,
             name: "b.pdf".into(),
             bytes: other,
             pages: Some(vec![1]),
@@ -1076,6 +1078,7 @@ fn combine_extract_split_and_insert_from_file() {
     let bad = s.apply(
         id,
         Edit::InsertPagesFrom {
+            password: None,
             name: "junk.pdf".into(),
             bytes: Arc::new(b"nope".to_vec()),
             pages: None,
@@ -1132,6 +1135,7 @@ fn insert_from_file_renames_colliding_fields_and_notes_it() {
     s.apply(
         id,
         Edit::InsertPagesFrom {
+            password: None,
             name: "b.pdf".into(),
             bytes: Arc::new(form_with_field("Text1")),
             pages: None,
@@ -3157,6 +3161,7 @@ fn create_and_reduce() {
     s2.apply(
         id2,
         Edit::InsertPagesFrom {
+            password: None,
             name: "x".into(),
             bytes: src.clone(),
             pages: None,

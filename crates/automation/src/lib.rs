@@ -1725,7 +1725,17 @@ impl Automation {
         let bytes = read_input(&path)?;
         let pages = a.opt_ints("pages")?.map(|p| one_based(&p)).transpose()?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.apply(a, Edit::InsertPagesFrom { name, bytes: Arc::new(bytes), pages, at, field_conflicts: pdfcraft_organize::FieldConflicts::Rename })
+        self.apply(
+            a,
+            Edit::InsertPagesFrom {
+                password: None,
+                name,
+                bytes: Arc::new(bytes),
+                pages,
+                at,
+                field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+            },
+        )
     }
 
     /// Write freshly created bytes to `out` and/or open them as a new document.
