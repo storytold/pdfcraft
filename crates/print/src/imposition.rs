@@ -111,6 +111,21 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     }
 }
 
+/// Read an annotation value through at most 64 indirect references.
+/// Standalone indirect objects can themselves hold references (ISO 32000-2 §7.3.10).
+/// Cycles and longer chains are unusable, like other invalid annotation values.
+fn annotation_value(doc: &Document, value: &Object) -> Option<std::sync::Arc<Object>> {
+    let mut value = std::sync::Arc::new(value.clone());
+    let mut seen = std::collections::HashSet::new();
+    while let Object::Ref(reference) = &*value {
+        if seen.len() == 64 || !seen.insert(*reference) {
+            return None;
+        }
+        value = doc.get(*reference);
+    }
+    Some(value)
+}
+
 /// The normal appearance stream to draw, resolving the annotation's `/AS` state name.
 pub(crate) fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     let ap = doc.resolve(d.get(b"AP")?);
@@ -118,7 +133,7 @@ pub(crate) fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     match &*doc.resolve(&normal) {
         Object::Stream(_) => normal.as_ref(),
         Object::Dict(states) => {
-            let state = doc.resolve(d.get(b"AS")?);
+            let state = annotation_value(doc, d.get(b"AS")?)?;
             states.get(state.as_name()?)?.as_ref()
         }
         _ => None,
@@ -184,9 +199,9 @@ pub(crate) fn page_form(
         }
         // A rectangle has four numbers, and each can be an indirect object (ISO 32000-2 §7.3.10).
         let rect = d.get(b"Rect").and_then(|r| {
-            let rect = doc.resolve(r);
+            let rect = annotation_value(doc, r)?;
             let [x0, y0, x1, y1] = rect.as_array()?.as_slice() else { return None };
-            let number = |v: &Object| doc.resolve(v).as_f64().filter(|v| v.is_finite());
+            let number = |v: &Object| annotation_value(doc, v)?.as_f64().filter(|v| v.is_finite());
             Some([number(x0)?, number(y0)?, number(x1)?, number(y1)?])
         });
         let Some([x0, y0, x1, y1]) = rect else { continue };

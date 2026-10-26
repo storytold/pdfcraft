@@ -79,6 +79,14 @@ fn saved(doc: &Document) -> Vec<u8> {
     write_full(doc, &SaveOptions::default()).unwrap()
 }
 
+/// Wrap a synthetic value in exactly `depth` standalone indirect objects.
+fn reference_chain(doc: &mut Document, mut value: Object, depth: usize) -> Object {
+    for _ in 0..depth {
+        value = Object::Ref(doc.add(value));
+    }
+    value
+}
+
 fn xobject(doc: &Document, owner: &Dict, name: &[u8]) -> ObjRef {
     let resources = doc.resolve(owner.get(b"Resources").unwrap());
     let objects = doc.resolve(resources.as_dict().unwrap().get(b"XObject").unwrap());
@@ -268,6 +276,128 @@ fn indirect_annotation_states_keep_their_printed_appearances() {
                     assert_eq!(saved(&doc), before, "printing does not rewrite the source annotation or appearance state");
                 }
             }
+        }
+    }
+}
+
+/// Standalone indirect objects can contain further references, including rectangle arrays,
+/// individual coordinates and AS names. Printing must match the equivalent direct values.
+#[test]
+fn chained_annotation_values_keep_their_printed_appearances() {
+    for subtype in ["Widget", "Square"] {
+        for (state_name, color) in [("Yes", [0, 255, 0, 255]), ("Off", [255, 0, 0, 255])] {
+            for (rect_depth, coordinate_depth, state_depth) in [(2, 0, 0), (0, 2, 0), (0, 0, 2), (2, 2, 2), (64, 64, 64)] {
+                let (mut doc, on, annot) = widget_fixture(Some(Object::name("Form")), None);
+                let off = doc.add(Object::Stream(Stream::flate(doc.get(on).as_dict().unwrap().clone(), b"/Ink cs 1 0 0 scn 0 0 20 10 re f")));
+                let values = [Object::Int(50), Object::Real(40.25), Object::Int(10), Object::Real(20.25)];
+                doc.update_dict(annot, |d| {
+                    d.set(b"Subtype".to_vec(), Object::name(subtype));
+                    d.set(b"Rect".to_vec(), Object::Array(values.to_vec()));
+                    d.set(b"AS".to_vec(), Object::name(state_name));
+                    d.set(
+                        b"AP".to_vec(),
+                        Object::Dict(Dict::from_iter([(
+                            b"N".to_vec(),
+                            Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(on)), (b"Off".to_vec(), Object::Ref(off))])),
+                        )])),
+                    );
+                })
+                .unwrap();
+                let modes = [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly];
+                let controls: Vec<_> = modes.iter().map(|&content| render(impose(&doc, &print_settings(content)).unwrap())).collect();
+                // Mix direct, one-hop and chained integer/real coordinates in the same rectangle.
+                let coordinates = values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, value)| {
+                        reference_chain(
+                            &mut doc,
+                            value,
+                            if coordinate_depth == 0 || i == 0 {
+                                0
+                            } else if i == 2 {
+                                1
+                            } else {
+                                coordinate_depth
+                            },
+                        )
+                    })
+                    .collect();
+                let rect = reference_chain(&mut doc, Object::Array(coordinates), rect_depth);
+                let state = reference_chain(&mut doc, Object::name(state_name), state_depth);
+                doc.update_dict(annot, |d| {
+                    d.set(b"Rect".to_vec(), rect);
+                    d.set(b"AS".to_vec(), state);
+                })
+                .unwrap();
+                // ISO 32000-2 permits reference-to-reference objects outside object streams.
+                let options = SaveOptions { object_streams: false, ..SaveOptions::default() };
+                let doc = Document::open(Arc::new(write_full(&doc, &options).unwrap())).unwrap();
+                let before = write_full(&doc, &options).unwrap();
+                let state = doc.read_state();
+                let graph: Vec<_> = doc.scan_objects().collect();
+                for (&content, control) in modes.iter().zip(controls) {
+                    let printed = render(impose(&doc, &print_settings(content)).unwrap());
+                    let shown = subtype == "Widget" || content == Content::DocumentAndMarkups;
+                    assert_eq!(
+                        pixel(&printed, 30, 70),
+                        if shown { color } else { [255; 4] },
+                        "{subtype}, {state_name}, depths={rect_depth}/{coordinate_depth}/{state_depth}, {content:?}"
+                    );
+                    assert_eq!(printed.rgba, control.rgba, "chained values preserve the complete direct-control output");
+                }
+                assert!(state.matches(&doc), "printing preserves the source read state");
+                assert_eq!(doc.scan_objects().collect::<Vec<_>>(), graph, "printing preserves the source object graph");
+                assert_eq!(write_full(&doc, &options).unwrap(), before, "printing preserves standalone reference chains");
+            }
+        }
+    }
+}
+
+/// Cycles, missing targets and reference chains beyond the print reader's limit skip only
+/// the unusable annotation, retaining page content and leaving source values unchanged.
+#[test]
+fn invalid_annotation_reference_chains_are_skipped_when_printing() {
+    for property in ["rectangle", "coordinate", "state"] {
+        for kind in ["cycle", "unresolved", "too-deep"] {
+            let (mut doc, ap, annot) = widget_fixture(Some(Object::name("Form")), None);
+            let value = match kind {
+                "cycle" => {
+                    let first = doc.add(Object::Null);
+                    let second = doc.add(Object::Ref(first));
+                    doc.set(first, Object::Ref(second));
+                    Object::Ref(first)
+                }
+                "unresolved" => reference_chain(&mut doc, Object::Ref(ObjRef::new(999_999, 0)), 2),
+                "too-deep" => {
+                    let value = match property {
+                        "rectangle" => numbers(&[10.0, 20.0, 50.0, 40.0]),
+                        "coordinate" => Object::Int(40),
+                        "state" => Object::name("Yes"),
+                        _ => panic!("unknown property {property}"),
+                    };
+                    reference_chain(&mut doc, value, 65)
+                }
+                _ => panic!("unknown kind {kind}"),
+            };
+            doc.update_dict(annot, |d| match property {
+                "rectangle" => d.set(b"Rect".to_vec(), value),
+                "coordinate" => d.set(b"Rect".to_vec(), Object::Array(vec![10.into(), 20.into(), 50.into(), value])),
+                "state" => {
+                    d.set(b"AS".to_vec(), value);
+                    d.set(
+                        b"AP".to_vec(),
+                        Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(ap))])))])),
+                    );
+                }
+                _ => panic!("unknown property {property}"),
+            })
+            .unwrap();
+            let before = saved(&doc);
+            let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+            assert_eq!(pixel(&printed, 30, 70), [255; 4], "invalid {property} chain ({kind}) does not select artwork");
+            assert_eq!(pixel(&printed, 4, 96), [0, 0, 255, 255], "page content survives invalid {property} chain ({kind})");
+            assert_eq!(saved(&doc), before, "invalid {property} chain ({kind}) is not rewritten");
         }
     }
 }
