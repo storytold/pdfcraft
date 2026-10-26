@@ -50,6 +50,22 @@ const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 /// key does not fit is not listed.
 const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
+/// Maximum number of chained actions to inspect per link (ISO 32000-2 §12.6.2, Table 196).
+const MAX_ACTION_CHAIN: usize = 64;
+/// Maximum number of field or annotation targets parsed from a single Hide or ResetForm action.
+const MAX_ACTION_TARGETS: usize = 256;
+/// Maximum number of action nodes visited while inspecting a `/Next` action chain.
+const MAX_ACTION_VISITS: usize = 1024;
+
+/// Whether a link target (or any action chained within it) is a JavaScript action.
+fn has_javascript_target(target: &LinkTarget) -> bool {
+    match target {
+        LinkTarget::Other(s) if s == "JavaScript" => true,
+        LinkTarget::Sequence(seq) => seq.iter().any(has_javascript_target),
+        _ => false,
+    }
+}
+
 /// The bytes a listed annotation keeps.
 fn retained(a: &Annotation) -> usize {
     let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
@@ -317,27 +333,38 @@ pub struct Link {
     pub target: LinkTarget,
 }
 
+/// A target of a Hide action (ISO 32000-2 §12.6.4.11, Table 214): a field by name, or an annotation by object identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HideTarget {
+    /// A form field identified by its fully qualified name.
+    Field(String),
+    /// An annotation identified by its object number and generation.
+    Annotation((u32, u16)),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
     /// A destination in this document: the 0-based page and where on it the view goes.
     Page(usize, DestView),
+    /// A web address (`URI`, ISO 32000-2 §12.6.4.8).
     Uri(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
     /// on turns off the other layers of its radio-button groups.
-    SetLayers {
-        changes: Vec<(LayerOp, (u32, u16))>,
-        preserve_rb: bool,
-    },
+    SetLayers { changes: Vec<(LayerOp, (u32, u16))>, preserve_rb: bool },
     /// A local-file remote Go-To action. The caller resolves `file` relative to the source path.
     /// `launch` marks a Launch action that names a PDF file (see `launch_pdf`), opened the same
     /// way: as a document in PdfCraft, never by the operating system.
-    RemoteGoTo {
-        launch: bool,
-        file: String,
-        destination: RemoteDestination,
-        new_window: Option<bool>,
-    },
+    RemoteGoTo { launch: bool, file: String, destination: RemoteDestination, new_window: Option<bool> },
+    /// A named action (ISO 32000-2 §12.6.4.12, Table 215): NextPage, PrevPage, FirstPage, LastPage.
+    Named(String),
+    /// A hide action (ISO 32000-2 §12.6.4.11, Table 214): show or hide the target fields or annotations.
+    Hide { targets: Vec<HideTarget>, hide: bool },
+    /// A reset-form action (ISO 32000-2 §12.7.6.3, Tables 241-242): reset the listed fields, or all except them.
+    ResetForm { fields: Vec<String>, exclude: bool },
+    /// A sequence of actions chained via `/Next` (ISO 32000-2 §12.6.2, Table 196).
+    Sequence(Vec<LinkTarget>),
+    /// An action of another type, kept as its action name.
     Other(String),
 }
 
@@ -1445,7 +1472,7 @@ impl<'a> Inspector<'a> {
             }
             if subtype == "Link" {
                 if let Some(link) = self.link(page, index, d, text_budget) {
-                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                    if has_javascript_target(&link.target) {
                         info.has_javascript = true;
                     }
                     info.links.push(link);
@@ -1535,33 +1562,266 @@ impl<'a> Inspector<'a> {
         link_replies(&mut info.annotations);
     }
 
+    /// Read a link annotation on `page` into a [`Link`].
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
             LinkTarget::Page(page, view)
         } else {
-            let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
-            match self.name(a, b"S").as_deref() {
-                Some("GoTo") => {
-                    let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
-                    LinkTarget::Page(page, view)
-                }
-                Some("URI") => {
-                    let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
-                    match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
-                        Some(uri) => LinkTarget::Uri(uri),
-                        None => LinkTarget::Other("URI".into()),
-                    }
-                }
-                Some("SetOCGState") => self.layer_state(a),
-                Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
-                Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-                Some(other) => LinkTarget::Other(other.to_string()),
-                None => return None,
+            let a_obj = d.get(b"A").ok()?;
+            let a = self.dict(a_obj)?;
+            let mut targets = Vec::new();
+            let mut active_stack = HashSet::new();
+            if let Object::Reference(id) = a_obj {
+                active_stack.insert(*id);
+            }
+            let mut visits = 0;
+            self.collect_actions(a, &mut targets, &mut active_stack, text_budget, &mut visits, 0);
+            match targets.len() {
+                0 => return None,
+                1 => targets.swap_remove(0),
+                _ => LinkTarget::Sequence(targets),
             }
         };
         Some(Link { page, index, rect, target })
+    }
+
+    /// Collect the action in `a` and any actions chained after it via `/Next` (§12.6.2, Table 196),
+    /// bounded to prevent cycles and exponential DAG fan-out.
+    fn collect_actions(
+        &self,
+        a: &'a Dictionary,
+        targets: &mut Vec<LinkTarget>,
+        active_stack: &mut HashSet<ObjectId>,
+        text_budget: &mut usize,
+        visits: &mut usize,
+        depth: usize,
+    ) {
+        if depth >= MAX_ACTION_CHAIN || targets.len() >= MAX_ACTION_CHAIN || *visits >= MAX_ACTION_VISITS {
+            return;
+        }
+        *visits += 1;
+        if let Some(target) = self.single_action(a, text_budget) {
+            targets.push(target);
+        }
+        let Ok(next) = a.get(b"Next") else { return };
+        if let Object::Reference(id) = next {
+            if !active_stack.insert(*id) {
+                return;
+            }
+            match self.resolve(next) {
+                Object::Dictionary(d) => {
+                    self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                }
+                Object::Array(items) => {
+                    for item in items.iter().take(MAX_ACTION_CHAIN) {
+                        if targets.len() >= MAX_ACTION_CHAIN || *visits >= MAX_ACTION_VISITS {
+                            break;
+                        }
+                        if let Object::Reference(child_id) = item {
+                            if !active_stack.insert(*child_id) {
+                                continue;
+                            }
+                            if let Some(d) = self.dict(item) {
+                                self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                            }
+                            active_stack.remove(child_id);
+                        } else if let Some(d) = self.dict(item) {
+                            self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            active_stack.remove(id);
+        } else {
+            match self.resolve(next) {
+                Object::Dictionary(d) => {
+                    self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                }
+                Object::Array(items) => {
+                    for item in items.iter().take(MAX_ACTION_CHAIN) {
+                        if targets.len() >= MAX_ACTION_CHAIN || *visits >= MAX_ACTION_VISITS {
+                            break;
+                        }
+                        if let Object::Reference(child_id) = item {
+                            if !active_stack.insert(*child_id) {
+                                continue;
+                            }
+                            if let Some(d) = self.dict(item) {
+                                self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                            }
+                            active_stack.remove(child_id);
+                        } else if let Some(d) = self.dict(item) {
+                            self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Parse a single action dictionary into a [`LinkTarget`].
+    fn single_action(&self, a: &'a Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        match self.name(a, b"S").as_deref() {
+            Some("GoTo") => {
+                let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
+                Some(LinkTarget::Page(page, view))
+            }
+            Some("URI") => {
+                let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                    Some(uri) => Some(LinkTarget::Uri(uri)),
+                    None => Some(LinkTarget::Other("URI".into())),
+                }
+            }
+            Some("SetOCGState") => Some(self.layer_state(a)),
+            Some("GoToR") => Some(self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into()))),
+            Some("Launch") => Some(self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into()))),
+            Some("Named") => {
+                let n = self.name(a, b"N").unwrap_or_default();
+                Some(LinkTarget::Named(n))
+            }
+            Some("Hide") => {
+                let targets = self.hide_targets(a, text_budget);
+                let hide = !matches!(a.get(b"H").ok().map(|h| self.resolve(h)), Some(Object::Boolean(false)));
+                Some(LinkTarget::Hide { targets, hide })
+            }
+            Some("ResetForm") => {
+                let (fields, incomplete) = self.reset_form_targets(a, text_budget);
+                let exclude = a.get(b"Flags").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 1 != 0;
+                // If /Fields is present:
+                // - In include mode (Flags bit 1 clear), an incomplete or unresolvable list must not reset all fields.
+                // - In exclude mode (Flags bit 1 set), an incomplete list must not omit excluded fields (which would reset them).
+                if a.get(b"Fields").is_ok() && (incomplete || (!exclude && fields.is_empty())) {
+                    return None;
+                }
+                Some(LinkTarget::ResetForm { fields, exclude })
+            }
+            Some(other) => Some(LinkTarget::Other(other.to_string())),
+            None => None,
+        }
+    }
+
+    /// The targets of a Hide action (§12.6.4.11, Table 214).
+    fn hide_targets(&self, a: &Dictionary, text_budget: &mut usize) -> Vec<HideTarget> {
+        let Ok(t) = a.get(b"T") else { return Vec::new() };
+        let mut targets = Vec::new();
+        match self.resolve(t) {
+            Object::Array(items) => {
+                for item in items.iter().take(MAX_ACTION_TARGETS) {
+                    if let Some(target) = self.hide_target(item, text_budget) {
+                        targets.push(target);
+                    }
+                }
+            }
+            _ => {
+                if let Some(target) = self.hide_target(t, text_budget) {
+                    targets.push(target);
+                }
+            }
+        }
+        targets
+    }
+
+    /// Resolves an action target object (string, name, or indirect reference) to a [`HideTarget`].
+    fn hide_target(&self, item: &'a Object, text_budget: &mut usize) -> Option<HideTarget> {
+        match item {
+            Object::Reference(id) => match self.resolve(item) {
+                Object::String(bytes, _) => spend(bytes, text_budget, text_string).map(HideTarget::Field),
+                Object::Name(bytes) => spend(bytes, text_budget, |b| String::from_utf8_lossy(b).into_owned()).map(HideTarget::Field),
+                _ => Some(HideTarget::Annotation(*id)),
+            },
+            _ => match self.resolve(item) {
+                Object::String(bytes, _) => spend(bytes, text_budget, text_string).map(HideTarget::Field),
+                Object::Name(bytes) => spend(bytes, text_budget, |b| String::from_utf8_lossy(b).into_owned()).map(HideTarget::Field),
+                _ => None,
+            },
+        }
+    }
+
+    /// The field names listed in a ResetForm action (§12.7.6.3, Table 241), and whether the target list is incomplete.
+    fn reset_form_targets(&self, a: &Dictionary, text_budget: &mut usize) -> (Vec<String>, bool) {
+        let Ok(f) = a.get(b"Fields") else { return (Vec::new(), false) };
+        let mut fields = Vec::new();
+        let mut incomplete = false;
+        match self.resolve(f) {
+            Object::Array(items) => {
+                if items.len() > MAX_ACTION_TARGETS {
+                    incomplete = true;
+                }
+                for item in items.iter().take(MAX_ACTION_TARGETS) {
+                    if let Some(field) = self.field_target_name(item, text_budget) {
+                        fields.push(field);
+                    } else if *text_budget == 0 {
+                        incomplete = true;
+                        break;
+                    }
+                }
+            }
+            _ => {
+                if let Some(field) = self.field_target_name(f, text_budget) {
+                    fields.push(field);
+                } else if *text_budget == 0 {
+                    incomplete = true;
+                }
+            }
+        }
+        (fields, incomplete)
+    }
+
+    /// Resolves an action target object (string, name, or indirect reference) to a field name.
+    fn field_target_name(&self, item: &'a Object, text_budget: &mut usize) -> Option<String> {
+        match self.resolve(item) {
+            Object::String(bytes, _) => spend(bytes, text_budget, text_string),
+            Object::Name(bytes) => spend(bytes, text_budget, |b| String::from_utf8_lossy(b).into_owned()),
+            Object::Dictionary(d) => {
+                if let Object::Reference(id) = item {
+                    self.field_qualified_name(*id, text_budget)
+                } else if d.get(b"FT").is_ok() || self.name(d, b"Subtype").as_deref() == Some("Widget") {
+                    let Ok(t) = d.get(b"T") else { return None };
+                    self.resolve(t).as_str().ok().and_then(|bytes| spend(bytes, text_budget, text_string))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                if let Object::Reference(id) = item {
+                    self.field_qualified_name(*id, text_budget)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// The fully qualified name of the field that `id` belongs to, from the partial names (`/T`)
+    /// up its `/Parent` chain.
+    fn field_qualified_name(&self, id: ObjectId, text_budget: &mut usize) -> Option<String> {
+        let mut parts = Vec::new();
+        let mut cur = id;
+        let mut seen = HashSet::new();
+        let mut is_field = false;
+        while seen.insert(cur) && parts.len() < 32 {
+            let Ok(d) = self.doc.get_dictionary(cur) else { break };
+            is_field |= d.get(b"FT").is_ok() || self.name(d, b"Subtype").as_deref() == Some("Widget");
+            if let Ok(t) = d.get(b"T")
+                && let Ok(bytes) = self.resolve(t).as_str()
+                && let Some(part) = spend(bytes, text_budget, text_string)
+            {
+                parts.push(part);
+            }
+            match d.get(b"Parent") {
+                Ok(Object::Reference(parent_id)) => cur = *parent_id,
+                _ => break,
+            }
+        }
+        (is_field && !parts.is_empty()).then(|| {
+            parts.reverse();
+            parts.join(".")
+        })
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
@@ -3430,6 +3690,102 @@ trailer << /Root 1 0 R >>
                 LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
             ]
         );
+    }
+
+    /// Links with Named, Hide, ResetForm actions and /Next chains (§12.6.4.11, §12.6.4.12, §12.7.6.3, §12.6.2).
+    #[test]
+    fn links_read_named_hide_and_reset_form_actions() {
+        let pdf = "%PDF-1.7\n\
+            1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] >> >> endobj\n\
+            2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+            3 0 obj << /Type /Page /Parent 2 0 R /Annots [10 0 R 11 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] >> endobj\n\
+            4 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /Rect [10 10 50 30] >> endobj\n\
+            5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (f1) /Rect [60 10 100 30] >> endobj\n\
+            6 0 obj << /FT /Tx /T (parent) /Kids [7 0 R] >> endobj\n\
+            7 0 obj << /Type /Annot /Subtype /Widget /Parent 6 0 R /T (child) /Kids [8 0 R] /Rect [10 40 50 60] >> endobj\n\
+            8 0 obj << /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [10 70 50 90] >> endobj\n\
+            9 0 obj << /Type /Annot /Subtype /Text /T (CommentAuthor) /Rect [10 100 50 120] >> endobj\n\
+            10 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Named /N /NextPage >> >> endobj\n\
+            11 0 obj << /Type /Annot /Subtype /Link /Rect [0 10 10 20] /A << /S /Named /N /Bogus >> >> endobj\n\
+            12 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Hide /T (secret) >> >> endobj\n\
+            13 0 obj << /Type /Annot /Subtype /Link /Rect [0 30 10 40] /A << /S /Hide /T 4 0 R /H false >> >> endobj\n\
+            14 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /ResetForm /Fields [(f1)] /Flags 0 >> >> endobj\n\
+            15 0 obj << /Type /Annot /Subtype /Link /Rect [0 50 10 60] /A << /S /ResetForm /Fields [5 0 R] /Flags 1 >> >> endobj\n\
+            16 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /Hide /T [4 0 R 8 0 R] >> >> endobj\n\
+            17 0 obj << /Type /Annot /Subtype /Link /Rect [0 70 10 80] /A << /S /Hide /T 9 0 R >> >> endobj\n\
+            18 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /ResetForm /Fields [9 0 R] /Flags 0 >> >> endobj\n\
+            19 0 obj << /Type /Annot /Subtype /Link /Rect [0 90 10 100] /A << /S /ResetForm /Flags 0 >> >> endobj\n\
+            trailer << /Root 1 0 R >>\n%%EOF";
+        let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        assert_eq!(
+            targets,
+            [
+                LinkTarget::Named("NextPage".into()),
+                LinkTarget::Named("Bogus".into()),
+                LinkTarget::Hide { targets: vec![HideTarget::Field("secret".into())], hide: true },
+                LinkTarget::Hide { targets: vec![HideTarget::Annotation((4, 0))], hide: false },
+                LinkTarget::ResetForm { fields: vec!["f1".into()], exclude: false },
+                LinkTarget::ResetForm { fields: vec!["f1".into()], exclude: true },
+                LinkTarget::Hide { targets: vec![HideTarget::Annotation((4, 0)), HideTarget::Annotation((8, 0))], hide: true },
+                LinkTarget::Hide { targets: vec![HideTarget::Annotation((9, 0))], hide: true },
+                // 18 is ResetForm with include-mode but only non-field target 9 0 R, so it's dropped (None)
+                LinkTarget::ResetForm { fields: Vec::new(), exclude: false },
+            ]
+        );
+    }
+
+    /// Links with /Next chains execute actions in sequence, cycles are bounded without hanging,
+    /// and repeated non-cyclic action references in chains are preserved in order.
+    #[test]
+    fn links_read_next_action_chains_and_guard_against_cycles() {
+        let pdf = "%PDF-1.7\n\
+            1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+            2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+            3 0 obj << /Type /Page /Parent 2 0 R /Annots [10 0 R 20 0 R 30 0 R] >> endobj\n\
+            10 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Named /N /NextPage /Next << /S /GoTo /D [3 0 R /Fit] >> >> >> endobj\n\
+            20 0 obj << /Type /Annot /Subtype /Link /Rect [0 10 10 20] /A 21 0 R >> endobj\n\
+            21 0 obj << /S /Named /N /FirstPage /Next 22 0 R >> endobj\n\
+            22 0 obj << /S /Named /N /LastPage /Next 21 0 R >> endobj\n\
+            30 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Named /N /NextPage /Next [21 0 R 21 0 R] >> >> endobj\n\
+            trailer << /Root 1 0 R >>\n%%EOF";
+        let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+        assert_eq!(info.links[0].target, LinkTarget::Sequence(vec![LinkTarget::Named("NextPage".into()), LinkTarget::Page(0, DestView::Fit)]));
+        let LinkTarget::Sequence(chain) = &info.links[1].target else { panic!("expected sequence") };
+        assert_eq!(chain, &[LinkTarget::Named("FirstPage".into()), LinkTarget::Named("LastPage".into())]);
+        let LinkTarget::Sequence(repeated) = &info.links[2].target else { panic!("expected sequence") };
+        assert_eq!(
+            repeated,
+            &[
+                LinkTarget::Named("NextPage".into()),
+                LinkTarget::Named("FirstPage".into()),
+                LinkTarget::Named("LastPage".into()),
+                LinkTarget::Named("FirstPage".into()),
+                LinkTarget::Named("LastPage".into()),
+            ]
+        );
+    }
+
+    /// A fan-out `/Next` DAG of action dictionaries with no `/S` does not hang or trigger exponential recursion.
+    #[test]
+    fn links_read_next_fanout_dag_is_bounded() {
+        let mut pdf = b"%PDF-1.7\n\
+            1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+            2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+            3 0 obj << /Type /Page /Parent 2 0 R /Annots [10 0 R] >> endobj\n\
+            10 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A 11 0 R >> endobj\n"
+            .to_vec();
+        // 20 levels of fan-out: each level k has /Next [k+1 0 R k+1 0 R] without /S.
+        // Without visit bounding, this would be 2^20 = 1,048,576 recursive calls.
+        for k in 11..31 {
+            pdf.extend_from_slice(format!("{k} 0 obj << /Next [{} 0 R {} 0 R] >> endobj\n", k + 1, k + 1).as_bytes());
+        }
+        pdf.extend_from_slice(
+            b"31 0 obj << /S /Named /N /NextPage >> endobj\n\
+            trailer << /Root 1 0 R >>\n%%EOF",
+        );
+        let info = inspect(Arc::new(pdf), None).expect("opens quickly");
+        assert_eq!(info.links.len(), 1);
     }
 
     /// #4168: a Launch action naming a `.pdf` file is read as the link to that file it amounts

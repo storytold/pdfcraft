@@ -2336,11 +2336,17 @@ title = "Execute-a-menu-item action (safe list)"
 area = "C"
 tier = "P2"
 milestone = "M7"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/render/src/inspect.rs::links_read_named_hide_and_reset_form_actions",
+    "crates/render/src/inspect.rs::links_read_next_action_chains_and_guard_against_cycles",
+    "crates/automation/tests/it/automation.rs::doc_info_describes_named_hide_reset_form_and_next_chain_links",
+    "crates/ui-egui/tests/it/buttons.rs::buttons_reset_navigate_and_print",
+    "crates/ui-egui/tests/it/document_links.rs::links_with_named_hide_reset_form_and_next_chain",
+]
+notes = "Links and push buttons run standard named actions (NextPage, PrevPage, FirstPage, LastPage) and /Next chains (#4524). Non-navigation actions (Save, Print) take no automated action without user confirmation. Not yet: creating named actions in Link Properties or button actions dialog."
 
 [[feature]]
 id = "edit.action-set-ocg-state"
@@ -2363,8 +2369,14 @@ milestone = "M6"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/buttons.rs::hide_actions_hide_and_show_fields", "crates/forms/src/tests.rs::push_buttons_read_hide_actions"]
-notes = "A push button's Hide action (/T names, field or widget references, arrays; /H) hides or shows the fields and their kids; hidden widgets take no clicks, tab stops or highlights. A widget reference acts on its whole field, and only form fields are hidden, not other annotations."
+evidence = [
+    "crates/ui-egui/tests/it/buttons.rs::hide_actions_hide_and_show_fields",
+    "crates/forms/src/tests.rs::push_buttons_read_hide_actions",
+    "crates/render/src/inspect.rs::links_read_named_hide_and_reset_form_actions",
+    "crates/automation/tests/it/automation.rs::doc_info_describes_named_hide_reset_form_and_next_chain_links",
+    "crates/ui-egui/tests/it/document_links.rs::links_with_named_hide_reset_form_and_next_chain",
+]
+notes = "Links and push buttons run Hide actions (/T names, field or widget references, arrays; /H) to hide or show fields and their kids (#4524); hidden widgets take no clicks, tab stops or highlights. A widget reference acts on its whole field, and only form fields are hidden, not other annotations."
 
 [[feature]]
 id = "edit.action-javascript"
@@ -4727,8 +4739,14 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.clear"]
 tools = ["form_reset"]
-evidence = ["crates/forms/src/tests.rs::reset_restores_defaults", "crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices"]
-notes = "back to /DV; undoable"
+evidence = [
+    "crates/forms/src/tests.rs::reset_restores_defaults",
+    "crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices",
+    "crates/render/src/inspect.rs::links_read_named_hide_and_reset_form_actions",
+    "crates/automation/tests/it/automation.rs::doc_info_describes_named_hide_reset_form_and_next_chain_links",
+    "crates/ui-egui/tests/it/document_links.rs::links_with_named_hide_reset_form_and_next_chain",
+]
+notes = "back to /DV; undoable; links and push buttons run ResetForm actions with field selection and exclusion flags (#4524)"
 
 [[feature]]
 id = "form.submit-form"

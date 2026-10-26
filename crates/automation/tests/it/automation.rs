@@ -7521,6 +7521,54 @@ fn doc_info_describes_set_layer_links() {
     assert_eq!(info["layers"], json!([{ "name": "Red", "visible": true, "initial": true }, { "name": "Green", "visible": false, "initial": false }]));
 }
 
+/// doc_info describes Named, Hide, ResetForm link targets and /Next action sequences (#4524).
+#[test]
+fn doc_info_describes_named_hide_reset_form_and_next_chain_links() {
+    let dir = workdir("named-hide-reset-links");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [8 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 90 20] /A << /S /Named /N /NextPage >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 25 90 35] /A << /S /Hide /T (txt) /H true >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 40 90 50] /A << /S /ResetForm /Fields [(txt)] /Flags 1 >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 55 90 65] /A << /S /Named /N /NextPage /Next << /S /URI /URI (https://example.com) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (txt) /Rect [10 70 90 80] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [10 85 90 95] /A << /S /Hide /T 8 0 R >> >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("actions.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "actions.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let links = info["links"].as_array().expect("links array");
+    assert_eq!(links.len(), 5);
+    assert_eq!(links[0]["target"], json!({ "named": "NextPage" }));
+    assert_eq!(links[1]["target"], json!({ "hide": ["txt"], "hidden": true }));
+    assert_eq!(links[2]["target"], json!({ "reset": ["txt"], "exclude": true }));
+    assert_eq!(
+        links[3]["target"],
+        json!({
+            "sequence": [
+                { "named": "NextPage" },
+                { "uri": "https://example.com" }
+            ]
+        })
+    );
+    assert_eq!(links[4]["target"], json!({ "hide": [], "annotations": ["8:0"], "hidden": true }));
+}
+
 mod close_argument_tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};

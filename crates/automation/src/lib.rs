@@ -2623,6 +2623,63 @@ fn summary(d: &Document) -> Value {
     })
 }
 
+/// Serialize a [`pdfcraft_render::LinkTarget`] into JSON for `doc_info`.
+fn target_json(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarget) -> Value {
+    let page1 = |p: usize| p + 1;
+    match target {
+        pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
+        pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
+        pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
+            "layers": changes.iter().map(|(op, ocg)| json!({
+                "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
+                "state": match op {
+                    pdfcraft_render::LayerOp::On => "on",
+                    pdfcraft_render::LayerOp::Off => "off",
+                    pdfcraft_render::LayerOp::Toggle => "toggle",
+                },
+            })).collect::<Vec<_>>(),
+            "preserve_rb": preserve_rb,
+        }),
+        pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
+            "action": if *launch { "Launch" } else { "GoToR" },
+            "remote_document": file,
+            "destination": match destination {
+                pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
+                pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
+                pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
+            },
+            "new_window": new_window,
+        }),
+        pdfcraft_render::LinkTarget::Named(n) => json!({ "named": n }),
+        pdfcraft_render::LinkTarget::Hide { targets, hide } => {
+            let fields: Vec<&str> = targets
+                .iter()
+                .filter_map(|t| match t {
+                    pdfcraft_render::HideTarget::Field(f) => Some(f.as_str()),
+                    pdfcraft_render::HideTarget::Annotation(_) => None,
+                })
+                .collect();
+            let annotations: Vec<String> = targets
+                .iter()
+                .filter_map(|t| match t {
+                    pdfcraft_render::HideTarget::Annotation(id) => Some(format!("{}:{}", id.0, id.1)),
+                    pdfcraft_render::HideTarget::Field(_) => None,
+                })
+                .collect();
+            if annotations.is_empty() {
+                json!({ "hide": fields, "hidden": hide })
+            } else {
+                json!({ "hide": fields, "annotations": annotations, "hidden": hide })
+            }
+        }
+        pdfcraft_render::LinkTarget::ResetForm { fields, exclude } => json!({ "reset": fields, "exclude": exclude }),
+        pdfcraft_render::LinkTarget::Sequence(seq) => json!({
+            "sequence": seq.iter().map(|t| target_json(i, t)).collect::<Vec<_>>(),
+        }),
+        pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
+    }
+}
+
 fn info(d: &Document) -> Value {
     let i = &d.info;
     let page1 = |p: usize| p + 1;
@@ -2673,32 +2730,7 @@ fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
-            "target": match &l.target {
-                pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
-                pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
-                pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
-                    "layers": changes.iter().map(|(op, ocg)| json!({
-                        "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
-                        "state": match op {
-                            pdfcraft_render::LayerOp::On => "on",
-                            pdfcraft_render::LayerOp::Off => "off",
-                            pdfcraft_render::LayerOp::Toggle => "toggle",
-                        },
-                    })).collect::<Vec<_>>(),
-                    "preserve_rb": preserve_rb,
-                }),
-                pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
-                    "action": if *launch { "Launch" } else { "GoToR" },
-                    "remote_document": file,
-                    "destination": match destination {
-                        pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
-                        pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
-                        pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
-                    },
-                    "new_window": new_window,
-                }),
-                pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
-            },
+            "target": target_json(i, &l.target),
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "initial": l.initial })).collect::<Vec<_>>(),
         // Full-screen presentation settings a page carries (ISO 32000-2 §12.4.4): only pages with
