@@ -57,6 +57,8 @@ pub enum PanelAction {
     Validate,
     GoTo(usize),
     Trust(Box<Certificate>),
+    /// Import certificates…: pick a certificate file to trust from.
+    Import,
     ViewSigned {
         len: usize,
         revision: usize,
@@ -73,6 +75,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Validate all"), false).clicked() {
             action = Some(PanelAction::Validate);
+        }
+        // The web build has no file to read certificates from.
+        #[cfg(not(target_arch = "wasm32"))]
+        if widgets::pill_button(ui, tl!("Import certificates…"), false).clicked() {
+            action = Some(PanelAction::Import);
         }
     });
     ui.add_space(6.0);
@@ -350,6 +357,146 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
     let mut close = false;
     ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = widgets::pill_button(ui, tl!("OK"), true).clicked()));
     (close, action)
+}
+
+/// The files Import certificates… offers: single certificates (DER or PEM) and PKCS #7 bundles.
+#[cfg(not(target_arch = "wasm32"))]
+pub const CERTIFICATE_EXTENSIONS: &[&str] = &["cer", "crt", "pem", "der", "p7b", "p7c"];
+
+/// The largest file Import certificates… reads. A national PKI's whole bundle is a few hundred
+/// kilobytes; anything far larger is not a certificate file.
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_CERTIFICATE_FILE_BYTES: u64 = 8 << 20;
+
+/// The most files one Import certificates… reads: ICP-Brasil's whole set is a few hundred.
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_CERTIFICATE_FILES: usize = 2000;
+
+/// Import certificates…: the certificates read from a file and which of them to trust. Nothing is
+/// trusted until the user confirms, since a trusted root vouches for every signature under it.
+#[derive(Clone, Debug)]
+pub struct CertImport {
+    /// The file they came from, as shown to the user.
+    pub file: String,
+    /// Each certificate once, in file order.
+    pub certs: Vec<Certificate>,
+    /// Whether each of `certs` is ticked to be trusted.
+    pub chosen: Vec<bool>,
+}
+
+impl CertImport {
+    /// The certificates in `bytes` (DER, PEM or a `.p7b`/`.p7c` bundle) from `file`, all ticked.
+    pub fn read(file: &str, bytes: &[u8]) -> Result<CertImport, String> {
+        let mut certs: Vec<Certificate> = Vec::new();
+        for c in sign::x509::load_certificates(bytes).map_err(|e| e.to_string())? {
+            if !certs.iter().any(|x| x.raw == c.raw) {
+                certs.push(c);
+            }
+        }
+        let chosen = vec![true; certs.len()];
+        Ok(CertImport { file: file.to_string(), certs, chosen })
+    }
+
+    /// Read `path`, refusing a file too large to be a certificate file before reading it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_file(path: &std::path::Path) -> Result<CertImport, String> {
+        Self::from_files(std::slice::from_ref(&path.to_path_buf()))
+    }
+
+    /// Read every file in `paths` into one list, each certificate once. A file that is too large
+    /// or holds no readable certificate refuses the whole import, naming it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_files(paths: &[std::path::PathBuf]) -> Result<CertImport, String> {
+        if paths.len() > MAX_CERTIFICATE_FILES {
+            return Err(format!("{} files: choose at most {MAX_CERTIFICATE_FILES}", paths.len()));
+        }
+        let mut all = CertImport { file: String::new(), certs: Vec::new(), chosen: Vec::new() };
+        for path in paths {
+            let file = path.display().to_string();
+            let len = std::fs::metadata(path).map_err(|e| format!("{file}: {e}"))?.len();
+            if len > MAX_CERTIFICATE_FILE_BYTES {
+                return Err(format!("{file}: too large for a certificate file"));
+            }
+            let bytes = std::fs::read(path).map_err(|e| format!("{file}: {e}"))?;
+            let one = Self::read(&file, &bytes).map_err(|e| format!("{file}: {e}"))?;
+            for c in one.certs {
+                if !all.certs.iter().any(|x| x.raw == c.raw) {
+                    all.certs.push(c);
+                    all.chosen.push(true);
+                }
+            }
+        }
+        all.file = match paths {
+            [one] => one.display().to_string(),
+            _ => format!("{} files", paths.len()),
+        };
+        Ok(all)
+    }
+
+    /// The ticked certificates that `trusted` doesn't already hold.
+    pub fn picked(&self, trusted: &[Certificate]) -> Vec<Certificate> {
+        self.certs
+            .iter()
+            .zip(&self.chosen)
+            .filter(|(c, chosen)| **chosen && !trusted.iter().any(|t| t.raw == c.raw))
+            .map(|(c, _)| c.clone())
+            .collect()
+    }
+}
+
+/// What the Import certificates dialog asks for.
+pub(crate) enum ImportAction {
+    Trust(Vec<Certificate>),
+    Cancel,
+}
+
+/// The Import certificates dialog: each certificate with who it names, who issued it, its validity
+/// and SHA-256 fingerprint (to compare with the one the authority publishes), and a tick.
+pub(crate) fn import_dialog(ui: &mut egui::Ui, v: &mut CertImport, trusted: &[Certificate], t: &Tokens) -> Option<ImportAction> {
+    title(ui, "Import Certificates");
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Certificates in {file}"), &[("file", &v.file)])).color(t.text_muted));
+    ui.add_space(4.0);
+    ui.label(tl!("Signatures made under a trusted certificate are shown as valid. Trust only certificates from a source you trust, and compare each fingerprint with the one its authority publishes."));
+    ui.add_space(8.0);
+    let muted = |s: String| egui::RichText::new(s).font(theme::regular(11.5)).color(t.text_muted);
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        for (i, c) in v.certs.iter().enumerate() {
+            let already = trusted.iter().any(|x| x.raw == c.raw);
+            ui.horizontal(|ui| {
+                if already {
+                    ui.add_enabled(false, widgets::checkbox(&mut true, c.display_name()));
+                    ui.label(muted(tl!("Already trusted").to_string()));
+                } else if let Some(chosen) = v.chosen.get_mut(i) {
+                    ui.add(widgets::checkbox(chosen, c.display_name()));
+                }
+                ui.label(muted(tl!(if c.is_ca { "Certificate authority" } else { "End entity" }).to_string()));
+            });
+            ui.indent(("cert-import", i), |ui| {
+                ui.label(muted(crate::i18n::fmt(tl!("Issued by {issuer}"), &[("issuer", &c.issuer.display())])));
+                ui.label(muted(crate::i18n::fmt(
+                    tl!("Valid from {from} to {to}"),
+                    &[("from", &c.not_before.to_string()), ("to", &c.not_after.to_string())],
+                )));
+                ui.label(muted(format!("SHA-256 {}", hex(&sign::keys::DigestAlg::Sha256.digest(&[&c.raw])))));
+            });
+            ui.add_space(6.0);
+        }
+    });
+    ui.add_space(10.0);
+    let picked = v.picked(trusted);
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let label = crate::i18n::fmt(tl!("Trust selected ({n})"), &[("n", &picked.len().to_string())]);
+            if ui.add_enabled_ui(!picked.is_empty(), |ui| widgets::pill_button(ui, &label, true)).inner.clicked() {
+                action = Some(ImportAction::Trust(picked.clone()));
+            }
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                action = Some(ImportAction::Cancel);
+            }
+        });
+    });
+    action
 }
 
 /// The text of an exported certificate (`.cer`, PEM).
