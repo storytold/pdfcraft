@@ -1917,9 +1917,243 @@
 	Device colour is used, but there is no PDF/A output intent	נעשה שימוש בצבע Device אך אין הגדרת פלט PDF/A
 	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	נעשה שימוש ב־DeviceCMYK: נדרשת הגדרת פלט CMYK (לא מתווספת אוטומטית)
 	The document has additional actions (/AA)	למסמך יש פעולות נוספות (/AA)
+	The document has document-level JavaScript	במסמך קיימים סקריפטים של JavaScript ברמת המסמך
+	The form asks viewers to make appearances (NeedAppearances)	הטופס מבקש מהמציגים ליצור את המראה של השדות (NeedAppearances)
+	A form field has additional actions	לשדה טופס יש פעולות נוספות
+	A stream uses LZW compression	זרם משתמש בדחיסת LZW
+	A stream refers to an external file	זרם מפנה לקובץ חיצוני
+	An image asks to be interpolated	תמונה מבקשת לבצע אינטרפולציה
+	An image has alternates or OPI information	לתמונה יש חלופות או מידע OPI
+	PostScript XObjects aren't allowed	אובייקטי XObject של PostScript אינם מותרים
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	קבצים מוטמעים חייבים להיות בעצמם קובצי PDF/A (לסוגים אחרים השתמש ב־PDF/A-3)
+	An embedded file has no AFRelationship	לקובץ מוטמע אין AFRelationship
+	Select Icon	בחירת סמל
+	Choose images	בחירת תמונות
+	{dpi} pixels/inch	{dpi} פיקסלים לאינץ׳
+	Type your {what}.	הקלד את {what} שלך.
+	Draw your {what} below.	צייר את {what} שלך למטה.
+	Your name	השם שלך
+	Images and text (converted to PDF)	תמונות וטקסט (מומרים ל־PDF)
+	Images and text	תמונות וטקסט
+	Check Box Style:	סגנון תיבת סימון:
+	Button Style:	סגנון לחצן:
+	Check	סימן ביקורת
+	Circle	עיגול
+	Diamond	מעוין
+	Square	ריבוע
+	Star	כוכב
+	{month} {y}	{month} {y}
+	Change {key}	שינוי {key}
+	Insert pages from {name}	הוספת עמודים מתוך {name}
+	Insert pages from {name} — 1 field renamed	הוספת עמודים מתוך {name} — שדה אחד שינה שם
+	Insert pages from {name} — fields renamed	הוספת עמודים מתוך {name} — שמות שדות שונו
+	Fill in {name}	מילוי {name}
+	Set the image of {name}	הגדרת התמונה של {name}
+	Edit script of {name}	עריכת הסקריפט של {name}
+	Import {name}	ייבוא {name}
 	Add bookmark	הוספת סימנייה
+	Rename bookmark	שינוי שם סימנייה
+	Delete bookmark	מחיקת סימנייה
+	Move bookmark	העברת סימנייה
+	Set bookmark destination	הגדרת יעד סימנייה
+	Add stamp	הוספת חותמת
+	Delete comment	מחיקת הערה
+	Edit comment	עריכת הערה
+	Erase	מחיקה
+	Lock comment	נעילת הערה
+	Unlock comment	ביטול נעילת הערה
+	Move comment	העברת הערה
+	Resize comment	שינוי גודל הערה
+	Change comment properties	שינוי מאפייני הערה
+	Add field	הוספת שדה
+	Change field properties	שינוי מאפייני שדה
+	Delete field	מחיקת שדה
+	Duplicate field	שכפול שדה
+	Set tab order	הגדרת סדר מעבר בין שדות
+	Set calculation order	הגדרת סדר חישוב
+	Change initial view	שינוי התצוגה הראשונית
+	Set alternate text	הגדרת טקסט חלופי
+	Mark figure as decorative	סימון איור כדקורטיבי
+	Run JavaScript	הפעלת JavaScript
+	Delete document JavaScript	מחיקת סקריפט JavaScript מהמסמך
+	Edit document JavaScript	עריכת סקריפט JavaScript במסמך
 	Edit text	עריכת טקסט
+	Load document font	טעינת גופן למסמך
+	Move image	העברת תמונה
+	Rotate image	סיבוב תמונה
+	Flip image	היפוך תמונה
+	Delete image	מחיקת תמונה
+	Add header & footer	הוספת כותרת עליונה ותחתונה
+	Update header & footer	עדכון כותרת עליונה ותחתונה
+	Update watermark	עדכון סימן מים
+	Add background	הוספת רקע
+	Update background	עדכון רקע
+	Add image	הוספת תמונה
+	Edit content	עריכת תוכן
+	Delete content	מחיקת תוכן
+	Remove redaction marks	הסרת סימוני השחרה
+	Add link	הוספת קישור
+	Change link properties	שינוי מאפייני קישור
+	Delete link	מחיקת קישור
+	Create link	יצירת קישור
+	Flatten	השטחה
+	Add sticky note	הוספת פתק נדבק
+	Add highlight	הוספת הדגשה
+	Add underline	הוספת קו תחתון
+	Add strikethrough	הוספת קו חוצה
+	Add squiggly underline	הוספת קו תחתון גלי
+	Add rectangle	הוספת מלבן
+	Add oval	הוספת אליפסה
+	Add arrow	הוספת חץ
+	Add line	הוספת קו
+	Add drawing	הוספת ציור
+	Add text box	הוספת תיבת טקסט
+	Add checkmark	הוספת סימן אישור
+	Add cross	הוספת סימן X
+	Add dot	הוספת נקודה
+	Add signature	הוספת חתימה
+	Add redaction mark	הוספת סימון השחרה
+	Add cloud	הוספת ענן
+	Add polygon	הוספת מצולע
+	Add connected lines	הוספת קווים מחוברים
+	Add callout	הוספת הערת הסבר
+	Add inserted text	הוספת טקסט שהוכנס
+	Add file attachment	הוספת קובץ מצורף
+	Set status Accepted	הגדרת מצב: התקבל
+	Set status Rejected	הגדרת מצב: נדחה
+	Set status Cancelled	הגדרת מצב: בוטל
+	Set status Completed	הגדרת מצב: הושלם
+	Set status None	הסרת המצב
+	Set status Unmarked	ביטול הסימון
+	Save as PDF/A-1b	שמירה כ־PDF/A-1b
+	Save as PDF/A-2b	שמירה כ־PDF/A-2b
+	Save as PDF/A-3b	שמירה כ־PDF/A-3b
+	Fill & Sign: change signature	מילוי וחתימה: שינוי החתימה
+	Fill & Sign: change initials	מילוי וחתימה: שינוי ראשי התיבות
+	Fill & Sign: remove saved signature	מילוי וחתימה: הסרת חתימה שמורה
+	Fill & Sign: remove saved initials	מילוי וחתימה: הסרת ראשי תיבות שמורים
+	Change signature	שינוי חתימה
+	Change initials	שינוי ראשי תיבות
+	Measure distance	מדידת מרחק
+	Measure perimeter	מדידת היקף
+	Measure area	מדידת שטח
+	Set measurement scale	הגדרת קנה מידה למדידה
+	Measurement information	מידע על המדידה
+	Measurement snapping	הצמדה למדידה
+	Export measurements as CSV	ייצוא מדידות כ־CSV
+	Distance	מרחק
+	Perimeter	היקף
+	Area	שטח
+	Drawing scale	קנה מידה של השרטוט
 	Scale	קנה מידה
+	Common scales	קני מידה נפוצים
+	Enter a scale such as 1:50.	הזן קנה מידה כגון 1:50.
+	Applying a scale switches units to m / mm.	החלת קנה מידה משנה את היחידות ל־m / mm.
+	Snapping	הצמדה
+	Export measurements	ייצוא מדידות
+	Open a PDF to measure it.	פתח PDF כדי למדוד אותו.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	לחץ על קודקודים. הקש Enter או לחץ פעמיים כדי לסיים היקף או שטח. לחץ על הנקודה הראשונה כדי לסגור שטח.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift מגביל לזוויות של 45 מעלות. Backspace מסיר קודקוד. Escape מבטל.
+	Angle	זווית
+	Click the first point to begin.	לחץ על הנקודה הראשונה כדי להתחיל.
+	Snap to drawing	הצמדה לשרטוט
+	Endpoints	נקודות קצה
+	Midpoints	נקודות אמצע
+	Intersections	נקודות חיתוך
+	Paths	נתיבים
+	Sensitivity	רגישות
+	Unit	יחידה
+	Decimals	ספרות עשרוניות
+	Calibrate from two points	כיול באמצעות שתי נקודות
+	Entire page	העמוד כולו
+	Viewport rectangle in page points (x, y, width, height)	מלבן אזור התצוגה ביחידות נקודות של העמוד (x, y, רוחב, גובה)
+	Viewport	אזור תצוגה
+	Apply scale	החלת קנה המידה
+	Saved measurements	מדידות שמורות
+	Saved measurements.	מדידות נשמרו.
+	Endpoint	נקודת קצה
+	Midpoint	נקודת אמצע
+	Intersection	נקודת חיתוך
+	Path	נתיב
+	This drawing exceeds the snapping limit; only the first paths are used.	השרטוט חורג ממגבלת ההצמדה; נעשה שימוש בנתיבים הראשונים בלבד.
+	Some page content couldn't be read; snapping uses the rest.	לא ניתן לקרוא חלק מתוכן העמוד; ההצמדה משתמשת בשאר התוכן.
+	Unsupported measurements	מדידות שאינן נתמכות
+	Label	תווית
+	{n} measurements use an unsupported format and are left out.	{n} מדידות משתמשות בתבנית שאינה נתמכת ולכן הושמטו.
+	This area has too many overlapping paths; intersection snapping is limited.	באזור זה יש יותר מדי נתיבים חופפים; ההצמדה לנקודות חיתוך מוגבלת.
+	This measurement needs at least {n} points.	מדידה זו דורשת לפחות {n} נקודות.
+	Switch to two-page view first to show the cover page	תחילה עבור לתצוגת שני עמודים כדי להציג את עמוד השער
+	Page display: {layout}	תצוגת עמוד: {layout}
+	Fit to width scrolling	התאמה לרוחב עם גלילה
+	Fit one full page	התאמת עמוד שלם אחד
+	Created a PDF from {n} files	נוצר PDF מתוך {n} קבצים
+	PDF, images and text	PDF, תמונות וטקסט
+	Insert a file before page {label}	הוספת קובץ לפני עמוד {label}
+	Insert a file at the end	הוספת קובץ בסוף
+	Save pages	שמירת עמודים
+	Save these pages as one PDF	שמירת העמודים האלה כ־PDF אחד
+	No changes to save	אין שינויים לשמירה
+	Created a PDF from {n} files; left out: {names}	נוצר PDF מתוך {n} קבצים; הושמטו: {names}
+	Created a PDF from the first {n} files	נוצר PDF מתוך {n} הקבצים הראשונים
+	None of those files can be made into a PDF; use PDFs, images or .txt files	לא ניתן ליצור PDF מאף אחד מהקבצים האלה; השתמש בקובצי PDF, תמונות או קובצי ‎.txt
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	בחר תמונת PNG או JPEG (עד 4 MiB). השקיפות נשמרת.
+	Couldn't import the signature image: {e}	לא ניתן לייבא את תמונת החתימה: {e}
+	Go to page…	מעבר לעמוד…
+	For page sizes and margins.	להגדרת גודל העמוד והשוליים.
+	Reopen the files that were open when PdfCraft last closed	פתיחת הקבצים מחדש שהיו פתוחים כש־PdfCraft נסגר בפעם האחרונה
+	Restore the last view (page, zoom and page display) when a document is opened again	שחזור התצוגה האחרונה (עמוד, זום ותצוגת עמוד) בעת פתיחת מסמך מחדש
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	גופני הטקסט של ה־PDF אינם יכולים להציג את “{c}” ({code}). בחר טקסט נתמך.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	הגופנים התקניים אינם יכולים להציג את “{c}” ({code}). כרגע ניתן להוסיף כטקסט רק תווים מערב־אירופיים.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	גופן השדה אינו יכול להציג את “{c}” ({code}), ולכן PdfCraft מציג במקומו ?. הערך נשמר ומציגי PDF אחרים מציגים מחדש את השדה על פיו.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	הגופנים שבהם PdfCraft כותב אינם יכולים להציג את “{c}” ({code}), ולכן יוצג ? בכל מציג PDF. הטקסט נשמר.
+	Open arrow	חץ פתוח
+	Closed arrow	חץ סגור
+	Butt	קצה שטוח
+	Reverse open arrow	חץ פתוח הפוך
+	Reverse closed arrow	חץ סגור הפוך
+	Slash	קו נטוי
+	Larger pages	עמודים גדולים יותר
+	Smaller pages	עמודים קטנים יותר
+	Reset page size	איפוס גודל העמוד
+	Date format	תבנית תאריך
+	Fill & Sign dates	תאריכי מילוי וחתימה
+	Pattern	תבנית
+	Today: {date}	היום: {date}
+	Same as interface ({language})	כמו שפת הממשק ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	לא ניתן עדיין לכתוב את {chars} ל־PDF: טקסט מילוי וחתימה תומך כרגע רק בתווים מערב־אירופיים. בחר תבנית מספרית כגון dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	פתיחת ההעדפות של מנהל התקן המדפסת. ההעדפות נשמרות לכל הדפסה ממחשב זה; מספר העותקים, הדפסה דו־צדדית, גווני אפור והנייר שנבחרו כאן עדיין יחולו.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	ההגדרות של מנהל התקן המדפסת להדפסה זו: מגש הנייר, סוג הנייר, גימור ועוד.
+	Couldn't open the printer's preferences: {e}	לא ניתן לפתוח את העדפות המדפסת: {e}
+	Printer properties	מאפייני מדפסת
+	Reset to printer defaults	איפוס לברירות המחדל של המדפסת
+	This printer offers no settings of its own.	למדפסת זו אין הגדרות משלה.
+	% of all commits	% מכלל ההתחייבויות
+	+LOC	+שורות קוד
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: ‏{prs} בקשות משיכה, {commits} התחייבויות, +{added} / −{deleted} שורות (Δ {delta}), +{bin_added} / −{bin_deleted} קבצים בינאריים, {first} – {last}
+	A button	לחצן
+	A link	קישור
+	A script	סקריפט
+	About	אודות
+	Add {what}	הוספת {what}
+	Align fields	יישור שדות
+	Another file dialog is still open. Finish with it first.	תיבת בחירת קובץ אחרת עדיין פתוחה. סיים תחילה את הפעולה שבה.
+	Basic constraints	אילוצים בסיסיים
+	Binary assets added	נוספו נכסים בינאריים
+	Binary assets removed	הוסרו נכסים בינאריים
+	Change document properties	שינוי מאפייני המסמך
+	Change {what}	שינוי {what}
+	Commits	התחייבויות
+	Company	חברה
+	Contributors	תורמים
+	Couldn't show the file picker. Please try again.	לא ניתן להציג את בורר הקבצים. נסה שוב.
+	Create	יצירה
+	Create PDF from images	יצירת PDF מתמונות
+	Cut and stack	חיתוך וערימה
+	DPI sets the printed page size without resampling the image.	DPI קובע את גודל ההדפסה בלי לדגום מחדש את התמונה.
+	Default page display	תצוגת עמוד כברירת מחדל
+	Default workspace mode	מצב סביבת העבודה כברירת מחדל
+	Default zoom	זום כברירת מחדל
+	Display name	שם התצוגה
 	Show	הצגה
 @plural	{n} field|{n} fields	{n} שדה|{n} שדות
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} שם שדה מתנגש עם קבצים קודמים וישונה: {list}|{n} שמות שדות מתנגשים עם קבצים קודמים וישונו: {list}
