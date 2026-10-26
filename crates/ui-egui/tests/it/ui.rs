@@ -1458,7 +1458,7 @@ fn explicit_mode_overrides_default_before_and_after_open() {
 fn preferences_selects_default_workspace_for_next_open() {
     use egui::accesskit::Role;
     use pdfcraft_ui_egui::Mode;
-    let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    let mut h = harness(|app| app.set_option("dialog", "preferences:page-display").unwrap());
     h.get_by_label("Default workspace mode");
     h.get_by_role_and_label(Role::RadioButton, "Read").scroll_to_me();
     h.run_steps(4);
@@ -1489,7 +1489,7 @@ fn use_system_title_bar_swaps_the_header_bar_for_the_window_frame() {
     // The window opened undecorated, so the first frame asks for nothing.
     assert_eq!(decorations(&h), None);
     assert!(h.query_by_label("Minimize").is_some(), "the header bar has the window buttons");
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.state_mut().set_option("dialog", "preferences:general").unwrap();
     h.run_steps(2);
     h.get_by_role_and_label(Role::CheckBox, "Use system title bar").scroll_to_me();
     h.run_steps(4);
@@ -1511,7 +1511,7 @@ fn use_system_title_bar_swaps_the_header_bar_for_the_window_frame() {
     assert!(!restored.system_title_bar);
     assert!(restored.set_option("system-title-bar", "maybe").is_err());
     // Where the desktop draws the frame there is nothing to choose.
-    let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    let mut h = harness(|app| app.set_option("dialog", "preferences:general").unwrap());
     h.run_steps(2);
     assert!(h.query_by_label("Use system title bar").is_none());
     assert!(h.query_by_label("Minimize").is_none());
@@ -1524,7 +1524,7 @@ fn use_system_title_bar_swaps_the_header_bar_for_the_window_frame() {
 fn preferences_choose_animation_effects_and_the_choice_is_saved() {
     use egui::accesskit::Role;
     use pdfcraft_ui_egui::motion::AnimationEffects;
-    let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    let mut h = harness(|app| app.set_option("dialog", "preferences:accessibility").unwrap());
     assert_eq!(h.state().animation_effects, AnimationEffects::System);
     h.get_by_label("Animation effects");
     for (label, choice) in [

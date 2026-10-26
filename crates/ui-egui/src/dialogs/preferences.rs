@@ -6,6 +6,7 @@ use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, pos2, v
 use crate::PdfCraftApp;
 use crate::canvas::{Fit, PageLayout, ViewDefaults};
 use crate::motion::AnimationEffects;
+use crate::prefs::tiles::{self, Picture, Tile};
 use crate::scroll_speed::ScrollSpeed;
 use crate::side_panels::ToolsSide;
 use crate::theme::{self, ThemeKind, Tokens};
@@ -43,6 +44,17 @@ pub fn segmented_pill_choice_a11y_query<T: PartialEq + Copy>(
 ) -> (bool, Option<egui::Response>) {
     let mut changed = false;
     let mut first_match_resp: Option<egui::Response> = None;
+    // In a wrapping row the bar moves under its label when it does not fit beside it: a frame is
+    // placed whole, so without this a long translation of the label pushes the bar off the card.
+    if ui.layout().main_wrap() {
+        let font = theme::medium(12.0);
+        let bar: f32 = options.iter().map(|&(_, label, _)| layout_pill_label(ui, label, query, font.clone(), t.text).size().x + 18.0).sum::<f32>()
+            + 2.0 * options.len().saturating_sub(1) as f32
+            + 6.0;
+        if bar > ui.available_size_before_wrap().x {
+            ui.end_row();
+        }
+    }
     egui::Frame::new()
         .fill(t.field)
         .stroke(Stroke::new(1.0, t.border))
@@ -365,6 +377,16 @@ impl<'a> PrefSearchContext<'a> {
         changed
     }
 
+    /// A row of picture tiles: its names count as matches and the row scrolls into view when one
+    /// of them holds the first. A tile draws its own name, so it carries no highlight.
+    pub fn tile_choice<V: PartialEq + Copy>(&mut self, ui: &mut egui::Ui, current: &mut V, options: &[Tile<'_, V>]) -> bool {
+        let matches = options.iter().map(|option| find_match_ranges(option.label, self.query).len()).sum();
+        self.total_matches += matches;
+        let row = ui.scope(|ui| tiles::choose(ui, current, options));
+        self.scroll_if_first_match(&row.response, matches);
+        row.inner
+    }
+
     pub fn toggle_pill(&mut self, ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str) -> bool {
         let matches = find_match_ranges(label, self.query).len();
         self.total_matches += matches;
@@ -501,48 +523,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
 
     let should_scroll = !query.trim().is_empty() && query != last_scrolled_query;
     let mut ctx = PrefSearchContext::new(&query, should_scroll);
-
-    // Card 1: General & Interface
-    let title1 = tl!("General & Interface");
-    preference_card(ui, t, title1, Some("settings"), &mut ctx, |ui, ctx| {
-        card_general(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 2: Appearance & Theme
-    let title2 = tl_ctx!("theme", "Appearance");
-    preference_card(ui, t, title2, Some("sun"), &mut ctx, |ui, ctx| {
-        card_appearance(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 3: Documents and View
-    let title3 = tl!("Documents and view");
-    preference_card(ui, t, title3, Some("file-text"), &mut ctx, |ui, ctx| {
-        card_documents_and_view(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 4: Comment
-    let title4 = tl!("Comment");
-    preference_card(ui, t, title4, Some("message-square-text"), &mut ctx, |ui, ctx| {
-        card_identity(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 5: Fill & Sign
-    let title5 = tl!("Fill & Sign");
-    preference_card(ui, t, title5, Some("pen-tool"), &mut ctx, |ui, ctx| {
-        card_fill_and_sign(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 6: JavaScript
-    let title6 = "JavaScript";
-    preference_card(ui, t, title6, Some("code-xml"), &mut ctx, |ui, ctx| {
-        card_javascript(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
+    draw_cards(ui, app, t, &mut ctx, None);
 
     if ctx.first_match_scrolled {
         ui.data_mut(|d| d.insert_temp(last_scrolled_id, query.clone()));
@@ -556,9 +537,89 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     }
 }
 
+/// One category of Preferences (#2264): the same cards, only the chosen category's, so the
+/// category list beside them has something to switch.
+pub(crate) fn preferences_category(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, page: crate::PrefsPage) {
+    // This is the path that draws with an empty search box, so it forgets the query that last
+    // scrolled: the same query entered again (pasted after clearing) has to scroll again.
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("pdfcraft_pref_last_scrolled_query"), String::new()));
+    let mut ctx = PrefSearchContext::new("", false);
+    draw_cards(ui, app, t, &mut ctx, Some(page));
+}
+
+/// The cards, every one (`only` is `None`, which is what a search needs: a match can sit in any
+/// category) or the ones of a single category.
+fn draw_cards(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext, only: Option<crate::PrefsPage>) {
+    let show = |page: crate::PrefsPage| only.is_none_or(|shown| shown == page);
+
+    // Card 1: General & Interface
+    if show(crate::PrefsPage::General) {
+        let title1 = tl!("General & Interface");
+        preference_card(ui, t, title1, Some("settings"), ctx, |ui, ctx| {
+            card_general(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+
+    // Card 2: Appearance & Theme
+    if show(crate::PrefsPage::Appearance) {
+        let title2 = tl_ctx!("theme", "Appearance");
+        preference_card(ui, t, title2, Some("sun"), ctx, |ui, ctx| {
+            card_appearance(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+
+    // Card 3: Documents and View
+    if show(crate::PrefsPage::PageDisplay) {
+        let title3 = tl!("Documents and view");
+        preference_card(ui, t, title3, Some("file-text"), ctx, |ui, ctx| {
+            card_documents_and_view(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+
+    // Card 4: Accessibility
+    if show(crate::PrefsPage::Accessibility) {
+        let title4 = tl!("Accessibility");
+        preference_card(ui, t, title4, Some("accessibility"), ctx, |ui, ctx| {
+            card_accessibility(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+
+    // Card 5: Comment
+    if show(crate::PrefsPage::Commenting) {
+        let title5 = tl!("Comment");
+        preference_card(ui, t, title5, Some("message-square-text"), ctx, |ui, ctx| {
+            card_identity(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+
+    // Card 6: Fill & Sign
+    if show(crate::PrefsPage::FillSign) {
+        let title6 = tl!("Fill & Sign");
+        preference_card(ui, t, title6, Some("pen-tool"), ctx, |ui, ctx| {
+            card_fill_and_sign(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+
+    // Card 7: JavaScript
+    if show(crate::PrefsPage::JavaScript) {
+        let title7 = "JavaScript";
+        preference_card(ui, t, title7, Some("code-xml"), ctx, |ui, ctx| {
+            card_javascript(ui, app, t, ctx);
+        });
+        ui.add_space(12.0);
+    }
+}
+
 /// Content for Card 1: General & Interface
 fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
+    // Wraps: the two labels and their pickers are wider than the card in German.
+    ui.horizontal_wrapped(|ui| {
         let label = ctx.label_primary(ui, tl!("Interface language"), t);
         let (selected, picker) = {
             let drawable = |text: &str| picker_text_is_drawable(ui, text);
@@ -618,15 +679,21 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     ctx.label_secondary(ui, tl!("Auto follows the system's text size. Pages always render at the display's full resolution."), t);
     ui.add_space(6.0);
 
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Tools panel side"), t);
-        let right = app.side_panels.tools_on_right();
-        let mut side = if right { ToolsSide::Right } else { ToolsSide::Left };
-        if ctx.pill_choice(ui, t, &mut side, &[(ToolsSide::Left, tl!("Left")), (ToolsSide::Right, tl!("Right"))]) {
-            app.side_panels.tools_side = side;
-        }
+    // The panel side is a pair of picture tiles (#2264): the drawing says which side, so a long
+    // translation only wraps the name under the tile instead of pushing the choice off the card.
+    ctx.label_primary(ui, tl!("Tools panel side"), t);
+    let right = app.side_panels.tools_on_right();
+    let mut side = if right { ToolsSide::Right } else { ToolsSide::Left };
+    let sides = [
+        Tile { value: ToolsSide::Left, label: tl!("Left"), picture: Picture::ToolsSide { right: false } },
+        Tile { value: ToolsSide::Right, label: tl!("Right"), picture: Picture::ToolsSide { right: true } },
+    ];
+    if ctx.tile_choice(ui, &mut side, &sides) {
+        app.side_panels.tools_side = side;
+    }
+    ui.add_space(6.0);
 
-        ui.add_space(16.0);
+    ui.horizontal_wrapped(|ui| {
         ctx.label_primary(ui, tl!("Navigation rail side"), t);
         let rail_right = app.side_panels.rail_on_right();
         let mut rside = if rail_right { ToolsSide::Right } else { ToolsSide::Left };
@@ -635,21 +702,6 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
         if ctx.pill_choice_a11y(ui, t, &mut rside, &[(ToolsSide::Left, tl!("Left"), &left_a11y), (ToolsSide::Right, tl!("Right"), &right_a11y)]) {
             app.side_panels.rail_side = rside;
         }
-    });
-    ui.add_space(6.0);
-
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Animation effects"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut app.animation_effects,
-            &[
-                (AnimationEffects::System, tl_ctx!("animation effects", AnimationEffects::System.label())),
-                (AnimationEffects::On, tl_ctx!("animation effects", AnimationEffects::On.label())),
-                (AnimationEffects::Off, tl_ctx!("animation effects", AnimationEffects::Off.label())),
-            ],
-        );
     });
     ui.add_space(6.0);
 
@@ -688,6 +740,24 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     crate::appearance::preferences_section_with_context(ui, app, t, ctx);
     ui.add_space(8.0);
     reading_colours_section(ui, app, t, ctx);
+}
+
+/// Content for Card 4: Accessibility — whether anything animates, the wheel's scrolling and
+/// zooming included; left alone it follows the system's animation setting (#2264).
+fn card_accessibility(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.horizontal_wrapped(|ui| {
+        ctx.label_primary(ui, tl!("Animation effects"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.animation_effects,
+            &[
+                (AnimationEffects::System, tl_ctx!("animation effects", AnimationEffects::System.label())),
+                (AnimationEffects::On, tl_ctx!("animation effects", AnimationEffects::On.label())),
+                (AnimationEffects::Off, tl_ctx!("animation effects", AnimationEffects::Off.label())),
+            ],
+        );
+    });
 }
 
 #[derive(Clone, Copy, Default)]
@@ -747,21 +817,19 @@ fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, c
 
 /// Content for Card 3: Documents and View
 fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Default workspace mode"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut app.default_mode,
-            &[
-                (crate::Mode::AllTools, tl!("All tools")),
-                (crate::Mode::Read, tl!("Read")),
-                (crate::Mode::Edit, tl!("Edit")),
-                (crate::Mode::Convert, tl!("Convert")),
-                (crate::Mode::Sign, tl!("E-Sign")),
-            ],
-        );
-    });
+    // The workspace is chosen from picture tiles (#2264), like the page display below it.
+    ctx.label_primary(ui, tl!("Default workspace mode"), t);
+    ctx.tile_choice(
+        ui,
+        &mut app.default_mode,
+        &[
+            Tile { value: crate::Mode::AllTools, label: tl!("All tools"), picture: Picture::Icon("layout-grid") },
+            Tile { value: crate::Mode::Read, label: tl!("Read"), picture: Picture::Icon("book-open") },
+            Tile { value: crate::Mode::Edit, label: tl!("Edit"), picture: Picture::Icon("pencil") },
+            Tile { value: crate::Mode::Convert, label: tl!("Convert"), picture: Picture::Icon("file-output") },
+            Tile { value: crate::Mode::Sign, label: tl!("E-Sign"), picture: Picture::Icon("signature") },
+        ],
+    );
     ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
     ui.add_space(6.0);
 
@@ -769,17 +837,21 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     let mut continuous = app.view_defaults.continuous;
     let mut layout_changed = false;
     let mut continuous_changed = false;
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Default page display"), t);
-        if ctx.pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
-            app.view_defaults.layout = layout_choice;
-            layout_changed = true;
-        }
-        if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
-            app.view_defaults.continuous = continuous;
-            continuous_changed = true;
-        }
-    });
+    // The page display is a row of picture tiles (#2264). The pictures follow Continuous
+    // scrolling, so a tile shows the display a PDF actually opens in.
+    ctx.label_primary(ui, tl!("Default page display"), t);
+    let layouts: Vec<Tile<'_, PageLayout>> = PageLayout::ORDER
+        .into_iter()
+        .map(|l| Tile { value: l, label: tl!(l.label()), picture: Picture::Pages { two_up: l == PageLayout::TwoUp, continuous } })
+        .collect();
+    if ctx.tile_choice(ui, &mut layout_choice, &layouts) {
+        app.view_defaults.layout = layout_choice;
+        layout_changed = true;
+    }
+    if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
+        app.view_defaults.continuous = continuous;
+        continuous_changed = true;
+    }
     let mut show_page_gaps = app.view_defaults.show_page_gaps;
     let gaps_changed = ctx.checkbox(ui, &mut show_page_gaps, tl!("Show gaps between pages"), t).changed();
     if gaps_changed {
@@ -790,20 +862,22 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
 
     let mut fit_changed = false;
     let mut zoom_changed = false;
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Default zoom"), t);
-        let mut fit = app.view_defaults.fit;
-        if ctx.pill_choice(ui, t, &mut fit, &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))])
-        {
-            app.view_defaults.fit = fit;
-            fit_changed = true;
-        }
-        let mut percent = app.view_defaults.zoom * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
-            zoom_changed = true;
-        }
-    });
+    ctx.label_primary(ui, tl!("Default zoom"), t);
+    let mut fit = app.view_defaults.fit;
+    let zooms = [
+        Tile { value: Fit::Width, label: tl!("Fit to width"), picture: Picture::Zoom(Fit::Width) },
+        Tile { value: Fit::Page, label: tl!("Zoom to page level"), picture: Picture::Zoom(Fit::Page) },
+        Tile { value: Fit::None, label: tl!("Custom"), picture: Picture::Zoom(Fit::None) },
+    ];
+    if ctx.tile_choice(ui, &mut fit, &zooms) {
+        app.view_defaults.fit = fit;
+        fit_changed = true;
+    }
+    let mut percent = app.view_defaults.zoom * 100.0;
+    if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+        (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
+        zoom_changed = true;
+    }
     ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
     let always_changed = ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t).changed();
 
@@ -828,7 +902,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."), t);
     ui.add_space(6.0);
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ctx.label_primary(ui, tl!("Units"), t);
         ctx.pill_choice(
             ui,
@@ -849,7 +923,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
 
 /// The scroll speed and the middle button's direction, in Card 3.
 fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ctx.label_primary(ui, tl!("Scroll speed (mouse wheel and arrow keys)"), t);
         ctx.pill_choice(
             ui,

@@ -75,6 +75,7 @@ impl PdfCraftApp {
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
+            preferences_page: PrefsPage::General,
             view_defaults: Default::default(),
             units: Default::default(),
             blank_paper: crate::paper::Paper::system(),

@@ -51,6 +51,8 @@ pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
+mod prefs;
+pub use prefs::PrefsPage;
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
 mod dialogs;
@@ -320,6 +322,8 @@ pub struct PdfCraftApp {
     pub mode: Mode,
     /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
     pub default_mode: Mode,
+    /// The Preferences category shown, kept while the app runs so Preferences reopens on it.
+    pub preferences_page: PrefsPage,
     /// Page display and zoom for newly opened PDFs that don't ask for their own (Preferences ▸
     /// Documents and view). Continuous scrolling at fit width by default, which never snaps
     /// between pages.

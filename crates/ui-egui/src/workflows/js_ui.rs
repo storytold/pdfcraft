@@ -1,5 +1,5 @@
 //! Acrobat JavaScript in the shell: what scripts ask for (alerts, printing, navigation, links),
-//! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
+//! the JavaScript console (⌘J) and Document JavaScripts. Preferences ▸ JavaScript is in `prefs`.
 
 use egui::{Align, Layout};
 use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Panel, Request};
@@ -415,7 +415,7 @@ impl PdfCraftApp {
     }
 }
 
-fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> {
+pub(crate) fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> {
     let mut clicked = None;
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

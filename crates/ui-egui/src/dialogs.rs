@@ -157,9 +157,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
-            Dialog::Preferences => 610.0,
-            Dialog::About => 820.0,
-            Dialog::PinTool => 540.0,
+            Dialog::About => 780.0,
+            // Preferences sizes itself to the window (`prefs::show`).
+            Dialog::Preferences => 240.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -1464,25 +1464,16 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
 
 /// `Dialog::Preferences` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
-    ui.set_width(610.0);
     let t = Tokens::get(ui.ctx());
-    preferences::preferences_header(ui, &t);
-    ui.add_space(10.0);
-    // The settings outgrow a short window: scroll them rather than run off the screen.
-    // The OK row stays below the scroll, in reach however far the settings are scrolled.
-    let max = (ui.ctx().content_rect().height() - 120.0 - preferences::PREFERENCES_BUTTON_ROW - 40.0).max(preferences::PREFERENCES_MIN_SCROLL);
-    // A scroll area starts from the room the dialog offers it, and a modal offers more
-    // each frame for the first few, so with OK outside the scroll the dialog would grow
-    // over those frames. Asking for the full height as the least it may scroll in
-    // (which only applies when the settings overflow it) opens the dialog at full size.
-    // A scrollbar of its own: the floating one lies over the right edge of the theme
-    // cards and other full-width rows (#3557).
-    preferences_scroll(ui, max, |ui| preferences::preferences_body(ui, app, &t));
-    req.close = preferences::preferences_buttons(ui);
+    // Sized to the window, with the categories beside the chosen one's settings.
+    req.close = crate::prefs::show(ui, app, &t);
     false
 }
 
-fn preferences_scroll(ui: &mut egui::Ui, max: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+/// The Preferences settings scroll: a scrollbar of its own (the floating one lies over the right
+/// edge of the cards and other full-width rows, #3557) and a short animation unless the interface
+/// has them turned off.
+pub(crate) fn preferences_scroll(ui: &mut egui::Ui, max: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.scope(|ui| {
         ui.spacing_mut().scroll.floating = false;
         ui.spacing_mut().scroll.bar_inner_margin = 14.0;
@@ -1494,6 +1485,9 @@ fn preferences_scroll(ui: &mut egui::Ui, max: f32, add_contents: impl FnOnce(&mu
             .id_salt("preferences-dialog-scroll")
             .max_height(max)
             .min_scrolled_height(max)
+            // The area keeps the height it is given even where the settings are shorter than it,
+            // so every Preferences category opens at the same size (#2264).
+            .auto_shrink([false, false])
             .animated(true)
             .show(ui, add_contents);
     });
