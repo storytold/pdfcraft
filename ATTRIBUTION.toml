@@ -243,6 +243,15 @@ kind = "translation"
 usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/he.tsv"
+title = "Hebrew interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room, AI-assisted translations from PdfCraft's English UI labels; not independently reviewed by a native-language reviewer"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Hebrew UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+[[asset]]
 path = "crates/ui-egui/src/i18n/hi.tsv"
 title = "Hindi interface translation catalog"
 author = "PdfCraft contributors"
