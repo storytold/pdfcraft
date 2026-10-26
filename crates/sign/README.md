@@ -37,12 +37,19 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   checks. An untrusted TSA's time is reported as an unverified timestamp and never used as the
   validation time (the signer's claimed time is). `timestamp::respond` is the TSA-side signer behind the
   deterministic test authority.
-- **Document timestamps and LTV:** `timestamp_document` appends a standalone RFC 3161
-  document timestamp (`/ETSI.RFC3161`) covering the whole file; validation discovers and
-  verifies these dictionaries (imprint over the signed bytes, token signature, TSA cert
-  validity). `dss::embed` merges revocation evidence into the catalog's `/DSS` with `/VRI`
-  entries keyed per signature (uppercase-hex SHA-1 of `/Contents`), deduplicating
-  byte-identical blobs — sign → DSS → timestamp makes a B-LTA file, and the change classifier
+- **Document timestamps and LTV:** `timestamp_document` appends an RFC 3161 document timestamp
+  (`/ETSI.RFC3161`) covering the whole file, stored as `/V` of an AcroForm signature field
+  (`Timestamp_n`) reachable from the catalog so validators that discover signatures through the
+  field tree see it (#4301). When linking is skipped — no page, permissions that forbid a
+  new field, or a form that would be written by replacing unread objects — it is kept as
+  the standalone dictionary scan discovery finds; when a named field already holds the
+  dictionary, no second field is added and that field (or the scan) lists it. Validation
+  discovers and verifies these dictionaries (imprint over the signed bytes, token
+  signature, TSA cert validity), including
+  legacy standalone ones that sit outside any field. `dss::embed` merges revocation evidence
+  into the catalog's `/DSS` with `/VRI` entries keyed per signature (uppercase-hex SHA-1 of
+  `/Contents`), deduplicating byte-identical blobs — sign → DSS → timestamp makes a B-LTA
+  file, and the change classifier
   treats the store as a permitted change: only objects reached through `/Certs`, `/CRLs`,
   `/OCSPs` and `/VRI` with the shape of their role, and new or only grown since the signature,
   count (a `/DSS` entry naming a page's contents, or a `/Type /DSS` label, does not).

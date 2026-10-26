@@ -5374,8 +5374,10 @@ impl Session {
         Ok(signed)
     }
 
-    /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
-    /// current state. An empty `date` takes the session clock; the transport is the caller's.
+    /// Append a document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's current
+    /// state — stored in a signature field when the document can hold one (#4301), left held
+    /// by a field that already references it, standalone otherwise. An empty `date` takes the
+    /// session clock; the transport is the caller's.
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;

@@ -624,7 +624,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         }
         out.push(info);
     }
-    // Standalone document timestamps (ISO 32000-2 §12.8.2.2) live outside AcroForm fields.
+    // Legacy standalone document timestamps (ISO 32000-2 §12.8.5) live outside AcroForm fields.
     let candidates = cache.timestamp_candidates(doc).into_iter().map(|r| r.num).collect();
     for (r, o) in doc.scan_objects_subset(candidates) {
         if field_values.contains(&r) {
@@ -2240,9 +2240,18 @@ fn sign_inner(
     Ok(out)
 }
 
-/// Append a document timestamp (ISO 32000-2 §12.8.2.2): a standalone signature dictionary
-/// whose `/Contents` is an RFC 3161 token covering the whole current file (`/ETSI.RFC3161`).
-/// The transport is the caller's; a rejected or malformed token produces no file.
+/// Append a document timestamp (ISO 32000-2 §12.8.5, the document timestamp dictionary):
+/// a signature dictionary whose `/Contents` is an RFC 3161 token covering the whole current
+/// file (`/ETSI.RFC3161`). When the document has a catalog, a page and a form that can be
+/// written without replacing unread objects, under permissions that allow a new signature
+/// field, it is stored as `/V` of an AcroForm signature
+/// field reachable from the catalog, so validators that discover signatures through the
+/// field tree see it (#4301). Otherwise this function adds no link: a fallback keeps the
+/// dictionary standalone (scan-based discovery finds it), or the dedupe guard found a
+/// named Sig field already holding it — the stamp lists through that field when its own
+/// dict carries the /V, and via the scan when only a separate widget does (that field
+/// then lists unsigned). Fields this function writes are merged and always carry /V on the
+/// dict. The transport is the caller's; a rejected or malformed token produces no file.
 pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampAuthority, date: &str) -> Result<Vec<u8>, SignError> {
     // A pending security change would make the incremental save a full rewrite that applies
     // or removes protection as it signs (and breaks existing signatures): save it first.
@@ -2271,7 +2280,140 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
     let mut build = Dict::new();
     build.set(b"App".to_vec(), Object::Dict(app));
     v.set(b"Prop_Build".to_vec(), Object::Dict(build));
-    doc.add(Object::Dict(v));
+    let sig = doc.add(Object::Dict(v));
+    // #4301 (from a reviewer's note on #4226): validators that discover signatures through
+    // the AcroForm field tree may miss a document timestamp nothing links. Store it as /V of
+    // a Sig field reachable from the catalog — the layout `sign`
+    // writes for new fields and that validation has accepted since #621. The field is its own
+    // widget (a combined object) with a zero-area Rect: a timestamp stamps the file, not a
+    // place on the page. A document whose catalog or pages cannot be resolved (corrupt input)
+    // keeps the old standalone behaviour: scan-based discovery still finds that stamp, so no
+    // file whose timestamp the base accepted is refused.
+    // Only link when nothing links yet: this dictionary's number can already be referenced by
+    // a caller that pre-reserved it (as #621's fixture does) or by a dangling /V pointing at
+    // the next free number — allocate_num hands out fresh numbers, so an honest earlier
+    // revision never refers to it. Either way a second field would list the same stamp twice.
+    // Margin: sig_fields inspects named /FT /Sig fields and their widgets, so a reference
+    // held by a field of another type, by an unnamed /FT /Sig field, or by a widget outside
+    // any named Sig field is not consulted; such a file gains a second field referencing the
+    // same stamp — our validator still lists one entry (the new field holds the dictionary,
+    // so the scan skips it), never loss.
+    let linked = sig_fields(&doc).into_iter().any(|f| {
+        f.dict.get(b"V").is_some_and(|v| matches!(v, Object::Ref(r) if *r == sig))
+            || f.widgets.iter().any(|(_, wd)| wd.get(b"V").is_some_and(|v| matches!(v, Object::Ref(r) if *r == sig)))
+    });
+    // Anchor the link at the catalog and first page — unless the form cannot be written
+    // without overwriting what we never read: a non-dictionary /AcroForm, or a /Fields
+    // that is neither absent nor array-like, would be replaced by the write below (base
+    // never touched AcroForm). Such corrupt input keeps the standalone dictionary, which
+    // scan discovery finds; an absent form is created (nothing to lose) and a dangling
+    // /AcroForm reference is filled in — except when that slot numbers one of the objects
+    // we just allocated: the form then lands inline in the catalog, never merged onto our
+    // stamp or widget, never replacing our cloned annotation array (see the collision
+    // check at the write). An explicit null /AcroForm is different: the author set that
+    // entry, so it is conservative to fall through rather than overwrite their statement
+    // with our own dictionary.
+    let anchor = match (doc.root(), pdfcraft_annot::page_refs(&doc).ok().and_then(|p| p.first().copied())) {
+        (Some(root), Some(page)) => {
+            let fields_writable = |d: &Dict| match d.get(b"Fields") {
+                None | Some(Object::Array(_)) => true,
+                Some(Object::Ref(r)) => doc.get(*r).as_array().is_some(),
+                Some(_) => false,
+            };
+            let catalog = doc.get(root);
+            let writable = match catalog.as_dict().and_then(|c| c.get(b"AcroForm")) {
+                None => true,
+                Some(Object::Dict(d)) => fields_writable(d),
+                Some(Object::Ref(r)) => match &*doc.get(*r) {
+                    Object::Null => true,
+                    Object::Dict(d) => fields_writable(d),
+                    _ => false,
+                },
+                Some(_) => false,
+            };
+            // A new /FT /Sig field with a page widget is precisely the write `sign` gates on
+            // bits 6 and 4 ("creating a new signature field needs bits 6 and 4",
+            // check_signing_permissions above). Where the permissions forbid it, fall through
+            // to the standalone write — never annotate against the /P, and never refuse a
+            // file whose timestamp base accepted.
+            let permitted = doc.permissions().is_none_or(|p| p.annotate() && p.modify());
+            if writable && permitted { Some((root, page)) } else { None }
+        }
+        _ => None,
+    };
+    if !linked && let Some((root, page)) = anchor {
+        let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
+        let fname = (1..).map(|i| format!("Timestamp_{i}")).find(|n| !taken.contains(n)).unwrap_or_default();
+        let mut w = Dict::new();
+        w.set(b"Type".to_vec(), Object::name("Annot"));
+        w.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w.set(b"FT".to_vec(), Object::name("Sig"));
+        w.set(b"T".to_vec(), PdfString::text(&fname));
+        w.set(b"V".to_vec(), Object::Ref(sig));
+        w.set(b"Rect".to_vec(), Object::Array((0..4).map(|_| Object::Real(0.0)).collect()));
+        w.set(b"P".to_vec(), Object::Ref(page));
+        // Print + Locked, as `sign` marks its widgets.
+        w.set(b"F".to_vec(), Object::Int(4 | 128));
+        let wr = doc.add(Object::Dict(w));
+        // A /Annots array cloned into a fresh object (below), if any: the form write must
+        // never retarget it (see the collision check there). Explicitly typed: a mutant
+        // deletes the only assignment, and the binding's type would then fail inference.
+        let mut nar: Option<ObjRef> = None;
+        // Page /Annots: a referenced array may be shared by several pages, so append through
+        // a fresh array of this page's own and leave the old object byte-untouched — no
+        // other page gains a widget it never asked for. (`sign` still updates in place;
+        // pre-existing since #621, untouched here.) A reference to anything that is not an
+        // array is corrupt — leave that object untouched (the `annot::set_annots`
+        // precedent) and rewrite the page entry inline, so a never-read object is never
+        // replaced.
+        let pd = doc.get(page).as_dict().cloned().unwrap_or_default();
+        match pd.get(b"Annots") {
+            Some(Object::Ref(ar)) if doc.get(*ar).as_array().is_some() => {
+                let mut a = doc.get(*ar).as_array().cloned().unwrap_or_default();
+                a.push(Object::Ref(wr));
+                let nr = doc.add(Object::Array(a));
+                nar = Some(nr);
+                doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Ref(nr)))?;
+            }
+            other => {
+                let mut a = other.and_then(|o| o.as_array().cloned()).unwrap_or_default();
+                a.push(Object::Ref(wr));
+                doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(a)))?;
+            }
+        }
+        // AcroForm /Fields and /SigFlags (signatures exist, append only).
+        let catalog = doc.get(root).as_dict().cloned().unwrap_or_default();
+        let (af_ref, af) = match catalog.get(b"AcroForm") {
+            Some(Object::Ref(r)) => (Some(*r), doc.get(*r).as_dict().cloned().unwrap_or_default()),
+            Some(Object::Dict(d)) => (None, d.clone()),
+            _ => (None, Dict::new()),
+        };
+        // A dangling /AcroForm slot can number-collide with an object this function just
+        // allocated. The writable check above cannot stop it: at check time the slot for
+        // `sig` holds our own stamp dict (get() is overlay-first, so it passes as a form),
+        // and the slots for `wr` or a cloned /Annots array are still free — they pass as
+        // dangling and are legitimately filled... until the allocator hands out exactly
+        // those numbers before the write below lands. Never build the form ON sig, wr or
+        // the cloned array (that merges two kinds into one dictionary, or replaces the
+        // array); on a collision, start a clean inline form in the catalog instead.
+        // Numbers compare generation-blind, as get() does: /AcroForm 9 1 R still aliases
+        // our 9 0 R.
+        let collides = af_ref.is_some_and(|r| r.num == sig.num || r.num == wr.num || nar.is_some_and(|n| n.num == r.num));
+        let (af_ref, mut af) = if collides { (None, Dict::new()) } else { (af_ref, af) };
+        let mut fields = match af.get(b"Fields") {
+            Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_default(),
+            Some(Object::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
+        fields.push(Object::Ref(wr));
+        af.set(b"Fields".to_vec(), Object::Array(fields));
+        af.set(b"SigFlags".to_vec(), Object::Int(3));
+        match af_ref {
+            Some(r) => doc.set(r, Object::Dict(af)),
+            // Inline (or new) AcroForms stay in the catalog.
+            None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
+        }
+    }
     let save = SaveOptions { mod_date: Some(date.to_string()), object_streams: false, ..SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;
     let (br_at, gap) = locate(&out, TOKEN_RESERVE)?;

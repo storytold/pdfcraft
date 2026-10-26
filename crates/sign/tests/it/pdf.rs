@@ -690,6 +690,455 @@ fn a_document_timestamp_covers_the_file_and_validates() {
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
 }
 
+/// #4301: validators discover signatures through the AcroForm field tree, so a standalone
+/// timestamp dictionary is invisible to them. `timestamp_document` must store its dictionary as
+/// the `/V` of a signature field reachable from the catalog — the layout our validator has
+/// accepted since #621 and `sign` writes for its own fields. Walked here by hand on purpose:
+/// our lenient scan finds dictionaries even when nothing links them, which proves nothing about
+/// reachability.
+#[test]
+fn a_document_timestamp_is_reachable_through_the_acroform_field_tree() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let stamped = pdfcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    // Catalog -> AcroForm (reference or inline) -> /Fields: one entry is a signature field
+    // holding the timestamp dictionary itself as its value.
+    let root = doc.root().unwrap();
+    let catalog = doc.get(root);
+    let af_obj = catalog.as_dict().and_then(|c| c.get(b"AcroForm").cloned()).expect("the form the writer used or created");
+    let af = doc.resolve(&af_obj).as_dict().cloned().expect("/AcroForm is a dictionary");
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).expect("/Fields is an array");
+    let holds_stamp = |d: &pdfcraft_cos::Dict| -> bool {
+        d.name(b"FT") == Some(b"Sig")
+            && d.get(b"V")
+                .map(|v| doc.resolve(v))
+                .and_then(|v| v.as_dict().cloned())
+                .is_some_and(|vd| vd.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(vd.name(b"Type"), Some(b"DocTimeStamp") | Some(b"Sig")))
+    };
+    let stamp_field = fields.iter().map(|f| doc.resolve(f)).find(|f| f.as_dict().is_some_and(holds_stamp));
+    let stamp_field = stamp_field.expect("an AcroForm signature field carries the timestamp dictionary as /V");
+    let field = stamp_field.as_dict().unwrap();
+    // The announced form flags, a real field name, and the stamp covering its own revision.
+    assert_eq!(af.get(b"SigFlags").map(|o| doc.resolve(o)).and_then(|o| o.as_int()), Some(3), "signatures exist; append-only");
+    let name = field.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).expect("/T names the field").to_text();
+    assert_eq!(name, "Timestamp_1", "the first timestamp field of a form");
+    // The widget shares the page's annotation list, as `sign` lays out its fields.
+    // (The reference comes from the /Fields entry: `stamp_field` is already resolved to a
+    // dictionary, which holds no reference to itself.)
+    let wr = fields.iter().find(|f| doc.resolve(f).as_dict().is_some_and(holds_stamp)).and_then(Object::as_ref);
+    let page = doc.get(pdfcraft_cos::ObjRef { num: 3, generation: 0 });
+    let annots = page.as_dict().and_then(|p| p.get(b"Annots").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_array().cloned());
+    assert!(wr.is_some_and(|w| annots.is_some_and(|a| a.iter().any(|x| x.as_ref() == Some(w)))), "the widget sits on a page");
+    // Our own validator reads it through the field path: one listing only — the standalone
+    // scan skips dictionaries a field already holds, so linking must not double-count — named
+    // by its field, Valid over trusted bytes.
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let all = signatures(&doc, &stamped, &trust);
+    assert_eq!(all.iter().filter(|s| s.doc_timestamp).count(), 1, "{:?}", all.iter().map(|s| &s.field).collect::<Vec<_>>());
+    let s = all.iter().find(|x| x.doc_timestamp).unwrap();
+    assert_eq!(s.field, name);
+    assert!(s.signed && s.doc_timestamp && s.timestamp);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.signed_len, stamped.len(), "the stamp covers the revision that adds its own field");
+    // No Modification assert here: validate_doc_timestamp sets None whenever signed_len ==
+    // file length, which locate() guarantees — the line above already carries that fact.
+}
+
+/// The dedupe guard's witness: on #621's fixture (a field pre-reserving the number our
+/// dictionary lands at) no second field may appear. Honest scope: this passes on base too —
+/// the collision predates this PR and base happens to fill that slot with the stamp. What it
+/// discriminates is a blinded guard (battery M4: forcing the link adds a second field,
+/// named Timestamp_2 because Timestamp_1 is taken — listing the same stamp twice; both the
+/// one-listing and the no-Timestamp_2 assertions below catch it). The guard cannot fire from
+/// honest earlier revisions:
+/// allocate_num hands out fresh numbers, so only a caller pre-reserving the slot (like this
+/// fixture) or a dangling /V at that number makes `linked` true.
+#[test]
+fn timestamping_a_file_whose_field_already_holds_the_dictionary_adds_no_second_field() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let doc = open(&stamped);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let all = signatures(&doc, &stamped, &trust);
+    assert_eq!(all.iter().filter(|s| s.doc_timestamp).count(), 1, "{:?}", all.iter().map(|s| &s.field).collect::<Vec<_>>());
+    assert!(!all.iter().any(|s| s.field == "Timestamp_2"), "no second field was added: {:?}", all.iter().map(|s| &s.field).collect::<Vec<_>>());
+    assert!(
+        all.iter().any(|s| s.field == "Timestamp_1" && s.status == Status::Valid),
+        "{:?}",
+        all.iter().map(|s| (&s.field, &s.status)).collect::<Vec<_>>()
+    );
+}
+
+/// Two honest stamps on one document, each unlinked when made: each gets its own field, and
+/// both are listed. (Re-stamping a saved document never hits the guard: its new dictionary is
+/// unreferenced.) Pins names, counts, both stamps' validity, and the first stamp's verdict on
+/// the revision the second adds.
+#[test]
+fn two_sequential_timestamps_each_get_their_own_field() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let once = pdfcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
+    let twice = pdfcraft_sign::timestamp_document(&open(&once), &tsa, "D:20261006130000Z").unwrap();
+    let doc = open(&twice);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let all = signatures(&doc, &twice, &trust);
+    let stamps: Vec<&String> = all.iter().filter(|s| s.doc_timestamp).map(|s| &s.field).collect();
+    assert_eq!(stamps, vec!["Timestamp_1", "Timestamp_2"], "{stamps:?}");
+    let second = all.iter().find(|s| s.field == "Timestamp_2").unwrap();
+    assert_eq!(second.status, Status::Valid, "{:?}", second.details);
+    assert_eq!(second.signed_len, twice.len(), "the later stamp covers everything");
+    // The earlier stamp now sees a new class of post-signature edit (a page /Annots entry and
+    // an AcroForm field, which the classifier reads as signing): pinned as observed.
+    let first = all.iter().find(|s| s.field == "Timestamp_1").unwrap();
+    assert!(matches!(first.modification, Modification::Allowed(_)), "appended field+annots read as permitted: {:?}", first.details);
+    assert_eq!(first.status, Status::Valid, "first stamp covers its own revision: {:?}", first.details);
+}
+
+/// Fail-soft witness: a document with no page keeps the pre-fix behaviour — the timestamp is
+/// still produced and scan-based discovery still reports it (as "DocumentTimestamp"). The base
+/// accepted such files; refusing them here would be a silent regression for corrupt input.
+#[test]
+fn timestamping_a_pageless_document_still_works_and_scan_finds_the_stamp() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = edit_after(&fixture(), |doc| {
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 2, generation: 0 }, |p| {
+            p.set(b"Kids".to_vec(), Object::Array(Vec::new()));
+            p.set(b"Count".to_vec(), Object::Int(0));
+        })
+        .unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").expect("a pageless document keeps being timestampable");
+    let doc = open(&stamped);
+    // No link happened: the /Fields array is unchanged (only Approval) and no fresh widget was
+    // written. (The detached page object keeps its old stale /Annots entry, as on base — no
+    // reachable annotation was added.) Naming proves the path: a linked stamp is named by its
+    // field; this one can only come from the standalone scan.
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap();
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+    assert_eq!(fields.len(), 1, "the pageless file gains no field");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] })
+        .into_iter()
+        .find(|x| x.doc_timestamp)
+        .expect("found by scan");
+    assert_eq!(s.field, "DocumentTimestamp", "no field existed to name it otherwise");
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+}
+
+/// Corrupt-form witness: a file whose /AcroForm is not a dictionary, or whose /Fields is
+/// not an array, must keep its form untouched — linking into it would replace objects we
+/// never read (base never touched AcroForm at all). The stamp falls through to the
+/// standalone write scan discovery still finds. Passes on base too by design: it guards
+/// this PR's own new write, armed by battery M6.
+#[test]
+fn a_corrupt_acroform_is_left_untouched_and_the_stamp_goes_standalone() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    // Variant A: /AcroForm is a name.
+    let named = edit_after(&fixture(), |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::name("Broken"))).unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&named), &tsa, "D:20261006120000Z").expect("a corrupt form keeps being timestampable");
+    let doc = open(&stamped);
+    let root = doc.root().unwrap();
+    assert_eq!(
+        doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).and_then(Object::as_name),
+        Some(b"Broken".as_slice()),
+        "corrupt /AcroForm kept as written"
+    );
+    let s = signatures(&doc, &stamped, &TrustStore::default()).into_iter().find(|x| x.doc_timestamp).expect("scan finds the stamp");
+    assert_eq!(s.field, "DocumentTimestamp", "nothing was linked into the corrupt form");
+    // Variant B: /Fields is a name inside a dictionary form.
+    let badfields = edit_after(&fixture(), |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            let mut af = pdfcraft_cos::Dict::new();
+            af.set(b"Fields".to_vec(), Object::name("Nope"));
+            c.set(b"AcroForm".to_vec(), Object::Dict(af));
+        })
+        .unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&badfields), &tsa, "D:20261006130000Z").unwrap();
+    let doc = open(&stamped);
+    let root = doc.root().unwrap();
+    let af = doc
+        .get(root)
+        .as_dict()
+        .and_then(|c| c.get(b"AcroForm").cloned())
+        .map(|a| doc.resolve(&a))
+        .and_then(|a| a.as_dict().cloned())
+        .expect("the form is still a dictionary");
+    assert_eq!(af.get(b"Fields").and_then(Object::as_name), Some(b"Nope".as_slice()), "corrupt /Fields kept as written");
+    let s = signatures(&doc, &stamped, &TrustStore::default()).into_iter().find(|x| x.doc_timestamp).expect("scan finds the stamp");
+    assert_eq!(s.field, "DocumentTimestamp", "nothing was linked into the corrupt form");
+}
+
+/// Widget-held-/V witness: a named Sig field with NO /V of its own whose separate widget
+/// (a /Kids member without /T) references the dictionary number. The guard consults the
+/// field's widgets too, so no second field is added; our validator then lists the field as
+/// unsigned and the stamp via the standalone scan (the "separate widget" shape the function
+/// doc describes). Passes on base too by design (base adds no field and the scan finds the
+/// stamp); it discriminates a blinded guard — battery M4 (whole guard) and M8 (widget
+/// clause only).
+#[test]
+fn a_pre_reserved_slot_held_by_a_separate_widget_still_suppresses_the_link() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = edit_after(&fixture(), |doc| {
+        let w = doc.add(Object::Null);
+        let mut fld = pdfcraft_cos::Dict::new();
+        fld.set(b"FT".to_vec(), Object::name("Sig"));
+        fld.set(b"T".to_vec(), PdfString::text("Timestamp_1"));
+        fld.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(w)]));
+        let fld_ref = doc.add(Object::Dict(fld));
+        let mut wd = pdfcraft_cos::Dict::new();
+        wd.set(b"Subtype".to_vec(), Object::name("Widget"));
+        wd.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+        wd.set(b"P".to_vec(), Object::Ref(pdfcraft_cos::ObjRef { num: 3, generation: 0 }));
+        // The dictionary this function adds next takes the number after the last object.
+        wd.set(b"V".to_vec(), Object::Ref(pdfcraft_cos::ObjRef { num: fld_ref.num + 1, generation: 0 }));
+        doc.set(w, Object::Dict(wd));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(form)) = c.get_mut(b"AcroForm")
+                && let Some(Object::Array(fields)) = form.get_mut(b"Fields")
+            {
+                fields.push(Object::Ref(fld_ref));
+            }
+        })
+        .unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap();
+    let names: Vec<String> = af
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| {
+            doc.resolve(&o).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+        })
+        .collect();
+    assert_eq!(names, vec!["Approval".to_string(), "Timestamp_1".to_string()], "no second field joined /Fields");
+    let all = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let stamp = all.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(stamp.len(), 1, "one stamp entry: {:?}", all.iter().map(|x| &x.field).collect::<Vec<_>>());
+    assert_eq!(stamp[0].field, "DocumentTimestamp", "listed via the scan — the field dict holds no /V");
+    assert_eq!(stamp[0].status, Status::Valid, "{:?}", stamp[0].details);
+    assert!(all.iter().any(|x| x.field == "Timestamp_1" && !x.doc_timestamp), "the widget-holding field lists as unsigned");
+}
+
+/// Corrupt-annots witness: a page whose /Annots is a reference to a non-array (here the
+/// page's own content stream) must keep that object untouched — the page's entry is
+/// rewritten inline instead, following `annot::set_annots`. The stamp links normally.
+/// Fails on base (base creates no field); the untouched-stream assertion is armed by
+/// battery M7 (the corrupt-annots guard dropped).
+#[test]
+fn a_corrupt_annots_reference_is_left_untouched_and_the_stamp_still_links() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = edit_after(&fixture(), |doc| {
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 3, generation: 0 }, |p| {
+            p.set(b"Annots".to_vec(), Object::Ref(pdfcraft_cos::ObjRef { num: 4, generation: 0 }));
+        })
+        .unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    assert!(
+        matches!(
+            &*doc.get(pdfcraft_cos::ObjRef { num: 4, generation: 0 }),
+            Object::Stream(s) if s.raw.as_ref() == b"BT /F1 14 Tf 20 250 Td (Contract text) Tj ET"
+        ),
+        "the exact stream /Annots wrongly pointed at is intact"
+    );
+    // The link happened as usual: field in /Fields, widget inline on the page's entry.
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap();
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+    let wr = fields.iter().filter_map(Object::as_ref).find(|r| {
+        doc.get(*r)
+            .as_dict()
+            .and_then(|d| d.get(b"T"))
+            .map(|t| doc.resolve(t))
+            .and_then(|t| t.as_string().cloned())
+            .is_some_and(|s| s.to_text() == "Timestamp_1")
+    });
+    let wr = wr.expect("the timestamp field is in /Fields");
+    let annots = doc
+        .get(pdfcraft_cos::ObjRef { num: 3, generation: 0 })
+        .as_dict()
+        .and_then(|p| p.get(b"Annots").cloned())
+        .map(|a| doc.resolve(&a))
+        .and_then(|a| a.as_array().cloned())
+        .expect("the page's /Annots now resolves to an array");
+    assert!(annots.iter().filter_map(Object::as_ref).any(|r| r == wr), "the widget is on the page");
+    // Battery M7 witness: the corrupt slot is rewritten PAGE-LOCALLY (an inline array in
+    // the page entry), never redirected to a fresh indirect array — a redirect would hide
+    // the corrupt object's remnants behind a reference the page never had before.
+    assert!(
+        matches!(doc.get(pdfcraft_cos::ObjRef { num: 3, generation: 0 }).as_dict().and_then(|p| p.get(b"Annots")), Some(Object::Array(_))),
+        "the corrupt /Annots entry is an inline array, not a reference"
+    );
+    let all = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = all.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing: {:?}", all.iter().map(|x| &x.field).collect::<Vec<_>>());
+    assert_eq!(s[0].field, "Timestamp_1", "listed through the field, not the standalone scan");
+    assert_eq!(s[0].status, Status::Valid, "{:?}", s[0].details);
+}
+
+/// Indirect-form witness: a catalog whose /AcroForm is a reference to a dictionary whose
+/// /Fields is a reference to an array. The link updates the form object in place
+/// (/SigFlags 3) and rewrites its /Fields as an inline array — the previous array object
+/// survives, no longer referenced by the form, matching how `sign` treats this shape.
+/// Fails on base (no field, no SigFlags update).
+#[test]
+fn the_timestamp_links_into_an_indirect_form() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let mut old_fields = None;
+    let base = edit_after(&fixture(), |doc| {
+        let of = doc.add(Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef { num: 6, generation: 0 })]));
+        old_fields = Some(of);
+        let mut af = pdfcraft_cos::Dict::new();
+        af.set(b"Fields".to_vec(), Object::Ref(of));
+        let af_ref = doc.add(Object::Dict(af));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Ref(af_ref))).unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    let root = doc.root().unwrap();
+    let af_obj = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).and_then(Object::as_ref).expect("the form is still an indirect reference");
+    let af = doc.get(af_obj).as_dict().expect("the form at that reference is a dictionary").clone();
+    assert_eq!(af.get(b"SigFlags").and_then(Object::as_int), Some(3), "the form object gained /SigFlags in place");
+    assert!(matches!(af.get(b"Fields"), Some(Object::Array(_))), "/Fields is now an inline array, not a reference");
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).expect("/Fields is now an inline array");
+    assert!(
+        fields.iter().filter_map(Object::as_ref).any(|r| {
+            doc.get(r)
+                .as_dict()
+                .and_then(|d| d.get(b"T"))
+                .map(|t| doc.resolve(t))
+                .and_then(|t| t.as_string().cloned())
+                .is_some_and(|s| s.to_text() == "Timestamp_1")
+        }),
+        "the new field is in the form's /Fields"
+    );
+    let prev = old_fields.expect("fixture captured its old /Fields reference");
+    assert!(doc.get(prev).as_array().is_some(), "the previous /Fields array object survives");
+    let all = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = all.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing: {:?}", all.iter().map(|x| &x.field).collect::<Vec<_>>());
+    assert_eq!(s[0].field, "Timestamp_1", "listed through the field, not the standalone scan");
+    assert_eq!(s[0].status, Status::Valid, "{:?}", s[0].details);
+}
+
+/// Absent-form witness: a catalog with no /AcroForm at all. Linking creates the form inline,
+/// flags /SigFlags 3, and the stamp lists through the created field. Fails on base: base
+/// never creates a form.
+#[test]
+fn the_timestamp_creates_a_form_when_the_document_has_none() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let mut source = open(&fixture());
+    source
+        .update_dict(source.root().unwrap(), |c| {
+            c.remove(b"AcroForm");
+        })
+        .unwrap();
+    let stamped = pdfcraft_sign::timestamp_document(&source, &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    let root = doc.root().unwrap();
+    let af = doc
+        .get(root)
+        .as_dict()
+        .and_then(|c| c.get(b"AcroForm").cloned())
+        .map(|a| doc.resolve(&a))
+        .and_then(|a| a.as_dict().cloned())
+        .expect("a form was created for the stamp");
+    assert_eq!(af.get(b"SigFlags").and_then(Object::as_int), Some(3), "the created form is flagged");
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).expect("/Fields exists");
+    assert_eq!(fields.len(), 1, "only our field — the old Approval entry left with the removed form");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = s.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing");
+    assert_eq!(s[0].field, "Timestamp_1", "listed through the created field");
+    assert_eq!(s[0].status, Status::Valid, "{:?}", s[0].details);
+    let annots = doc
+        .get(pdfcraft_cos::ObjRef { num: 3, generation: 0 })
+        .as_dict()
+        .and_then(|p| p.get(b"Annots").cloned())
+        .map(|a| doc.resolve(&a))
+        .and_then(|a| a.as_array().cloned())
+        .expect("page 1 has /Annots");
+    // The fixture's page 1 carried the Approval widget before the form was removed; orphaning
+    // the field from /Fields leaves the annotation on its page. Ours joins it.
+    assert!(
+        annots.iter().any(|o| o.as_ref().is_some_and(|r| {
+            doc.get(r)
+                .as_dict()
+                .and_then(|d| d.get(b"T"))
+                .map(|t| doc.resolve(t))
+                .and_then(|t| t.as_string().cloned())
+                .is_some_and(|s| s.to_text() == "Timestamp_1")
+        })),
+        "our widget is on page 1"
+    );
+}
+
+/// Page-choice witness: with two pages the field hangs off page 1 — `/P` names it, page 1's
+/// `/Annots` gains the widget, and page 2 gains none. Selecting the last page instead
+/// fails the first two assertions and the third would see page 2 carrying the entry.
+#[test]
+fn timestamp_field_is_attached_to_the_first_page() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let mut page2_ref = None;
+    let base = edit_after(&fixture(), |doc| {
+        let page2 = doc.add(Object::Dict({
+            let mut d = pdfcraft_cos::Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Page"));
+            d.set(b"Parent".to_vec(), Object::Ref(pdfcraft_cos::ObjRef { num: 2, generation: 0 }));
+            d.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)]));
+            d
+        }));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 2, generation: 0 }, |p| {
+            p.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef { num: 3, generation: 0 }), Object::Ref(page2)]));
+            p.set(b"Count".to_vec(), Object::Int(2));
+        })
+        .unwrap();
+        page2_ref = Some(page2);
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    // The stamp's own field: located via the AcroForm tree, named Timestamp_1.
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap();
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+    let wr = fields.iter().filter_map(Object::as_ref).find(|r| {
+        doc.get(*r)
+            .as_dict()
+            .and_then(|d| d.get(b"T"))
+            .map(|t| doc.resolve(t))
+            .and_then(|t| t.as_string().cloned())
+            .is_some_and(|s| s.to_text() == "Timestamp_1")
+    });
+    let wr = wr.expect("the timestamp field is in /Fields");
+    assert_eq!(
+        doc.get(wr).as_dict().and_then(|d| d.get(b"P")).and_then(Object::as_ref),
+        Some(pdfcraft_cos::ObjRef { num: 3, generation: 0 }),
+        "/P names page 1"
+    );
+    let page1_annots = doc
+        .get(pdfcraft_cos::ObjRef { num: 3, generation: 0 })
+        .as_dict()
+        .and_then(|p| p.get(b"Annots").cloned())
+        .map(|a| doc.resolve(&a))
+        .and_then(|a| a.as_array().cloned())
+        .expect("page 1 /Annots");
+    assert!(page1_annots.iter().filter_map(Object::as_ref).any(|r| r == wr), "page 1 /Annots carries the widget");
+    let page2 = doc.get(page2_ref.expect("fixture captured page 2"));
+    assert!(page2.as_dict().and_then(|p| p.get(b"Annots")).is_none(), "page 2 gains no /Annots");
+}
+
 #[test]
 fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
@@ -2423,6 +2872,314 @@ fn encrypted_documents_take_a_document_timestamp() {
     assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(tsa.time)), "{:?}", s.details);
     let print_only = open_pw(&protected(pdfcraft_cos::Algorithm::Aes128, -3900), None);
     assert!(matches!(pdfcraft_sign::timestamp_document(&print_only, &tsa, "D:20261006120000Z"), Err(SignError::Pdf(_))));
+}
+
+/// Permission witness for the linking gate: under a fill-forms-and-sign mask (bit 9 only —
+/// the mask that refuses `sign()`'s new field), the timestamp still succeeds but stays
+/// STANDALONE: no field, no annotation written against the /P. Under the owner password
+/// (all bits), the same document gets the linked field — which is why this fails on base
+/// (base never writes a field at all). Battery M9 (permission gate dropped) reds the
+/// fill-only half; M1 (never link) reds the owner half.
+#[test]
+fn a_fill_only_mask_timestamps_standalone_and_the_owner_gets_the_field() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = protected(pdfcraft_cos::Algorithm::Aes128, FILL_AND_SIGN_ONLY);
+    let stamped = pdfcraft_sign::timestamp_document(&open_pw(&base, None), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open_pw(&stamped, None);
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap();
+    let names: Vec<String> = af
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| {
+            doc.resolve(&o).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+        })
+        .collect();
+    assert_eq!(names, vec!["Approval".to_string()], "no new field on a fill-only mask");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] })
+        .into_iter()
+        .find(|x| x.doc_timestamp)
+        .expect("the stamp is still found");
+    assert_eq!((s.field.as_str(), s.status), ("DocumentTimestamp", Status::Valid), "standalone, valid: {:?}", s.details);
+    let owned = pdfcraft_sign::timestamp_document(&open_pw(&base, Some("owner")), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open_pw(&owned, Some("owner"));
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_dict().cloned()).unwrap();
+    let names: Vec<String> = af
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| {
+            doc.resolve(&o).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+        })
+        .collect();
+    assert_eq!(names, vec!["Approval".to_string(), "Timestamp_1".to_string()], "all bits: the field is linked");
+}
+
+/// Dangling-form witness: a catalog whose /AcroForm references a missing object. That slot
+/// was READ (as null), so filling it replaces nothing unread — the form is created there
+/// and the stamp links. Fails on base (base never touches the form).
+#[test]
+fn the_timestamp_fills_a_dangling_acroform_reference() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let mut dangling = None;
+    let base = edit_after(&fixture(), |doc| {
+        let root = doc.root().unwrap();
+        let r = doc.add(Object::Null);
+        dangling = Some(r);
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Ref(r))).unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    let filled = doc.get(dangling.expect("fixture captured the dangling reference"));
+    let af = filled.as_dict().expect("the form was created at the dangling reference").clone();
+    assert_eq!(af.get(b"SigFlags").and_then(Object::as_int), Some(3), "the created form is flagged");
+    let names: Vec<String> = af
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| {
+            doc.resolve(&o).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+        })
+        .collect();
+    assert!(names.iter().any(|n| n == "Timestamp_1"), "the stamp linked into the filled form: {names:?}");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = s.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing");
+    assert_eq!((s[0].field.as_str(), s[0].status), ("Timestamp_1", Status::Valid), "{:?}", s[0].details);
+}
+
+/// Collision witness 1: a dangling /AcroForm slot numbered exactly where the timestamp
+/// dictionary will land (raw fixture: objects 1..=6, /Size 7, so sig = 7). The writable
+/// check cannot see it: get() is overlay-first, so the slot resolves to our own stamp and
+/// passes as a form — and the AcroForm write then merged /Fields into the stamp itself
+/// (a hybrid dictionary). Fixed: a clean inline form in the catalog, the stamp untouched.
+/// Fails without the fix (the stamp carries /Fields; the catalog entry is a reference).
+#[test]
+fn a_dangling_form_slot_at_the_timestamp_number_lands_a_clean_form_inline() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>", &[]);
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    // Vacuity guard: the collision really happened — the stamp itself sits at 7 0 R.
+    let stamp = doc.get(pdfcraft_cos::ObjRef { num: 7, generation: 0 });
+    let stamp = stamp.as_dict().expect("the object at the dangling slot is a dictionary");
+    assert_eq!(stamp.get(b"SubFilter").and_then(Object::as_name), Some(b"ETSI.RFC3161".as_slice()), "the stamp landed at 7 0 R");
+    assert!(stamp.get(b"Fields").is_none(), "the timestamp dictionary carries no form entries");
+    assert!(stamp.get(b"SigFlags").is_none(), "nor signature flags");
+    // The form landed inline in the catalog, complete: /Fields names the widget, /SigFlags set.
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).expect("the catalog carries AcroForm").clone();
+    let af = af.as_dict().expect("the form is inline in the catalog, not a reference").clone();
+    let widget_names: Vec<String> = af
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| {
+            doc.resolve(&o).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+        })
+        .collect();
+    assert!(widget_names.iter().any(|n| n == "Timestamp_1"), "the inline form names the timestamp field: {widget_names:?}");
+    assert_eq!(af.get(b"SigFlags").and_then(Object::as_int), Some(3), "the inline form is flagged");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = s.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing");
+    assert_eq!((s[0].field.as_str(), s[0].status), ("Timestamp_1", Status::Valid), "{:?}", s[0].details);
+}
+
+/// Collision witness 2: the dangling slot numbered where the field-widget will land
+/// (objects 1..=6; sig = 7, wr = 8 — the slot reads free at check time, exactly the race).
+/// Without the fix the widget object gained /Fields and /SigFlags on top of its widget
+/// roles. Fails without the fix.
+#[test]
+fn a_dangling_form_slot_at_the_widget_number_lands_a_clean_form_inline() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm 8 0 R >>", &[]);
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    // Vacuity guard: the widget sits at 8 0 R.
+    let widget = doc.get(pdfcraft_cos::ObjRef { num: 8, generation: 0 });
+    let widget = widget.as_dict().expect("the object at the dangling slot is a dictionary");
+    assert_eq!(
+        widget.get(b"T").and_then(|t| doc.resolve(t).as_string().cloned()).map(|s| s.to_text()),
+        Some("Timestamp_1".into()),
+        "the widget landed at 8 0 R"
+    );
+    assert!(widget.get(b"Fields").is_none(), "the widget carries no form entries");
+    assert!(widget.get(b"SigFlags").is_none(), "nor signature flags");
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).expect("the catalog carries AcroForm").clone();
+    let af = af.as_dict().expect("the form is inline in the catalog").clone();
+    let widget_names: Vec<String> = af
+        .get(b"Fields")
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| {
+            doc.resolve(&o).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+        })
+        .collect();
+    assert!(widget_names.iter().any(|n| n == "Timestamp_1"), "the inline form names the timestamp field: {widget_names:?}");
+    assert_eq!(af.get(b"SigFlags").and_then(Object::as_int), Some(3), "the inline form is flagged");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = s.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing");
+    assert_eq!((s[0].field.as_str(), s[0].status), ("Timestamp_1", Status::Valid), "{:?}", s[0].details);
+}
+
+/// Shared-array witness: page 1 and page 2 reference the SAME indirect /Annots array
+/// (object 7). Appending in place put the zero-area widget on page 2's list too — a page
+/// that never asked for it. Fixed: page 1 gets a fresh array; the shared object is never
+/// written — page 2 keeps resolving the original list. Fails without the fix (page 2
+/// gains the widget).
+#[test]
+fn a_shared_annotation_array_lets_only_page_1_gain_the_widget() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 7 0 R >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"[6 0 R]",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 7 0 R >>",
+    ]);
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    let pages = pdfcraft_annot::page_refs(&doc).unwrap();
+    let list_of = |i: usize| -> Vec<pdfcraft_cos::ObjRef> {
+        let p = doc.get(pages[i]).as_dict().cloned().unwrap_or_default();
+        let a = doc.resolve(p.get(b"Annots").unwrap());
+        a.as_array().cloned().unwrap_or_default().into_iter().filter_map(|o| o.as_ref()).collect()
+    };
+    // The widget: the field in AcroForm /Fields (named Timestamp_1).
+    let root = doc.root().unwrap();
+    let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    let fields: Vec<Object> = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let wr = fields
+        .iter()
+        .filter_map(|o| o.as_ref())
+        .find(|r| {
+            doc.get(*r).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+                == Some("Timestamp_1".into())
+        })
+        .expect("the field is linked");
+    let page1 = list_of(0);
+    let page2 = list_of(1);
+    let original = pdfcraft_cos::ObjRef { num: 6, generation: 0 };
+    assert!(page1.contains(&wr), "page 1's list carries the widget");
+    assert!(page1.contains(&original), "page 1 keeps the original annot");
+    assert!(!page2.contains(&wr), "page 2's list does NOT gain the widget");
+    assert!(page2.contains(&original), "page 2 keeps its list");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = s.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing, no duplication across pages");
+    assert_eq!((s[0].field.as_str(), s[0].status), ("Timestamp_1", Status::Valid), "{:?}", s[0].details);
+}
+
+/// Pin at this head, red at base: a dangling /AcroForm at the number the cloned /Annots
+/// array takes. At the first commit of this branch there was no third allocation — the
+/// slot read null and the form filled it harmlessly; page 1 keeps its annotation array
+/// either way. With the /Annots clone introduced but no collision guard, the form write
+/// retargets that very array (witnessed by a neutralized run, receipts banked) — the
+/// guard defuses the hazard before it ships. Red at base: base never links, so the
+/// widget never reaches page 1's array.
+#[test]
+fn a_dangling_form_slot_at_the_cloned_annots_number_keeps_page_one_annotations() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    // Objects 1..=7 -> next_num = 8: sig = 8, wr = 9, the cloned /Annots array would take
+    // 10 — the very slot this dangling reference points at.
+    let base = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 10 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 7 0 R >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"[6 0 R]",
+    ]);
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&stamped);
+    let page = doc.get(pdfcraft_cos::ObjRef { num: 3, generation: 0 });
+    let pd = page.as_dict().cloned().unwrap_or_default();
+    let annots = doc.resolve(pd.get(b"Annots").expect("page 1 has /Annots"));
+    let list: Vec<pdfcraft_cos::ObjRef> = annots
+        .as_array()
+        .expect("page 1's /Annots resolves to an array — never retargeted by the form write")
+        .iter()
+        .filter_map(|o| o.as_ref())
+        .collect();
+    assert!(list.contains(&pdfcraft_cos::ObjRef { num: 6, generation: 0 }), "the original annot is kept: {list:?}");
+    let has_stamp_field = list.iter().any(|r| {
+        doc.get(*r).as_dict().and_then(|d| d.get(b"T")).map(|t| doc.resolve(t)).and_then(|t| t.as_string().cloned()).map(|s| s.to_text())
+            == Some("Timestamp_1".into())
+    });
+    assert!(has_stamp_field, "the widget reached page 1's array: {list:?}");
+    let s = signatures(&doc, &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let s = s.iter().filter(|x| x.doc_timestamp).collect::<Vec<_>>();
+    assert_eq!(s.len(), 1, "one listing");
+    assert_eq!((s[0].field.as_str(), s[0].status), ("Timestamp_1", Status::Valid), "{:?}", s[0].details);
+}
+
+/// Shared arrays survive re-stamping: two sequential timestamps on a page whose /Annots
+/// is a shared indirect array must give page 1 two widgets (each stamp gets its own
+/// field; the linked guard keys on the fresh dictionary, so it does not fire) while the
+/// shared object still holds only what it started with — page 2 gains neither stamp.
+/// Fails without the shared-array fix (both widgets land on page 2 through the shared
+/// object); red at base like every linking witness (base drops the widgets before they
+/// ever reach page 1).
+#[test]
+fn two_timestamps_on_a_shared_annotation_array_page_leave_page_2_untouched() {
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let base = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 7 0 R >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"[6 0 R]",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots 7 0 R >>",
+    ]);
+    let one = pdfcraft_sign::timestamp_document(&open(&base), &tsa, "D:20261006120000Z").unwrap();
+    let two = pdfcraft_sign::timestamp_document(&open(&one), &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&two);
+    let pages = pdfcraft_annot::page_refs(&doc).unwrap();
+    let list_of = |i: usize| -> Vec<pdfcraft_cos::ObjRef> {
+        let p = doc.get(pages[i]).as_dict().cloned().unwrap_or_default();
+        let a = doc.resolve(p.get(b"Annots").unwrap());
+        a.as_array().cloned().unwrap_or_default().into_iter().filter_map(|o| o.as_ref()).collect()
+    };
+    let original = pdfcraft_cos::ObjRef { num: 6, generation: 0 };
+    let stamped_on = |r: pdfcraft_cos::ObjRef| {
+        doc.get(r)
+            .as_dict()
+            .and_then(|d| d.get(b"T"))
+            .map(|t| doc.resolve(t))
+            .and_then(|t| t.as_string().cloned())
+            .map(|s| s.to_text())
+            .unwrap_or_default()
+            .starts_with("Timestamp_")
+    };
+    let page1 = list_of(0);
+    let page2 = list_of(1);
+    assert_eq!(page1.iter().filter(|r| stamped_on(**r)).count(), 2, "both widgets on page 1: {page1:?}");
+    assert!(page1.contains(&original), "page 1 keeps the original annot");
+    assert_eq!(page2, vec![original], "page 2's list is exactly what it started as");
+    let s = signatures(&doc, &two, &TrustStore { certs: vec![tsa.id.certificate.clone()] });
+    let stamps: Vec<&str> = s.iter().filter(|x| x.doc_timestamp).map(|x| x.field.as_str()).collect();
+    assert_eq!(stamps.len(), 2, "both stamps list: {stamps:?}");
 }
 
 /// A visible signature draws its details in Helvetica: a reason or location it can't draw is

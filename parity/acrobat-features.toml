@@ -6192,8 +6192,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/sign/tests/it/pdf.rs::a_document_timestamp_covers_the_file_and_validates"]
-notes = "timestamp_document appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time. Missing: automation tool and timestamp-server configuration (transport is caller-injected)."
+evidence = ["crates/sign/tests/it/pdf.rs::a_document_timestamp_covers_the_file_and_validates", "crates/sign/tests/it/pdf.rs::a_document_timestamp_is_reachable_through_the_acroform_field_tree"]
+notes = "timestamp_document appends an /ETSI.RFC3161 signature dictionary over the whole file, stored as /V of a Sig field reachable through AcroForm (Timestamp_n) so field-walking validators discover it (#4301), or kept standalone when the document cannot take the link, or left held by a named field that already references it; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time, including legacy dictionaries that sit outside any field. Missing: automation tool and timestamp-server configuration (transport is caller-injected)."
 
 [[feature]]
 id = "sign.timestamp-servers"
@@ -6217,7 +6217,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = ["crates/sign/tests/it/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
-notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
+notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the document timestamp (`sign.document-timestamp`), automation tool."
 
 [[feature]]
 id = "sign.ltv"
