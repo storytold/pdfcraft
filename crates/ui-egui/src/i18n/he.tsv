@@ -7,8 +7,12 @@
 # Product and technology names such as PdfCraft, PDF, Acrobat, JavaScript and Discord stay in Latin.
 #
 	Menu	תפריט
+	File	קובץ
+	Edit	עריכה
 	Pages	עמודים
+	View	תצוגה
 	Help	עזרה
+	Preferences	העדפות
 	Preferences…	העדפות…
 	Interface language	שפת הממשק
 	Interface size	גודל הממשק
@@ -17,6 +21,7 @@
 	Identity	פרטי זהות
 	Name on new comments	שם שיופיע בהערות חדשות
 	Hide hover previews for highlights without comment text	הסתרת תצוגה מקדימה במעבר עכבר מעל סימונים שאין בהם טקסט הערה
+	Open…	פתיחה…
 	Open Recent	פתיחת קבצים אחרונים
 	Clear Recent Files	ניקוי רשימת הקבצים האחרונים
 	Remove from Recent	הסרה מהאחרונים
@@ -81,6 +86,7 @@
 	Display theme	ערכת תצוגה
 	Side panels	חלוניות צד
 	Enable Acrobat JavaScript	הפעלת JavaScript של Acrobat
+	OK	אישור
 	Join our Discord	הצטרפות לשרת Discord שלנו
 	Close	סגירה
 	Next / previous match	התוצאה הבאה / הקודמת
@@ -94,11 +100,14 @@
 	Previous / next page	העמוד הקודם / הבא
 	Delete selected pages (Organize)	מחיקת העמודים שנבחרו (ארגון)
 	Select all pages (Organize)	בחירת כל העמודים (ארגון)
+	Home	בית
 	Open	פתיחה
 	Open a PDF ({key})	פתיחת PDF ({key})
 	Dark gray theme	ערכת נושא אפורה כהה
 	Light theme	ערכת נושא בהירה
 	Appearance mode	מצב מראה
+	Light	בהיר
+	Dark	כהה
 	Active	פעיל
 	Dark theme	ערכת נושא כהה
 	Appearance settings…	הגדרות מראה…
@@ -132,8 +141,10 @@
 	Bookmarks	סימניות
 	Fields	שדות
 	Layers	שכבות
+	Attachments	קבצים מצורפים
 	Signatures	חתימות
 	Accessibility Checker	בודק נגישות
+	Search	חיפוש
 	Compare	השוואה
 	Page thumbnails	תמונות ממוזערות של עמודים
 	Form fields	שדות טופס
@@ -154,6 +165,7 @@
 	Open file	פתיחת קובץ
 	Recent	אחרונים
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	קבצים שתפתח ב־PdfCraft יופיעו כאן. אפשר לגרור PDF לכל מקום בחלון כדי לפתוח אותו.
+	Privacy	פרטיות
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft פועל גם ללא חיבור לאינטרנט. אין איסוף נתוני שימוש, אין צורך בחשבון ואין עיבוד בענן, אלא אם מוסיפים ספק.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	סקריפטים פועלים בסביבה מבודדת ללא גישה לקבצים או לרשת. גם כש־JavaScript כבוי, פונקציות format, validate ו־calculate הסטנדרטיות של Acrobat ממשיכות לפעול.
 	Back to all tools	חזרה לכל הכלים
@@ -322,6 +334,8 @@
 	Cross	סימן X
 	Dot	נקודה
 	Line	קו
+	Date	תאריך
+	Signature	חתימה
 	Initials	ראשי תיבות
 	Edit a PDF	עריכת PDF
 	Modify page	שינוי עמוד
@@ -329,11 +343,14 @@
 	Insert pages	הוספת עמודים
 	Extract pages	חילוץ עמודים
 	Add content	הוספת תוכן
+	Text	טקסט
 	Image	תמונה
 	Header and footer	כותרת עליונה ותחתונה
 	Watermark	סימן מים
+	Link	קישור
 	Bates numbering	מספור בייטס
 	Background	רקע
+	Attach file	צירוף קובץ
 	Create a PDF	יצירת PDF
 	Create from	יצירה מתוך
 	Single file	קובץ יחיד
@@ -348,7 +365,9 @@
 	Page options	אפשרויות עמוד
 	Page grid	רשת עמודים
 	Rotate	סיבוב
+	Delete	מחיקה
 	Extract	חילוץ
+	Insert	הוספה
 	Replace	החלפה
 	Split	פיצול
 	More	עוד
@@ -360,6 +379,7 @@
 	Markup	סימון
 	Sticky note	פתק נדבק
 	Underline	קו תחתון
+	Strikethrough	קו חוצה
 	Squiggly underline	קו תחתון גלי
 	Text box	תיבת טקסט
 	Drawing	ציור
@@ -492,7 +512,7 @@
 	Password required	נדרשת סיסמה
 	“{name}” is protected. Enter a password to open it.	“{name}” מוגן. הזן סיסמה כדי לפתוח אותו.
 	Password	סיסמה
-	Incorrect password. Try again.	הסיסמה שגויה. נסה שוב.
+	Incorrect password. Try again.	הסיסמה שגויה. נסה שוב
 	Recognize Text	זיהוי טקסט
 	Password protection will be applied when you save	ההגנה באמצעות סיסמה תחול בעת השמירה
 	Saved the print-ready PDF to {path}	קובץ ה־PDF המוכן להדפסה נשמר ב־{path}
@@ -572,8 +592,8 @@
 	ZIP	ZIP
 	Retain existing	השארת הקיים
 	Minimum	מינימום
-	Low	נמוכה
-	High	גבוהה
+	Low	נמוך
+	High	גבוה
 	Maximum	מקסימום
 	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	כל תמונה נמדדת בגודל שבו היא מוצגת בעמודים; תמונה מוחלפת רק אם התוצאה קטנה יותר.
 	Discard all links, actions and JavaScript	הסרת כל הקישורים, הפעולות וקוד JavaScript
@@ -1293,3 +1313,44 @@
 	No comments match.	אין הערות תואמות.
 	Unknown author	מחבר לא ידוע
 	No colour	ללא צבע
+	Type	סוג
+	Status	מצב
+	Medium	בינוני
+	All	הכול
+	Security	אבטחה
+	Advanced	מתקדם
+	Default	ברירת מחדל
+	Yes	כן
+	No	לא
+	Language	שפה
+	Unlock	ביטול נעילה
+	{n} files	{n} קבצים
+	File name	שם הקובץ
+	Export	ייצוא
+	Couldn't open {name}: {e}	לא ניתן לפתוח את {name}: {e}
+	{n} pages	{n} עמודים
+	Couldn't save {name}: {e}	לא ניתן לשמור את {name}: {e}
+	Sign	חתימה
+	Cut	גזירה
+	Copy	העתקה
+	Rename	שינוי שם
+	Page	עמוד
+	None	ללא
+	Page {p} of {n}	עמוד {p} מתוך {n}
+	Add bookmark	הוספת סימנייה
+	Edit text	עריכת טקסט
+	Scale	קנה מידה
+@plural	{n} field|{n} fields	{n} שדה|{n} שדות
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} שם שדה מתנגש עם קבצים קודמים וישונה: {list}|{n} שמות שדות מתנגשים עם קבצים קודמים וישונו: {list}
+@plural	{n} page|{n} pages	{n} עמוד|{n} עמודים
+@plural	{n} object selected|{n} objects selected	נבחר אובייקט אחד ({n})|נבחרו {n} אובייקטים
+	Tools	כלים
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	הורד קובץ PDF אחד ({n})|הורדו {n} קובצי PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} חישוב משתמש כעת בשם החדש.|{n} חישובים משתמשים כעת בשם החדש.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	בסדר החישוב יש {n} רשומה שאינה מחשבת דבר. תיקון הסדר יסיר אותה.|בסדר החישוב יש {n} רשומות שאינן מחשבות דבר. תיקון הסדר יסיר אותן.
+@plural	{fields} reads it|{fields} read it	{fields} קורא ממנו|{fields} קוראים ממנו
+@plural	{n} field shows an old value|{n} fields show old values	{n} שדה מציג ערך ישן|{n} שדות מציגים ערכים ישנים
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} מחושב לפני {fields}, שעליהם הוא מסתמך.|{field} מחושב לפני {fields}, שעליהם הוא מסתמך.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} שדה נוסף מחושב מוקדם מדי.|{n} שדות נוספים מחושבים מוקדם מדי.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} חסר בסדר שנשמר ב־PDF, ולכן ייתכן שמציגי PDF אחרים לא יחשבו אותו.|{fields} חסרים בסדר שנשמר ב־PDF, ולכן ייתכן שמציגי PDF אחרים לא יחשבו אותם.
+@plural	{n} reply|{n} replies	{n} תגובה|{n} תגובות
