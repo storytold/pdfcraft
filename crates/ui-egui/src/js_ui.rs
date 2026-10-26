@@ -277,6 +277,16 @@ fn reading_mode_label(mode: &str) -> &'static str {
     }
 }
 
+/// The label for a way of drawing scanned pages under a dark reading setting.
+fn scan_mode_label(mode: pdfcraft_render::ScanMode) -> &'static str {
+    match mode {
+        pdfcraft_render::ScanMode::Smart => "Smart invert",
+        pdfcraft_render::ScanMode::Palette => "Reading colours only",
+        pdfcraft_render::ScanMode::Invert => "Invert",
+        pdfcraft_render::ScanMode::Off => "Keep original colours",
+    }
+}
+
 /// The height the Preferences dialog keeps below its scrolling settings for the OK row: the
 /// button, and the space above it.
 pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
@@ -498,18 +508,17 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
                 ] {
                     if ui.selectable_label(mode == m, tl!(label)).clicked() {
                         match m {
-                            "off" => app.set_reading_colors(pdfcraft_render::ReadingColors::default()),
+                            "off" => app.set_reading_colors(pdfcraft_render::ReadingColors { params: None, ..app.reading_colors }),
                             "custom" => {
                                 // Custom starts from the colours already chosen, or black on white.
-                                let colors = app.reading_colors.params.map_or(pdfcraft_render::ReadingColors::BLACK_ON_WHITE, |params| {
-                                    pdfcraft_render::ReadingColors { params: Some(params) }
-                                });
-                                app.set_reading_colors(colors);
+                                let params = app.reading_colors.params.or(pdfcraft_render::ReadingColors::BLACK_ON_WHITE.params);
+                                app.set_reading_colors(pdfcraft_render::ReadingColors { params, ..app.reading_colors });
                             }
                             // `parse` knows these names; a preset comes with its own flags.
+                            // The scans choice stays as it was.
                             preset => {
                                 if let Ok(colors) = pdfcraft_render::ReadingColors::parse(preset, None, None, None, None) {
-                                    app.set_reading_colors(colors);
+                                    app.set_reading_colors(pdfcraft_render::ReadingColors { scans: app.reading_colors.scans, ..colors });
                                 }
                             }
                         }
@@ -534,6 +543,31 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             }
             if ui.add(crate::widgets::checkbox(&mut params.line_art, tl!("Change the colour of line art as well as text"))).changed() {
                 changed = true;
+            }
+        }
+        // A dark setting draws scanned pages (one picture, no text of their own) through a filter:
+        // recolouring text and line art cannot reach a picture, so a scan stayed white.
+        if app.reading_colors.is_dark() {
+            let scans = &mut app.reading_colors.scans;
+            ui.horizontal(|ui| {
+                let label = ui.label(tl!("Scanned pages"));
+                egui::ComboBox::from_id_salt("reading-scans")
+                    .selected_text(tl!(scan_mode_label(scans.mode)))
+                    .show_ui(ui, |ui| {
+                        for mode in pdfcraft_render::ScanMode::ALL {
+                            changed |= ui.selectable_value(&mut scans.mode, mode, tl!(scan_mode_label(mode))).changed();
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
+            if matches!(scans.mode, pdfcraft_render::ScanMode::Smart | pdfcraft_render::ScanMode::Palette) {
+                ui.horizontal(|ui| {
+                    let label = ui.label(tl!("Scan contrast"));
+                    // Applied when the drag ends: each change re-renders every open document.
+                    let slider = ui.add(egui::Slider::new(&mut scans.contrast, 0..=100)).labelled_by(label.id);
+                    changed |= slider.drag_stopped() || (slider.changed() && !slider.dragged());
+                });
             }
         }
         if changed {

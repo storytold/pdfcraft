@@ -8402,7 +8402,10 @@ fn reading_colors_through_tools() {
     assert_eq!(pixel(&page1_off, 10, 290), [255, 255, 255, 255]);
 
     let echo = ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black" }));
-    assert_eq!(echo, json!({ "mode": "white-on-black", "text": "#ffffff", "background": "#000000", "only_black": false, "line_art": true }));
+    assert_eq!(
+        echo,
+        json!({ "mode": "white-on-black", "text": "#ffffff", "background": "#000000", "only_black": false, "line_art": true, "scans": "smart", "scan_contrast": 50 })
+    );
 
     // The page clears to the setting's background, and the text paints with its colour.
     let page1_on = render(&mut a, 1);
@@ -8436,9 +8439,62 @@ fn reading_colors_through_tools() {
     // Back off: the render matches the original one again.
     assert_eq!(
         ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "off" })),
-        json!({ "mode": "off", "text": null, "background": null, "only_black": false, "line_art": false })
+        json!({ "mode": "off", "text": null, "background": null, "only_black": false, "line_art": false, "scans": "smart", "scan_contrast": 50 })
     );
     assert_eq!(render(&mut a, 1), page1_off);
+}
+
+/// A dark `view_reading_colors` setting draws a scanned page (one page-sized picture, no text)
+/// through its scan filter in `page_render`; `scans` and `scan_contrast` choose it, keep their
+/// value across a change of mode, and are refused out of range.
+#[test]
+fn reading_colors_draw_scans_through_tools() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-reading-scans-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A 200 × 300 pt scan: light grey paper with a red mark in its top-left pixel.
+    let image = "c81e1e".to_string() + &"f2f2f2".repeat(3) + ">";
+    let content = "q 200 0 0 300 0 0 cm /Im0 Do Q\n";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}endstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{image}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        image.len()
+    );
+    std::fs::write(dir.join("scan.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation| png_pixels(&a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap()[0]);
+    let (paper, mark) = ((150, 250), (20, 20));
+
+    let off = render(&mut a);
+    assert_eq!(pixel(&off, paper.0, paper.1), [242, 242, 242, 255], "the scan's own paper");
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black" }));
+    let smart = render(&mut a);
+    assert_eq!(pixel(&smart, paper.0, paper.1), [0, 0, 0, 255], "smart: the paper takes the background");
+    let [r, g, b, _] = pixel(&smart, mark.0, mark.1);
+    assert!(r > 230 && g < r - 80 && g == b, "smart: the red mark stays red: {r} {g} {b}");
+
+    let echo = ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black", "scans": "invert", "scan_contrast": 20 }));
+    assert_eq!((echo["scans"].clone(), echo["scan_contrast"].clone()), (json!("invert"), json!(20)));
+    assert_eq!(pixel(&render(&mut a), paper.0, paper.1), [13, 13, 13, 255], "invert: a plain negative");
+    // A change of mode keeps the scans choice.
+    let echo = ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "yellow-on-black" }));
+    assert_eq!(echo["scans"], json!("invert"));
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black", "scans": "off" }));
+    assert_eq!(render(&mut a), off, "off: the scan keeps its colours");
+
+    for (args, what) in [
+        (json!({ "doc": doc, "mode": "white-on-black", "scans": "negative" }), "smart, palette, invert, off"),
+        (json!({ "doc": doc, "mode": "white-on-black", "scan_contrast": 101 }), "0 to 100"),
+    ] {
+        let r = a.call("view_reading_colors", &args);
+        assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains(what)), "{r:?}");
+    }
 }
 
 #[test]

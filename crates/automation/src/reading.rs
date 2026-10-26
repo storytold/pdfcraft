@@ -1,7 +1,8 @@
 //! Reading colours: Acrobat's Replace Document Colors as a tool (#897, AGENTS.md §3).
 //!
 //! A per-document view setting: solid text and line-art paints remap for readability and the
-//! page clears to the setting's background when rendering. The file itself never changes.
+//! page clears to the setting's background when rendering. A dark setting draws scanned pages
+//! through its scan filter (`scans`). The file itself never changes.
 
 use pdfcraft_render::ReadingColors;
 use serde_json::{Value, json};
@@ -19,8 +20,11 @@ impl Automation {
         let Some(mode) = a.opt_str("mode")? else {
             return Err(ToolError::InvalidArgs(format!("mode is required (one of: {MODES})")));
         };
-        let colors = ReadingColors::parse(mode, a.opt_str("text")?, a.opt_str("background")?, a.opt_bool("only_black")?, a.opt_bool("line_art")?)
+        let mut colors = ReadingColors::parse(mode, a.opt_str("text")?, a.opt_str("background")?, a.opt_bool("only_black")?, a.opt_bool("line_art")?)
             .map_err(ToolError::InvalidArgs)?;
+        // The scans choice outlives a change of preset: what is not given stays as it was.
+        let current = self.session.reading_colors(id).unwrap_or_default().scans;
+        colors.scans = current.parse(a.opt_str("scans")?, a.opt_int("scan_contrast")?).map_err(ToolError::InvalidArgs)?;
         if self.session.set_reading_colors(id, colors) {
             // Cached renderers baked the old setting into their config; page_render must re-read it.
             self.renderers.remove(&id);
@@ -31,6 +35,8 @@ impl Automation {
             "background": colors.background_hex(),
             "only_black": colors.params.is_some_and(|p| p.only_black),
             "line_art": colors.params.is_some_and(|p| p.line_art),
+            "scans": colors.scans.mode.name(),
+            "scan_contrast": colors.scans.contrast,
         }))
     }
 }
