@@ -9175,3 +9175,64 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// Issue #4488: form_fill in a radio group without RadiosInUnison selects a single widget,
+/// and accepts targeted widget selection via {"widget": 2, "value": "Yes"}.
+#[test]
+fn form_fill_radios_in_unison_clear_enforces_mutual_exclusion() {
+    let dir = workdir("radios-unison");
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        // Field 5: D_plain, RADIO (1<<15) | NOTOGGLE (1<<14) = 49152
+        b"<< /FT /Btn /T (D_plain) /Ff 49152 /V /Off /Kids [6 0 R 7 0 R 8 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [10 10 30 30] /AS /Off /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [40 10 60 30] /AS /Off /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [70 10 90 30] /AS /Off /AP << /N << /No 9 0 R /Off 9 0 R >> >> >>".to_vec(),
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    std::fs::write(dir.join("radios.pdf"), bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "radios.pdf" }))["doc"].as_u64().unwrap();
+
+    // 1. Fill with string "Yes": selects first Yes button.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "D_plain": "Yes" } }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out1.pdf" }));
+
+    let bytes1 = std::sync::Arc::new(std::fs::read(dir.join("out1.pdf")).unwrap());
+    let saved = pdfcraft_cos::Document::open(bytes1).unwrap();
+    let as_state = |obj: u32| {
+        saved.get(pdfcraft_cos::ObjRef::new(obj, 0)).as_dict().and_then(|d| d.name(b"AS")).map(|b| String::from_utf8_lossy(b).into_owned())
+    };
+    assert_eq!(as_state(6).as_deref(), Some("Yes"));
+    assert_eq!(as_state(7).as_deref(), Some("Off"), "second Yes button is not turned on");
+
+    // 2. Target widget 2 specifically using {"widget": 2, "value": "Yes"}.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "D_plain": { "widget": 2, "value": "Yes" } } }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out2.pdf" }));
+
+    let bytes2 = std::sync::Arc::new(std::fs::read(dir.join("out2.pdf")).unwrap());
+    let saved2 = pdfcraft_cos::Document::open(bytes2).unwrap();
+    let as_state2 = |obj: u32| {
+        saved2.get(pdfcraft_cos::ObjRef::new(obj, 0)).as_dict().and_then(|d| d.name(b"AS")).map(|b| String::from_utf8_lossy(b).into_owned())
+    };
+    assert_eq!(as_state2(6).as_deref(), Some("Off"));
+    assert_eq!(as_state2(7).as_deref(), Some("Yes"), "second Yes button is now turned on");
+}

@@ -1528,3 +1528,73 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     assert_eq!(h.state().right, None);
 }
+
+/// Issue #4488: In a radio group where buttons share an on state (Yes, Yes, No) and RadiosInUnison
+/// is clear, clicking the first Yes button turns only that button on, and clicking the second
+/// Yes button switches the selection to the second button.
+#[test]
+fn clicking_one_of_two_radio_buttons_sharing_an_on_state_turns_only_that_one_on() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        // Field 5: D_plain, RADIO (1<<15) | NOTOGGLE (1<<14) = 49152. RadiosInUnison is clear.
+        "<< /FT /Btn /T (D_plain) /Ff 49152 /V /Off /Kids [6 0 R 7 0 R 8 0 R] >>",
+        // Widgets 6, 7, 8: Yes, Yes, No
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [20 300 40 320] /P 3 0 R /F 4 /AS /Off /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [60 300 80 320] /P 3 0 R /F 4 /AS /Off /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [100 300 120 320] /P 3 0 R /F 4 /AS /Off /AP << /N << /No 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream",
+    ]);
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("radios.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+
+    let widget_states = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "D_plain").unwrap();
+        f.widgets.iter().map(|w| w.state.clone()).collect::<Vec<_>>()
+    };
+
+    // Initially all widgets are Off.
+    assert_eq!(widget_states(&h), vec![Some("Off".into()), Some("Off".into()), Some("Off".into())]);
+
+    // Click widget 0 (the first "Yes" button).
+    click_field(&mut h, "D_plain", 0);
+    h.run_steps(4);
+    assert_eq!(value(&h, "D_plain"), ["Yes"]);
+    assert_eq!(
+        widget_states(&h),
+        vec![Some("Yes".into()), Some("Off".into()), Some("Off".into())],
+        "only the first Yes button is turned on; the second Yes button must stay Off"
+    );
+
+    // Click widget 1 (the second "Yes" button).
+    click_field(&mut h, "D_plain", 1);
+    h.run_steps(4);
+    assert_eq!(value(&h, "D_plain"), ["Yes"]);
+    assert_eq!(
+        widget_states(&h),
+        vec![Some("Off".into()), Some("Yes".into()), Some("Off".into())],
+        "clicking the second Yes button switches selection to the second button"
+    );
+
+    // Click widget 2 ("No" button).
+    click_field(&mut h, "D_plain", 2);
+    h.run_steps(4);
+    assert_eq!(value(&h, "D_plain"), ["No"]);
+    assert_eq!(
+        widget_states(&h),
+        vec![Some("Off".into()), Some("Off".into()), Some("No".into())],
+        "switching to No turns widget 2 on and all Yes buttons off"
+    );
+}

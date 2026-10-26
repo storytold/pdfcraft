@@ -130,7 +130,11 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
 
 /// Select a radio button, if it isn't selected already.
 fn select_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
-    (w.on_state.as_ref() != f.value.first()).then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(w.on_state.clone()) })
+    let is_selected = match &w.state {
+        Some(s) => w.on_state.as_deref() == Some(s.as_str()),
+        None => f.value.first() == w.on_state.as_ref() && w.on_state.is_some(),
+    };
+    (!is_selected).then(|| Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::RadioWidget(w.obj, w.on_state.clone()) })
 }
 
 /// What clicking a check box or radio button does.
@@ -139,12 +143,19 @@ fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
         FormFieldKind::CheckBox => FieldValue::Check(f.value.is_empty()),
         FormFieldKind::Radio => {
             let on = w.on_state.clone();
+            let is_selected = match &w.state {
+                Some(s) => on.as_deref() == Some(s.as_str()),
+                None => f.value.first() == on.as_ref() && on.is_some(),
+            };
             // Clicking the selected button again turns it off unless the group forbids it.
-            let value = if f.value.first() == on.as_ref() && !f.has(field_flags::NO_TOGGLE_TO_OFF) { None } else { on };
-            if value.as_ref() == f.value.first() {
+            let value = if is_selected && !f.has(field_flags::NO_TOGGLE_TO_OFF) {
+                None
+            } else if is_selected {
                 return None;
-            }
-            FieldValue::Radio(value)
+            } else {
+                on
+            };
+            FieldValue::RadioWidget(w.obj, value)
         }
         _ => return None,
     };
@@ -604,7 +615,14 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
         FormFieldKind::Radio => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
+            let selected = if f.has(field_flags::RADIOS_IN_UNISON) {
+                f.value.first().map(String::as_str) == w.on_state.as_deref()
+            } else {
+                match &w.state {
+                    Some(s) => w.on_state.as_deref() == Some(s.as_str()),
+                    None => f.value.first().map(String::as_str) == w.on_state.as_deref(),
+                }
+            };
             if selected {
                 let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
                 painter.circle_filled(r.center(), radius, Color32::BLACK);

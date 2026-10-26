@@ -166,6 +166,12 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
         (FormFieldKind::CheckBox, Value::Bool(b)) => FieldValue::Check(*b),
         (FormFieldKind::Radio, Value::Null) => FieldValue::Radio(None),
         (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(s.clone())),
+        (FormFieldKind::Radio, Value::Object(m)) => {
+            let widget_idx = m.get("widget").and_then(Value::as_u64).and_then(|w| usize::try_from(w.checked_sub(1)?).ok());
+            let w = widget_idx.and_then(|i| f.widgets.get(i)).ok_or_else(|| wrong("unknown widget index"))?;
+            let opt = m.get("option").or_else(|| m.get("value")).and_then(Value::as_str).map(str::to_owned).or_else(|| w.on_state.clone());
+            FieldValue::RadioWidget(w.obj, opt)
+        }
         (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(
             a.iter().map(|x| x.as_str().map(str::to_owned).ok_or_else(|| wrong("list values must be strings"))).collect::<Result<_>>()?,
         ),

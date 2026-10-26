@@ -4577,3 +4577,111 @@ fn set_values_reads_the_form_once_not_per_value() {
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
+
+fn radios_doc() -> Document {
+    let stream = "<< /Length 4 >>\nstream\nq\nQ\nendstream".to_string();
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 10 0 R 14 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [7 0 R 8 0 R 9 0 R 11 0 R 12 0 R 13 0 R 15 0 R 16 0 R 17 0 R] >>".into(),
+        stream.clone(),
+        stream,
+        // C_unison: RADIO (1<<15) | NOTOGGLE (1<<14) | UNISON (1<<25) = 33603584
+        "<< /FT /Btn /T (C_unison) /Ff 33603584 /V /Off /Kids [7 0 R 8 0 R 9 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 6 0 R /Rect [100 700 120 720] /AS /Off /AP << /N << /Yes 4 0 R /Off 5 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 6 0 R /Rect [160 700 180 720] /AS /Off /AP << /N << /Yes 4 0 R /Off 5 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 6 0 R /Rect [220 700 240 720] /AS /Off /AP << /N << /No 4 0 R /Off 5 0 R >> >> >>".into(),
+        // D_plain: RADIO (1<<15) | NOTOGGLE (1<<14) = 49152
+        "<< /FT /Btn /T (D_plain) /Ff 49152 /V /Off /Kids [11 0 R 12 0 R 13 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 10 0 R /Rect [100 640 120 660] /AS /Off /AP << /N << /Yes 4 0 R /Off 5 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 10 0 R /Rect [160 640 180 660] /AS /Off /AP << /N << /Yes 4 0 R /Off 5 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 10 0 R /Rect [220 640 240 660] /AS /Off /AP << /N << /No 4 0 R /Off 5 0 R >> >> >>".into(),
+        // B_free: RADIO (1<<15) = 32768
+        "<< /FT /Btn /T (B_free) /Ff 32768 /V /Off /Kids [15 0 R 16 0 R 17 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 14 0 R /Rect [100 580 120 600] /AS /Off /AP << /N << /S 4 0 R /Off 5 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 14 0 R /Rect [160 580 180 600] /AS /Off /AP << /N << /M 4 0 R /Off 5 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /Parent 14 0 R /Rect [220 580 240 600] /AS /Off /AP << /N << /L 4 0 R /Off 5 0 R >> >> >>".into(),
+    ];
+    document(&objs)
+}
+/// ISO 32000-2 Table 229, RadiosInUnison clear: buttons sharing an on-state are mutually exclusive.
+#[test]
+fn radios_in_unison_clear_enforces_mutual_exclusion() {
+    let mut doc = radios_doc();
+    let as_of = |d: &Document, obj_num: u32| d.get(ObjRef::new(obj_num, 0)).as_dict().and_then(|dict| dict.name(b"AS")).map(name_text);
+    let v_of = |d: &Document, obj_num: u32| d.get(ObjRef::new(obj_num, 0)).as_dict().and_then(|dict| dict.name(b"V")).map(name_text);
+
+    // Initial state: all /Off.
+    assert_eq!(v_of(&doc, 10), Some("Off".into()));
+    assert_eq!(as_of(&doc, 11), Some("Off".into()));
+    assert_eq!(as_of(&doc, 12), Some("Off".into()));
+    assert_eq!(as_of(&doc, 13), Some("Off".into()));
+
+    // Click the first Yes button (widget 11).
+    set_value(&mut doc, "D_plain", &FieldValue::RadioWidget(ObjRef::new(11, 0), Some("Yes".into()))).unwrap();
+    assert_eq!(v_of(&doc, 10), Some("Yes".into()));
+    assert_eq!(as_of(&doc, 11), Some("Yes".into()), "first button turns on");
+    assert_eq!(as_of(&doc, 12), Some("Off".into()), "second button stays off");
+    assert_eq!(as_of(&doc, 13), Some("Off".into()));
+
+    // Click the second Yes button (widget 12).
+    set_value(&mut doc, "D_plain", &FieldValue::RadioWidget(ObjRef::new(12, 0), Some("Yes".into()))).unwrap();
+    assert_eq!(v_of(&doc, 10), Some("Yes".into()));
+    assert_eq!(as_of(&doc, 11), Some("Off".into()), "first button turns off");
+    assert_eq!(as_of(&doc, 12), Some("Yes".into()), "second button turns on");
+    assert_eq!(as_of(&doc, 13), Some("Off".into()));
+
+    // Headless set_value with FieldValue::Radio keeps the active Yes button and turns no others on.
+    set_value(&mut doc, "D_plain", &FieldValue::Radio(Some("Yes".into()))).unwrap();
+    assert_eq!(as_of(&doc, 11), Some("Off".into()));
+    assert_eq!(as_of(&doc, 12), Some("Yes".into()));
+
+    // Switching to No turns widget 13 on and 12 off.
+    set_value(&mut doc, "D_plain", &FieldValue::Radio(Some("No".into()))).unwrap();
+    assert_eq!(v_of(&doc, 10), Some("No".into()));
+    assert_eq!(as_of(&doc, 11), Some("Off".into()));
+    assert_eq!(as_of(&doc, 12), Some("Off".into()));
+    assert_eq!(as_of(&doc, 13), Some("No".into()));
+}
+
+/// ISO 32000-2 Table 229, RadiosInUnison set: buttons sharing an on-state turn on/off together.
+#[test]
+fn radios_in_unison_set_turns_both_buttons_on() {
+    let mut doc = radios_doc();
+    let as_of = |d: &Document, obj_num: u32| d.get(ObjRef::new(obj_num, 0)).as_dict().and_then(|dict| dict.name(b"AS")).map(name_text);
+    let v_of = |d: &Document, obj_num: u32| d.get(ObjRef::new(obj_num, 0)).as_dict().and_then(|dict| dict.name(b"V")).map(name_text);
+
+    // Click the first Yes button (widget 7) in unison group (parent 6).
+    set_value(&mut doc, "C_unison", &FieldValue::RadioWidget(ObjRef::new(7, 0), Some("Yes".into()))).unwrap();
+    assert_eq!(v_of(&doc, 6), Some("Yes".into()));
+    assert_eq!(as_of(&doc, 7), Some("Yes".into()), "first Yes turns on");
+    assert_eq!(as_of(&doc, 8), Some("Yes".into()), "second Yes turns on in unison");
+    assert_eq!(as_of(&doc, 9), Some("Off".into()));
+
+    // Switch to No.
+    set_value(&mut doc, "C_unison", &FieldValue::Radio(Some("No".into()))).unwrap();
+    assert_eq!(v_of(&doc, 6), Some("No".into()));
+    assert_eq!(as_of(&doc, 7), Some("Off".into()));
+    assert_eq!(as_of(&doc, 8), Some("Off".into()));
+    assert_eq!(as_of(&doc, 9), Some("No".into()));
+}
+
+/// Radio group without NoToggleToOff allows deselecting when clicked again.
+#[test]
+fn radio_without_no_toggle_to_off_deselects_on_second_click() {
+    let mut doc = radios_doc();
+    let as_of = |d: &Document, obj_num: u32| d.get(ObjRef::new(obj_num, 0)).as_dict().and_then(|dict| dict.name(b"AS")).map(name_text);
+    let v_of = |d: &Document, obj_num: u32| d.get(ObjRef::new(obj_num, 0)).as_dict().and_then(|dict| dict.name(b"V")).map(name_text);
+
+    // Select S (widget 15).
+    set_value(&mut doc, "B_free", &FieldValue::RadioWidget(ObjRef::new(15, 0), Some("S".into()))).unwrap();
+    assert_eq!(v_of(&doc, 14), Some("S".into()));
+    assert_eq!(as_of(&doc, 15), Some("S".into()));
+
+    // Toggle off.
+    set_value(&mut doc, "B_free", &FieldValue::RadioWidget(ObjRef::new(15, 0), None)).unwrap();
+    assert_eq!(v_of(&doc, 14), Some("Off".into()));
+    assert_eq!(as_of(&doc, 15), Some("Off".into()));
+    assert_eq!(as_of(&doc, 16), Some("Off".into()));
+    assert_eq!(as_of(&doc, 17), Some("Off".into()));
+}

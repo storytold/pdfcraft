@@ -215,6 +215,8 @@ pub enum FieldValue {
     Check(bool),
     /// Radio group: the on-state to select (`None`: none selected).
     Radio(Option<String>),
+    /// Radio button targeting a specific widget: (widget object, on-state).
+    RadioWidget(ObjRef, Option<String>),
     /// Combo box or list box: export values (several only for multi-select lists).
     Choice(Vec<String>),
 }
@@ -1045,11 +1047,11 @@ fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String
     match twin.kind {
         FieldKind::CheckBox => {
             let state = twin.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
-            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()))
+            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()), None)
         }
         FieldKind::Radio => {
             let choice = value.first().filter(|c| twin.widgets.iter().any(|w| w.on_state.as_deref() == Some(c.as_str())));
-            set_states(doc, twin, choice.map(String::as_str))
+            set_states(doc, twin, choice.map(String::as_str), None)
         }
         FieldKind::Text | FieldKind::Combo | FieldKind::List => {
             let src = doc.get(source).as_dict().cloned().unwrap_or_default();
@@ -1160,7 +1162,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             let on = match v {
                 FieldValue::Check(on) => *on,
                 // The on-state name or a yes/no word also work (agents, FDF-style data).
-                FieldValue::Text(t) | FieldValue::Radio(Some(t)) => {
+                FieldValue::Text(t) | FieldValue::Radio(Some(t)) | FieldValue::RadioWidget(_, Some(t)) => {
                     let t = t.trim();
                     if t == state || f.state_for(t).is_some() || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
                         true
@@ -1170,19 +1172,25 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                         return invalid(format!("{:?} is a check box: use true or false", f.name));
                     }
                 }
-                FieldValue::Radio(None) => false,
+                FieldValue::Radio(None) | FieldValue::RadioWidget(_, None) => false,
                 FieldValue::Choice(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
             };
-            set_states(doc, f, on.then_some(state.as_str()))
+            set_states(doc, f, on.then_some(state.as_str()), None)
         }
         (FieldKind::Radio, v) => {
-            let choice = match v {
-                FieldValue::Radio(c) => c.clone(),
-                FieldValue::Text(t) if t.is_empty() => None,
-                FieldValue::Text(t) => Some(t.clone()),
-                FieldValue::Check(false) => None,
+            let (target_widget, choice) = match v {
+                FieldValue::Radio(c) => (None, c.clone()),
+                FieldValue::RadioWidget(w, c) => (Some(*w), c.clone()),
+                FieldValue::Text(t) if t.is_empty() => (None, None),
+                FieldValue::Text(t) => (None, Some(t.clone())),
+                FieldValue::Check(false) => (None, None),
                 _ => return invalid(format!("{:?} is a radio group: choose one of its options", f.name)),
             };
+            if let Some(target) = target_widget
+                && !f.widgets.iter().any(|w| w.obj == target)
+            {
+                return invalid(format!("{:?} has no widget {target:?}", f.name));
+            }
             // An export value from /Opt selects its widget's on state.
             let choice = choice.map(|c| f.state_for(&c).map(str::to_owned).unwrap_or(c));
             if let Some(c) = &choice
@@ -1194,7 +1202,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
             }
-            set_states(doc, f, choice.as_deref())
+            set_states(doc, f, choice.as_deref(), target_widget)
         }
         (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_)) => {
             let vals: Vec<String> = match value {
@@ -1272,12 +1280,22 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
 }
 
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.
-fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), FormError> {
+fn set_states(doc: &mut Document, f: &Field, on: Option<&str>, target_widget: Option<ObjRef>) -> Result<(), FormError> {
     let v = on.unwrap_or("Off");
     doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?;
+    let unison = f.has(flags::RADIOS_IN_UNISON) || f.kind == FieldKind::CheckBox;
+    let selected_obj = if unison || on.is_none() {
+        None
+    } else if let Some(target) = target_widget {
+        Some(target)
+    } else {
+        let matching = |w: &&Widget| w.on_state.as_deref() == on;
+        f.widgets.iter().find(|w| matching(w) && w.state.as_deref() == on).or_else(|| f.widgets.iter().find(matching)).map(|w| w.obj)
+    };
+
     for w in &f.widgets {
         let state = match (on, w.on_state.as_deref()) {
-            (Some(c), Some(s)) if c == s => s,
+            (Some(c), Some(s)) if c == s && (unison || selected_obj == Some(w.obj)) => s,
             _ => "Off",
         };
         // A widget without appearances for its states gets PdfCraft's own.

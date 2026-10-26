@@ -99,7 +99,7 @@ impl PdfCraftApp {
                                             changed_pages.insert(p);
                                         }
                                     }
-                                    if old.value != f.value {
+                                    if old.value != f.value || old.widgets != f.widgets {
                                         for w in &f.widgets {
                                             if let Some(p) = w.page {
                                                 view.forms.unbaked.insert((f.name.clone(), p));
