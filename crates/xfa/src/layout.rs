@@ -1203,7 +1203,10 @@ impl Layouter<'_> {
                     let inner = (avail_w - c.margin.horizontal()).max(1.0);
                     (self.content_width(node, inner, &ctx, depth) + c.margin.horizontal()).min(avail_w)
                 }
-                Node::Draw(d) => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                Node::Draw(d) => match &d.value {
+                    Value::Line { edge, .. } => (edge.thickness.clamp(0.1, 20.0) + c.margin.horizontal()).min(avail_w),
+                    _ => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                },
                 Node::Field(f) if f.ui == Ui::Button => f
                     .caption
                     .as_ref()
@@ -1730,6 +1733,7 @@ impl Layouter<'_> {
         self.push_block(block)
     }
 
+    /// Draws a static `<draw>` element (text, rich text, image, line, or rectangle) into `rect`.
     fn draw_draw(&mut self, d: &Draw, rect: Rect, ctx: &Ctx) -> Result<(), XfaError> {
         if let Some(b) = &d.common.border {
             self.draw_border(b, rect)?;
@@ -1743,7 +1747,13 @@ impl Layouter<'_> {
                 if !edge.visible() {
                     return Ok(());
                 }
-                let (from, to) = if *slope_up {
+                let (from, to) = if d.common.w.is_none() || (d.common.h.is_some() && inner.w <= edge.thickness * 2.0) {
+                    let x = inner.x + inner.w / 2.0;
+                    ((x, inner.y), (x, inner.bottom()))
+                } else if d.common.h.is_none() || (d.common.w.is_some() && inner.h <= edge.thickness * 2.0) {
+                    let y = inner.y + inner.h / 2.0;
+                    ((inner.x, y), (inner.right(), y))
+                } else if *slope_up {
                     ((inner.x, inner.bottom()), (inner.right(), inner.y))
                 } else {
                     ((inner.x, inner.y), (inner.right(), inner.bottom()))

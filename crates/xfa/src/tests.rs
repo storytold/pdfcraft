@@ -4073,3 +4073,28 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+/// A line draw without a width is vertical; one without a height is horizontal,
+/// even when the template declares a default slope="/".
+#[test]
+fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
+    let items = positioned(r#"
+        <draw name="vert" x="1in" y="0.5in" h="2in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="horiz" x="0.5in" y="1in" w="3in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="narrow_horiz" x="0.5in" y="1in" w="1pt"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="narrow_vert" x="1in" y="0.5in" h="1pt"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+    "#);
+    let lines: Vec<&Item> = items.iter().filter(|i| matches!(i, Item::Line { .. })).collect();
+    assert_eq!(lines.len(), 4);
+    let is_vertical = |item: &Item| match item {
+        Item::Line { from, to, .. } => (from.0 - to.0).abs() < 1e-3,
+        _ => false,
+    };
+    let is_horizontal = |item: &Item| match item {
+        Item::Line { from, to, .. } => (from.1 - to.1).abs() < 1e-3,
+        _ => false,
+    };
+    assert!(is_vertical(lines[0]), "vert without width should be strictly vertical: {:?}", lines[0]);
+    assert!(is_horizontal(lines[1]), "horiz without height should be strictly horizontal: {:?}", lines[1]);
+    assert!(is_horizontal(lines[2]), "narrow horizontal line without height should remain horizontal: {:?}", lines[2]);
+    assert!(is_vertical(lines[3]), "narrow vertical line without width should remain vertical: {:?}", lines[3]);
+}
