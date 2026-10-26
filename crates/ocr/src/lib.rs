@@ -79,11 +79,17 @@ pub const LANGUAGES: &[(&str, &str)] = &[
 pub fn preferred_letters(language: &str) -> &'static str {
     match language {
         "fr" => "àâæçéèêëîïôœùûüÿÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸ",
-        "de" => "äöüßÄÖÜ",
+        // ß is lowercase-only in most German text (words in full uppercase spell it "SS"), but
+        // the 2017 reform gave it the capital ẞ for exactly the cases that still need one letter
+        // (a name, an all-caps heading): "STRASSE" and "STRAẞE" are both correct today.
+        "de" => "äöüßÄÖÜẞ",
         "es" => "áéíñóúü¿¡ÁÉÍÑÓÚÜ",
         "pt" => "áàâãçéêíóôõúÁÀÂÃÇÉÊÍÓÔÕÚ",
         "it" => "àèéìíîòóùÀÈÉÌÍÎÒÓÙ",
-        "nl" => "áéëïóöüÁÉËÏÓÖÜ",
+        // The stress mark (klemtoonteken) that separates "wíl" from "wil" falls on any vowel, not
+        // only a/e/o: "dít" and "nú" are as valid as "dát". The diaeresis (ë, ï, ö, ü) breaks up a
+        // vowel pair that would otherwise read as one sound ("ideeën", "ruïne", "zoölogie").
+        "nl" => "áéíóúëïöüÁÉÍÓÚËÏÖÜ",
         "da" | "no" => "åæøÅÆØ",
         "sv" | "fi" => "åäöÅÄÖ",
         "is" => "áðéíóúýþæöÁÐÉÍÓÚÝÞÆÖ",
@@ -604,6 +610,73 @@ mod tests {
         for (code, _) in LANGUAGES {
             for ch in preferred_letters(code).chars() {
                 assert!(have.contains(&ch), "{code} prefers {ch} (U+{:04X}), which {} does not contain", u32::from(ch), path.display());
+            }
+        }
+    }
+
+    /// Every named language's complete set of standard diacritics and special letters, lower and
+    /// upper case, checked letter by letter against [`preferred_letters`] (#572): a language that
+    /// is missing one of its own vowels, or has gained a letter that isn't its own, fails here by
+    /// name and by character, not as a vague "wrong length" count. The sets below are each
+    /// language's published orthography (the accented letters its own spelling rules use), not
+    /// merely what the Latin dictionary happens to contain; `preferred_letters_are_in_the_latin_dictionary`
+    /// checks that separately. `en`, `zh` and `la` keep no preference (`la` reads every accented
+    /// letter without favouring one language's own), and are covered by the empty-string case.
+    #[test]
+    fn every_named_language_prefers_exactly_its_own_alphabet() {
+        let reference: &[(&str, &str)] = &[
+            // à â æ ç é è ê ë î ï ô œ ù û ü ÿ: the accents, ligatures and diaereses of French
+            // spelling (façade, Noël, août, capharnaüm, haïr), each with its capital.
+            ("fr", "àâæçéèêëîïôœùûüÿÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸ"),
+            // ä ö ü: the umlauts. ß: the lowercase-only eszett; ẞ is its 2017-reform capital, used
+            // in an all-uppercase name or heading where plain "SS" would lose the distinction.
+            ("de", "äöüßÄÖÜẞ"),
+            // á é í ó ú: the acute accent on every vowel. ñ: the distinct letter eñe. ü: the
+            // trema in "güe"/"güi" (pingüino). ¿ ¡: the opening question and exclamation marks.
+            ("es", "áéíñóúü¿¡ÁÉÍÑÓÚÜ"),
+            // á à â ã ç é ê í ó ô õ ú: Portuguese's acute, grave, circumflex and tilde vowels plus
+            // the cedilla (ação, informação, área, à, ânimo, café, você, Brasília, avó, avô, açúcar).
+            ("pt", "áàâãçéêíóôõúÁÀÂÃÇÉÊÍÓÔÕÚ"),
+            // à è é ì í î ò ó ù: the grave and acute stress marks Italian spelling uses (città,
+            // perché, cioè, lì, sì, ciò, più) plus the rarer í/î of formal and literary use.
+            ("it", "àèéìíîòóùÀÈÉÌÍÎÒÓÙ"),
+            // á é í ó ú: the stress mark (klemtoonteken) Dutch can put on any vowel (wíl, dát,
+            // nú). ë ï ö ü: the diaeresis that keeps a vowel pair from reading as one sound
+            // (ideeën, ruïne, zoölogie, reünie).
+            ("nl", "áéíóúëïöüÁÉÍÓÚËÏÖÜ"),
+            // å æ ø: the three letters Danish and (Bokmål) Norwegian add after z, not diacritics
+            // on a Latin letter but letters of their own alphabets.
+            ("da", "åæøÅÆØ"),
+            ("no", "åæøÅÆØ"),
+            // å ä ö: the three letters Swedish and Finnish add after z (å only by convention in
+            // Finnish, in names and Swedish loanwords; ä and ö are native Finnish vowels).
+            ("sv", "åäöÅÄÖ"),
+            ("fi", "åäöÅÄÖ"),
+            // á ð é í ó ú ý þ æ ö: the whole of Icelandic's extension of the Latin alphabet (its
+            // own letters eth and thorn, the acute vowels, and æ/ö).
+            ("is", "áðéíóúýþæöÁÐÉÍÓÚÝÞÆÖ"),
+            // á č ď é ě í ň ó ř š ť ú ů ý ž: Czech's full diacritic set (háček, čárka and kroužek).
+            ("cs", "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ"),
+            // ą ć ę ł ń ó ś ź ż: the nine letters Polish spelling adds to the plain Latin alphabet.
+            ("pl", "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"),
+            ("en", ""),
+            ("zh", ""),
+            ("la", ""),
+        ];
+        assert_eq!(
+            reference.iter().map(|(code, _)| *code).collect::<std::collections::BTreeSet<_>>(),
+            LANGUAGES.iter().map(|(code, _)| *code).collect::<std::collections::BTreeSet<_>>(),
+            "every language in LANGUAGES has a reference entry here, and vice versa"
+        );
+        for (code, expect) in reference {
+            let have: std::collections::BTreeSet<char> = preferred_letters(code).chars().collect();
+            let want: std::collections::BTreeSet<char> = expect.chars().collect();
+            assert_eq!(have.len(), expect.chars().count(), "{code}: a letter is repeated in {expect:?}");
+            for ch in &want {
+                assert!(have.contains(ch), "{code} is missing {ch} (U+{:04X}) from its own alphabet", u32::from(*ch));
+            }
+            for ch in &have {
+                assert!(want.contains(ch), "{code} prefers {ch} (U+{:04X}), which is not one of its own letters", u32::from(*ch));
             }
         }
     }
