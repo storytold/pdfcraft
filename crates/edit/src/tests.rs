@@ -3751,6 +3751,30 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
 }
 
 #[test]
+fn moving_an_image_inside_marked_content_leaves_every_sequence_intact() {
+    // `translate_images` changes the image's own `cm`; its `Do` stays where it was, so a moved
+    // image stays in the sequence that tags it (an image on a layer sits in `/OC … BDC`).
+    for content in [
+        "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+        "/OC /L0 BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC",
+    ] {
+        let mut doc = image_page_with(content);
+        let before = images::page_images(&doc, 0).unwrap()[0].rect;
+        images::translate_images(&mut doc, 0, &[0], [10.0, 0.0]).unwrap();
+        let after = images::page_images(&doc, 0).unwrap()[0].rect;
+        assert!(close(after, [before[0] + 10.0, before[1], before[2] + 10.0, before[3]]), "{content}: {after:?}");
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let count = |name: &str| ops.iter().filter(|op| op.is(name)).count();
+        assert_eq!((count("BDC"), count("EMC")), (2, 2), "{content}: both sequences remain");
+        let first = ops.iter().position(|op| op.is("BDC")).unwrap();
+        let end = ops.iter().position(|op| op.is("EMC")).unwrap();
+        let image = ops.iter().position(|op| op.is("Do")).unwrap();
+        assert!(first < image && image < end, "{content}: the image is still inside its own sequence");
+        assert!(!ops[end..].iter().any(|op| op.is("Do")), "{content}: the other sequence gained no image");
+    }
+}
+
+#[test]
 fn page_images_move_turn_replace_and_delete() {
     let mut doc = image_page();
     let imgs = images::page_images(&doc, 0).unwrap();
