@@ -12,7 +12,7 @@ use crate::support;
 const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
 fn recent_file(name: &str) -> RecentFile {
-    RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 }
+    RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0, pinned: false }
 }
 
 fn names(app: &PdfCraftApp) -> Vec<&str> {
@@ -207,7 +207,7 @@ fn the_limit_is_saved_and_restored_and_cuts_a_longer_list() {
             path.to_string_lossy().into_owned()
         })
         .collect();
-    let entries: Vec<RecentFile> = paths.iter().map(|p| RecentFile { name: "x.pdf".into(), path: p.clone(), pages: 1, size: 0 }).collect();
+    let entries: Vec<RecentFile> = paths.iter().map(|p| RecentFile { name: "x.pdf".into(), path: p.clone(), pages: 1, size: 0, pinned: false }).collect();
     let json = serde_json::json!({ "recent": entries, "recent_limit": 2 }).to_string();
     let mut restored = PdfCraftApp::new();
     restored.restore(&json);
@@ -233,7 +233,7 @@ fn restoring_settings_does_not_check_recent_files_and_a_frame_drops_the_gone_one
     let here = here.to_string_lossy().into_owned();
     let gone = dir.join("gone.pdf").to_string_lossy().into_owned();
     let entries: Vec<RecentFile> =
-        [&here, &gone].iter().map(|p| RecentFile { name: "x.pdf".into(), path: (*p).clone(), pages: 1, size: 0 }).collect();
+        [&here, &gone].iter().map(|p| RecentFile { name: "x.pdf".into(), path: (*p).clone(), pages: 1, size: 0, pinned: false }).collect();
     let json = serde_json::json!({ "recent": entries }).to_string();
 
     let mut restored = PdfCraftApp::new();

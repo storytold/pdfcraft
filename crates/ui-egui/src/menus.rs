@@ -734,6 +734,7 @@ mod tests {
         assert_eq!(kind(&app, "view.side_panel"), ItemKind::Check(true));
     }
 
+    /// Verify that an open modal dialog disables document menu commands while leaving Quit enabled.
     #[test]
     fn a_dialog_greys_document_commands_and_drops_their_clicks() {
         let (mut app, ctx) = app(&["a.pdf"]);
@@ -749,6 +750,7 @@ mod tests {
         assert!(app.menu_gate(&ctx).allows_command(&Builtin::Quit.command()));
     }
 
+    /// Verify that Open Recent and Window list each recent file and open document once in order.
     #[test]
     fn recent_files_and_open_documents_are_listed_once_each() {
         let (mut app, ctx) = app(&["a.pdf", "b.pdf"]);

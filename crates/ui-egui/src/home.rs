@@ -220,23 +220,25 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 } else {
                     press.wash(ui, rect, 8, false);
                 }
-                if hovered || r.pinned {
-                    // Pin or unpin this file so it stays at the top of Recent across Clear (#4772).
-                    let pin_rect = Rect::from_center_size(rect.right_center() - vec2(58.0, 0.0), vec2(28.0, 28.0));
-                    let p = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
-                    let (label, hover) = if r.pinned {
-                        (crate::i18n::fmt(tl!("Unpin {name} from Recent"), &[("name", &r.name)]), tl!("Unpin from Recent"))
-                    } else {
-                        (crate::i18n::fmt(tl!("Pin {name} to Recent"), &[("name", &r.name)]), tl!("Pin to Recent"))
-                    };
-                    p.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-                    if p.hovered() {
+                // Pin or unpin this file so it stays at the top of Recent across Clear (#4772).
+                // The interaction is always present so keyboard users can focus and activate it;
+                // the icon is drawn when the row is hovered, focused, or already pinned.
+                let pin_rect = Rect::from_center_size(rect.right_center() - vec2(58.0, 0.0), vec2(28.0, 28.0));
+                let p = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
+                let (label, hover) = if r.pinned {
+                    (crate::i18n::fmt(tl!("Unpin {name} from Recent"), &[("name", &r.name)]), tl!("Unpin from Recent"))
+                } else {
+                    (crate::i18n::fmt(tl!("Pin {name} to Recent"), &[("name", &r.name)]), tl!("Pin to Recent"))
+                };
+                p.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                if hovered || r.pinned || p.has_focus() {
+                    if p.hovered() || p.has_focus() {
                         ui.painter().rect_filled(pin_rect, CornerRadius::same(6), t.pressed);
                     }
                     icons::paint(ui, pin_rect.shrink(6.0), "pin", 16.0, if r.pinned { t.accent_text } else { t.icon });
-                    if p.on_hover_text(hover).clicked() {
-                        pin = Some(r.path.clone());
-                    }
+                }
+                if p.on_hover_text(hover).clicked() {
+                    pin = Some(r.path.clone());
                 }
                 if hovered {
                     // Remove just this file from the list (#430); the file itself is untouched.
@@ -340,6 +342,7 @@ mod tests {
         assert!(h.state().pinned_tools.is_empty());
     }
 
+    /// Verify that translated tool card descriptions wrap without overlapping the action label.
     #[test]
     fn translated_card_description_leaves_room_for_the_action() {
         if !crate::i18n::needs_catalogs() {

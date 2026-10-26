@@ -377,6 +377,7 @@ fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
 }
 
+/// Verify that `file.clear_recent` clears unpinned entries, persists, and reports an empty list.
 #[test]
 fn clear_recent_files_runs_from_the_palette_and_is_saved() {
     let mut app = PdfCraftApp::new();

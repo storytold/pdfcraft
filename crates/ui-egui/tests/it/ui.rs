@@ -39,6 +39,7 @@ fn home_shows_welcome_and_tools() {
     h.get_by_label("Open file");
 }
 
+/// Verify that changing the tools panel side in Preferences moves the pane and persists.
 #[test]
 fn tools_panel_side_preference_moves_and_persists() {
     use pdfcraft_ui_egui::Dialog;
@@ -144,7 +145,6 @@ fn home_pins_recent_file_to_top_keeps_it_across_clear_and_persists() {
         }
     });
     h.run_steps(4);
-    assert!(h.query_by_label("Pin second.pdf to Recent").is_none(), "the pin button shows only over its row while unpinned");
     h.get_by_label("second.pdf").hover();
     h.run_steps(2);
     h.get_by_label("Pin second.pdf to Recent").click();
@@ -172,8 +172,9 @@ fn home_pins_recent_file_to_top_keeps_it_across_clear_and_persists() {
     let remaining: Vec<(&str, bool)> = h.state().recent.iter().map(|r| (r.name.as_str(), r.pinned)).collect();
     assert_eq!(remaining, [("second.pdf", true)], "Clear Recent Files keeps pinned files");
 
-    // Pinned state survives persistence round-trip.
+    // Pinned state survives persistence round-trip, even when the file is temporarily missing at startup.
     let saved = h.state().persist();
+    let _ = std::fs::remove_dir_all(&dir);
     let mut restarted = PdfCraftApp::new();
     restarted.restore(&saved);
     assert_eq!(restarted.recent.len(), 1);
@@ -184,9 +185,9 @@ fn home_pins_recent_file_to_top_keeps_it_across_clear_and_persists() {
     h.get_by_label("Unpin second.pdf from Recent").click();
     h.run_steps(2);
     assert!(!h.state().recent[0].pinned, "clicking Unpin clears the pinned state");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Verify that clicking View more in the sidebar lists every tool group in the catalog.
 #[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
@@ -197,6 +198,7 @@ fn every_catalog_tool_is_listed_after_view_more() {
     }
 }
 
+/// Verify that expanding All tools shows every category and filters tools by search query.
 #[test]
 fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
     let mut h = harness(|_| {});
