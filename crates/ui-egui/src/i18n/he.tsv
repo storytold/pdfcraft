@@ -817,6 +817,8 @@
 	Output intent: {list}	כוונת הפלט: {list}
 	Conformance level:	רמת תאימות:
 	No problems found: the document conforms to {level}.	לא נמצאו בעיות: המסמך עומד בדרישות {level}.
+	 (page {p})	 (עמוד {p})
+	  · not fixable here	  · לא ניתן לתקן כאן
 	Verify	אימות
 	Box	תיבה
 	Units	יחידות
@@ -1438,6 +1440,7 @@
 	just now	ממש עכשיו
 	{n} min ago	לפני {n} דקות
 	{n} h ago	לפני {n} שעות
+	 · password-protected	 · מוגן בסיסמה
 	Recover	שחזור
 	Discard	השלכה
 	Version {v}	גרסה {v}
@@ -2342,7 +2345,7 @@ animation effects	Off	כבוי
 	Only change the colour of black text or line art	שינוי הצבע של טקסט שחור או איור קווי בלבד
 	Change the colour of line art as well as text	שינוי הצבע של איור קווי בנוסף לטקסט
 	Colours are remapped while rendering; the document itself never changes.	הצבעים ממופים מחדש בעת הרינדור; המסמך עצמו אינו משתנה.
-	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	מנהל ההתקן של מדפסת זו אינו מקבל הגדרות דו־צדדיות מיישומים אחרים, ולכן ההגדרה שלו היא הקובעת. שנה אותה ב„מאפיינים…”.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	מנהל ההתקן של מדפסת זו אינו מקבל הגדרות דו־צדדיות מיישומים אחרים, ולכן ההגדרה שלו היא הקובעת. שנה אותה דרך „מאפיינים…
 	Browser's print dialog	תיבת ההדפסה של הדפדפן
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	מספר העותקים, הדפסה דו־צדדית והצבע נקבעים בתיבת ההדפסה של הדפדפן.
 	Preparing {n} sheets for printing…	מכין {n} גיליונות להדפסה…
@@ -2350,6 +2353,7 @@ animation effects	Off	כבוי
 	Opening the browser's print dialog…	פותח את תיבת ההדפסה של הדפדפן…
 	Couldn't print from the browser ({e}); downloaded {name} to print instead	לא ניתן להדפיס דרך הדפדפן ({e}); {name} הורד כדי להדפיס אותו במקום זאת
 	Tools panel side	צד חלונית הכלים
+	Add comment	הוספת הערה
 	Change tag properties	שינוי מאפייני תגית
 	Tags panel	חלונית תגיות
 	Tags	תגיות
