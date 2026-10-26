@@ -1219,6 +1219,9 @@ struct PageOut {
     page_action: Option<PageMenuAction>,
     primary_down: bool,
     refused: Option<String>,
+    /// The current page or spread where it is drawn, every page of it: one off screen (the second
+    /// page of a zoomed spread) has no screen transform, but still decides where the row ends.
+    row_on_screen: Option<Rect>,
     stamp_placed: bool,
 }
 
@@ -1653,6 +1656,7 @@ fn draw_pages(
         }
     }
     let origin = resp_rect.min - vec2(0.0, y_shift);
+    out.row_on_screen = shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
@@ -3098,6 +3102,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         page_action,
         primary_down,
         mut refused,
+        row_on_screen,
         stamp_placed,
     } = page_out;
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
@@ -3111,11 +3116,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // spread shown whole that way (in continuous view the content is as wide as the widest page,
     // and a narrower current page shows whole inside it).
     let max_x = (out.content_size.x - out.inner_rect.width()).max(0.0);
-    let row = shown_row(view).iter().filter_map(|&p| view.page_xform(p)).map(|xf| xf.rect).reduce(Rect::union);
     let inner = out.inner_rect;
     view.side_edges = Some((
-        out.state.clamped_offset().x <= 1.0 || row.is_some_and(|r| r.left() >= inner.left() - 1.0),
-        out.state.clamped_offset().x >= max_x - 1.0 || row.is_some_and(|r| r.right() <= inner.right() + 1.0),
+        out.state.clamped_offset().x <= 1.0 || row_on_screen.is_some_and(|r| r.left() >= inner.left() - 1.0),
+        out.state.clamped_offset().x >= max_x - 1.0 || row_on_screen.is_some_and(|r| r.right() <= inner.right() + 1.0),
     ));
 
     view.viewport_screen = out.inner_rect;

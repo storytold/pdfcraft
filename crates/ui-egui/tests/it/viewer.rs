@@ -1554,6 +1554,50 @@ fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
     assert!(left.zip(start).is_some_and(|(l, s)| l < s - 10.0), "the wide page moved left: {left:?} from {start:?}");
 }
 
+/// A zoomed two-page spread scrolled so its first page ends inside the window and the second is
+/// still wholly to the right of it: → scrolls on to the second page rather than turning the
+/// spread. (Read from the pages on screen alone, the spread seemed to end with its first page.)
+#[test]
+fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
+    use egui::Key;
+    // The page gap (points on screen).
+    const GAP: f32 = 14.0;
+    let build = |zoom: f32| {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
+            app.set_option("layout", "two-page").unwrap();
+            // Before the first layout: zoomed about the content's top left, scrolled to it.
+            app.views[0].set_zoom(zoom);
+            app
+        });
+        crate::support::settle(&mut h);
+        h.state_mut().active = Some(0);
+        h.run_steps(4);
+        h
+    };
+    let shown =
+        |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].viewport_rect(), h.state().views[0].page_screen_rect(0).expect("page 1 on screen"));
+    // Zoom until page 1's right edge sits half a gap inside the window's.
+    let mut zoom = 2.0;
+    let mut h = build(zoom);
+    for _ in 0..3 {
+        let (inner, first) = shown(&h);
+        zoom *= (inner.right() - GAP / 2.0 - first.left()) / first.width();
+        h = build(zoom);
+    }
+    let (inner, first) = shown(&h);
+    assert!(first.right() <= inner.right() && first.right() + GAP > inner.right(), "the spread's gap at the window's edge: {first:?} in {inner:?}");
+    assert!(h.state().views[0].page_screen_rect(1).is_none(), "its second page off screen");
+    assert!(h.state().views[0].layout == pdfcraft_ui_egui::canvas::PageLayout::TwoUp && !h.state().views[0].continuous);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert!(v.current < 2, "→ doesn't turn the spread: page {}", v.current + 1);
+    assert!(v.page_screen_rect(1).is_some(), "it scrolls the second page into view");
+}
+
 #[test]
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
