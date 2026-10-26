@@ -1995,11 +1995,18 @@ fn japanese_replacement_missing_a_glyph_after_240_changes_nothing() {
         return;
     }
     // The first CJK character that no face draws: the 242nd unique character, in a second font.
-    let faces = pdfcraft_fonts::document_japanese_fonts_for_style(false, false);
+    // The Chinese faces count too when the build has them, or the edit succeeds instead of failing.
+    let faces: Vec<_> = pdfcraft_fonts::document_japanese_fonts_for_style(false, false)
+        .into_iter()
+        .chain(pdfcraft_fonts::document_chinese_fonts_for_style(false, false))
+        .collect();
+    // Usually a CJK ideograph; a build whose Chinese faces cover that whole block falls through to
+    // the private use area, which no bundled face draws either.
     let missing = (0x4E00u32..0x9FFF)
+        .chain(0xE000..0xF8FF)
         .filter_map(char::from_u32)
         .find(|ch| faces.iter().all(|face| pdfcraft_fonts::japanese_glyph_from(face, *ch).is_err()))
-        .expect("some CJK character is outside every face");
+        .expect("some character is outside every face");
     let replacement = format!("{}{missing}", covered_japanese_chars(241));
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();

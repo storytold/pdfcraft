@@ -20,12 +20,13 @@ pub mod source_shaping;
 mod std14;
 mod std14_metrics;
 pub use craft::{
-    CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
-    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
-    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+    CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_chinese_fonts_for_style, document_devanagari_font, document_hebrew_font,
+    document_japanese_font, document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font,
+    ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
 pub use script::{
-    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
+    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, covers_text, japanese_glyph, japanese_glyph_from, script_missing,
+    script_outline,
 };
 pub use shaping::{
     ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
