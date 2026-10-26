@@ -17,7 +17,8 @@ use hayro::hayro_syntax::LoadPdfError;
 use hayro::hayro_syntax::Pdf;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use pdfcraft_cos::page_labels::{
-    MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, alpha, roman,
+    LabelRange, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES,
+    label_for_page,
 };
 
 use crate::OpenError;
@@ -1345,45 +1346,26 @@ impl<'a> Inspector<'a> {
                 return Err("decoded prefixes exceed 4 MiB in total");
             }
             let style = d.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok());
-            specs.insert(start, (first, prefix, style));
+            specs.insert(start, LabelRange { start, first, prefix, style: style.filter(|s| s.len() == 1).and_then(|s| s.first().copied()) });
         }
         let mut staged = Vec::new();
         let mut total = 0usize;
         for (i, _) in pages.iter().enumerate() {
-            let Some((&start, (first, prefix, style))) = specs.range(..=i).next_back() else { continue };
-            let n = if matches!(*style, Some(b"D" | b"R" | b"r" | b"A" | b"a")) {
-                let offset = u64::try_from(i - start).map_err(|_| "a page number is too large")?;
-                first.checked_add(offset).ok_or("a page number overflows")?
-            } else {
-                0 // /St is unused when the label consists only of its prefix.
-            };
-            let remaining = MAX_LABEL_BYTES - prefix.len();
-            let number = match *style {
-                Some(b"D") => Some(n.to_string()),
-                Some(b"R" | b"r") => roman(n, remaining),
-                Some(b"A" | b"a") => alpha(n, remaining),
-                _ => Some(String::new()),
-            }
-            .filter(|number| number.len() <= remaining);
-            // A label too long to show keeps that page's physical number; other ranges stay.
-            let Some(mut number) = number else {
-                let note = format!(
-                    "labels from page {} exceed {MAX_LABEL_BYTES} UTF-8 bytes; those pages show their physical page numbers",
-                    start.saturating_add(1)
-                );
-                if !notes.contains(&note) {
-                    notes.push(note);
+            let Some((&start, range)) = specs.range(..=i).next_back() else { continue };
+            let Some(label) = label_for_page(range, i) else {
+                // An empty custom label keeps the physical number silently; a number too
+                // long to show does so with a note, and the other ranges are unaffected.
+                if range.is_numbered() {
+                    let note = format!(
+                        "labels from page {} exceed {MAX_LABEL_BYTES} UTF-8 bytes; those pages show their physical page numbers",
+                        start.saturating_add(1)
+                    );
+                    if !notes.contains(&note) {
+                        notes.push(note);
+                    }
                 }
                 continue;
             };
-            if matches!(*style, Some(b"R" | b"A")) {
-                number.make_ascii_uppercase();
-            }
-            let mut label = prefix.clone();
-            label.push_str(&number);
-            if label.is_empty() {
-                continue; // Keep the existing physical number for an empty custom label.
-            }
             total = total.checked_add(label.len()).ok_or("the total label size overflows")?;
             if total > MAX_LABEL_TOTAL_BYTES {
                 return Err("custom labels exceed 4 MiB in total");
@@ -2547,6 +2529,7 @@ mod tests {
     }
 
     use super::*;
+    use pdfcraft_cos::page_labels::{alpha, roman};
 
     #[test]
     fn roman_and_alpha_labels() {
