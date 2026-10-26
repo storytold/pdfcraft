@@ -22,14 +22,17 @@ pub mod appearance;
 mod author;
 mod calc_order;
 pub mod detect;
+mod locks;
 mod scripting;
 pub mod table;
+
 pub use actions::{FieldAction, Trigger, field_action_chains, field_actions, set_field_actions};
 pub use author::{
     BorderStyle, CheckStyle, FieldFont, FieldProps, Look, LookPatch, MIN_FIELD_SIDE, NewField, add_field, check_style, delete_field,
     delete_field_object, duplicate_field, look, redraw_field, set_button_icon, set_props,
 };
 pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
+pub use locks::signature_locks;
 pub use scripting::{
     FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,
     set_field_script,
@@ -46,6 +49,10 @@ pub enum FormError {
     NoSuchField(String),
     #[error("{0:?} is read-only")]
     ReadOnly(String),
+    /// A signed signature field locks the field (`/Lock` or FieldMDP): changing it would
+    /// invalidate that signature.
+    #[error("{field:?} is locked by the signature in {signature:?}")]
+    Locked { field: String, signature: String },
     #[error("{0}")]
     Invalid(String),
     /// The value doesn't fit the field's format (its keystroke check refused it), which is
@@ -1024,6 +1031,9 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     if f.read_only() {
         return Err(FormError::ReadOnly(name.into()));
     }
+    if let Some(signature) = signature_locks(doc, all).remove(name) {
+        return Err(FormError::Locked { field: name.into(), signature });
+    }
     write_value(doc, f, value, scripts)?;
     author::form_fonts_as_objects(doc, all)?;
     // Fields with the same fully qualified name are one field (§12.7.3.1). Writers that repeat a
@@ -1084,9 +1094,14 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
     }
     // By object: two fields can share a name in a malformed form, and each calculates.
     let order: Vec<ObjRef> = calc_order::run_order(doc, &all).0.into_iter().filter_map(|(i, _)| all.get(i)).map(|f| f.obj).collect();
+    // A locked calculated field keeps the value the signature covers.
+    let locked = signature_locks(doc, &all);
     let mut changed = 0;
     for obj in order {
         let Some(f) = all.iter().find(|f| f.obj == obj).cloned() else { continue };
+        if locked.contains_key(&f.name) {
+            continue;
+        }
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
             all.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.first().cloned()).collect()
@@ -1788,7 +1803,9 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         return Err(FormError::NoSuchField(missing.clone()));
     }
     let mut changed = 0;
-    for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name))) {
+    // A signature's locked fields keep their values: resetting them would invalidate it.
+    let locked = signature_locks(doc, &all);
+    for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name)) && !locked.contains_key(&f.name)) {
         if f.value == f.default {
             continue;
         }

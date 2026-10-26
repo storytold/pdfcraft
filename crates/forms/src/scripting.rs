@@ -106,8 +106,13 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         return Ok(());
     }
     let all = fields(doc);
+    // Scripts can't change what a signature locks (as with a locked field in Acrobat).
+    let locked = crate::signature_locks(doc, &all);
     for c in changes {
         let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
+        if locked.contains_key(&c.name) {
+            continue;
+        }
         if let Some(v) = &c.value
             && c.name != except
             && *v != f.value

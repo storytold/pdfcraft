@@ -4577,3 +4577,89 @@ fn set_values_reads_the_form_once_not_per_value() {
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
+
+/// A form with `A`, `B`, a calculated `Total` (A + B) and a signature field `Sig1` carrying
+/// `lock` (a `/Lock` dictionary, or anything else for its field dictionary); `signature` is its
+/// `/V` (the signature value), or `None` while it is unsigned.
+fn locked_form(lock: &str, signature: Option<&str>) -> Document {
+    let v = if signature.is_some() { "/V 10 0 R" } else { "" };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /CO [7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 9 0 R >> >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (A) /V (1) /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (B) /V (2) /Rect [50 670 150 690] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Total) /V (3) /Rect [50 640 150 660] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array(\"A\", \"B\"));) >> >> >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [300 640 500 700] /P 3 0 R {v} {lock} >>"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        signature.unwrap_or("null").into(),
+    ];
+    document(&objs)
+}
+
+const SIGNED: Option<&str> = Some("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >>");
+
+fn value_of(doc: &Document, name: &str) -> Vec<String> {
+    fields(doc).into_iter().find(|f| f.name == name).map(|f| f.value).unwrap_or_default()
+}
+
+#[test]
+fn a_signed_lock_refuses_changes_to_the_fields_it_names() {
+    let mut doc = locked_form("/Lock << /Type /SigFieldLock /Action /Include /Fields [(A)] >>", SIGNED);
+    let locks = signature_locks(&doc, &fields(&doc));
+    assert_eq!(locks.get("A").map(String::as_str), Some("Sig1"));
+    assert!(!locks.contains_key("B") && !locks.contains_key("Sig1"));
+    assert_eq!(set_value(&mut doc, "A", &FieldValue::Text("9".into())), Err(FormError::Locked { field: "A".into(), signature: "Sig1".into() }));
+    assert_eq!(value_of(&doc, "A"), ["1"], "unchanged");
+    set_value(&mut doc, "B", &FieldValue::Text("5".into())).expect("B isn't locked");
+    assert_eq!(value_of(&doc, "Total"), ["6"], "an unlocked total still calculates");
+}
+
+#[test]
+fn a_lock_takes_effect_only_once_signed() {
+    let mut doc = locked_form("/Lock << /Type /SigFieldLock /Action /All >>", None);
+    assert!(signature_locks(&doc, &fields(&doc)).is_empty());
+    set_value(&mut doc, "A", &FieldValue::Text("9".into())).expect("unsigned: no lock yet");
+}
+
+#[test]
+fn exclude_locks_every_other_field() {
+    let doc = locked_form("/Lock << /Type /SigFieldLock /Action /Exclude /Fields [(B)] >>", SIGNED);
+    let locks = signature_locks(&doc, &fields(&doc));
+    let mut names: Vec<&str> = locks.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["A", "Total"]);
+}
+
+#[test]
+fn a_fieldmdp_transform_in_the_signature_locks_too() {
+    // No `/Lock` on the field, only the transform in the signature value (other signers).
+    let doc = locked_form(
+        "",
+        Some(
+            "<< /Type /Sig /Filter /Adobe.PPKLite /Reference [<< /Type /SigRef /TransformMethod /FieldMDP /TransformParams << /Type /TransformParams /Action /Include /Fields [(A) (Total)] /V /1.2 >> >>] >>",
+        ),
+    );
+    let locks = signature_locks(&doc, &fields(&doc));
+    assert!(locks.contains_key("A") && locks.contains_key("Total") && !locks.contains_key("B"));
+}
+
+#[test]
+fn reset_and_calculation_keep_locked_values() {
+    let mut doc = locked_form("/Lock << /Type /SigFieldLock /Action /Include /Fields [(A) (Total)] >>", SIGNED);
+    set_value(&mut doc, "B", &FieldValue::Text("5".into())).expect("B isn't locked");
+    assert_eq!(value_of(&doc, "Total"), ["3"], "the locked total keeps the signed value");
+    reset(&mut doc, None).expect("resets");
+    assert_eq!(value_of(&doc, "A"), ["1"], "a locked field isn't reset");
+    assert!(value_of(&doc, "B").is_empty(), "the others are");
+}
+
+#[test]
+fn a_script_cannot_change_a_locked_field() {
+    let mut doc = locked_form("/Lock << /Type /SigFieldLock /Action /Include /Fields [(A)] >>", SIGNED);
+    let set = |name: &str| FieldChange { name: name.into(), value: Some(vec!["9".into()]), ..FieldChange::default() };
+    apply_script_changes(&mut doc, &[set("A"), set("B")], &mut NoScripts).expect("applies");
+    assert_eq!(value_of(&doc, "A"), ["1"], "locked: unchanged");
+    assert_eq!(value_of(&doc, "B"), ["9"]);
+}

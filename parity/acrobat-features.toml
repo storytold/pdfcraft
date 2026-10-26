@@ -6177,11 +6177,11 @@ title = "Field locks (FieldMDP)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["form_fill"]
+evidence = ["crates/forms/src/tests.rs::a_signed_lock_refuses_changes_to_the_fields_it_names", "crates/forms/src/tests.rs::a_lock_takes_effect_only_once_signed", "crates/forms/src/tests.rs::exclude_locks_every_other_field", "crates/forms/src/tests.rs::a_fieldmdp_transform_in_the_signature_locks_too", "crates/forms/src/tests.rs::reset_and_calculation_keep_locked_values", "crates/forms/src/tests.rs::a_script_cannot_change_a_locked_field"]
+notes = "Honoured when filling: a signed signature field's /Lock (All, Include, Exclude) or the FieldMDP transform in its signature's /Reference locks the fields it names (with the fields below them); filling one fails naming the signature, and reset, recalculation and script changes leave it as it is. Missing: writing a lock when signing (sign.lock-after-signing), marking locked fields in the UI and in form_fields, and reporting a locked field's change in changes-after-signing"
 
 [[feature]]
 id = "sign.document-timestamp"
