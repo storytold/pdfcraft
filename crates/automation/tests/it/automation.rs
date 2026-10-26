@@ -9772,8 +9772,8 @@ fn a_bookmark_added_at_a_position_reports_the_same_position_back_on_any_page_rot
     near(&d["top"], Some(120.25), "reopened top");
 }
 
-/// `comment_edit points` reshapes a line, connected lines or a polygon, in one undo step, and
-/// `comment_list` reports the points it takes.
+/// `comment_edit rotate` turns a line's points about its middle and keeps a rectangle's box with
+/// an angle, which `comment_list` reports.
 #[test]
 fn comments_are_turned_through_the_tool() {
     let dir = workdir("rotate");
@@ -9794,8 +9794,21 @@ fn comments_are_turned_through_the_tool() {
     for bad in [json!(1000), json!("x")] {
         assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": index, "rotate": bad })).is_err());
     }
+    // Its `rect` is now the upright rectangle around it, which doesn't give its own sides: `rect`
+    // is refused while it is turned (it grew it and, at a quarter turn, swapped its sides), `move`
+    // still moves it.
+    let resized = a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": index, "rect": r["rect"] }));
+    assert!(matches!(&resized, Err(ToolError::InvalidArgs(m)) if m.contains("upright")), "{resized:?}");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": index, "move": [10, 0] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let moved = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Square").unwrap().clone();
+    let x = |c: &Value| c["rect"][0].as_f64().unwrap();
+    assert!((x(&moved) - x(&r) - 10.0).abs() < 0.01, "{moved} from {r}");
+    assert_eq!(moved["angle"], json!(30.0));
 }
 
+/// `comment_edit points` reshapes a line, connected lines or a polygon, in one undo step, and
+/// `comment_list` reports the points it takes.
 #[test]
 fn comments_are_reshaped_through_the_tool() {
     let dir = workdir("reshape");

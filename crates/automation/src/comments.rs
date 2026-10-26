@@ -667,9 +667,16 @@ impl Automation {
         if let Some(r) = a.nums::<4>("rect")? {
             // The rectangle as comment_list reports it: where the comment is drawn.
             let doc = self.doc(a)?;
+            let comment = doc.info.annotations.iter().find(|c| c.page == page && c.index == index);
+            // A turned one's is the upright rectangle around it, which doesn't say how long its
+            // own sides are (at 45° not even which is longer).
+            if comment.is_some_and(|c| c.turn.is_some()) {
+                return Err(ToolError::InvalidArgs(
+                    "a turned comment can't be resized by `rect` (comment_list's `rect` is the upright rectangle around it): turn it upright with `rotate` first, or move it with `move`".into(),
+                ));
+            }
             let rect = rect_to_user(&info, r);
-            let rect =
-                doc.info.annotations.iter().find(|c| c.page == page && c.index == index).map_or(rect, |c| c.rect_for_shown(rect, info.rotation));
+            let rect = comment.map_or(rect, |c| c.rect_for_shown(rect, info.rotation));
             edits.push(Edit::ResizeAnnotation { page, index, rect });
         }
         if let Some([dx, dy]) = a.nums::<2>("move")? {
