@@ -2209,6 +2209,43 @@ fn properties_dialog_makes_the_strikethrough_colour_default() {
     assert!(made.iter().zip(green).all(|(m, r)| (f64::from(*m) - r).abs() < 0.01), "the next strikethrough is green: {made:?}");
 }
 
+/// A text box with neither a border nor a fill is all text: Make Properties Default (and the
+/// context menu's Make Current Properties Default) gives the tool the opacity its text is drawn
+/// at, the one Comment Properties shows, not the comment's /CA.
+#[test]
+fn a_text_only_text_box_made_default_gives_the_tool_its_texts_opacity() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 0.0, fill: None, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Faint".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Faint")).map(|a| a.index).expect("the text box");
+    // As the automation's comment_edit sets it.
+    assert!(h.state_mut().apply_edit(Edit::PartOpacity { page: 0, index, fill: None, text: Some(0.5) }));
+    h.run_steps(2);
+    let opacity = |h: &Harness<'static, PdfCraftApp>| h.state().comment_prefs.style(CommentTool::TextBox).opacity;
+    assert!((opacity(&h) - 1.0).abs() < 1e-6);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+    // The context menu's way, from a tool at 100 % again.
+    h.state_mut().comment_prefs.set_opacity(CommentTool::TextBox, 1.0);
+    h.state_mut().make_comment_default(0, index);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
