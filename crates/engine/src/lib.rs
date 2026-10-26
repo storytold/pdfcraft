@@ -3877,7 +3877,7 @@ impl Session {
         Ok(PreparedDocument { document })
     }
 
-    /// The last step of opening: build the document record and register it.
+    /// Build a document record; `commit_open` later registers the prepared document in the session.
     #[allow(clippy::too_many_arguments)]
     fn build_document(
         trust: &Arc<TrustStore>,
