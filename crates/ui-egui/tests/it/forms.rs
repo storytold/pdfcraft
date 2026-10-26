@@ -34,6 +34,7 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str, widget: usize)
     click_at(h, p);
 }
 
+/// Click at a screen position, delivering hover, press and release in separate UI frames.
 fn click_at(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
     h.hover_at(p);
     h.run_steps(1);
@@ -41,6 +42,182 @@ fn click_at(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(3);
+}
+
+/// #4792: a fixed-size, scrollable field with substantially more text than fits.
+fn overflowing_multiline() -> (Harness<'static, PdfCraftApp>, String, egui::Rect, egui::Id) {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 0,
+        rect: [35.0, 100.0, 257.7, 247.4],
+        kind: pdfcraft_engine::NewField::Text { multiline: true },
+        name: Some("overflow".into()),
+    }));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "overflow".into(),
+        props: Box::new(pdfcraft_engine::FieldProps {
+            font_size: Some(10.0),
+            appearance: Some(pdfcraft_engine::FieldLookPatch { border: Some(None), fill: Some(None), width: Some(0.0), ..Default::default() }),
+            ..Default::default()
+        }),
+    }));
+    let text = (1..=20).map(|n| format!("Line {n}: editable text\n")).collect::<String>() + "LAST LINE: reachable";
+    assert!(
+        h.state_mut()
+            .apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "overflow".into(), value: pdfcraft_engine::FieldValue::Text(text.clone()) })
+    );
+    crate::support::settle(&mut h);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == "overflow").unwrap();
+    assert!(!f.has(pdfcraft_engine::field_flags::DO_NOT_SCROLL));
+    let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).unwrap();
+    let id = egui::Id::unique(("form-field", s.views[0].id.0, "overflow", 0usize));
+    click_at(&mut h, rect.min + egui::vec2(8.0, 8.0));
+    (h, text, rect, id)
+}
+
+/// Inspect the actual painted galley and clip, rather than only checking cursor indices.
+fn multiline_paint(h: &Harness<'static, PdfCraftApp>, text: &str, at: usize) -> (egui::Rect, egui::Rect) {
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => {
+                Some((t.galley.pos_from_cursor(egui::text::CCursor::new(at)).translate(t.pos.to_vec2()), s.clip_rect))
+            }
+            _ => None,
+        })
+        .expect("the focused field paints its text")
+}
+
+/// Assert that a text position is within the painted clip and both stay inside the PDF widget.
+fn assert_multiline_visible(h: &Harness<'static, PdfCraftApp>, text: &str, at: usize, field: egui::Rect) {
+    let (caret, clip) = multiline_paint(h, text, at);
+    assert!(field.expand(1.0).contains_rect(caret), "caret must stay inside the PDF widget: {caret:?}, {field:?}");
+    assert!(field.expand(1.0).contains_rect(clip), "clip stays inside the PDF widget: {clip:?}, {field:?}");
+    assert!(clip.expand(1.0).contains_rect(caret), "caret must be visible: {caret:?}, clip {clip:?}");
+}
+
+/// Keyboard navigation and typing reveal the caret in an overflowing field, and Save preserves
+/// the complete edited value when the PDF is reopened.
+#[test]
+fn multiline_overflow_follows_keyboard_and_saves_edits() {
+    let _gpu = crate::gpu();
+    let (mut h, text, rect, id) = overflowing_multiline();
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/multiline-top.png")).unwrap();
+    }
+    // Control+End on Windows/Linux, Command+Down on macOS.
+    let (modifiers, end, home) = if cfg!(target_os = "macos") {
+        (egui::Modifiers::MAC_CMD, egui::Key::ArrowDown, egui::Key::ArrowUp)
+    } else {
+        (egui::Modifiers::CTRL, egui::Key::End, egui::Key::Home)
+    };
+    h.key_press_modifiers(modifiers, end);
+    h.run_steps(30);
+    let range = egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range().unwrap();
+    assert_eq!(range.primary.index.0, text.chars().count());
+    assert_multiline_visible(&h, &text, text.chars().count(), rect);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/multiline-end.png")).unwrap();
+    }
+    h.key_press_modifiers(modifiers, home);
+    h.run_steps(30);
+    assert_multiline_visible(&h, &text, 0, rect);
+    for _ in 0..20 {
+        h.key_press(egui::Key::ArrowDown);
+        h.run_steps(2);
+    }
+    h.run_steps(30);
+    let range = egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range().unwrap();
+    assert_multiline_visible(&h, &text, range.primary.index.0, rect);
+    h.key_press_modifiers(modifiers, end);
+    h.event(egui::Event::Text(" edited".into()));
+    h.run_steps(30);
+    let edited = format!("{text} edited");
+    assert_multiline_visible(&h, &edited, edited.chars().count(), rect);
+    assert!(h.ctx.memory(|m| m.has_focus(id)), "scrolling retains keyboard focus");
+    let dir = scratch("multiline-overflow");
+    let out = dir.join("saved.pdf");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+    wait_for_file(&mut h, &out);
+    assert_eq!(saved_value(&out, "overflow"), [edited]);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        std::fs::copy(&out, format!("{dir}/multiline-edited.pdf")).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Point and line wheel input reveal overflow without moving the caret, page or stored value;
+/// Home then reveals the unchanged caret, and Escape closes the editor without editing the field.
+#[test]
+fn multiline_overflow_wheel_reveals_text_without_moving_the_caret_or_page() {
+    for (unit, distance) in [(egui::MouseWheelUnit::Point, 1000.0), (egui::MouseWheelUnit::Line, 40.0)] {
+        let (mut h, text, rect, id) = overflowing_multiline();
+        h.key_press(egui::Key::Home);
+        h.run_steps(3);
+        let caret = egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range();
+        let (first, _) = multiline_paint(&h, &text, 0);
+        h.hover_at(rect.center());
+        h.run_steps(1);
+        let wheel = |dy| egui::Event::MouseWheel {
+            unit,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            delta: egui::vec2(0.0, dy),
+            modifiers: egui::Modifiers::NONE,
+        };
+        h.event(wheel(-distance));
+        h.run_steps(30);
+        assert_multiline_visible(&h, &text, text.chars().count(), rect);
+        assert!(multiline_paint(&h, &text, 0).0.top() < first.top() - 10.0, "the text actually scrolls");
+        assert_eq!(egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range(), caret, "wheel leaves the selection alone");
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "overflow").unwrap();
+        assert_eq!(pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0), Some(rect), "the page stays put");
+        assert_eq!(value(&h, "overflow").as_slice(), std::slice::from_ref(&text), "scrolling doesn't edit the value");
+        h.event(wheel(distance));
+        h.run_steps(30);
+        assert_multiline_visible(&h, &text, 0, rect);
+        h.event(wheel(-distance));
+        h.run_steps(30);
+        // Home must reveal a caret already at the start, even though its index doesn't change.
+        h.key_press(egui::Key::Home);
+        h.run_steps(30);
+        assert_multiline_visible(&h, &text, 0, rect);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().views[0].forms.focus.is_none());
+        assert_eq!(value(&h, "overflow"), [text]);
+    }
+}
+
+/// Tab selects the whole overflowing value and reveals its primary caret; typing replaces the
+/// selection, while Escape cancels the draft and a fresh click reopens the field at the top.
+#[test]
+fn multiline_overflow_tab_keeps_select_all_and_reveals_the_caret() {
+    let (mut h, text, rect, id) = overflowing_multiline();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    click_field(&mut h, "city", 0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().name, "overflow");
+    let range = egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range().unwrap();
+    assert_eq!(range.secondary.index.0, 0);
+    assert_eq!(range.primary.index.0, text.chars().count());
+    assert_multiline_visible(&h, &text, text.chars().count(), rect);
+    h.event(egui::Event::Text("replacement".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().text, "replacement");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(value(&h, "overflow").as_slice(), std::slice::from_ref(&text), "Escape still cancels the draft");
+    click_at(&mut h, rect.min + egui::vec2(8.0, 8.0));
+    assert_multiline_visible(&h, &text, 0, rect);
 }
 
 /// Rest the pointer on the centre of a field's widget long enough for a tooltip.
@@ -134,6 +311,33 @@ fn a_field_that_doesnt_scroll_stops_taking_text_when_full() {
     h.key_press(egui::Key::Tab);
     h.run_steps(4);
     assert_eq!(value(&h, "name"), ["W".repeat(80)]);
+}
+
+/// The scrolling editor must not change fixed-size DoNotScroll fields either.
+#[test]
+fn a_fixed_multiline_field_that_doesnt_scroll_keeps_only_what_fits() {
+    let mut h = harness();
+    set_city(
+        &mut h,
+        pdfcraft_engine::FieldProps {
+            flags: vec![(pdfcraft_engine::field_flags::DO_NOT_SCROLL, true)],
+            multiline: Some(true),
+            font_size: Some(10.0),
+            ..Default::default()
+        },
+    );
+    click_field(&mut h, "city", 0);
+    let pasted = "A line of text\n".repeat(21);
+    h.event(egui::Event::Paste(pasted.clone()));
+    h.run_steps(3);
+    let kept = h.state().views[0].forms.focus.as_ref().unwrap().text.clone();
+    let s = h.state();
+    let tb = s.session.get(s.views[0].id).unwrap().field_text_box("city", 0).unwrap();
+    assert!(!kept.is_empty() && kept.len() < pasted.len());
+    assert!(tb.fits(&kept), "DoNotScroll still limits the draft to the appearance's capacity");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "city"), [kept]);
 }
 
 /// A multi-line field that doesn't scroll, with an automatic size, takes lines until even the

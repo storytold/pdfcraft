@@ -705,15 +705,63 @@ pub(crate) fn overlay(
                     if multiline {
                         te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
                     }
+                    let scrollable = multiline && !f.has(field_flags::DO_NOT_SCROLL);
+                    if scrollable {
+                        te = te.min_size(rect.size());
+                    }
                     let mut laid_out = None;
-                    let r = ui
-                        .add_sized(rect.size(), |ui: &mut egui::Ui| {
-                            let out = te.show(ui);
-                            laid_out = Some((out.galley, out.galley_pos));
-                            out.response.response
+                    let show = |ui: &mut egui::Ui| {
+                        let out = te.show(ui);
+                        if scrollable {
+                            // egui follows changed text/selections, but not Tab's select-all
+                            // (stored below after showing the editor), nor a navigation key that
+                            // leaves the cursor index unchanged after wheel scrolling. Reveal on
+                            // those inputs too; doing this every frame would undo wheel scrolling.
+                            let cursor = if focus.request_focus && focus.select_all {
+                                Some(out.galley.end())
+                            } else if out.response.has_focus()
+                                && ui.input(|i| {
+                                    use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp, End, Home, PageDown, PageUp};
+                                    [ArrowDown, ArrowLeft, ArrowRight, ArrowUp, End, Home, PageDown, PageUp].into_iter().any(|key| i.key_pressed(key))
+                                })
+                            {
+                                out.cursor_range.map(|range| range.primary)
+                            } else {
+                                None
+                            };
+                            if let Some(cursor) = cursor {
+                                let caret =
+                                    out.galley.pos_from_cursor(cursor).translate(out.galley_pos.to_vec2() - vec2(out.galley.rect.left(), 0.0));
+                                ui.scroll_to_rect(caret, None);
+                            }
+                        }
+                        laid_out = Some((out.galley, out.galley_pos));
+                        out.response.response
+                    };
+                    let r = if scrollable {
+                        ui.allocate_ui_with_layout(rect.size(), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.shrink_clip_rect(rect);
+                            // egui 0.37's multiline editor grows to its galley height. Keep that
+                            // natural height inside a viewport fixed to the PDF widget, with no
+                            // scrollbar taking space from its wrapping width.
+                            let mut scroll = egui::ScrollArea::vertical()
+                                .id_salt(("form-scroll", view.id.0, &f.name, focus.widget))
+                                .max_height(rect.height())
+                                .min_scrolled_height(0.0)
+                                .auto_shrink([false, false])
+                                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                                .animated(false);
+                            if focus.request_focus && (focus.press.is_some() || focus.select_all) {
+                                scroll = scroll.scroll_offset(egui::Vec2::ZERO);
+                            }
+                            scroll.show(ui, show).inner
                         })
-                        // The form field's own logical name; not a visual/preordered label.
-                        .accessible_name(f.name.clone());
+                        .inner
+                    } else {
+                        ui.add_sized(rect.size(), show)
+                    };
+                    // The form field's own logical name; not a visual/preordered label.
+                    let r = r.accessible_name(f.name.clone());
                     if let (Some(tb), Some(before)) = (text_box, before)
                         && fx.text != before
                     {
