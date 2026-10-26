@@ -1022,6 +1022,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     view.need_thumbnail(p, true);
                     view.page_preview(p)
                 });
+                // Units picked in the dialog are the Preferences choice too.
+                app.units = app.print_draft.units;
                 print_go = go;
                 close = go || cancel;
                 return;

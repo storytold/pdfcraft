@@ -37,6 +37,221 @@ pub enum Handling {
     Label,
 }
 
+/// The sizes a custom paper may have, in points: from 1 in (the least the engine lays out on) to
+/// PDF's largest page, 200 in.
+pub const CUSTOM_PAPER_RANGE: std::ops::RangeInclusive<f64> = 72.0..=14_400.0;
+
+/// The most characters the Paper list's search keeps.
+const PAPER_QUERY_MAX: usize = 64;
+
+/// The sections of the Paper list, in the order shown (see [`paper_group`]).
+const PAPER_GROUPS: [&str; 8] =
+    ["ISO A", "ISO B", "Print sheets (RA, SRA)", "North American", "Envelopes", "Japan and China", "Photo, cards and labels", "Other"];
+
+/// The [`PAPER_GROUPS`] section a `PAPERS` name belongs to.
+fn paper_group(name: &str) -> usize {
+    let first = name.split(' ').next().unwrap_or(name);
+    let numbered = |prefix: &str| first.strip_prefix(prefix).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    if name.contains("Envelope") {
+        4
+    } else if numbered("A") || first == "2A0" {
+        0
+    } else if numbered("B") {
+        1
+    } else if numbered("RA") || numbered("SRA") {
+        2
+    } else if ["US", "Tabloid", "ARCH", "ANSI", "Executive", "Statement", "Government", "Foolscap", "Super"].contains(&first) {
+        3
+    } else if ["JIS", "Hagaki", "16K"].contains(&first) {
+        5
+    } else if ["Photo", "Index"].contains(&first) || name.contains("label") {
+        6
+    } else {
+        7
+    }
+}
+
+/// The most paper sizes the user can save.
+pub const SAVED_PAPERS_MAX: usize = 200;
+
+/// The most characters a saved paper's name or category keeps.
+const SAVED_PAPER_TEXT_MAX: usize = 80;
+
+/// The category a saved paper gets when none is typed.
+const SAVED_PAPER_CATEGORY: &str = "My sizes";
+
+/// A paper size the user named, put in a category and saved (Print ▸ Custom ▸ Save size…). It is
+/// listed with the papers and kept with the settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedPaper {
+    pub name: String,
+    pub category: String,
+    /// Points, width × height as typed; within [`CUSTOM_PAPER_RANGE`].
+    pub size: (f64, f64),
+}
+
+impl SavedPaper {
+    /// A saved paper from what was typed: the name and category trimmed and cut to
+    /// [`SAVED_PAPER_TEXT_MAX`] characters, a blank category becoming [`SAVED_PAPER_CATEGORY`].
+    /// `None` for a blank name or a size outside [`CUSTOM_PAPER_RANGE`].
+    pub fn new(name: &str, category: &str, size: (f64, f64)) -> Option<Self> {
+        let text = |s: &str| s.trim().chars().filter(|c| !c.is_control()).take(SAVED_PAPER_TEXT_MAX).collect::<String>();
+        let (name, category) = (text(name), text(category));
+        let fits = CUSTOM_PAPER_RANGE.contains(&size.0) && CUSTOM_PAPER_RANGE.contains(&size.1);
+        (!name.is_empty() && fits).then(|| SavedPaper {
+            name,
+            category: if category.is_empty() { SAVED_PAPER_CATEGORY.to_string() } else { category },
+            size,
+        })
+    }
+}
+
+/// A paper in the Paper list: one of `PAPERS`, or one of the user's saved papers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaperRef {
+    Listed(usize),
+    Saved(usize),
+}
+
+/// A section heading in the Paper list: one of [`PAPER_GROUPS`], or a category of the user's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Heading {
+    Group(usize),
+    Category(String),
+}
+
+/// The papers whose name has `query` in it (ignoring case and spaces, so "sra3" finds
+/// "SRA3 (320 x 450 mm)" and "320x450" its size), by section, largest paper first within each.
+/// The user's own categories come first (alphabetically), then [`PAPER_GROUPS`] in order; a
+/// saved paper whose category names one of those goes in with the listed papers. A saved paper
+/// is also found by its category. Every paper when `query` is blank.
+fn paper_sections(query: &str, saved: &[SavedPaper]) -> Vec<(Heading, Vec<PaperRef>)> {
+    let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect::<String>();
+    let query = squash(query);
+    let mut sections: Vec<(Heading, Vec<PaperRef>)> = Vec::new();
+    let mut add = |heading: Heading, paper: PaperRef| match sections.iter_mut().find(|(h, _)| *h == heading) {
+        Some((_, items)) => items.push(paper),
+        None => sections.push((heading, vec![paper])),
+    };
+    for (i, (name, _)) in PAPERS.iter().enumerate() {
+        if squash(name).contains(&query) || squash(tl!(name)).contains(&query) {
+            add(Heading::Group(paper_group(name)), PaperRef::Listed(i));
+        }
+    }
+    for (i, paper) in saved.iter().enumerate() {
+        if squash(&paper.name).contains(&query) || squash(&paper.category).contains(&query) {
+            let group = PAPER_GROUPS.iter().position(|g| g.eq_ignore_ascii_case(&paper.category) || tl!(g).eq_ignore_ascii_case(&paper.category));
+            add(group.map_or_else(|| Heading::Category(paper.category.clone()), Heading::Group), PaperRef::Saved(i));
+        }
+    }
+    sections.sort_by(|(a, _), (b, _)| match (a, b) {
+        (Heading::Category(a), Heading::Category(b)) => a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b)),
+        (Heading::Category(_), Heading::Group(_)) => std::cmp::Ordering::Less,
+        (Heading::Group(_), Heading::Category(_)) => std::cmp::Ordering::Greater,
+        (Heading::Group(a), Heading::Group(b)) => a.cmp(b),
+    });
+    let area = |p: &PaperRef| match p {
+        PaperRef::Listed(i) => PAPERS.get(*i).map_or(0.0, |(_, (w, h))| w * h),
+        PaperRef::Saved(i) => saved.get(*i).map_or(0.0, |s| s.size.0 * s.size.1),
+    };
+    let order = |p: &PaperRef| match p {
+        PaperRef::Listed(i) => (0, *i),
+        PaperRef::Saved(i) => (1, *i),
+    };
+    for (_, items) in &mut sections {
+        items.sort_by(|a, b| area(b).total_cmp(&area(a)).then(order(a).cmp(&order(b))));
+    }
+    sections
+}
+
+/// The Save size… form under the Paper row: the name and category being typed.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SavePaperForm {
+    pub name: String,
+    pub category: String,
+    /// The category is being typed rather than picked from the existing ones.
+    pub new_category: bool,
+    /// The name field takes the keyboard on the next frame (the form was just opened).
+    pub focus_name: bool,
+    /// Why the last Save was refused.
+    pub error: Option<&'static str>,
+}
+
+/// The units sizes are shown and typed in (mm, cm, in, pt); the same choice as Preferences ▸
+/// Units, which the app takes back from the draft.
+fn unit_combo(ui: &mut egui::Ui, units: &mut crate::units::Unit) {
+    egui::ComboBox::from_id_salt("print-units")
+        .selected_text(units.label())
+        .width(56.0)
+        .show_ui(ui, |ui| {
+            for u in crate::units::Unit::ALL {
+                ui.selectable_value(units, u, u.label());
+            }
+        })
+        .response
+        .on_hover_text(tl!("Units"));
+}
+
+/// The row under Paper while a custom size is in use: Save size… (and Delete for a saved
+/// paper), or the form that names the size and puts it in a category.
+fn save_paper_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    let categories = d.paper_categories();
+    let Some(form) = d.save_form.as_mut() else {
+        if ui.button(tl!("Save size…")).on_hover_text(tl!("Name this size and keep it in the Paper list.")).clicked() {
+            let saved = d.custom_name.as_ref().and_then(|n| d.saved_papers.iter().find(|p| &p.name == n));
+            d.save_form = Some(SavePaperForm {
+                name: saved.map(|p| p.name.clone()).unwrap_or_default(),
+                category: saved.map_or_else(|| SAVED_PAPER_CATEGORY.to_string(), |p| p.category.clone()),
+                focus_name: true,
+                ..SavePaperForm::default()
+            });
+        }
+        if let Some(name) = d.custom_name.clone()
+            && ui.button(tl!("Delete")).on_hover_text(crate::i18n::fmt(tl!("Remove {name} from the Paper list."), &[("name", &name)])).clicked()
+        {
+            d.delete_saved_paper();
+        }
+        return;
+    };
+    let name = ui.add(widgets::line(&mut form.name).hint_text(tl!("Name")).desired_width(170.0)).on_hover_text(tl!("Name"));
+    if std::mem::take(&mut form.focus_name) {
+        name.request_focus();
+    }
+    if form.new_category {
+        ui.add(widgets::line(&mut form.category).hint_text(tl!("New category")).desired_width(150.0)).on_hover_text(tl!("Category"));
+    } else {
+        egui::ComboBox::from_id_salt("paper-category").selected_text(tl!(form.category.as_str())).width(150.0).show_ui(ui, |ui| {
+            for c in &categories {
+                if ui.selectable_label(form.category == *c, tl!(c.as_str())).clicked() {
+                    form.category = c.clone();
+                }
+            }
+            ui.separator();
+            if ui.selectable_label(false, tl!("New category…")).clicked() {
+                form.new_category = true;
+                form.category.clear();
+            }
+        });
+    }
+    let named = !form.name.trim().is_empty();
+    let enter = name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let save = ui.add_enabled(named, egui::Button::new(tl!("Save"))).clicked() || (enter && named);
+    let cancel = ui.button(tl!("Cancel")).clicked();
+    if let Some(error) = form.error {
+        ui.label(egui::RichText::new(tl!(error)).small().color(t.text_muted));
+    }
+    let (typed_name, typed_category) = (form.name.clone(), form.category.clone());
+    if save
+        && let Err(error) = d.save_paper(&typed_name, &typed_category)
+        && let Some(form) = d.save_form.as_mut()
+    {
+        form.error = Some(error);
+    }
+    if cancel {
+        d.save_form = None;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
@@ -77,6 +292,17 @@ pub struct PrintDraft {
     pub as_image: bool,
     pub dpi: f64,
     pub paper: usize,
+    /// A paper of the user's own size (points, as typed: width × height), used instead of
+    /// `PAPERS[paper]` while set. Always within [`CUSTOM_PAPER_RANGE`].
+    pub custom_paper: Option<(f64, f64)>,
+    /// What is typed in the Paper list's search field.
+    pub paper_query: String,
+    /// The paper sizes the user saved (see [`SavedPaper`]), at most [`SAVED_PAPERS_MAX`].
+    pub saved_papers: Vec<SavedPaper>,
+    /// The saved paper `custom_paper` came from, while its size is unchanged.
+    pub custom_name: Option<String>,
+    /// The Save size… form, while it is open.
+    pub save_form: Option<SavePaperForm>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -137,6 +363,11 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            custom_paper: None,
+            paper_query: String::new(),
+            saved_papers: Vec::new(),
+            custom_name: None,
+            save_form: None,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -161,7 +392,10 @@ impl PrintDraft {
         self.handling = handling;
         self.sheet = 0;
         if handling == Handling::Label {
-            // A label goes on label stock.
+            // A label goes on label stock, not on a paper of the user's own size.
+            self.custom_paper = None;
+            self.custom_name = None;
+            self.save_form = None;
             if self.paper != print::LABEL_PAPER {
                 self.paper_before_label = Some(self.paper);
                 self.paper = print::LABEL_PAPER;
@@ -172,6 +406,72 @@ impl PrintDraft {
         {
             self.paper = paper;
         }
+    }
+
+    /// The paper the sheets are laid out on (points, portrait as listed or as typed).
+    pub fn paper_size(&self) -> (f64, f64) {
+        self.custom_paper.unwrap_or(PAPERS[self.paper.min(PAPERS.len() - 1)].1)
+    }
+
+    /// Use a paper of the user's own size, held to [`CUSTOM_PAPER_RANGE`]; `None` when a size
+    /// is not a number.
+    pub fn set_custom_paper(&mut self, size: (f64, f64)) -> Option<(f64, f64)> {
+        let clamp = |v: f64| v.is_finite().then(|| v.clamp(*CUSTOM_PAPER_RANGE.start(), *CUSTOM_PAPER_RANGE.end()));
+        let size = (clamp(size.0)?, clamp(size.1)?);
+        self.custom_paper = Some(size);
+        // A changed size is no longer the saved paper it came from.
+        self.custom_name = None;
+        self.paper_before_label = None;
+        self.sheet = 0;
+        Some(size)
+    }
+
+    /// Use one of the saved papers (its size, shown by its name).
+    pub fn use_saved_paper(&mut self, index: usize) {
+        let Some(paper) = self.saved_papers.get(index).cloned() else { return };
+        if self.handling == Handling::Label {
+            self.set_handling(Handling::Size);
+        }
+        if self.set_custom_paper(paper.size).is_some() {
+            self.custom_name = Some(paper.name);
+        }
+    }
+
+    /// Save the custom size in use as `name` in `category`, replacing a saved paper of that name
+    /// (ignoring case). Refused without a custom size, with a blank name, or when
+    /// [`SAVED_PAPERS_MAX`] papers are already saved.
+    pub fn save_paper(&mut self, name: &str, category: &str) -> Result<(), &'static str> {
+        let size = self.custom_paper.ok_or("Tick Custom and type the size first.")?;
+        let paper = SavedPaper::new(name, category, size).ok_or("Give the paper size a name.")?;
+        let full = self.saved_papers.len() >= SAVED_PAPERS_MAX;
+        match self.saved_papers.iter_mut().find(|p| p.name.to_lowercase() == paper.name.to_lowercase()) {
+            Some(existing) => *existing = paper.clone(),
+            None if full => return Err("Too many saved paper sizes. Delete one first."),
+            None => self.saved_papers.push(paper.clone()),
+        }
+        self.custom_name = Some(paper.name);
+        self.save_form = None;
+        Ok(())
+    }
+
+    /// Delete the saved paper in use; its size stays as a custom size.
+    pub fn delete_saved_paper(&mut self) {
+        if let Some(name) = self.custom_name.take() {
+            self.saved_papers.retain(|p| p.name != name);
+        }
+    }
+
+    /// The categories a saved paper can go in: the user's own (alphabetically), then
+    /// [`PAPER_GROUPS`].
+    pub fn paper_categories(&self) -> Vec<String> {
+        let mut own: Vec<String> = Vec::new();
+        for p in &self.saved_papers {
+            if !PAPER_GROUPS.iter().any(|g| g.eq_ignore_ascii_case(&p.category)) && !own.iter().any(|c| c.eq_ignore_ascii_case(&p.category)) {
+                own.push(p.category.clone());
+            }
+        }
+        own.sort_by_key(|c| c.to_lowercase());
+        own.into_iter().chain(PAPER_GROUPS.iter().map(|g| g.to_string())).collect()
     }
 
     /// The engine settings for this draft (page count and labels from the document).
@@ -210,7 +510,7 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper: self.paper_size(),
             orientation: self.orientation,
             layout,
             content: self.content,
@@ -248,8 +548,13 @@ impl PrintDraft {
                 _ => Vec::new(),
             }
             .into_iter()
-            // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(print::media_option(self.paper))
+            // The sheet the PDF was laid out on, not the queue's default paper. A size of the
+            // user's own goes to CUPS as its custom size (points); Windows matches the driver's
+            // paper to the sheet size itself.
+            .chain(match self.custom_paper {
+                Some((w, h)) => Some(("media".to_string(), format!("Custom.{w:.2}x{h:.2}"))),
+                None => print::media_option(self.paper),
+            })
             .collect(),
         }
     }
@@ -1061,22 +1366,164 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
-                let before = d.paper;
-                egui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, tl!(name));
+                ui.horizontal(|ui| {
+                    // A saved paper shows its own name, as typed (not translated).
+                    let paper_name: String = match (&d.custom_name, d.custom_paper) {
+                        (Some(name), Some(_)) => name.clone(),
+                        (None, Some(_)) => tl!("Custom size").to_string(),
+                        _ => tl!(PAPERS.get(d.paper).map_or("US Letter", |p| p.0)).to_string(),
+                    };
+                    let before = d.paper;
+                    let mut picked = None;
+                    let combo_id = ui.make_persistent_id("paper");
+                    // What is typed while the list is open narrows it (shown on top), then the
+                    // papers in sections; Enter takes the first match.
+                    egui::ComboBox::from_id_salt("paper")
+                        .selected_text(paper_name)
+                        .width(260.0)
+                        .height(460.0)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show_ui(ui, |ui| {
+                            // The keys are read here, not by a text field: a focused field in the
+                            // list turns Windows' IME on, which closes the list as it opens. The
+                            // list button gives up the keyboard, so Space types instead of closing it.
+                            ui.memory_mut(|m| m.surrender_focus(combo_id));
+                            let enter = ui.input_mut(|i| {
+                                for event in &i.events {
+                                    match event {
+                                        egui::Event::Text(text) => {
+                                            for c in text.chars().filter(|c| !c.is_control()) {
+                                                if d.paper_query.chars().count() < PAPER_QUERY_MAX {
+                                                    d.paper_query.push(c);
+                                                }
+                                            }
+                                        }
+                                        egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+                                            d.paper_query.pop();
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                            });
+                            egui::Frame::new()
+                                .fill(t.field)
+                                .stroke(Stroke::new(1.0, t.border))
+                                .corner_radius(t.radius)
+                                .inner_margin(egui::Margin::symmetric(8, 4))
+                                .show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    if d.paper_query.is_empty() {
+                                        ui.label(egui::RichText::new(tl!("Type to search paper sizes…")).color(t.text_faint));
+                                    } else {
+                                        ui.label(format!("{}|", d.paper_query));
+                                    }
+                                });
+                            let sections = paper_sections(&d.paper_query, &d.saved_papers);
+                            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                                if sections.is_empty() {
+                                    ui.label(egui::RichText::new(tl!("No paper size matches. Tick Custom to type its size.")).small().color(t.text_muted));
+                                }
+                                for (heading, items) in &sections {
+                                    ui.add_space(4.0);
+                                    let heading = match heading {
+                                        Heading::Group(g) => tl!(PAPER_GROUPS.get(*g).copied().unwrap_or("Other")).to_string(),
+                                        Heading::Category(c) => c.clone(),
+                                    };
+                                    ui.label(egui::RichText::new(heading).small().strong().color(t.text_muted));
+                                    for &paper in items {
+                                        let (selected, name) = match paper {
+                                            PaperRef::Listed(i) => {
+                                                let Some((name, _)) = PAPERS.get(i) else { continue };
+                                                (d.custom_paper.is_none() && d.paper == i, tl!(name).to_string())
+                                            }
+                                            PaperRef::Saved(i) => {
+                                                let Some(saved) = d.saved_papers.get(i) else { continue };
+                                                let size = d.units.size(saved.size.0, saved.size.1);
+                                                (d.custom_name.as_deref() == Some(saved.name.as_str()), format!("{} ({size})", saved.name))
+                                            }
+                                        };
+                                        if ui.selectable_label(selected, name).clicked() {
+                                            picked = Some(paper);
+                                        }
+                                    }
+                                }
+                            });
+                            if enter && picked.is_none() {
+                                picked = sections.first().and_then(|(_, items)| items.first().copied());
+                            }
+                            if picked.is_some() {
+                                ui.close();
+                            }
+                        })
+                        .response
+                        .labelled_by(paper_label.id);
+                    match picked {
+                        Some(PaperRef::Listed(i)) => {
+                            // A listed paper replaces a size of the user's own.
+                            d.paper = i;
+                            d.custom_paper = None;
+                            d.custom_name = None;
+                            d.save_form = None;
+                            d.paper_query.clear();
+                            d.sheet = 0;
+                        }
+                        Some(PaperRef::Saved(i)) => {
+                            d.use_saved_paper(i);
+                            d.save_form = None;
+                            d.paper_query.clear();
+                        }
+                        None => {}
                     }
-                })
-                .response
-                .labelled_by(paper_label.id);
-                // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER {
-                    d.paper_before_label = Some(before);
-                    d.handling = Handling::Label;
-                    d.sheet = 0;
-                }
+                    // Label stock gets the label layout (cut, turned upright, fitted).
+                    if d.paper != before && d.paper == print::LABEL_PAPER {
+                        d.paper_before_label = Some(before);
+                        d.handling = Handling::Label;
+                        d.sheet = 0;
+                    }
+                    // A paper of the user's own size, next to the list rather than in it.
+                    let mut custom = d.custom_paper.is_some();
+                    if ui
+                        .add(widgets::checkbox(&mut custom, tl!("Custom")))
+                        .on_hover_text(tl!("Lay the pages out on a paper of your own size. The printer's driver must have a paper of that size."))
+                        .changed()
+                    {
+                        if custom {
+                            if d.handling == Handling::Label {
+                                d.set_handling(Handling::Size);
+                            }
+                            d.set_custom_paper(d.paper_size());
+                        } else {
+                            d.custom_paper = None;
+                            d.custom_name = None;
+                            d.save_form = None;
+                            d.sheet = 0;
+                        }
+                    }
+                    if let Some((w, h)) = d.custom_paper {
+                        let unit = d.units;
+                        let k = unit.per_point();
+                        let range = CUSTOM_PAPER_RANGE.start() * k..=CUSTOM_PAPER_RANGE.end() * k;
+                        let (mut width, mut height) = (w * k, h * k);
+                        fn field(value: &mut f64, range: std::ops::RangeInclusive<f64>, unit: crate::units::Unit) -> egui::DragValue<'_> {
+                            egui::DragValue::new(value).range(range).speed(unit.speed()).max_decimals(unit.decimals())
+                        }
+                        let a = ui.add(field(&mut width, range.clone(), unit)).on_hover_text(tl!("Width"));
+                        ui.label("×");
+                        let b = ui.add(field(&mut height, range, unit)).on_hover_text(tl!("Height"));
+                        if a.changed() || b.changed() {
+                            d.set_custom_paper((width / k, height / k));
+                        }
+                        unit_combo(ui, &mut d.units);
+                    }
+                });
                 ui.end_row();
+                // Saving the custom size under a name and a category, and deleting a saved one.
+                if d.custom_paper.is_some() {
+                    ui.label("");
+                    ui.horizontal(|ui| save_paper_row(ui, d, t));
+                    ui.end_row();
+                }
             });
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
@@ -1102,16 +1549,31 @@ pub(crate) fn body(
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
                     let matched = print::matching_paper(source);
-                    if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
-                        && let Some(paper) = matched
-                    {
-                        d.paper = paper;
+                    // A page of no listed size gets a paper of its own size (portrait, as listed).
+                    let own = (source.0.min(source.1), source.0.max(source.1));
+                    let fits = CUSTOM_PAPER_RANGE.contains(&own.0) && CUSTOM_PAPER_RANGE.contains(&own.1);
+                    if ui.add_enabled(matched.is_some() || fits, egui::Button::new(tl!("Match page at 100%"))).clicked() {
+                        match matched {
+                            Some(paper) => {
+                                d.paper = paper;
+                                d.custom_paper = None;
+                                d.custom_name = None;
+                                d.save_form = None;
+                            }
+                            None => {
+                                d.set_custom_paper(own);
+                            }
+                        }
                         // A paper picked outright: nothing for leaving Label to give back.
                         d.paper_before_label = None;
                         d.handling = Handling::Size;
                         d.size = SizeMode::Actual;
                         d.orientation = Orientation::Auto;
                         d.sheet = 0;
+                    }
+                    // With Custom ticked the units sit next to its size instead.
+                    if d.custom_paper.is_none() {
+                        unit_combo(ui, &mut d.units);
                     }
                 });
             }
@@ -1436,6 +1898,132 @@ mod tests {
             draft.current_page = current;
             assert!(draft.settings(count, &labels).is_err());
         }
+    }
+
+    /// The Paper list shows every paper once, in its section, largest first; typing narrows it
+    /// by name or size, ignoring case and spaces.
+    #[test]
+    fn the_paper_list_is_sectioned_and_searchable() {
+        // Nothing is saved here, so every paper is a listed one (a saved one would index past the end).
+        let listed = |p: &PaperRef| match p {
+            PaperRef::Listed(i) => *i,
+            PaperRef::Saved(_) => usize::MAX,
+        };
+        let names = |q: &str| paper_sections(q, &[]).into_iter().flat_map(|(_, items)| items).map(|p| PAPERS[listed(&p)].0).collect::<Vec<_>>();
+        let all = paper_sections("", &[]);
+        let mut seen: Vec<usize> = all.iter().flat_map(|(_, items)| items.iter().map(listed)).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..PAPERS.len()).collect::<Vec<_>>(), "every paper once");
+        let groups: Vec<usize> = all
+            .iter()
+            .map(|(h, _)| match h {
+                Heading::Group(g) => Some(*g),
+                Heading::Category(_) => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+        assert!(groups.windows(2).all(|w| w[0] < w[1]), "sections in order, none twice");
+        // Only Folio is left for Other.
+        assert_eq!(
+            all.iter()
+                .find(|(h, _)| *h == Heading::Group(PAPER_GROUPS.len() - 1))
+                .map(|(_, items)| items.iter().map(|p| PAPERS[listed(p)].0).collect::<Vec<_>>()),
+            Some(vec!["Folio (210 x 330 mm)"])
+        );
+        let iso_a = &all[0];
+        assert_eq!(
+            (&iso_a.0, PAPERS[listed(&iso_a.1[0])].0, PAPERS[listed(iso_a.1.last().unwrap())].0),
+            (&Heading::Group(0), "2A0 (1189 x 1682 mm)", "A8 (52 x 74 mm)"),
+            "largest first"
+        );
+        assert_eq!(names("sra3"), ["SRA3 (320 x 450 mm)"]);
+        assert_eq!(names("  SRA 3 "), ["SRA3 (320 x 450 mm)"]);
+        assert_eq!(names("320x450"), ["SRA3 (320 x 450 mm)"]);
+        assert_eq!(names("a4"), ["A4", "SRA4 (225 x 320 mm)", "RA4 (215 x 305 mm)"]);
+        assert!(names("envelope").iter().all(|n| n.contains("Envelope")) && names("envelope").len() == 11);
+        assert!(names("no such paper").is_empty());
+    }
+
+    /// Saved papers are listed in their own categories ahead of the standard sections, or with
+    /// the listed papers when their category names a section, and are found by name or category.
+    #[test]
+    fn saved_papers_are_listed_by_category_and_searchable() {
+        let saved = vec![
+            SavedPaper::new("Shipping labels", "Štítky", (907.09, 1360.63)).unwrap(),
+            SavedPaper::new("SRA3+", "print sheets (ra, sra)", (935.43, 1380.47)).unwrap(),
+            SavedPaper::new("Banner", "", (1000.0, 3000.0)).unwrap(),
+        ];
+        let all = paper_sections("", &saved);
+        let headings: Vec<&Heading> = all.iter().map(|(h, _)| h).collect();
+        assert_eq!(
+            headings[..2],
+            [&Heading::Category("My sizes".into()), &Heading::Category("Štítky".into())],
+            "own categories first, alphabetically"
+        );
+        let sheets = all.iter().find(|(h, _)| *h == Heading::Group(2)).unwrap();
+        let sra3 = PaperRef::Listed(PAPERS.iter().position(|p| p.0.starts_with("SRA3 ")).unwrap());
+        let at = |p: PaperRef| sheets.1.iter().position(|q| *q == p).unwrap();
+        assert_eq!(at(PaperRef::Saved(1)) + 1, at(sra3), "SRA3+ goes in with the print sheets, by size");
+        let found = |q: &str| paper_sections(q, &saved).into_iter().flat_map(|(_, items)| items).collect::<Vec<_>>();
+        assert_eq!(found("shipping"), [PaperRef::Saved(0)]);
+        assert_eq!(found("štítky"), [PaperRef::Saved(0)], "by category");
+        assert_eq!(found("sra3"), [PaperRef::Saved(1), PaperRef::Listed(PAPERS.iter().position(|p| p.0.starts_with("SRA3 ")).unwrap())]);
+    }
+
+    /// A custom size is saved under a name and category, used again by name, replaced by saving
+    /// the same name, and deleted; blank names, sizes out of range and a full list are refused.
+    #[test]
+    fn a_custom_size_is_saved_used_replaced_and_deleted() {
+        let mut d = PrintDraft::default();
+        assert!(d.save_paper("Nálepky", "Štítky").is_err(), "nothing to save without Custom");
+        d.set_custom_paper((907.09, 1360.63));
+        assert!(d.save_paper("   ", "Štítky").is_err(), "a blank name");
+        assert_eq!(d.save_paper("  Nálepky  ", "  Štítky "), Ok(()));
+        assert_eq!(d.saved_papers, [SavedPaper { name: "Nálepky".into(), category: "Štítky".into(), size: (907.09, 1360.63) }]);
+        assert_eq!(d.custom_name.as_deref(), Some("Nálepky"));
+        assert_eq!(d.paper_categories()[0], "Štítky");
+        assert!(d.paper_categories().contains(&"ISO A".to_string()));
+        // Changing the size leaves the saved one as it was; saving the name again replaces it.
+        d.set_custom_paper((500.0, 700.0));
+        assert_eq!(d.custom_name, None);
+        assert_eq!(d.save_paper("NÁLEPKY", ""), Ok(()));
+        assert_eq!(d.saved_papers, [SavedPaper { name: "NÁLEPKY".into(), category: "My sizes".into(), size: (500.0, 700.0) }]);
+        // Using it again, from another paper.
+        d.custom_paper = None;
+        d.custom_name = None;
+        d.use_saved_paper(0);
+        assert_eq!((d.custom_paper, d.custom_name.as_deref()), (Some((500.0, 700.0)), Some("NÁLEPKY")));
+        d.use_saved_paper(99);
+        assert_eq!(d.custom_name.as_deref(), Some("NÁLEPKY"), "no such paper changes nothing");
+        d.delete_saved_paper();
+        assert!(d.saved_papers.is_empty());
+        assert_eq!((d.custom_paper, d.custom_name.as_deref()), (Some((500.0, 700.0)), None), "the size stays as a custom size");
+        // A full list takes no more, but a saved name can still be replaced.
+        d.saved_papers = (0..SAVED_PAPERS_MAX).map(|i| SavedPaper::new(&format!("p{i}"), "", (500.0, 700.0)).unwrap()).collect();
+        assert!(d.save_paper("one more", "").is_err());
+        assert_eq!(d.save_paper("p7", "Other"), Ok(()));
+        assert_eq!(d.saved_papers.len(), SAVED_PAPERS_MAX);
+        assert!(SavedPaper::new("x", "", (10.0, 500.0)).is_none(), "out of range");
+        assert_eq!(SavedPaper::new(&"n".repeat(500), "", (500.0, 500.0)).unwrap().name.chars().count(), SAVED_PAPER_TEXT_MAX);
+    }
+
+    /// A paper of the user's own size lays the sheets out at that size, goes to CUPS as its
+    /// custom size, is held to the allowed range, and gives way to label stock.
+    #[test]
+    fn a_custom_paper_is_used_held_in_range_and_replaced_by_label_stock() {
+        let labels = vec!["1".to_string()];
+        let mut draft = PrintDraft::default();
+        assert_eq!(draft.paper_size(), PAPERS[0].1);
+        assert_eq!(draft.set_custom_paper((907.09, 1360.63)), Some((907.09, 1360.63)));
+        assert_eq!(draft.settings(1, &labels).unwrap().paper, (907.09, 1360.63));
+        let media = draft.job("a.pdf").options.into_iter().find(|(k, _)| k == "media");
+        assert_eq!(media, Some(("media".to_string(), "Custom.907.09x1360.63".to_string())));
+        assert_eq!(draft.set_custom_paper((1.0, 99_999.0)), Some((72.0, 14_400.0)), "held to the range");
+        assert_eq!(draft.set_custom_paper((f64::NAN, 500.0)), None, "not a number");
+        assert_eq!(draft.custom_paper, Some((72.0, 14_400.0)), "a refused size changes nothing");
+        draft.set_handling(Handling::Label);
+        assert_eq!((draft.custom_paper, draft.paper), (None, print::LABEL_PAPER));
+        assert_eq!(draft.paper_size(), PAPERS[print::LABEL_PAPER].1);
     }
 
     #[test]

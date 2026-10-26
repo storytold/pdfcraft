@@ -411,6 +411,8 @@ fn architectural_page_can_be_matched_at_100_percent() {
     assert_eq!(settings.layout, pdfcraft_engine::print::Layout::Size(pdfcraft_engine::print::SizeMode::Actual));
 }
 
+/// A page of no listed size never silently takes a standard paper: Match page puts it on a
+/// paper of its own size, shown as Custom next to the list.
 #[test]
 fn custom_page_cannot_silently_match_a_standard_paper() {
     let mut h = harness();
@@ -419,11 +421,14 @@ fn custom_page_cannot_silently_match_a_standard_paper() {
     // The 300 x 400 pt fixture is not a standard sheet.
     assert!(pdfcraft_engine::print::matching_paper((300.0, 400.0)).is_none());
     let before = h.state().print_draft.clone();
-    assert!(h.get_by_label("Match page at 100%").accesskit_node().is_disabled());
+    assert_eq!(before.custom_paper, None);
     h.get_by_label("Match page at 100%").click();
     h.run_steps(3);
-    assert_eq!(h.state().print_draft.paper, before.paper);
-    assert_eq!(h.state().print_draft.size, before.size);
+    let d = &h.state().print_draft;
+    assert_eq!((d.paper, d.custom_paper), (before.paper, Some((300.0, 400.0))));
+    assert_eq!(d.size, pdfcraft_engine::print::SizeMode::Actual);
+    assert_eq!(d.settings(1, &[]).unwrap().paper, (300.0, 400.0));
+    h.get_by_value("Custom size");
 }
 
 /// A driver Windows reports without two-sided printing keeps its own setting whatever Two-sided
@@ -802,8 +807,14 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert_eq!(restarted.state().print_draft.paper, a4);
     restarted.get_by_value("A4").click();
     restarted.run_steps(2);
-    restarted.get_by_label("US Letter").click();
+    // US Letter is in the North American section, below the ISO sizes: typed into the list's
+    // search field, which has the keyboard as the list opens, Enter takes the first match.
+    restarted.event(egui::Event::Text("letter".into()));
     restarted.run_steps(2);
+    restarted.key_press(egui::Key::Enter);
+    restarted.run_steps(2);
+    assert_eq!(restarted.state().print_draft.paper, letter);
+    assert!(restarted.state().print_draft.paper_query.is_empty(), "the search is cleared once a paper is taken");
     restarted.get_by_label("Cancel").click();
     restarted.run_steps(2);
     let saved = restarted.state().persist();
@@ -851,6 +862,31 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
     let mut app = PdfCraftApp::new();
     app.print_draft.paper = usize::MAX;
     assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_paper"], serde_json::Value::Null);
+}
+
+/// A paper of the user's own size is remembered in points; a value that is not two numbers in
+/// the allowed range is ignored.
+#[test]
+fn custom_paper_survives_a_restart_and_invalid_sizes_are_ignored() {
+    let mut app = PdfCraftApp::new();
+    app.print_draft.custom_paper = Some((907.09, 1360.63));
+    let saved = app.persist();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap()["print_custom_paper"], serde_json::json!([907.09, 1360.63]));
+    let mut again = PdfCraftApp::new();
+    again.restore(&saved);
+    assert_eq!(again.print_draft.custom_paper, Some((907.09, 1360.63)));
+    for invalid in [
+        r#"{"print_custom_paper":null}"#,
+        r#"{"print_custom_paper":[907]}"#,
+        r#"{"print_custom_paper":["907","1360"]}"#,
+        r#"{"print_custom_paper":[10,500]}"#,
+        r#"{"print_custom_paper":[500,1e9]}"#,
+        r#"{"print_custom_paper":{"w":500,"h":500}}"#,
+    ] {
+        let mut app = PdfCraftApp::new();
+        app.restore(invalid);
+        assert_eq!(app.print_draft.custom_paper, None, "{invalid}");
+    }
 }
 
 #[test]
@@ -912,4 +948,111 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
+}
+
+/// The Paper list opens with a size of the user's own in use, shows its sections, and what is
+/// typed while it is open narrows it; Enter takes the first match, replacing the custom size.
+#[test]
+fn typing_in_the_paper_list_finds_a_paper() {
+    use pdfcraft_engine::print::PAPERS;
+    let sra3 = PAPERS.iter().position(|(name, _)| *name == "SRA3 (320 x 450 mm)").unwrap();
+    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4","print_custom_paper":[907.0866141732284,1275.5905511811025]}"#.into()));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_value("Custom size").click();
+    h.run_steps(3);
+    h.get_by_label("ISO A");
+    let shots = std::env::var("PDFCRAFT_PAPER_LIST_SHOTS").ok();
+    let _gpu = shots.as_ref().map(|_| crate::gpu());
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(std::path::Path::new(dir).join("paper-list.png")).unwrap();
+    }
+    h.event(egui::Event::Text("SRA 3".into()));
+    h.run_steps(2);
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(std::path::Path::new(dir).join("paper-list-sra3.png")).unwrap();
+    }
+    assert_eq!(h.state().print_draft.paper_query, "SRA 3");
+    assert!(h.query_by_label("ISO A").is_none(), "only the matching section is left");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    let d = &h.state().print_draft;
+    assert_eq!((d.paper, d.custom_paper, d.paper_query.as_str()), (sra3, None, ""));
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "Enter takes the paper, it does not print");
+}
+
+/// Save size… names the custom size and keeps it: it is listed under its category, survives a
+/// restart with its name, and malformed saved entries are skipped.
+#[test]
+fn a_named_paper_size_is_saved_listed_and_restored() {
+    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4","print_custom_paper":[907.09,1360.63]}"#.into()));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Save size…").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("Shipping labels".into()));
+    h.run_steps(1);
+    let shots = std::env::var("PDFCRAFT_PAPER_LIST_SHOTS").ok();
+    let _gpu = shots.as_ref().map(|_| crate::gpu());
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(std::path::Path::new(dir).join("save-paper-form.png")).unwrap();
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    let d = &h.state().print_draft;
+    assert_eq!(d.saved_papers.len(), 1);
+    assert_eq!((d.saved_papers[0].name.as_str(), d.saved_papers[0].category.as_str()), ("Shipping labels", "My sizes"));
+    assert_eq!((d.custom_name.as_deref(), d.save_form.is_none()), (Some("Shipping labels"), true));
+    h.get_by_value("Shipping labels");
+    // Listed under its category, with its size.
+    h.get_by_value("Shipping labels").click();
+    h.run_steps(2);
+    h.get_by_label("My sizes");
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(std::path::Path::new(dir).join("saved-paper-list.png")).unwrap();
+    }
+    let saved = h.state().persist();
+    let mut again = PdfCraftApp::new();
+    again.restore(&saved);
+    assert_eq!(again.print_draft.saved_papers, h.state().print_draft.saved_papers);
+    assert_eq!(again.print_draft.custom_name.as_deref(), Some("Shipping labels"));
+    let mut bad = PdfCraftApp::new();
+    bad.restore(
+        r#"{"print_custom_paper":[500,500],"print_custom_name":"gone","print_saved_papers":[
+            {"name":"ok","category":"A","size":[500,700]},
+            {"name":"OK","category":"dup","size":[500,700]},
+            {"name":"","category":"A","size":[500,700]},
+            {"name":"tiny","size":[1,1]},
+            {"name":"no size"},
+            {"name":5,"size":[500,700]},
+            "text"
+        ]}"#,
+    );
+    let names: Vec<_> = bad.print_draft.saved_papers.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["ok"]);
+    assert_eq!(bad.print_draft.custom_name, None, "a name with no such saved paper is dropped");
+}
+
+/// The units next to the custom size change how sizes are shown and typed, and are the
+/// Preferences choice too, so they are kept.
+#[test]
+fn units_are_picked_in_the_print_dialog_and_kept() {
+    let mut h = harness_with_settings(Some(r#"{"units":"millimetres","print_custom_paper":[907.0866141732284,1275.5905511811025]}"#.into()));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_value("mm").click();
+    h.run_steps(2);
+    h.get_by_label("cm").click();
+    h.run_steps(3);
+    assert_eq!(h.state().units, pdfcraft_ui_egui::units::Unit::Centimetres);
+    assert_eq!(h.state().print_draft.units, pdfcraft_ui_egui::units::Unit::Centimetres);
+    h.get_by_value("32.00");
+    h.get_by_value("45.00");
+    if let Ok(dir) = std::env::var("PDFCRAFT_PAPER_LIST_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(std::path::Path::new(&dir).join("print-units.png")).unwrap();
+    }
+    assert_eq!(h.state().print_draft.custom_paper, Some((907.0866141732284, 1275.5905511811025)), "the size itself is unchanged");
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["units"], "centimetres");
 }

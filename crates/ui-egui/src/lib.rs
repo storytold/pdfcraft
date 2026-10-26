@@ -2695,6 +2695,17 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        // A paper of the user's own size, in points; the listed paper above stays for when it is unticked.
+        v["print_custom_paper"] = serde_json::json!(self.print_draft.custom_paper.map(|(w, h)| [w, h]));
+        // The saved paper the custom size came from, and every saved paper (sizes in points).
+        v["print_custom_name"] = serde_json::json!(self.print_draft.custom_name);
+        v["print_saved_papers"] = serde_json::Value::Array(
+            self.print_draft
+                .saved_papers
+                .iter()
+                .map(|p| serde_json::json!({ "name": p.name, "category": p.category, "size": [p.size.0, p.size.1] }))
+                .collect(),
+        );
         v.to_string()
     }
 
@@ -2774,6 +2785,42 @@ impl PdfCraftApp {
             .and_then(|name| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name))
         {
             self.print_draft.paper = paper;
+        }
+        // Only a pair of numbers inside the allowed range; anything else leaves the listed paper.
+        if let Some([w, h]) = v.get("print_custom_paper").and_then(|s| serde_json::from_value::<[f64; 2]>(s.clone()).ok())
+            && print_ui::CUSTOM_PAPER_RANGE.contains(&w)
+            && print_ui::CUSTOM_PAPER_RANGE.contains(&h)
+        {
+            self.print_draft.custom_paper = Some((w, h));
+        }
+        // Saved papers: each a name, a category and a size in range, as `SavedPaper::new` takes
+        // them; malformed entries are skipped, and at most `SAVED_PAPERS_MAX` are kept.
+        if let Some(saved) = v.get("print_saved_papers").and_then(serde_json::Value::as_array) {
+            let papers: Vec<print_ui::SavedPaper> = saved
+                .iter()
+                .filter_map(|p| {
+                    let [w, h] = serde_json::from_value::<[f64; 2]>(p.get("size")?.clone()).ok()?;
+                    print_ui::SavedPaper::new(
+                        p.get("name")?.as_str()?,
+                        p.get("category").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                        (w, h),
+                    )
+                })
+                .fold(Vec::new(), |mut kept, p| {
+                    if kept.len() < print_ui::SAVED_PAPERS_MAX
+                        && !kept.iter().any(|k: &print_ui::SavedPaper| k.name.to_lowercase() == p.name.to_lowercase())
+                    {
+                        kept.push(p);
+                    }
+                    kept
+                });
+            self.print_draft.saved_papers = papers;
+        }
+        // The custom size's name only while that saved paper exists with that very size.
+        if let (Some(name), Some(size)) = (v.get("print_custom_name").and_then(serde_json::Value::as_str), self.print_draft.custom_paper)
+            && self.print_draft.saved_papers.iter().any(|p| p.name == name && p.size == size)
+        {
+            self.print_draft.custom_name = Some(name.to_string());
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
