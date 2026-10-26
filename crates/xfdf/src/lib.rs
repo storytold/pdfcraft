@@ -960,10 +960,10 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
     if let Some(c) = node.attribute("interior-color").and_then(parse_hex) {
         d.set(b"IC".to_vec(), arr(&c));
     }
-    if let Some(o) = node.attribute("opacity").and_then(|o| o.parse::<f64>().ok()) {
+    if let Some(o) = node.attribute("opacity").and_then(|o| o.parse::<f64>().ok()).filter(|o| o.is_finite()) {
         d.set(b"CA".to_vec(), Object::Real(o.clamp(0.0, 1.0)));
     }
-    if let Some(w) = node.attribute("width").and_then(|w| w.parse::<f64>().ok()) {
+    if let Some(w) = node.attribute("width").and_then(|w| w.parse::<f64>().ok()).filter(|w| w.is_finite()) {
         let mut bs = Dict::new();
         bs.set(b"W".to_vec(), Object::Real(w.max(0.0)));
         bs.set(b"S".to_vec(), Object::name("S"));

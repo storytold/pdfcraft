@@ -1063,6 +1063,27 @@ fn xfdf_keeps_polygon_and_polyline_vertices() {
 }
 
 #[test]
+fn xfdf_ignores_non_finite_opacity_and_width() {
+    let xml = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>
+        <square page="0" rect="10,10,50,50" name="a" opacity="nan" width="inf"/>
+        </annots></xfdf>"#;
+    let mut dst = blank();
+    import(&mut dst, xml.as_bytes()).unwrap();
+    for p in pdfcraft_model::pages(&dst) {
+        for a in p.dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+            let d = dst.resolve(&a).as_dict().cloned().unwrap();
+            if let Some(ca) = d.get(b"CA").and_then(|o| o.as_f64()) {
+                assert!(ca.is_finite() && (0.0..=1.0).contains(&ca), "CA={ca}");
+            }
+            let bs = d.get(b"BS").map(|o| dst.resolve(o)).and_then(|o| o.as_dict().cloned());
+            if let Some(w) = bs.and_then(|bs| bs.get(b"W").and_then(|o| o.as_f64())) {
+                assert!(w.is_finite() && w >= 0.0, "W={w}");
+            }
+        }
+    }
+}
+
+#[test]
 fn xfdf_keeps_callout_leader_inset_and_ending() {
     let mut src = blank();
     let shape = Shape::Callout {
