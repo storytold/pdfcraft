@@ -379,6 +379,28 @@ mod tests {
     }
 
     #[test]
+    fn raw_flate_fallback_preserves_partial_output() {
+        // A nonfinal stored block declares 257 bytes, but only two remain.
+        // Its alignment bits also make 78 01 look like a zlib header.
+        let raw = [0x78, 0x01, 0x01, 0xfe, 0xfe, b'4', b'1'];
+        let chain = [(Filter::Flate, Params::default())];
+        assert_eq!(decode_tolerant(&chain, &raw, 257).unwrap(), (b"41".to_vec(), true));
+        assert_eq!(decode_tolerant_counted(&chain, &raw, 257).unwrap(), (b"41".to_vec(), true, 2));
+        assert!(matches!(decode_counted(&chain, &raw, 257), Err((FilterError::Corrupt { .. }, 2))));
+        for max in [0, 1] {
+            assert!(matches!(decode_tolerant(&chain, &raw, max), Err(FilterError::LimitExceeded(m)) if m == max));
+        }
+
+        let chain = [(Filter::Flate, Params::default()), (Filter::AsciiHex, Params::default())];
+        assert_eq!(decode_tolerant_counted(&chain, &raw, 3).unwrap(), (b"A".to_vec(), true, 3));
+
+        let mut predicted = raw;
+        predicted[5] = 0; // PNG None row tag, followed by one recovered byte.
+        let params = Params { predictor: 12, columns: 4, ..Params::default() };
+        assert_eq!(decode_tolerant_counted(&[(Filter::Flate, params)], &predicted, 2).unwrap(), (b"1".to_vec(), true, 2));
+    }
+
+    #[test]
     fn tolerant_flate_returns_partial() {
         let data: Vec<u8> = (0..20_000u32).map(|i| (i % 97) as u8 ^ (i / 300) as u8).collect();
         let mut z = encode_flate(&data);
