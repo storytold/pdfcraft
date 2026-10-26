@@ -235,10 +235,11 @@ impl PdfCraftApp {
     /// boxes over it do not count as text, but real page text does, and such a page (a flyer with a
     /// background picture) is left alone, and is judged again only when the document changes. It
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
+    /// Without the OCR models the page waits for them (see [`Self::await_ocr_models`]).
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
         if !pdfcraft_engine::ocr::available() {
-            self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
+            self.await_ocr_models(&scan);
             return;
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
@@ -249,6 +250,30 @@ impl PdfCraftApp {
         settings.skip_text_pages = true;
         settings.native_text_only = true;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
+    }
+
+    /// Edit found a scan but the OCR models aren't loaded. The page is set aside until they are
+    /// (rather than judged again every frame), and the web build starts downloading them, as
+    /// Recognize Text does. After a failed download it doesn't try again by itself: Recognize Text
+    /// does, and the page is read once the models are in.
+    fn await_ocr_models(&mut self, scan: &ScanToRead) {
+        self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
+        #[cfg(target_arch = "wasm32")]
+        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
+            && let Some(ctx) = self.ctx.clone()
+        {
+            crate::ocr_web::start(ctx);
+            self.notify(tl!("Downloading the text recognition models…"));
+        }
+    }
+
+    /// The OCR models have just loaded: the scans Edit set aside for want of them may be read.
+    /// Only the web build loads them while running.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn ocr_models_loaded(&mut self) {
+        for view in &mut self.views {
+            view.auto_ocr_awaiting_models.clear();
+        }
     }
 
     /// The page Edit should read now, if there is one: Edit is on outside Read mode with no dialog
@@ -279,7 +304,9 @@ impl PdfCraftApp {
         // A page found not to be a scan is judged again only once the document has changed, not
         // every frame (listing its images parses the page).
         let generation = document.edit_generation();
-        if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation) {
+        if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation)
+            || self.views[view].auto_ocr_awaiting_models.get(&page) == Some(&generation)
+        {
             return None;
         }
         let info = document.info.pages.get(page)?;
@@ -518,6 +545,9 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn pump_web_ocr(&mut self) {
         self.start_waiting_web_batch();
+        if self.views.iter().any(|v| !v.auto_ocr_awaiting_models.is_empty()) && pdfcraft_engine::ocr::available() {
+            self.ocr_models_loaded();
+        }
         let Some(ctx) = self.ctx.clone() else { return };
         let mut busy = false;
         if let Some(run) = self.ocr_run.as_mut()
@@ -782,6 +812,18 @@ mod tests {
         let add = Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: Arc::new(png.into_inner()) };
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
+    }
+    /// A scan found while the OCR models were missing waits for them, and is read once they load,
+    /// though the document has not changed. Before, it was taken for no scan and left unread.
+    #[test]
+    fn a_scan_found_without_the_models_is_read_once_they_load() {
+        let mut app = app_with(scan());
+        let scan = app.scan_to_read().unwrap();
+        app.await_ocr_models(&scan);
+        assert_eq!(found(&mut app), None, "it waits for the models, not judged every frame");
+        app.ocr_models_loaded();
+        assert_eq!(found(&mut app), Some(0), "read once they are in");
+        assert!(app.views[0].auto_ocr_skipped.is_empty(), "never taken for no scan");
     }
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
