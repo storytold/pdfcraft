@@ -637,14 +637,14 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
             app.open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
         }
     });
-    let open = h.get_by_label("Open").rect();
+    let create = h.get_by_label("Create").rect();
     let discord = h.get_by_label("Discord").rect();
-    assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
+    assert!(create.right() <= discord.left(), "Create {create:?} must not run under Discord {discord:?}");
     let mut previous_right = f32::MIN;
     for i in 0..5 {
         let tab = h.get_by_label(&name(i)).rect();
         assert!(tab.left() >= previous_right - 0.5, "tabs must not overlap: {i} at {tab:?}");
-        assert!(tab.right() <= open.left() + 0.5, "every tab fits before Open: {i} at {tab:?}, Open at {open:?}");
+        assert!(tab.right() <= create.left() + 0.5, "every tab fits before Create: {i} at {tab:?}, Create at {create:?}");
         assert!(tab.width() >= 179.0, "tabs keep most of their name: {i} is {tab:?}");
         previous_right = tab.right();
     }
@@ -661,17 +661,17 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
     h.run_steps(4);
     assert!(h.get_by_label(&name(0)).rect().left() > first.left(), "the left arrow scrolls the tabs back");
     assert_eq!(enabled(&h, "Scroll tabs right"), Some(true), "and then there is more to the right");
-    let open = h.get_by_label("Open").rect();
+    let create = h.get_by_label("Create").rect();
     let right = h.get_by_label("Scroll tabs right").rect();
-    assert!(right.right() <= open.left() + 0.5 && open.right() <= h.get_by_label("Discord").rect().left());
-    // Twenty: Open stays in sight left of Discord.
+    assert!(right.right() <= create.left() + 0.5 && create.right() <= h.get_by_label("Discord").rect().left());
+    // Twenty: Create stays in sight left of Discord.
     for i in 0..13 {
         h.state_mut().open_bytes(&format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
     }
     h.run_steps(4);
-    let open = h.get_by_label("Open").rect();
+    let create = h.get_by_label("Create").rect();
     let discord = h.get_by_label("Discord").rect();
-    assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
+    assert!(create.left() > 0.0 && create.right() <= discord.left(), "Create {create:?} stays in sight left of Discord {discord:?}");
 }
 
 /// macOS (#789): with the integrated title bar, the strip is the 28 pt band AppKit centres the
@@ -684,7 +684,7 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
         app.open_bytes("band.pdf", None, FIXTURE.to_vec()).unwrap();
     });
     let band = 28.0;
-    for label in ["Home", "band.pdf", "Open", "Discord", "Keyboard shortcuts"] {
+    for label in ["Home", "band.pdf", "Create", "Discord", "Keyboard shortcuts"] {
         let r = h.get_by_label(label).rect();
         assert!(r.top() >= 0.0 && r.bottom() <= band, "{label}: {r:?} inside the {band} pt title bar");
         assert!(r.height() >= 24.0, "{label}: {r:?} stays clickable");
@@ -692,6 +692,23 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
     // Content starts after the three lights (the last one ends 62 pt in) with a gap.
     let home = h.get_by_label("Home").rect();
     assert!(home.left() >= 62.0 + 4.0, "Home {home:?} clears the traffic lights");
+}
+
+#[test]
+fn hovering_create_button_opens_menu_with_three_options() {
+    let mut h = harness(|app| {
+        app.open_bytes("band.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let initial_combine_count = h.query_all_by_label("Combine files").count();
+    let initial_create_pdf_count = h.query_all_by_label("Create a PDF").count();
+    let initial_open_count = h.query_all_by_label_contains("Open").count();
+    let create_btn = h.get_by_label("Create");
+    let center = create_btn.rect().center();
+    h.input_mut().events.push(egui::Event::PointerMoved(center));
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Combine files").count(), initial_combine_count + 1, "menu opened on hover: Combine files");
+    assert_eq!(h.query_all_by_label("Create a PDF").count(), initial_create_pdf_count + 1, "menu opened on hover: Create a PDF");
+    assert_eq!(h.query_all_by_label_contains("Open").count(), initial_open_count + 1, "menu opened on hover: Open");
 }
 
 #[test]

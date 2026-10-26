@@ -69,6 +69,13 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
         return dialog.add_filter("PDF", &["pdf"]);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    let all: Vec<&str> = if purpose == FilePurpose::Combine {
+        std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).chain(pdfcraft_engine::OFFICE_EXTENSIONS).collect()
+    } else {
+        std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
     dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
 }
@@ -407,34 +414,51 @@ impl PdfCraftApp {
         }
         // Combine files lists when each file was last modified.
         if purpose == FilePurpose::Combine {
-            let incoming = files
-                .into_iter()
-                .zip(modified)
-                .map(|((name, bytes), modified)| crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None })
+            let incoming = paths
+                .iter()
+                .zip(files.into_iter().zip(modified))
+                .map(|(p, ((name, bytes), modified))| {
+                    let office_path = if pdfcraft_engine::is_office_path(p) { Some(p.clone()) } else { None };
+                    crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None, temp_pdf: None, office_path }
+                })
                 .collect();
             self.stage_combine_with(incoming);
+            self.open_combine_tab();
         } else {
             self.use_files(purpose, files);
         }
     }
 
+    /// Files dropped on the Combine files tab: added to its list in their exact dropped order.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn drop_all_into_combine(&mut self, files: Vec<egui::DroppedFileHandle>, _ctx: &egui::Context) {
+        let mut paths = Vec::new();
+        let mut loose = Vec::new();
+        for f in files {
+            if f.path().is_absolute() && f.path().is_dir() {
+                self.add_folder_to_combine(f.path(), true);
+            } else if f.path().is_absolute() {
+                paths.push(f.path().to_path_buf());
+            } else {
+                let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+                if let Ok(bytes) = f.bytes() {
+                    loose.push((name, bytes));
+                }
+            }
+        }
+        if !paths.is_empty() {
+            self.use_paths(FilePurpose::Combine, &paths);
+        }
+        if !loose.is_empty() {
+            self.use_files(FilePurpose::Combine, loose);
+        }
+    }
+
     /// A file dropped on the Combine files tab: added to its list.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
-        // A folder: the PDFs in it and in the folders inside it.
-        if f.path().is_absolute() && f.path().is_dir() {
-            self.add_folder_to_combine(f.path(), true);
-            return;
-        }
-        if f.path().is_absolute() {
-            self.use_paths(FilePurpose::Combine, &[f.path().to_path_buf()]);
-            return;
-        }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-        match f.bytes() {
-            Ok(bytes) => self.use_files(FilePurpose::Combine, vec![(name, bytes)]),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
-        }
+    #[allow(dead_code)]
+    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+        self.drop_all_into_combine(vec![f], ctx);
     }
 
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.

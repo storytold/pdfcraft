@@ -154,6 +154,37 @@ enum HeadingEvent {
     Reset,
 }
 
+/// A converted Office document result from the worker thread.
+pub struct ConvertedItem {
+    pub id: u64,
+    pub temp_pdf: Arc<pdfcraft_engine::converter::TempConvertedPdf>,
+    pub bytes: Vec<u8>,
+}
+
+/// An item queued for background Office conversion.
+struct ItemToConvert {
+    id: u64,
+    name: String,
+    bytes: Arc<Vec<u8>>,
+}
+
+/// Messages from the background Office document converter worker.
+pub enum CombineConversionNews {
+    Progress { current: usize, total: usize, name: String },
+    Finished(Result<Vec<ConvertedItem>, String>),
+}
+
+/// State of an active background Office conversion for Combine.
+pub struct CombineConverting {
+    pub rx: std::sync::mpsc::Receiver<CombineConversionNews>,
+    pub progress: Option<(usize, usize, String)>,
+}
+
+/// Returns the Turkish localized string if Turkish is active, otherwise the English original.
+fn tr_combine_text(en: &'static str, tr: &'static str) -> &'static str {
+    if crate::i18n::current().code() == "tr" { tr } else { en }
+}
+
 /// The Combine files tab. It shows in the Home slot (`active == None`) while `focused`.
 #[derive(Clone, Debug, Default)]
 pub struct CombineTab {
@@ -382,6 +413,10 @@ pub(crate) struct Incoming {
     pub note: Option<String>,
     /// The open document it is, when it came from a tab.
     pub open_doc: Option<pdfcraft_engine::DocId>,
+    /// Optional temporary converted PDF RAII handle.
+    pub temp_pdf: Option<Arc<pdfcraft_engine::converter::TempConvertedPdf>>,
+    /// Original file path on disk (for Office documents).
+    pub office_path: Option<std::path::PathBuf>,
 }
 
 /// A new value for [`CombineFile::auth`]: counted for the whole run, outside the undo history.
@@ -430,6 +465,10 @@ pub struct CombineFile {
     /// The range last checked and the result: the number of pages it takes and the first of
     /// them (0-based), or why it is wrong.
     checked: Option<(String, RangeCheck)>,
+    /// Temporary converted PDF file handle (RAII). Cleaned up when the row or combine tab is dropped.
+    pub temp_pdf: Option<Arc<pdfcraft_engine::converter::TempConvertedPdf>>,
+    /// Original file path on disk (for Office documents).
+    pub office_path: Option<std::path::PathBuf>,
 }
 
 impl CombineTab {
@@ -476,6 +515,16 @@ impl CombineTab {
 }
 
 impl CombineFile {
+    /// Whether this file is a supported Microsoft Office document.
+    pub fn is_office(&self) -> bool {
+        pdfcraft_engine::is_office_name(&self.name)
+    }
+
+    /// Whether this Office file needs to be converted before combining.
+    pub fn needs_conversion(&self) -> bool {
+        self.is_office() && self.temp_pdf.is_none()
+    }
+
     fn take(&mut self, a: Assessed, password: Option<Secret>) {
         self.pages = a.pages;
         self.sizes = a.sizes;
@@ -491,6 +540,9 @@ impl CombineFile {
     /// it stays in the list, with why, and Combine leaves it out once the user agrees. A
     /// password-protected file can be unlocked instead, so it isn't one.
     pub(crate) fn unreadable(&self) -> bool {
+        if self.needs_conversion() {
+            return false;
+        }
         self.problem.is_some() && self.lock.is_none()
     }
 
@@ -502,17 +554,26 @@ impl CombineFile {
     /// The number of pages `range` takes, or why it can't be used. Checked again only when the
     /// range changes.
     pub fn selection(&mut self) -> Result<usize, String> {
+        if self.needs_conversion() {
+            return Ok(1);
+        }
         self.checked_range().map(|(count, _)| count)
     }
 
     /// The first page (0-based) the range takes, in its order ("3, 1" starts with page 3): the
     /// page the grid shows for the file.
     pub fn first_page(&mut self) -> Result<usize, String> {
+        if self.needs_conversion() {
+            return Ok(0);
+        }
         self.checked_range().map(|(_, first)| first)
     }
 
     /// The first page the range takes, without updating the cache (read-only callers).
     pub(crate) fn first_taken(&self) -> Option<usize> {
+        if self.needs_conversion() {
+            return Some(0);
+        }
         match &self.checked {
             Some((range, result)) if *range == self.range => result.as_ref().ok().map(|(_, first)| *first),
             _ => self.pages_taken().ok()?.first().copied(),
@@ -521,6 +582,9 @@ impl CombineFile {
 
     /// Every page (0-based) the range takes, in its order: what the preview flips through.
     pub(crate) fn pages_taken(&self) -> Result<Vec<usize>, String> {
+        if self.needs_conversion() {
+            return Ok(vec![0]);
+        }
         if self.range.trim().is_empty() {
             return Ok((0..self.pages).collect());
         }
@@ -556,6 +620,9 @@ impl CombineFile {
 
     /// 0 = can't be combined, 1 = has warnings, 2 = fine: the Warnings column's sort order.
     fn severity(&mut self) -> u8 {
+        if self.needs_conversion() {
+            return 2;
+        }
         if self.problem.is_some() || self.selection().is_err() {
             0
         } else if !self.notes.is_empty() {
@@ -709,12 +776,24 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Combine files")).font(theme::semibold(20.0)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let response = ui.add_enabled_ui(blocker.is_none(), |ui| widgets::icon_pill(ui, "files", tl!("Combine"), true)).inner;
-                if let Some(why) = &blocker {
-                    response.clone().on_disabled_hover_text(why);
-                }
-                if response.clicked() {
-                    combine = true;
+                if let Some(converting) = &app.combine_converting {
+                    let text = if let Some((cur, tot, name)) = &converting.progress {
+                        crate::i18n::fmt(
+                            tr_combine_text("Converting: {name} ({cur}/{tot})…", "Dönüştürülüyor: {name} ({cur}/{tot})…"),
+                            &[("name", name), ("cur", &cur.to_string()), ("tot", &tot.to_string())],
+                        )
+                    } else {
+                        tr_combine_text("Converting to PDF…", "PDF'e dönüştürülüyor…").to_string()
+                    };
+                    ui.add_enabled(false, egui::Button::new(egui::RichText::new(text).color(Color32::WHITE)).fill(t.accent));
+                } else {
+                    let response = ui.add_enabled_ui(blocker.is_none(), |ui| widgets::icon_pill(ui, "files", tl!("Combine"), true)).inner;
+                    if let Some(why) = &blocker {
+                        response.clone().on_disabled_hover_text(why);
+                    }
+                    if response.clicked() {
+                        combine = true;
+                    }
                 }
             });
         });
@@ -725,6 +804,20 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         };
         ui.label(egui::RichText::new(hint).color(t.text_faint));
         ui.add_space(12.0);
+
+        if let Some(CombineConverting { progress: Some((cur, tot, name)), .. }) = &app.combine_converting {
+            egui::Frame::NONE.fill(t.panel).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    let msg = crate::i18n::fmt(
+                        tr_combine_text("Converting: {name} ({cur}/{tot})…", "Dönüştürülüyor: {name} ({cur}/{tot})…"),
+                        &[("name", name), ("cur", &cur.to_string()), ("tot", &tot.to_string())],
+                    );
+                    ui.label(egui::RichText::new(msg).font(theme::medium(13.0)).color(t.text));
+                });
+            });
+            ui.add_space(8.0);
+        }
 
         // Toolbar: on two lines when the window is narrow.
         ui.horizontal_wrapped(|ui| {
@@ -896,8 +989,10 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(action) = events.action {
         app.combine_apply(action);
     }
-    if combine && blocker.is_none() {
-        if app.combine_draft.iter().any(CombineFile::unreadable) {
+    if combine && blocker.is_none() && app.combine_converting.is_none() {
+        if app.combine_draft.iter().any(|f| f.needs_conversion()) {
+            app.start_combine_conversion();
+        } else if app.combine_draft.iter().any(CombineFile::unreadable) {
             app.combine_tab.confirm_skip = true;
         } else {
             app.combine_staged();
@@ -956,7 +1051,11 @@ fn skip_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if let Some(go) = choice {
         app.combine_tab.confirm_skip = false;
         if go {
-            app.combine_staged();
+            if app.combine_draft.iter().any(|f| f.needs_conversion()) {
+                app.start_combine_conversion();
+            } else {
+                app.combine_staged();
+            }
         }
     }
 }
@@ -1468,7 +1567,18 @@ fn table_body(
                     for kind in order {
                         row.col(|ui| match kind {
                             SortKey::Name => {
-                                ui.add(icons::image("file-text", 16.0, t.icon));
+                                let (icon, tint) = if f.needs_conversion() {
+                                    let ext = f.name.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
+                                    match ext.as_str() {
+                                        "docx" | "doc" => ("file-text", Color32::from_rgb(0x2B, 0x57, 0x9A)),
+                                        "xlsx" | "xls" => ("file-spreadsheet", Color32::from_rgb(0x21, 0x73, 0x46)),
+                                        "pptx" | "ppt" => ("presentation", Color32::from_rgb(0xD2, 0x47, 0x26)),
+                                        _ => ("file-text", t.icon),
+                                    }
+                                } else {
+                                    ("file-text", t.icon)
+                                };
+                                ui.add(icons::image(icon, 16.0, tint));
                                 // A file name is file/path chrome: explicitly LTR, extension last.
                                 crate::widgets::label_ltr_truncated(ui, f.name.clone(), theme::regular(13.0), t.text);
                             }
@@ -1476,11 +1586,12 @@ fn table_body(
                             SortKey::Pages => {
                                 crate::widgets::begin_dialog(ui);
                                 let edit = ui.add_enabled(
-                                    f.problem.is_none(),
+                                    f.problem.is_none() && !f.needs_conversion(),
                                     crate::widgets::line(&mut f.range).frame(egui::Frame::NONE).hint_text(tl!("All pages")).desired_width(88.0),
                                 );
                                 // A visible field on plain and striped rows alike; red when the range is wrong.
-                                let border = if check.is_err() { Stroke::new(1.5, ERROR) } else { Stroke::new(1.0, t.border) };
+                                let border =
+                                    if check.is_err() && !f.needs_conversion() { Stroke::new(1.5, ERROR) } else { Stroke::new(1.0, t.border) };
                                 ui.painter().rect_stroke(edit.rect, CornerRadius::same(4), border, egui::StrokeKind::Inside);
                                 if let Err(e) = &check {
                                     edit.clone().on_hover_text(e);
@@ -1495,12 +1606,20 @@ fn table_body(
                                 if edit.changed() {
                                     events.range_changed = true;
                                 }
-                                let count = match (&check, f.problem.is_some()) {
-                                    (_, true) => "—".to_string(),
-                                    (Ok(k), _) => crate::i18n::fmt(tl!("{k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]),
-                                    (Err(_), _) => crate::i18n::fmt(tl!("? of {n}"), &[("n", &f.pages.to_string())]),
+                                let count = if f.needs_conversion() {
+                                    "—".to_string()
+                                } else {
+                                    match (&check, f.problem.is_some()) {
+                                        (_, true) => "—".to_string(),
+                                        (Ok(k), _) => crate::i18n::fmt(tl!("{k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]),
+                                        (Err(_), _) => crate::i18n::fmt(tl!("? of {n}"), &[("n", &f.pages.to_string())]),
+                                    }
                                 };
-                                ui.label(egui::RichText::new(count).small().color(if check.is_err() { ERROR } else { t.text_faint }));
+                                ui.label(egui::RichText::new(count).small().color(if check.is_err() && !f.needs_conversion() {
+                                    ERROR
+                                } else {
+                                    t.text_faint
+                                }));
                             }
                             SortKey::Size => {
                                 ui.label(egui::RichText::new(crate::panels::human_size(f.bytes.len())).color(t.text_muted));
@@ -1515,11 +1634,19 @@ fn table_body(
                             },
                             // Blocking problems first, in red.
                             SortKey::Warnings => {
-                                let mut errors: Vec<String> = f.problem.iter().cloned().collect();
-                                if let Err(e) = &check {
-                                    errors.push(e.clone());
-                                }
+                                let errors: Vec<String> = if f.needs_conversion() {
+                                    Vec::new()
+                                } else {
+                                    let mut errs: Vec<String> = f.problem.iter().cloned().collect();
+                                    if let Err(e) = &check {
+                                        errs.push(e.clone());
+                                    }
+                                    errs
+                                };
                                 let mut warnings = f.notes.clone();
+                                if f.needs_conversion() {
+                                    warnings.push(tr_combine_text("Will convert on Combine", "Birleştirirken dönüştürülecek").to_string());
+                                }
                                 if rows.twice.get(i).copied().unwrap_or(false) {
                                     warnings.push(tl!("Added more than once").to_string());
                                 }
@@ -1629,10 +1756,10 @@ fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::Path
     (found, more)
 }
 
-/// Whether a file with extension `ext` can join the list: a PDF, or an image or text file that
-/// becomes one.
+/// Whether a file with extension `ext` can join the list: a PDF, or an image, text or Office
+/// file that becomes one.
 fn combinable(ext: &str) -> bool {
-    std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).any(|c| ext.eq_ignore_ascii_case(c))
+    std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).chain(pdfcraft_engine::OFFICE_EXTENSIONS).any(|c| ext.eq_ignore_ascii_case(c))
 }
 
 /// A file's bookmark in the combined PDF: its name without ".pdf", or without the extension of
@@ -2397,6 +2524,7 @@ impl PdfCraftApp {
         self.combine_tab = CombineTab { revision, ..CombineTab::default() };
         self.combine_draft.clear();
         self.combine_thumbs.clear();
+        self.combine_converting = None;
         if showing {
             self.active = self.views.len().checked_sub(1);
         }
@@ -2404,15 +2532,52 @@ impl PdfCraftApp {
 
     /// Add picked files to the Combine files list (and show it).
     pub(crate) fn stage_combine(&mut self, files: Vec<(String, Vec<u8>)>) {
-        let incoming =
-            files.into_iter().map(|(name, bytes)| Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }).collect();
+        let incoming = files
+            .into_iter()
+            .map(|(name, bytes)| Incoming {
+                name,
+                bytes: Arc::new(bytes),
+                modified: None,
+                note: None,
+                open_doc: None,
+                temp_pdf: None,
+                office_path: None,
+            })
+            .collect();
         self.stage_combine_with(incoming);
     }
 
     /// Add files to the Combine files list, with what can be known about them up front.
     pub(crate) fn stage_combine_with(&mut self, files: Vec<Incoming>) {
         let mut added = Vec::new();
-        for Incoming { name, bytes, modified, note, open_doc } in files {
+        for Incoming { name, bytes, modified, note, open_doc, temp_pdf, office_path } in files {
+            if pdfcraft_engine::is_office_name(&name) && temp_pdf.is_none() {
+                let source = bytes.clone();
+                let f = CombineFile {
+                    id: 0,
+                    group: 0,
+                    name,
+                    bytes,
+                    source,
+                    pages: 1,
+                    range: String::new(),
+                    modified,
+                    problem: None,
+                    lock: None,
+                    password: None,
+                    sizes: Arc::from(vec![crate::combine_grid::FALLBACK_PAGE]),
+                    auth: next_auth(),
+                    notes: Vec::new(),
+                    origin_note: note,
+                    open_doc,
+                    checked: None,
+                    temp_pdf: None,
+                    office_path,
+                };
+                added.push(f);
+                continue;
+            }
+
             // Images and text files become PDFs as they join the list (#569): from then on they
             // are ordinary files, with pages, thumbnails and page ranges.
             // A file that can't be read joins the list all the same, with why (the Warnings
@@ -2466,6 +2631,8 @@ impl PdfCraftApp {
                 origin_note: note,
                 open_doc,
                 checked: None,
+                temp_pdf,
+                office_path,
             };
             f.take(assessed, None);
             added.push(f);
@@ -2578,7 +2745,7 @@ impl PdfCraftApp {
             let modified = None;
             let note = doc.dirty.then(|| tl!("Includes unsaved changes").to_string());
             let name = if doc.name.to_ascii_lowercase().ends_with(".pdf") { doc.name.clone() } else { format!("{}.pdf", doc.name) };
-            incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, note, open_doc: Some(doc.id) });
+            incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, note, open_doc: Some(doc.id), temp_pdf: None, office_path: None });
         }
         self.stage_combine_with(incoming);
     }
@@ -2604,6 +2771,134 @@ impl PdfCraftApp {
             }
             // The list stays, so the user can fix it.
             Err(e) => self.notify_fmt("Couldn't combine files: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
+    /// Convert pending Office documents in draft order, reporting progress, and then combine.
+    pub(crate) fn start_combine_conversion(&mut self) {
+        let to_convert: Vec<ItemToConvert> = self
+            .combine_draft
+            .iter()
+            .filter(|f| f.needs_conversion())
+            .map(|f| ItemToConvert { id: f.id, name: f.name.clone(), bytes: f.bytes.clone() })
+            .collect();
+
+        if to_convert.is_empty() {
+            self.combine_staged();
+            return;
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let first_name = to_convert.first().map(|item| item.name.clone()).unwrap_or_default();
+        self.combine_converting = Some(CombineConverting { rx, progress: Some((1, to_convert.len(), first_name)) });
+
+        let ctx = self.ctx.clone();
+        let spawned = std::thread::Builder::new().name("pdfcraft-office-combine".into()).spawn(move || {
+            let total = to_convert.len();
+            let mut results = Vec::new();
+            for (idx, item) in to_convert.into_iter().enumerate() {
+                if tx.send(CombineConversionNews::Progress { current: idx + 1, total, name: item.name.clone() }).is_err() {
+                    // The Combine tab was closed: nobody is waiting for results.
+                    return;
+                }
+                if let Some(c) = &ctx {
+                    c.request_repaint();
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let converted = pdfcraft_engine::converter::convert_bytes_to_pdf(&item.name, &item.bytes);
+
+                #[cfg(target_arch = "wasm32")]
+                let converted: Result<pdfcraft_engine::converter::TempConvertedPdf, pdfcraft_engine::converter::ConversionError> =
+                    Err(pdfcraft_engine::converter::ConversionError::NoConverterFound("Web browser conversion not supported".into()));
+
+                match converted {
+                    Ok(temp_pdf) => match temp_pdf.read_bytes() {
+                        Ok(pdf_bytes) => {
+                            results.push(ConvertedItem { id: item.id, temp_pdf: Arc::new(temp_pdf), bytes: pdf_bytes });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(CombineConversionNews::Finished(Err(format!("{}: {e}", item.name))));
+                            if let Some(c) = &ctx {
+                                c.request_repaint();
+                            }
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = tx.send(CombineConversionNews::Finished(Err(format!("{}: {e}", item.name))));
+                        if let Some(c) = &ctx {
+                            c.request_repaint();
+                        }
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(CombineConversionNews::Finished(Ok(results)));
+            if let Some(c) = &ctx {
+                c.request_repaint();
+            }
+        });
+
+        if spawned.is_err() {
+            self.combine_converting = None;
+            self.notify_tr("Failed to start background conversion worker");
+        }
+    }
+
+    /// Poll any active background conversion, updating progress and combining when done.
+    pub(crate) fn poll_combine_converting(&mut self) {
+        let Some(converting) = &mut self.combine_converting else { return };
+        let mut finished = None;
+        let mut disconnected = false;
+        loop {
+            match converting.rx.try_recv() {
+                Ok(CombineConversionNews::Progress { current, total, name }) => {
+                    converting.progress = Some((current, total, name));
+                }
+                Ok(CombineConversionNews::Finished(res)) => {
+                    finished = Some(res);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if disconnected && finished.is_none() {
+            self.combine_converting = None;
+            self.notify_tr("Conversion worker terminated unexpectedly");
+            return;
+        }
+        if let Some(res) = finished {
+            self.combine_converting = None;
+            match res {
+                Ok(results) => {
+                    for item in results {
+                        if let Some(f) = self.combine_draft.iter_mut().find(|f| f.id == item.id) {
+                            f.temp_pdf = Some(item.temp_pdf);
+                            f.bytes = Arc::new(item.bytes);
+                            f.source = f.bytes.clone();
+                            f.auth = next_auth();
+                            if let Ok(assessed) = assess(&f.bytes, None) {
+                                f.take(assessed, None);
+                            }
+                        }
+                    }
+                    if self.combine_draft.iter().any(|f| f.needs_conversion()) {
+                        self.start_combine_conversion();
+                    } else if self.combine_draft.iter().any(CombineFile::unreadable) {
+                        self.combine_tab.confirm_skip = true;
+                    } else {
+                        self.combine_staged();
+                    }
+                }
+                Err(err_msg) => {
+                    self.notify(err_msg);
+                }
+            }
         }
     }
 }

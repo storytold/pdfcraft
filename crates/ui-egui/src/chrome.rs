@@ -74,9 +74,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     + 2.0 * button
                     + 50.0
                     + window_controls::width(&controls.right);
-                // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
-                let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
-                let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
+                // Create stays in sight after the tabs: its icon, text and padding, and the gaps around it.
+                let create_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Create").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
+                let mut tabs_width = (ui.available_width() - controls_width - create_width).max(0.0);
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
@@ -268,10 +268,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.ctx().request_repaint();
                 }
                 ui.add_space(4.0);
-                let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
-                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
-                    app.open_dialog();
-                }
+                create_menu(app, ui, tab_h);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if !controls.right.is_empty() {
                         // Laid out left to right inside the right-to-left run, so they read in
@@ -522,6 +519,69 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// Render the Create button and dropdown menu (Create a PDF, Combine files, Open…).
+fn create_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, tab_h: f32) {
+    let tip = crate::commands::command_tip(ui.ctx(), tl!("Create a PDF"), "create.file");
+    let resp = widgets::ghost_button_sized(ui, "plus", tl!("Create"), tab_h).on_hover_text(tip);
+    let popup_id = resp.id.with("create_popup");
+
+    let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    let pointer_pos = ui.ctx().pointer_latest_pos();
+
+    if resp.clicked() {
+        if is_open {
+            egui::Popup::close_id(ui.ctx(), popup_id);
+        } else {
+            egui::Popup::open_id(ui.ctx(), popup_id);
+            ui.ctx().request_repaint();
+        }
+    } else if resp.hovered() {
+        if !is_open {
+            egui::Popup::open_id(ui.ctx(), popup_id);
+            ui.ctx().request_repaint();
+        }
+    } else if is_open && ui.input(|i| i.pointer.is_moving()) {
+        let popup_rect = ui.ctx().read_response(popup_id).map(|r| r.rect);
+        let in_button = pointer_pos.is_some_and(|p| resp.rect.expand2(egui::vec2(2.0, 4.0)).contains(p));
+        let in_popup = pointer_pos.is_some_and(|p| popup_rect.is_some_and(|r| r.expand2(egui::vec2(4.0, 4.0)).contains(p)));
+        if !in_button && !in_popup && !resp.has_focus() {
+            egui::Popup::close_id(ui.ctx(), popup_id);
+        }
+    }
+
+    egui::Popup::menu(&resp).id(popup_id).open_memory(None).show(|ui| {
+        ui.set_min_width(220.0);
+        let t = Tokens::get(ui.ctx());
+        let item = |ui: &mut egui::Ui, icon: &str, label: &str, shortcut: &str| {
+            let mut btn = egui::Button::image_and_text(icons::image(icon, 16.0, t.icon), label);
+            if !shortcut.is_empty() {
+                btn = btn.shortcut_text(shortcut);
+            }
+            ui.add(btn)
+        };
+
+        let is_tr = crate::i18n::current().code() == "tr";
+        let create_label = if is_tr { "PDF oluştur" } else { crate::i18n::t("Create a PDF") };
+        if item(ui, "file-plus", create_label, "").clicked() {
+            app.create_file_dialog();
+            ui.close();
+        }
+
+        let combine_label = if is_tr { "Dosyaları birleştir" } else { crate::i18n::t("Combine files") };
+        if item(ui, "files", combine_label, "").clicked() {
+            app.open_combine_tab();
+            ui.close();
+        }
+
+        let open_label = if is_tr { "Dosyaları aç" } else { crate::i18n::t("Open…") };
+        let open_shortcut = crate::commands::command_shortcut_label(ui.ctx(), "file.open");
+        if item(ui, "folder-open", open_label, &open_shortcut).clicked() {
+            app.open_dialog();
+            ui.close();
+        }
+    });
 }
 
 /// Draw the right tool rail with page navigation, history, zoom, rotation and page-display controls for the

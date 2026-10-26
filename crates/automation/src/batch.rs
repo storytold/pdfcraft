@@ -59,7 +59,11 @@ impl<'a> Recipe<'a> {
 
     fn accepts(&self, path: &Path) -> bool {
         let extension = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-        extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
+        let lock_file = path.file_name().and_then(std::ffi::OsStr::to_str).is_some_and(pdfcraft_engine::is_office_lock_file);
+        extension == "pdf"
+            || (self.steps.contains(&"convert")
+                && !lock_file
+                && (pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()) || pdfcraft_engine::is_office_extension(&extension)))
     }
 
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {

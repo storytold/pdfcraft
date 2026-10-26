@@ -79,7 +79,7 @@ const KEEP_OPEN: f64 = 2.0;
 /// The most pages one file can be spread out into (each is a card, laid out every frame).
 pub(crate) const MAX_EXPAND: usize = 2000;
 /// The shape drawn for a page whose size is unknown (US Letter); nothing is rendered for it.
-const FALLBACK_PAGE: (f32, f32) = (612.0, 792.0);
+pub(crate) const FALLBACK_PAGE: (f32, f32) = (612.0, 792.0);
 /// Icons drawn on the (always white) paper, in either theme: the light theme's muted text, which
 /// keeps its contrast on white where the dark theme's doesn't.
 const ON_PAPER: Color32 = Color32::from_rgb(0x5E, 0x5E, 0x66);
@@ -510,7 +510,7 @@ pub(crate) struct PageList {
 /// changes; `None` when it can't be shown as its pages (locked, unreadable, a bad range, no page,
 /// or more than [`MAX_EXPAND`]).
 pub(crate) fn pages_shown(cache: &mut HashMap<u64, PageList>, f: &CombineFile) -> Option<PageList> {
-    if f.lock.is_some() || f.problem.is_some() {
+    if f.lock.is_some() || f.problem.is_some() || f.needs_conversion() {
         return None;
     }
     let list = match cache.get(&f.id) {
@@ -905,6 +905,16 @@ impl Card {
             why = Some(("lock", ON_PAPER, text.to_owned()));
         } else if let Some(p) = &f.problem {
             why = Some(("circle-x", ERROR, p.clone()));
+        } else if f.needs_conversion() {
+            let ext = f.name.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
+            let (icon, badge_color, badge_text) = match ext.as_str() {
+                "docx" | "doc" => ("file-text", Color32::from_rgb(0x2B, 0x57, 0x9A), "DOCX"),
+                "xlsx" | "xls" => ("file-spreadsheet", Color32::from_rgb(0x21, 0x73, 0x46), "XLSX"),
+                "pptx" | "ppt" => ("presentation", Color32::from_rgb(0xD2, 0x47, 0x26), "PPTX"),
+                _ => ("file-text", ON_PAPER, "OFFICE"),
+            };
+            icons::paint(ui, Rect::from_center_size(paper.center() - vec2(0.0, 12.0), Vec2::splat(44.0)), icon, 44.0, badge_color);
+            painter.text(pos2(paper.center().x, paper.center().y + 26.0), Align2::CENTER_CENTER, badge_text, theme::semibold(13.0), badge_color);
         } else {
             match page {
                 Err(e) => why = Some(("circle-x", ERROR, e)),
@@ -961,7 +971,7 @@ impl Card {
         painter.rect_stroke(paper, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
 
         // A warning that doesn't stop it being combined: a badge on the file's card.
-        let warned = self.page.is_none() && (!f.notes.is_empty() || self.twice);
+        let warned = self.page.is_none() && (!f.notes.is_empty() || self.twice) && !f.needs_conversion();
         if warned && why.as_ref().is_none_or(|(icon, ..)| *icon == "eye-off") {
             let r = Rect::from_center_size(paper.right_top() + vec2(-2.0, 2.0), Vec2::splat(18.0));
             painter.circle_filled(r.center(), 10.0, t.card);
@@ -984,7 +994,11 @@ impl Card {
         // A file name is file/path chrome: always left to right, so an Arabic name ends in `.pdf`.
         let name_galley = crate::bidi::layout_ltr(ui, shown, font, colour);
         painter.galley(pos2(c.center().x - name_galley.size().x / 2.0, y - name_galley.size().y / 2.0), name_galley, colour);
-        let note = if self.page.is_none() && !f.range.trim().is_empty() {
+        let note = if f.needs_conversion() {
+            let ext = f.name.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_uppercase();
+            let template = if crate::i18n::current().code() == "tr" { "{ext} belgesi" } else { "{ext} document" };
+            Some((crate::i18n::fmt(template, &[("ext", &ext)]), t.text_muted))
+        } else if self.page.is_none() && !f.range.trim().is_empty() {
             match &self.check {
                 Ok(k) => Some((crate::i18n::fmt(tl!("Pages: {k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]), t.text_muted)),
                 Err(_) => Some((tl!("Check the pages").to_owned(), ERROR)),
@@ -999,7 +1013,7 @@ impl Card {
         // On hover, the card's own actions along the top of the page (not while a card is
         // dragged): remove this file only, and show it large when there is a page to show. Drawn
         // over the card, so a click on one doesn't select or move it.
-        let previewable = why.is_none();
+        let previewable = why.is_none() && !f.needs_conversion();
         // A file that adds more pages than one can be spread out into them.
         let expandable = self.page.is_none() && takes > 1 && takes <= MAX_EXPAND && f.lock.is_none() && f.problem.is_none() && self.check.is_ok();
         // Shown large: the file from its first page, or a page card's page.

@@ -642,7 +642,7 @@ impl PdfCraftApp {
                 }
             }
             "create.blank" => self.create_blank(),
-            "create.file" => self.open_dialog(),
+            "create.file" => self.create_file_dialog(),
             "create.multiple" => self.create_multiple_dialog(),
             "create.multiple_separate" => self.create_multiple_separate_dialog(),
             "create.images" => self.create_from_images_dialog(),

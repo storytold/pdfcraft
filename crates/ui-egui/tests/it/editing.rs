@@ -987,6 +987,16 @@ fn opening_a_missing_file_fails_and_tells_the_user() {
 }
 
 #[test]
+fn opening_an_office_lock_file_fails_and_tells_the_user() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    let lock_file = std::env::temp_dir().join("~$locked.docx");
+    assert_eq!(app.open_path(&lock_file.to_string_lossy()), OpenOutcome::Failed);
+    assert!(app.views.is_empty());
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Office lock files")));
+}
+
+#[test]
 fn opening_the_same_file_with_a_dot_component_focuses_its_tab() {
     let pdfs = TempPdfs::new("dedup-dot");
     let a = pdfs.file("a.pdf", 1);
@@ -1837,10 +1847,10 @@ fn images_and_text_files_join_the_combine_list_as_pdfs() {
 #[test]
 fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     let mut h = combine_of(&[("one.pdf", 2)]);
-    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("report.docx".to_string(), b"PK\x03\x04".to_vec())];
+    let bad = vec![("broken.jpg".to_string(), b"\xff\xd8\xff\xe0 not a JPEG".to_vec()), ("archive.zip".to_string(), b"PK\x03\x04".to_vec())];
     h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, bad);
     h.run_steps(3);
-    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "report.docx"]);
+    assert_eq!(combine_names(&h), ["one.pdf", "broken.jpg", "archive.zip"]);
     for f in &h.state().combine_draft[1..] {
         let why = f.problem.as_deref().expect("why it can't be combined");
         assert!(why.starts_with("Can't be read: ") && !why.contains(&f.name), "{why}");
@@ -1857,7 +1867,7 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     h.run_steps(3);
     h.get_by_label("Leave out files that can't be read?");
     h.get_by_label("• broken.jpg");
-    h.get_by_label("• report.docx");
+    h.get_by_label("• archive.zip");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.query_by_label("Leave out files that can't be read?").is_none());

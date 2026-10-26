@@ -21,6 +21,7 @@ pub mod camera_edges;
 pub mod catalog;
 pub mod commands;
 pub mod compare;
+pub mod converter;
 mod copy_image;
 pub mod dates;
 pub mod export;
@@ -54,6 +55,9 @@ pub use pdfcraft_organize::Standard;
 pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
+pub use converter::{
+    ConversionError, OFFICE_EXTENSIONS, OfficeApp, TempConvertedPdf, is_office_extension, is_office_lock_file, is_office_name, is_office_path,
+};
 pub use pdfcraft_cos::Algorithm;
 pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
 pub use pdfcraft_edit::added::{
@@ -4710,9 +4714,14 @@ impl Session {
         self.write_new(&doc)
     }
 
-    /// Convert a file Create understands (an image or plain text) to PDF bytes; a PDF is checked
-    /// (it must open and allow copying pages) and returned as it is.
+    /// Convert a file Create understands (an image or plain text) or an Office document to PDF bytes;
+    /// a PDF is checked (it must open and allow copying pages) and returned as it is.
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        if is_office_name(name) {
+            let temp_pdf = converter::convert_bytes_to_pdf(name, bytes).map_err(|e| EditError::Source(format!("{name}: {e}")))?;
+            let pdf_bytes = temp_pdf.read_bytes().map_err(|e| EditError::Source(format!("{name}: {e}")))?;
+            return Ok((SourceKind::Pdf, Arc::new(pdf_bytes)));
+        }
         let Some(kind) = source_kind(name, bytes) else {
             return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
         };
@@ -4727,10 +4736,13 @@ impl Session {
         Ok((kind, created?))
     }
 
-    /// A file for Combine as PDF bytes: an image or text file is converted; a PDF is returned as
-    /// it is, unchecked (Combine reads it itself, with its password), as is a file named .pdf
-    /// without a `%PDF-` header, which the reader may still open.
+    /// A file for Combine as PDF bytes: an image, text file or Office document is converted; a PDF
+    /// is returned as it is, unchecked (Combine reads it itself, with its password), as is a file
+    /// named .pdf without a `%PDF-` header, which the reader may still open.
     pub fn as_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+        if is_office_name(name) {
+            return self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf);
+        }
         let pdf = match source_kind(name, bytes) {
             Some(SourceKind::Pdf) => true,
             Some(SourceKind::Image | SourceKind::Text) => false,
@@ -5131,6 +5143,12 @@ impl Session {
     /// Open freshly created bytes (combine / extract) as a new, unsaved document.
     pub fn open_new(&mut self, name: impl Into<String>, bytes: Arc<Vec<u8>>) -> Result<DocId, OpenError> {
         let id = self.open(name, None, bytes, None)?;
+        self.mark_new(id);
+        Ok(id)
+    }
+
+    /// Mark an existing document as newly created and unsaved.
+    pub fn mark_new(&mut self, id: DocId) {
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
             d.dirty = true;
             if let Some(e) = d.editor.as_mut() {
@@ -5139,7 +5157,6 @@ impl Session {
             // Unsaved work with no edit yet still needs its first recovery snapshot.
             d.generation += 1;
         }
-        Ok(id)
     }
 
     fn cos(&self, id: DocId) -> Result<&pdfcraft_cos::Document, EditError> {

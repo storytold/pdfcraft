@@ -772,6 +772,8 @@ pub struct PdfCraftApp {
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).
     pub inbox: Inbox,
+    /// Active background Office conversion for Combine.
+    pub(crate) combine_converting: Option<crate::combine_ui::CombineConverting>,
     /// The browser's startup `?file=` download. Unlike a deliberate Open or drop, a late
     /// arrival opens in the background once the user has started working (#171).
     pub startup_inbox: Inbox,
@@ -1181,6 +1183,7 @@ impl PdfCraftApp {
             unlock_prompt: None,
             full_screen: false,
             inbox: Default::default(),
+            combine_converting: None,
             startup_inbox: Default::default(),
             startup_superseded: false,
             failed_inbox: Default::default(),
@@ -1490,24 +1493,35 @@ impl PdfCraftApp {
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 None => {}
             },
-            open_worker::ResultKind::Prepared { bytes, result } => match *result {
-                Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
-                    Ok(id) => {
-                        if pending.path.is_some() {
-                            self.watch.known_as(id, pending.stamp);
+            open_worker::ResultKind::Prepared { bytes, result, office_converted } => match *result {
+                Ok(prepared) => {
+                    let (name, path) = if office_converted {
+                        let stem = pending.name.rsplit_once('.').map_or(&pending.name[..], |(s, _)| s);
+                        (format!("{stem}.pdf"), None)
+                    } else {
+                        (pending.name.clone(), pending.path.clone())
+                    };
+                    match self.finish_open(&name, path, bytes.len(), prepared, pending.activate) {
+                        Ok(id) => {
+                            if office_converted {
+                                self.session.mark_new(id);
+                            }
+                            if pending.path.is_some() && !office_converted {
+                                self.watch.known_as(id, pending.stamp);
+                            }
+                            if let Some(destination) = pending.after_open {
+                                self.apply_remote_destination(destination);
+                            }
+                            if let Some(meta) = &pending.recovered {
+                                self.finish_recovery(meta);
+                            }
+                            if let Some(command) = pending.then {
+                                self.execute(command);
+                            }
                         }
-                        if let Some(destination) = pending.after_open {
-                            self.apply_remote_destination(destination);
-                        }
-                        if let Some(meta) = &pending.recovered {
-                            self.finish_recovery(meta);
-                        }
-                        if let Some(command) = pending.then {
-                            self.execute(command);
-                        }
+                        Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                     }
-                    Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
-                },
+                }
                 Err(error @ (pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword)) => {
                     let password_error =
                         matches!(error, pdfcraft_render::OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
@@ -2143,6 +2157,10 @@ impl PdfCraftApp {
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+        if pdfcraft_engine::is_office_lock_file(&name) {
+            self.notify_fmt("Couldn't open {name}: temporary Office lock files (~$*) cannot be opened", &[("name", &name)]);
+            return OpenOutcome::Failed;
+        }
         // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
         let stamp = file_watch::Stamp::at(path);
         // Before the first frame there is no interaction to keep responsive; this also preserves
@@ -2200,20 +2218,20 @@ impl PdfCraftApp {
         }
     }
 
-    /// The File ▸ Open picker: PDFs, and images and text that become PDFs.
+    /// The File ▸ Open picker: PDFs, and images, text and Office documents that become PDFs.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_picker() -> rfd::AsyncFileDialog {
-        rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
+        let all: Vec<&str> = std::iter::once("pdf").chain(create_ui::CONVERTIBLE).chain(pdfcraft_engine::OFFICE_EXTENSIONS).collect();
+        rfd::AsyncFileDialog::new()
+            .add_filter(tl!("PDF, images and text"), &all)
+            .add_filter("PDF", &["pdf"])
+            .add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
     }
 
     pub fn open_dialog(&mut self) {
         self.startup_superseded = true;
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick(
-            pickers::PickFor::Open,
-            rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
-            true,
-        );
+        self.pick(pickers::PickFor::Open, Self::open_picker(), true);
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
         #[cfg(target_arch = "wasm32")]
         {
@@ -2236,6 +2254,21 @@ impl PdfCraftApp {
                     }
                 }
             });
+        }
+    }
+
+    /// Create a PDF from a chosen file (PDF, Office, image, text), converted and opened in a new tab.
+    pub fn create_file_dialog(&mut self) {
+        self.startup_superseded = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let title = if crate::i18n::current().code() == "tr" { "PDF oluştur" } else { crate::i18n::t("Create a PDF") };
+            let picker = Self::open_picker().set_title(title);
+            self.pick(pickers::PickFor::Open, picker, false);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.open_dialog();
         }
     }
 
@@ -3601,11 +3634,17 @@ impl eframe::App for PdfCraftApp {
         let dropped = self.drop_on_signature_pad(dropped);
         #[cfg(not(target_arch = "wasm32"))]
         let dropped = self.drop_on_grid(dropped, ctx);
-        for f in dropped {
-            // Files dropped on the Combine files tab join its list instead of opening.
-            if self.combine_showing() {
+        if self.combine_showing() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if !dropped.is_empty() {
+                self.drop_all_into_combine(dropped, ctx);
+            }
+            #[cfg(target_arch = "wasm32")]
+            for f in dropped {
                 self.drop_into_combine(f, ctx);
-            } else {
+            }
+        } else {
+            for f in dropped {
                 self.open_dropped(f, ctx);
             }
         }
@@ -3615,6 +3654,7 @@ impl eframe::App for PdfCraftApp {
                 self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
             }
         }
+        self.poll_combine_converting();
         // Don't replace a pending prompt or import. A startup file may need its own password
         // prompt, so its bytes stay queued until the current interaction finishes.
         #[cfg(not(target_arch = "wasm32"))]
