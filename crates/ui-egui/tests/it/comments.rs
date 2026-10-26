@@ -2657,3 +2657,45 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+#[test]
+fn a_text_box_handle_outside_the_page_can_be_dragged_back_inside() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape};
+    for rotation in [0, 90, 180, 270] {
+        let mut h = harness(move |app| {
+            app.set_option("zoom", "100").unwrap();
+            app.set_option("quick", "select").unwrap();
+            app.views[0].rotation = rotation;
+            app.apply_edit(Edit::AddAnnotation(NewAnnotation {
+                page: 0,
+                shape: Shape::TextBox {
+                    rect: if rotation == 270 { [-12.0, 80.0, 40.0, 120.0] } else { [260.0, 80.0, 312.0, 120.0] },
+                    font_size: 12.0,
+                },
+                style: Default::default(),
+                contents: "Note".into(),
+                author: "Tester".into(),
+            }));
+            app.views[0].comments.selected = Some((0, 0));
+        });
+        let (outside, inside) = {
+            let app = h.state();
+            let v = &app.views[0];
+            let info = &app.session.get(v.id).unwrap().info;
+            let page = &info.pages[0];
+            let xf = pdfcraft_ui_egui::canvas::PageXform { rect: v.page_screen_rect(0).unwrap(), rot: v.rotation, pw: page.width, ph: page.height };
+            let (start, end) = if rotation == 270 { (-12.0, 20.0) } else { (312.0, 280.0) };
+            let outside = xf.user_rect(info, 0, [start, 100.0, start, 100.0]).center();
+            assert!(!xf.rect.contains(outside));
+            assert!(v.viewport_rect().contains(outside));
+            (outside, xf.user_rect(info, 0, [end, 100.0, end, 100.0]).center())
+        };
+        drag(&mut h, outside, inside);
+        let r = comments(&h)[0].rect;
+        assert!(
+            if rotation == 270 { (r[0] - 20.0).abs() < 2.0 } else { (r[2] - 280.0).abs() < 2.0 },
+            "the outside handle must shrink the box, {rotation} degrees: {r:?}"
+        );
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"));
+    }
+}

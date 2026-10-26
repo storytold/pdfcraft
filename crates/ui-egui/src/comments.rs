@@ -813,6 +813,9 @@ pub(crate) fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2, aspect_ratio: 
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;
+    // A selected comment may extend into the canvas margin. Its visible handles still belong
+    // to this page; ordinary drawing and hit testing remain confined to the page itself.
+    let handle_pressed = origin.is_some_and(|o| !cx.hidden && on_handle(cx, view, o, |_| true));
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
     let fill_grab = fill_grabs(cx, view);
@@ -836,7 +839,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     match cx.tool {
         // The shape just drawn is selected with its handles showing: they resize it without a
         // trip to the Select tool (#2338). Anywhere else the tool keeps drawing.
-        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here || handle_pressed),
         QuickTool::Comment(tool) if tool.draws() => {
             if !cx.allowed {
                 return false;
@@ -1074,8 +1077,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             true
         }
-        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
-        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here || handle_pressed),
+        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here || handle_pressed),
         _ => false,
     }
 }
@@ -1125,13 +1128,14 @@ fn grabs(cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) ->
         return true;
     }
     let Some(p) = press_point(cx) else { return false };
-    on_handle(cx, view, p, &pick) || cx.hit(p).is_some_and(pick)
+    on_handle(cx, view, p, &pick) || cx.xf.rect.contains(p) && cx.hit(p).is_some_and(pick)
 }
 
 /// Where a gesture on this page is decided: the press while the button is down, otherwise the
-/// pointer (egui clears the press origin on release). `None` off the page.
+/// pointer (egui clears the press origin on release). Callers allow only selected handles
+/// outside the page, never ordinary annotation hits or drawing there.
 fn press_point(cx: &PageCx<'_>) -> Option<Pos2> {
-    (if cx.ptr.any_down { cx.ptr.origin } else { cx.ptr.pos }).filter(|p| cx.xf.rect.contains(*p))
+    if cx.ptr.any_down { cx.ptr.origin } else { cx.ptr.pos }
 }
 
 /// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
