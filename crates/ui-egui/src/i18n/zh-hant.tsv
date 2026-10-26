@@ -1695,6 +1695,7 @@
 	Downloaded {name}	已下載{name}
 	Couldn't download {name}: {e}	無法下載{name}：{e}
 	Reverted to the last saved version	已還原到上次儲存的版本
+	The comment being edited no longer exists, so its text was not saved.	正在編輯的註解已不存在，因此其文字未儲存。
 	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	出錯了：內部錯誤中斷了操作（{m}）。文件未更改。
 	Nothing to undo	沒有可復原的操作
 	Nothing to redo	沒有可重做的操作

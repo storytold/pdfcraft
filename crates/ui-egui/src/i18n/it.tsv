@@ -1798,6 +1798,7 @@
 	Downloaded {name}	{name} scaricato
 	Couldn't download {name}: {e}	Impossibile scaricare {name}: {e}
 	Reverted to the last saved version	Ripristinata l'ultima versione salvata
+	The comment being edited no longer exists, so its text was not saved.	Il commento in modifica non esiste più, quindi il suo testo non è stato salvato.
 	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Operazione non riuscita: un errore interno l'ha interrotta ({m}). I tuoi documenti non sono stati modificati.
 	Nothing to undo	Niente da annullare
 	Nothing to redo	Niente da ripetere

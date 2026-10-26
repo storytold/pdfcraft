@@ -1712,6 +1712,7 @@
 	Downloaded {name}	{name} letöltve
 	Couldn't download {name}: {e}	{name} letöltése nem sikerült: {e}
 	Reverted to the last saved version	Visszaállítva az utoljára mentett változatra
+	The comment being edited no longer exists, so its text was not saved.	A szerkesztett megjegyzés már nem létezik, ezért a szövege nem lett mentve.
 	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Ez nem sikerült: egy belső hiba megállította ({m}). A dokumentumaid változatlanok.
 	Nothing to undo	Nincs mit visszavonni
 	Nothing to redo	Nincs mit megismételni

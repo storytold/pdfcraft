@@ -2824,3 +2824,7 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+
+# AI-assisted addition for the comment-note save fix (2026-10-21).
+# This addition has not had separate native-speaker review.
+	The comment being edited no longer exists, so its text was not saved.	Bình luận đang chỉnh sửa không còn tồn tại nên văn bản của nó không được lưu.

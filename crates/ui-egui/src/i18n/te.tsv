@@ -1711,6 +1711,7 @@ action wizard	Start	ప్రారంభించు
 	Downloaded {name}	{name} డౌన్‌లోడ్ చేయబడింది
 	Couldn't download {name}: {e}	{name}ను డౌన్‌లోడ్ చేయడం సాధ్యం కాలేదు: {e}
 	Reverted to the last saved version	చివరిగా సేవ్ చేసిన వెర్షన్‌కు మార్చబడింది
+	The comment being edited no longer exists, so its text was not saved.	సవరిస్తున్న వ్యాఖ్య ఇకపై లేదు, కాబట్టి దాని టెక్స్ట్ సేవ్ చేయబడలేదు.
 	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	అది పని చేయలేదు: అంతర్గత లోపం దాన్ని ఆపివేసింది ({m}). మీ పత్రాలు మారలేదు.
 	Nothing to undo	రద్దు చేయడానికి ఏమీ లేదు
 	Nothing to redo	మళ్లీ చేయడానికి ఏమీ లేదు

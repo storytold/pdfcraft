@@ -12,7 +12,7 @@ use pdfcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
 use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::DocView;
-use crate::comments::{CommentPrefs, CommentTool, SortBy, color32, status_badge};
+use crate::comments::{CommentPrefs, CommentTool, DraftTarget, SortBy, color32, status_badge};
 use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{icons, widgets};
@@ -315,7 +315,15 @@ fn card(
     let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.as_deref());
     let marked = is_marked(thread);
     let replies: Vec<&&Annotation> = thread.iter().filter(|r| r.state.is_none()).collect();
-    let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key);
+    // Only the comment the note was typed for shows it (and can save it), wherever it now is in
+    // `/Annots`; never another that took its index, and none when it can't be told apart.
+    let editing = view
+        .comments
+        .editing
+        .as_ref()
+        .zip(view.comments.editing_target.as_ref())
+        .and_then(|((page, _, _), target)| target.find(info, *page))
+        .is_some_and(|found| (found.page, found.index) == key);
     let fill = if selected { t.hover.gamma_multiply(0.7) } else { Color32::TRANSPARENT };
     let mut open_menu = false;
     let mut more_rect = None;
@@ -371,9 +379,11 @@ fn card(
                             .add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12))
                             .clicked()
                             || submit)
-                            && let Some((page, index, text)) = view.comments.editing.take()
+                            && let Some((_, _, text)) = view.comments.editing.take()
                         {
-                            edit = Some(Edit::SetAnnotationContents { page, index, text });
+                            // This card's own comment, which `editing` matched to the note this
+                            // frame: its index may have changed since the note was opened.
+                            edit = Some(Edit::SetAnnotationContents { page: a.page, index: a.index, text });
                         }
                         if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             view.comments.editing = None;
@@ -466,8 +476,10 @@ fn card(
     ui.painter().hline(rect.x_range().shrink(10.0), rect.bottom() + 2.0, Stroke::new(1.0, t.divider));
     ui.add_space(5.0);
     // The header row selects the card (and shows the comment on the page); unselected cards are
-    // clickable everywhere.
-    let hit = if selected { frame.inner } else { rect };
+    // clickable everywhere — except over the note editor this card shows: the card is created
+    // last, so it would win that click, and egui surrenders a focused editor's keyboard when the
+    // click lands anywhere but on it. The note takes its own clicks to keep it (#3125).
+    let hit = if selected || editing { frame.inner } else { rect };
     let click = ui
         .interact(hit, ui.scope_id().with(("card", key)), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -479,6 +491,7 @@ fn card(
     }
     if click.double_clicked() && allowed {
         view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
+        view.comments.editing_target = Some(DraftTarget::of(a));
     }
     let menu_id = ui.scope_id().with(("card-menu", key));
     if open_menu {
@@ -495,6 +508,7 @@ fn card(
             crate::comments::attachment_items(ui, view, info, a);
             if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
                 view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
+                view.comments.editing_target = Some(DraftTarget::of(a));
                 ui.close();
             }
             ui.menu_button(tl!("Set status"), |ui| {

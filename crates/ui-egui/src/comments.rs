@@ -481,6 +481,41 @@ impl CommentView {
     }
 }
 
+/// Which comment a card's note was typed for: its `/NM`, or, for a comment without one, its type
+/// and rectangle. Tells it from another comment that later takes its place in `/Annots`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DraftTarget {
+    name: Option<String>,
+    subtype: String,
+    rect: [f32; 4],
+}
+
+impl DraftTarget {
+    pub fn of(a: &Annotation) -> Self {
+        Self { name: a.name.clone(), subtype: a.subtype.clone(), rect: a.rect }
+    }
+
+    /// Whether `a` is the comment this was taken from.
+    pub fn is(&self, a: &Annotation) -> bool {
+        match &self.name {
+            Some(name) => a.name.as_ref() == Some(name),
+            // Without `/NM`, a moved or resized comment no longer matches: its note is dropped
+            // rather than risk putting it on another comment.
+            None => a.name.is_none() && a.subtype == self.subtype && a.rect == self.rect,
+        }
+    }
+
+    /// The comment on `page` this was taken from, wherever it now is in `/Annots` (deleting or
+    /// undoing an earlier comment shifts the later ones). Found only when exactly one comment on
+    /// the page matches: none means it is gone, and several can't be told apart, so `None`
+    /// rather than a guess. Never by index: another comment can take the one it had.
+    pub(crate) fn find<'a>(&self, info: &'a DocInfo, page: usize) -> Option<&'a Annotation> {
+        let mut found = info.annotations.iter().filter(|a| a.page == page && self.is(a));
+        let only = found.next()?;
+        found.next().is_none().then_some(only)
+    }
+}
+
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
@@ -497,6 +532,10 @@ pub struct CommentView {
     pub reply: String,
     /// Inline edit of a card's text in the Comments panel: (page, index, text).
     pub editing: Option<(usize, usize, String)>,
+    /// The comment `editing` was opened for. Deleting or undoing a comment shifts the indexes of
+    /// the ones after it, so the note is shown, and saved, only while the comment at its index is
+    /// still this one.
+    pub editing_target: Option<DraftTarget>,
     /// The panel should scroll the selected card into view.
     pub reveal: bool,
     /// The "Add a comment" box at the top of the Comments panel.

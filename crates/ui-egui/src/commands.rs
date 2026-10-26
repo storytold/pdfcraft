@@ -754,10 +754,11 @@ impl PdfCraftApp {
     /// Run a registry command from its shortcut or a menu, which share this path.
     pub(crate) fn dispatch_command(&mut self, ctx: &egui::Context, id: &'static str) {
         let active = self.active_ids();
-        let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
+        let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some() || v.comments.editing.is_some());
         if form_typing {
-            // A form field has the keyboard: let it take this frame's typing (and Escape) first,
-            // so ⌘S saves what's on screen (#166). Runs next frame, for this document only.
+            // A form field or comment card has the keyboard: let it take this frame's typing (and
+            // Escape) first, so ⌘S saves what's on screen (#166). Runs next frame, for this
+            // document only.
             self.deferred_commands.push((id, active.map(|(_, id)| id)));
             ctx.request_repaint();
         } else if id == "file.close" && active.is_none() && crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") {

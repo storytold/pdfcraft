@@ -2657,3 +2657,377 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+// ── A note typed into a comment card is kept by Save, Close and Quit ────────────────────────────
+
+/// A path in a fresh folder for one test's saved file.
+fn saved_path(test: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-comment-drafts-{}-{test}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("saved.pdf")
+}
+
+/// The comments in the PDF written to `path`, read back from the file.
+fn saved_comments(path: &std::path::Path) -> Vec<Annotation> {
+    let bytes = std::fs::read(path).expect("file written");
+    pdfcraft_render::inspect(std::sync::Arc::new(bytes), None).expect("reopens").annotations
+}
+
+fn contents(a: &Annotation) -> &str {
+    a.contents.as_deref().unwrap_or_default()
+}
+
+/// The note being typed into a card in the Comments panel.
+fn draft(h: &Harness<'static, PdfCraftApp>) -> Option<(usize, usize, String)> {
+    h.state().views[0].comments.editing.clone()
+}
+
+/// A key press, to deliver in one frame with other input.
+fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+}
+
+fn save(h: &mut Harness<'static, PdfCraftApp>) -> bool {
+    h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace)
+}
+
+/// Replace the text of the open note, as typing would; the comment it is for stays the same.
+fn set_note(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    let note = h.state_mut().views[0].comments.editing.as_mut().expect("a note is open");
+    note.2 = text.into();
+}
+
+/// Highlight "quick brown" on page 1 with the highlighter, with the Comments panel open (the
+/// note's card is drawn there): its note opens for typing.
+fn highlight_with_open_note() -> Harness<'static, PdfCraftApp> {
+    use pdfcraft_ui_egui::RightPanel;
+    let mut h = harness(|app| {
+        app.set_option("quick", "highlight").unwrap();
+        app.choose_right_panel(Some(RightPanel::Comments));
+    });
+    assert_eq!(h.state().right, Some(RightPanel::Comments), "the card is drawn in the Comments panel");
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(draft(&h), Some((0, 0, String::new())), "the new highlight's note is open for typing");
+    h
+}
+
+#[test]
+fn saving_with_the_keyboard_while_typing_a_note_saves_the_note_once() {
+    let out = saved_path("keyboard-save");
+    let mut h = highlight_with_open_note();
+    h.event(egui::Event::Text("Check this".into()));
+    h.run_steps(2);
+    assert_eq!(draft(&h), Some((0, 0, "Check this".into())), "the card's text box has the keyboard");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    // ⌘S with the card's text box focused, in the same frame as more typing: that typing is saved too.
+    h.input_mut().events.extend([egui::Event::Text(" figure".into()), key(egui::Key::S, egui::Modifiers::COMMAND)]);
+    h.run_steps(4);
+    let saved = saved_comments(&out);
+    assert_eq!(saved.len(), 1, "one highlight, no duplicate");
+    assert_eq!(contents(&saved[0]), "Check this figure", "the note is in the saved file");
+    assert_eq!(draft(&h), None, "the note was written, so its card is done");
+    assert_eq!(contents(&comments(&h)[0]), "Check this figure");
+    assert_eq!(h.state().first_dirty(), None, "nothing is left unsaved");
+    // Saving again writes the same note: it was committed once, not left to commit again.
+    assert!(save(&mut h));
+    let saved = saved_comments(&out);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(contents(&saved[0]), "Check this figure");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn closing_a_saved_document_with_a_typed_note_asks_first() {
+    let out = saved_path("close-asks");
+    let mut h = highlight_with_open_note();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h));
+    h.run_steps(2);
+    assert_eq!(h.state().first_dirty(), None, "saved, and an empty note on an empty comment changes nothing");
+    // A note typed after the save is the only unsaved work.
+    set_note(&mut h, "Not lost");
+    assert_eq!(h.state().first_dirty(), Some(0), "the typed note is unsaved work");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(3);
+    assert!(h.state().close_request.is_some(), "⌘W asks instead of discarding the note");
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(draft(&h), Some((0, 0, "Not lost".into())), "the note is still there to save");
+    // Discarding is the user's explicit choice.
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(false));
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "Don't Save closes the document");
+    assert_eq!(contents(&saved_comments(&out)[0]), "", "and nothing more was written");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn choosing_save_when_closing_saves_the_typed_note() {
+    let out = saved_path("close-save");
+    let mut h = highlight_with_open_note();
+    set_note(&mut h, "Keep me");
+    h.state_mut().request_close_tab(0);
+    assert!(h.state().close_request.is_some(), "unsaved: the user is asked");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(true));
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "closed once saved");
+    let saved = saved_comments(&out);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].subtype, "Highlight");
+    assert_eq!(contents(&saved[0]), "Keep me", "the note was saved with the highlight");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn a_cancelled_note_is_neither_saved_nor_asked_about() {
+    let out = saved_path("cancel");
+    let mut h = highlight_with_open_note();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    set_note(&mut h, "Never mind");
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(draft(&h), None, "Cancel closes the card");
+    assert!(save(&mut h));
+    assert_eq!(contents(&saved_comments(&out)[0]), "", "the cancelled note was not saved");
+    assert_eq!(h.state().first_dirty(), None);
+    h.state_mut().request_close_tab(0);
+    assert!(h.state().close_request.is_none(), "nothing unsaved: no prompt");
+    assert!(h.state().views.is_empty());
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn escape_and_save_in_the_same_frame_discard_the_note() {
+    let out = saved_path("escape-save");
+    let mut h = highlight_with_open_note();
+    h.event(egui::Event::Text("Draft".into()));
+    h.run_steps(2);
+    assert_eq!(draft(&h), Some((0, 0, "Draft".into())));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.input_mut().events.extend([key(egui::Key::Escape, egui::Modifiers::NONE), key(egui::Key::S, egui::Modifiers::COMMAND)]);
+    h.run_steps(4);
+    assert_eq!(draft(&h), None, "Escape closed the card");
+    assert_eq!(contents(&saved_comments(&out)[0]), "", "the cancelled note was not saved");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn a_note_never_lands_on_the_comment_that_took_its_place() {
+    let out = saved_path("shifted");
+    let mut h = highlight_with_open_note();
+    set_note(&mut h, "For the first highlight");
+    // A second highlight, over an area: the note being typed stays with the first.
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(comments(&h).len(), 2);
+    assert_eq!(draft(&h), Some((0, 0, "For the first highlight".into())));
+    // Deleting the first highlight moves the second into its place in /Annots.
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAnnotation { page: 0, index: 0 }));
+    h.run_steps(2);
+    let left = comments(&h);
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].index, 0, "the second highlight now has the first one's index");
+    assert!(h.query_by_label("Cancel").is_none(), "the other highlight's card doesn't show the note (or offer to save it)");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h));
+    let saved = saved_comments(&out);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(contents(&saved[0]), "", "the note did not go onto the other highlight");
+    assert_eq!(draft(&h), None, "the stale note was dropped");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn a_note_left_by_an_undone_highlight_gives_way_to_the_next_highlights_note() {
+    let out = saved_path("next-highlight");
+    let mut h = highlight_with_open_note();
+    set_note(&mut h, "Typed for a highlight that goes");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(comments(&h).is_empty(), "the highlight is gone, its note can't be saved");
+    // The next highlight takes index 0 again; its own note opens instead of the stale one.
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(draft(&h), Some((0, 0, String::new())), "the new highlight's note is open for typing");
+    // And it is this highlight's note: typed text saves onto it.
+    set_note(&mut h, "Its own note");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h));
+    let saved = saved_comments(&out);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(contents(&saved[0]), "Its own note");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn a_note_whose_highlight_was_undone_does_not_block_saving_or_land_elsewhere() {
+    let out = saved_path("undone");
+    let mut h = highlight_with_open_note();
+    set_note(&mut h, "Orphan");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(comments(&h).is_empty(), "the highlight is gone");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h), "Save isn't held up by a note with no comment");
+    assert!(saved_comments(&out).is_empty(), "the note didn't become a comment or land on another");
+    assert_eq!(draft(&h), None, "the note is dropped rather than kept for whatever comment takes its place");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn revert_to_saved_closes_the_open_note_and_restores_the_saved_text() {
+    use pdfcraft_ui_egui::Dialog;
+    let out = saved_path("revert");
+    let mut h = highlight_with_open_note();
+    set_note(&mut h, "Saved note");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h));
+    assert_eq!(contents(&comments(&h)[0]), "Saved note");
+    // Since the save: the comment's text changed, and a note is being typed into its card again.
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetAnnotationContents { page: 0, index: 0, text: "Unsaved change".into() }));
+    let target = pdfcraft_ui_egui::comments::DraftTarget::of(&comments(&h)[0]);
+    let card = &mut h.state_mut().views[0].comments;
+    card.editing = Some((0, 0, "Still typing".into()));
+    card.editing_target = Some(target);
+    h.run_steps(2);
+    assert_eq!(h.state().first_dirty(), Some(0));
+    // File ▸ Revert, confirmed in its dialog.
+    assert!(h.state_mut().execute("file.revert"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Revert));
+    h.get_all_by_label("Revert").last().expect("the button").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(draft(&h), None, "Revert closed the open note");
+    assert_eq!(contents(&comments(&h)[0]), "Saved note", "the comment's text is the saved one again");
+    assert_eq!(h.state().first_dirty(), None, "nothing is left unsaved");
+    // Saving now writes the saved text, not the discarded note.
+    assert!(save(&mut h));
+    assert_eq!(contents(&saved_comments(&out)[0]), "Saved note");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+/// Highlight A (index 0), then B over an area (index 1), whose note opens; type into B's note and
+/// delete A, so B moves to index 0 while its note was opened at index 1.
+fn note_on_a_comment_that_moved() -> Harness<'static, PdfCraftApp> {
+    let mut h = highlight_with_open_note();
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(comments(&h).len(), 2);
+    assert_eq!(draft(&h), Some((0, 1, String::new())), "B's note is open");
+    set_note(&mut h, "For B");
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAnnotation { page: 0, index: 0 }));
+    h.run_steps(2);
+    let left = comments(&h);
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].index, 0, "B now has A's index");
+    h
+}
+
+#[test]
+fn a_note_follows_its_comment_when_an_earlier_one_is_deleted() {
+    let mut h = note_on_a_comment_that_moved();
+    // B's card still shows the note, and the card's own Save (Ctrl+Enter) writes it onto B.
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && n.placeholder() != Some("Add a reply"))
+        .next()
+        .expect("B's card still shows its note")
+        .click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(draft(&h), None, "the card's Save took the note");
+    let left = comments(&h);
+    assert_eq!(left.len(), 1);
+    assert_eq!(contents(&left[0]), "For B", "onto B, at its new index");
+}
+
+#[test]
+fn saving_writes_a_note_onto_its_comment_after_an_earlier_one_is_deleted() {
+    let out = saved_path("moved");
+    let mut h = note_on_a_comment_that_moved();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h));
+    let saved = saved_comments(&out);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(contents(&saved[0]), "For B", "File ▸ Save wrote the note onto B");
+    assert_eq!(draft(&h), None);
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+/// Highlight, type `note` into its note, then undo the highlight: the document is back as it was
+/// opened, so only the note, now without its comment, is unsaved.
+fn note_left_by_an_undone_highlight(note: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = highlight_with_open_note();
+    set_note(&mut h, note);
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(comments(&h).is_empty(), "the highlight is gone");
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "the document is as it was opened");
+    h
+}
+
+#[test]
+fn closing_with_a_typed_note_left_by_an_undone_highlight_asks_and_cancel_lets_redo_recover_it() {
+    let out = saved_path("orphan-cancel");
+    let mut h = note_left_by_an_undone_highlight("Keep me");
+    assert_eq!(h.state().first_dirty(), Some(0), "the typed note is unsaved work (Close, Close all and Quit ask)");
+    h.state_mut().request_close_tab(0);
+    assert!(h.state().close_request.is_some(), "the user is asked before the note is lost");
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, None);
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1, "Cancel keeps the document open");
+    assert_eq!(draft(&h).map(|d| d.2), Some("Keep me".to_string()), "and the note");
+    // Redo brings the highlight back with its /NM: the note is its own again, and saves.
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), 1);
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(save(&mut h));
+    assert_eq!(contents(&saved_comments(&out)[0]), "Keep me", "the recovered note is saved with its highlight");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn choosing_save_for_a_note_left_by_an_undone_highlight_drops_it_and_closes() {
+    let out = saved_path("orphan-save");
+    let mut h = note_left_by_an_undone_highlight("Nowhere to go");
+    h.state_mut().request_close_tab(0);
+    assert!(h.state().close_request.is_some(), "the user is asked");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(true));
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "saved, then closed");
+    assert!(saved_comments(&out).is_empty(), "the note had no comment to go onto, so none was written");
+    let _ = std::fs::remove_dir_all(out.parent().unwrap());
+}
+
+#[test]
+fn choosing_dont_save_for_a_note_left_by_an_undone_highlight_closes() {
+    let mut h = note_left_by_an_undone_highlight("Never mind");
+    h.state_mut().request_close_tab(0);
+    assert!(h.state().close_request.is_some(), "the user is asked");
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(false));
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "Don't Save closes, discarding the note");
+}
+
+#[test]
+fn an_empty_note_left_by_an_undone_highlight_does_not_ask_on_close() {
+    let mut h = note_left_by_an_undone_highlight("");
+    assert_eq!(h.state().first_dirty(), None, "nothing typed: nothing unsaved");
+    h.state_mut().request_close_tab(0);
+    assert!(h.state().close_request.is_none(), "no prompt");
+    assert!(h.state().views.is_empty(), "the tab just closes");
+}

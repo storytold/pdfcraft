@@ -1803,6 +1803,7 @@
 	Downloaded {name}	{name} をダウンロードしました
 	Couldn't download {name}: {e}	{name} をダウンロードできませんでした: {e}
 	Reverted to the last saved version	最後に保存した状態に戻しました
+	The comment being edited no longer exists, so its text was not saved.	編集中の注釈はもう存在しないため、テキストは保存されませんでした。
 	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	内部エラーにより操作を中止しました（{m}）。文書は変更されていません。
 	Nothing to undo	取り消す操作はありません
 	Nothing to redo	やり直す操作はありません
