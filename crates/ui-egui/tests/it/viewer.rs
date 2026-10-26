@@ -2268,3 +2268,123 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// Right-clicking on the page canvas keeps the existing entries ("Copy", "Add a sticky note here",
+/// "Comments panel") and presents the Acrobat-parity page menu entries (Select, Hand, Marquee zoom,
+/// Take a snapshot, Edit a PDF, Add text, Add image…, Rotate view clockwise, Find tools and
+/// commands…, Save, Print…, Document properties…).
+#[test]
+fn page_canvas_context_menu_has_acrobat_parity_options_and_actions() {
+    let mut h = harness();
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // Existing canvas menu entries are preserved.
+    assert!(h.query_all_by_label_contains("Copy").count() >= 1, "Copy in context menu");
+    assert!(h.query_all_by_label("Add a sticky note here").count() >= 1, "Add a sticky note here in context menu");
+    assert!(h.query_all_by_label("Comments panel").count() >= 1, "Comments panel in context menu");
+
+    // Additional page menu entries with standard menu labels and shortcut texts.
+    assert!(h.query_all_by_label_contains("Select").count() >= 1, "Select in context menu");
+    assert!(h.query_all_by_label_contains("Hand").count() >= 1, "Hand in context menu");
+    assert!(h.query_all_by_label("Marquee zoom").count() >= 1, "Marquee zoom in context menu");
+    assert!(h.query_all_by_label("Take a snapshot").count() >= 1, "Take a snapshot in context menu");
+    assert!(h.query_all_by_label("Edit a PDF").count() >= 1, "Edit a PDF in context menu");
+    assert!(h.query_all_by_label("Add text").count() >= 1, "Add text in context menu");
+    assert!(h.query_all_by_label("Add image…").count() >= 1, "Add image… in context menu");
+    assert!(h.query_all_by_label_contains("Rotate view clockwise").count() >= 1, "Rotate view clockwise in context menu");
+    assert!(h.query_all_by_label_contains("Find tools and commands…").count() >= 1, "Find tools and commands… in context menu");
+    assert!(h.query_all_by_label_contains("Save").count() >= 1, "Save in context menu");
+    assert!(h.query_all_by_label_contains("Print…").count() >= 1, "Print… in context menu");
+    assert!(h.query_all_by_label_contains("Document properties…").count() >= 1, "Document properties… in context menu");
+
+    // Click Rotate view clockwise.
+    assert_eq!(h.state().views[i].rotation, 0);
+    h.get_all_by_label_contains("Rotate view clockwise").last().expect("button").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].rotation, 90, "view rotated 90 degrees clockwise");
+
+    // Right-click again to test Take a snapshot.
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_all_by_label("Take a snapshot").last().expect("button").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Snapshot, "snapshot tool selected");
+
+    // Right-click again to test Add text.
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_all_by_label("Add text").last().expect("button").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::AddText, "add text tool selected");
+}
+
+#[test]
+fn page_canvas_context_menu_shows_flatten_comments_when_annotations_exist() {
+    let mut h = harness();
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    let shape = pdfcraft_engine::Shape::Ink { strokes: vec![vec![[10.0, 10.0], [20.0, 20.0]]] };
+    let stroke = pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "tester".into(),
+    });
+    h.state_mut().apply_edit(stroke);
+    h.run_steps(2);
+
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    assert!(h.query_all_by_label("Flatten comments").count() >= 1, "Flatten comments should appear in page context menu when annotations exist");
+}
+
+/// When the interface language is Turkish, the context menu labels match the Turkish catalog.
+#[test]
+fn page_canvas_context_menu_in_turkish() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "tr").unwrap();
+        app.open_bytes("a.pdf", None, fixture(2)).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    assert!(h.query_all_by_label_contains("Kopyala").count() >= 1, "Copy in TR context menu");
+    assert!(h.query_all_by_label("Buraya bir not ekle").count() >= 1, "Add a sticky note here in TR context menu");
+    assert!(h.query_all_by_label("Yorumlar paneli").count() >= 1, "Comments panel in TR context menu");
+
+    assert!(h.query_all_by_label_contains("Seç").count() >= 1, "Select in TR context menu");
+    assert!(h.query_all_by_label_contains("El").count() >= 1, "Hand in TR context menu");
+    assert!(h.query_all_by_label("Seçim yakınlaştırma").count() >= 1, "Marquee zoom in TR context menu");
+    assert!(h.query_all_by_label("Anlık görüntü al").count() >= 1, "Take a snapshot in TR context menu");
+    assert!(h.query_all_by_label("PDF'i düzenle").count() >= 1, "Edit a PDF in TR context menu");
+    assert!(h.query_all_by_label("Metin ekle").count() >= 1, "Add text in TR context menu");
+    assert!(h.query_all_by_label("Resim ekle…").count() >= 1, "Add image… in TR context menu");
+    assert!(h.query_all_by_label_contains("Görünümü saat yönünde döndür").count() >= 1, "Rotate view clockwise in TR context menu");
+    assert!(h.query_all_by_label_contains("Araçları ve komutları bul…").count() >= 1, "Find tools and commands… in TR context menu");
+    assert!(h.query_all_by_label_contains("Kaydet").count() >= 1, "Save in TR context menu");
+    assert!(h.query_all_by_label_contains("Yazdır…").count() >= 1, "Print… in TR context menu");
+    assert!(h.query_all_by_label_contains("Belge özellikleri…").count() >= 1, "Document properties… in TR context menu");
+}

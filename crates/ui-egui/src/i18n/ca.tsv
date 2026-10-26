@@ -1811,7 +1811,9 @@ action wizard	Start	Inicia
 	Security settings	Configuració de seguretat
 	Details	Detalls
 	Select (V)	Selecciona (V)
+	Select	Selecciona
 	Hand (H)	Mà (H)
+	Hand	Mà
 	Delete pages (Delete)	Suprimeix pàgines (Supr)
 	Insert a blank page after the selection	Insereix una pàgina en blanc després de la selecció
 	Insert pages from a file…	Insereix pàgines d'un fitxer…

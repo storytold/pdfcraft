@@ -1866,7 +1866,9 @@ action wizard	Start	Iniciar
 	Security settings	Configuración de seguridad
 	Details	Detalles
 	Select (V)	Seleccionar (V)
+	Select	Seleccionar
 	Hand (H)	Mano (H)
+	Hand	Mano
 	Delete pages (Delete)	Eliminar páginas (Supr)
 	Insert a blank page after the selection	Insertar una página en blanco después de la selección
 	Insert pages from a file…	Insertar páginas desde un archivo…

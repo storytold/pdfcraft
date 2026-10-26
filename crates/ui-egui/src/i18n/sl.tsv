@@ -895,6 +895,7 @@
 	H / Space (hold)	H / preslednica (drži)
 	HTML web page	Spletna stran HTML
 	Hand (H)	Roka (H)
+	Hand	Roka
 	Has JavaScript actions (run in M6)	Vsebuje dejanja JavaScript (izvajajo se v M6)
 	Header and footer	Glava in noga
 	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Celice glave (TH) povedo bralniku, kaj vsebuje posamezen stolpec ali vrstica. Označite celice glave.
@@ -1656,6 +1657,7 @@
 	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Varnostne nastavitve morajo podpornim tehnologijam omogočati branje vsebine („Omogoči dostop do besedila bralnikom zaslona“). Spremenite varnost dokumenta, da to dovolite.
 	Security will be removed when you save	Zaščita bo odstranjena ob shranjevanju
 	Select (V)	Izberi (V)
+	Select	Izberi
 	Select Action:	Izberite dejanje:
 	Select All	Izberi vse
 	Select Icon	Izberite ikono

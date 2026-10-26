@@ -624,6 +624,7 @@ theme	Appearance	Giao diện
 	Greyscale	Thang xám
 	Grid view	Dạng lưới
 	Hand (H)	Bàn tay (H)
+	Hand	Bàn tay
 	Has JavaScript actions (run in M6)	Có các hành động JavaScript (chạy ở M6)
 	Height:	Chiều cao:
 	Hide field highlights	Ẩn tô sáng trường
@@ -1072,6 +1073,7 @@ theme	Appearance	Giao diện
 	Security	Bảo mật
 	Security settings	Cài đặt bảo mật
 	Select (V)	Chọn (V)
+	Select	Chọn
 	Select Action:	Chọn hành động:
 	Select All	Chọn tất cả
 	Select Icon	Chọn biểu tượng

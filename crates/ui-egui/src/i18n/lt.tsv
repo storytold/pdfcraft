@@ -628,6 +628,7 @@
 	Greyscale	Pilki atspalviai
 	Grid view	Tinklelio rodinys
 	Hand (H)	Rankos įrankis (H)
+	Hand	Rankos įrankis
 	Has JavaScript actions (run in M6)	Turi JavaScript veiksmų (bus vykdomi M6 etape)
 	Height:	Aukštis:
 	Hide field highlights	Slėpti laukų paryškinimą
@@ -1082,6 +1083,7 @@
 	Security	Sauga
 	Security settings	Saugos nuostatos
 	Select (V)	Pasirinkti (V)
+	Select	Pasirinkti
 	Select Action:	Pasirinkite veiksmą:
 	Select All	Pažymėti viską
 	Select Icon	Pasirinkti piktogramą
