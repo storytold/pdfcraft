@@ -6,9 +6,16 @@
 //! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
-//! The models read the Western European Latin alphabet (English, German, French, Spanish, Italian,
-//! Portuguese, Dutch, Nordic languages, and other Latin-script languages representable in
-//! WinAnsiEncoding).
+//! The bundled upstream recognition model uses a 96-character alphabet. Accented Western European
+//! text (for example, German `ä ö ü ß` and French `é è ê ë à ç œ`) is supported only when the
+//! installed recognition model was trained with the matching 182-character [`LATIN_ALPHABET`]
+//! (183 output classes including the CTC blank), or a matching custom alphabet sidecar is supplied.
+//! Changing an alphabet mapping alone cannot teach new characters to an existing model.
+//!
+//! The extended alphabet is limited to characters that can be represented by the PDF text layer's
+//! standard Helvetica / WinAnsi encoding. It does not cover every Latin-script language; for
+//! example, Polish `ł`, Turkish `ı`, Vietnamese tone-mark combinations, and Unicode combining marks
+//! require a different alphabet/model and potentially a Unicode-capable PDF text font.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -43,8 +50,11 @@ pub const LATIN_ALPHABET: &str = concat!(
     "¡¢£¥§«¬°±µ¶·»¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿŒœŠšŸŽžƒ"
 );
 
-/// The Western European & Latin languages the extended alphabet can spell (ISO 639-1).
-/// Informational: nothing in this crate enforces it; front ends may list it.
+/// Languages whose common spellings can be represented by [`LATIN_ALPHABET`] (ISO 639-1).
+///
+/// This is capability metadata for a compatible extended recognition model, not a claim that the
+/// bundled 96-character model recognizes every listed language. The model's output-class count
+/// determines which alphabet [`Ocr::load`] selects. Nothing in this crate enforces a language hint.
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("en", "English"),
     ("de", "German"),
@@ -74,10 +84,13 @@ pub enum OcrError {
     /// requires updating the catalogs as well.
     #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
     NoModels,
+    /// A model or OCR configuration file could not be loaded or validated.
     #[error("loading {0}: {1}")]
     Load(String, String),
+    /// The OCR engine rejected the image or failed during recognition.
     #[error("text recognition failed: {0}")]
     Recognize(String),
+    /// The supplied image has zero dimensions or no pixel data.
     #[error("the image is empty")]
     EmptyImage,
 }
@@ -85,7 +98,9 @@ pub enum OcrError {
 /// Where the model files are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
+    /// Path to the text-detection model file.
     pub detection: PathBuf,
+    /// Path to the text-recognition model file.
     pub recognition: PathBuf,
 }
 
@@ -208,17 +223,21 @@ impl Models {
 /// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
+    /// Recognized text for this word.
     pub text: String,
+    /// Bounding rectangle in image pixels as `[left, top, right, bottom]`.
     pub rect: [f32; 4],
 }
 
 /// A recognised line of words, in reading order.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Line {
+    /// Words in reading order within this line.
     pub words: Vec<Word>,
 }
 
 impl Line {
+    /// Join the words in this line with single spaces, preserving their reading order.
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -272,6 +291,8 @@ pub struct Ocr {
 }
 
 impl Ocr {
+    /// Load the detection and recognition models and select an alphabet compatible with the
+    /// recognition model's output-class count or adjacent custom alphabet sidecar.
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
         let detection = load(&models.detection)?;
@@ -354,9 +375,13 @@ impl Ocr {
 /// vectors along its bottom edge (`across`, left → right as read) and its left edge (`up`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedWord {
+    /// Word text to write into the invisible PDF text layer.
     pub text: String,
+    /// Bottom-left origin of the word in PDF user-space coordinates.
     pub origin: [f64; 2],
+    /// Vector from the left to the right side of the word, in PDF user space.
     pub across: [f64; 2],
+    /// Vector from the bottom to the top side of the word, in PDF user space.
     pub up: [f64; 2],
 }
 
@@ -410,6 +435,7 @@ fn ink_extent(text: &str) -> (f64, f64) {
     (if tall { CAP_HEIGHT } else { X_HEIGHT }, if low { -DESCENT } else { 0.0 })
 }
 
+/// Format a finite PDF numeric operand compactly, avoiding scientific notation and negative zero.
 fn num(v: f64) -> String {
     let s = format!("{:.4}", if v.abs() < 1e-9 { 0.0 } else { v });
     let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -473,6 +499,7 @@ mod tests {
     struct ScratchDir(PathBuf);
 
     impl ScratchDir {
+        /// Create a clean temporary directory uniquely named for the current test label.
         fn new(label: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
                 "pdfcraft-ocr-{label}-{}",
@@ -483,17 +510,20 @@ mod tests {
             Self(dir)
         }
 
+        /// Return the scratch directory's path.
         fn path(&self) -> &Path {
             &self.0
         }
     }
 
     impl Drop for ScratchDir {
+        /// Remove the temporary directory when the guard leaves scope.
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
+    /// Create placeholder model files for model-path discovery tests.
     fn write_models(dir: &Path) {
         std::fs::create_dir_all(dir).unwrap();
         for file in [DETECTION_MODEL, RECOGNITION_MODEL] {
@@ -501,6 +531,7 @@ mod tests {
         }
     }
 
+    /// Check that tightly packed grayscale, RGB, and RGBA images are accepted.
     #[test]
     fn image_buffer_validation_accepts_gray_rgb_and_rgba() {
         assert_eq!(validate_image_buffer(6, 3, 2).unwrap(), (6, ImageLayout::Grayscale));
@@ -508,6 +539,7 @@ mod tests {
         assert_eq!(validate_image_buffer(24, 3, 2).unwrap(), (6, ImageLayout::Rgba));
     }
 
+    /// Check that empty, mismatched, and overflowing image buffers are rejected.
     #[test]
     fn image_buffer_validation_rejects_empty_or_malformed_buffers() {
         assert!(matches!(validate_image_buffer(0, 3, 2), Err(OcrError::EmptyImage)));
@@ -516,6 +548,7 @@ mod tests {
         assert!(matches!(validate_image_buffer(usize::MAX, u32::MAX, u32::MAX), Err(OcrError::Recognize(_))));
     }
 
+    /// Verify image-pixel coordinates are mapped correctly into PDF user space.
     #[test]
     fn places_words_through_the_mapping() {
         // 2 pixels per point, page 612 × 792, y flipped.
@@ -529,12 +562,28 @@ mod tests {
         assert_eq!(w.up, [0.0, 20.0]);
     }
 
+    /// Verify all built-in model alphabets are drawable by the PDF text-layer font.
     #[test]
     fn model_alphabets_fit_the_text_layer_font() {
         assert_eq!(pdfcraft_fonts::first_undrawable(ALPHABET), None);
         assert_eq!(pdfcraft_fonts::first_undrawable(LATIN_ALPHABET), None);
+        for sample in [
+            "Münchner Straße",        // German: ü, ß
+            "français déjà vu, cœur", // French: ç, é, à, œ
+            "¡Qué año!",               // Spanish: ¿, ¡, é, ñ
+            "Smørrebrød",              // Danish/Norwegian: ø
+            "Ærø",                     // Nordic: Æ, ø
+            "Þingvellir",              // Icelandic: Þ, þ
+        ] {
+            assert!(
+                sample.chars().all(|ch| LATIN_ALPHABET.contains(ch)),
+                "extended alphabet cannot represent sample {sample:?}"
+            );
+            assert_eq!(pdfcraft_fonts::first_undrawable(sample), None);
+        }
     }
 
+    /// Verify German, French, Spanish, and Nordic text retains valid sizing and WinAnsi encoding.
     #[test]
     fn western_european_words_encode_and_size_accurately() {
         assert_eq!(ink_extent("reçu"), (X_HEIGHT, -DESCENT));
@@ -567,8 +616,22 @@ mod tests {
         assert!(helvetica_width(text, 1.0) > 0.0);
         let literal = pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(text));
         assert!(layer.windows(literal.len()).any(|w| w == &literal[..]));
+
+        // Check a French phrase as well: the invisible PDF text must preserve accented letters
+        // and the œ ligature instead of replacing them with question marks.
+        let french_text = "français déjà vu, cœur";
+        let french_word = PlacedWord {
+            text: french_text.into(),
+            origin: [10.0, 40.0],
+            across: [120.0, 0.0],
+            up: [0.0, 10.0],
+        };
+        let french_layer = text_layer(&[french_word]);
+        let french_literal = pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(french_text));
+        assert!(french_layer.windows(french_literal.len()).any(|w| w == &french_literal[..]));
     }
 
+    /// Verify invisible PDF text is scaled and placed inside its word rectangle.
     #[test]
     fn text_layer_is_invisible_text_fitted_to_each_box() {
         let w = PlacedWord {
@@ -588,6 +651,7 @@ mod tests {
         assert!(s.starts_with("/OCR BMC") && s.ends_with("EMC\n"));
     }
 
+    /// Verify NaN and infinite placements are omitted from generated PDF operators.
     #[test]
     fn invalid_coordinates_are_not_written_to_pdf_content() {
         let invalid = PlacedWord {
@@ -604,6 +668,7 @@ mod tests {
         assert!(layer.ends_with("EMC\n"));
     }
 
+    /// Verify the OCR text layer balances its graphics-state and marked-content operators.
     #[test]
     fn the_layer_restores_the_graphics_state_it_changes() {
         let w = PlacedWord {
@@ -626,6 +691,7 @@ mod tests {
         assert_eq!(depth, 0, "the layer leaves a q open: {s:?}");
     }
 
+    /// Verify measured text height follows capitals, x-height letters, and descenders.
     #[test]
     fn text_height_tracks_caps_x_height_and_descenders() {
         assert_eq!(ink_extent("DT"), (CAP_HEIGHT, 0.0));
@@ -650,6 +716,7 @@ mod tests {
         )), "{s}");
     }
 
+    /// Verify rotated-page mappings preserve the recognized word reading direction.
     #[test]
     fn rotated_pages_keep_the_reading_direction() {
         let to_user = |x: f32, y: f32| [y as f64, x as f64];
@@ -661,6 +728,7 @@ mod tests {
         assert_eq!(w.up, [-10.0, 0.0]);
     }
 
+    /// Verify explicit model directories are searched in priority order.
     #[test]
     fn finds_models_in_known_locations_and_in_directory_order() {
         let scratch = ScratchDir::new("model-discovery");
@@ -685,6 +753,7 @@ mod tests {
         assert_ne!(dirs.first(), Some(&PathBuf::new()));
     }
 
+    /// Verify model discovery matches all documented release package layouts.
     #[test]
     fn finds_models_in_every_release_package_layout() {
         let scratch = ScratchDir::new("package-layouts");
@@ -721,6 +790,7 @@ mod tests {
         }
     }
 
+    /// Verify built-in alphabet lengths, order, and uniqueness match trained output classes.
     #[test]
     fn the_alphabet_is_the_trained_one() {
         let chars: Vec<char> = ALPHABET.chars().collect();
@@ -735,6 +805,7 @@ mod tests {
         assert!(latin_chars.iter().all(|c| seen.insert(*c)), "duplicate character in LATIN_ALPHABET");
     }
 
+    /// Verify output-class counts and custom alphabet files select or reject alphabets correctly.
     #[test]
     fn alphabet_for_follows_the_model_class_count() {
         let scratch = ScratchDir::new("alphabet");
@@ -769,6 +840,7 @@ mod tests {
         assert!(models.alphabet_for(None).is_err(), "sidecar read errors must be reported");
     }
 
+    /// Verify missing-model errors give actionable guidance without build-tool references.
     #[test]
     fn missing_models_message_is_for_end_users() {
         let message = OcrError::NoModels.to_string();
@@ -777,13 +849,15 @@ mod tests {
         assert!(message.contains("PDFCRAFT_MODELS"), "message must name the environment override: {message}");
     }
 
-    /// This end-to-end test runs when the OCR models are installed. In CI, set
-    /// `PDFCRAFT_REQUIRE_OCR_MODELS=1` to fail instead of silently skipping.
+    /// Run an end-to-end OCR smoke test when model assets are installed.
+    ///
+    /// In CI, set `PDFCRAFT_REQUIRE_OCR_MODELS=1` to fail instead of silently skipping. This
+    /// ASCII-only smoke test does not establish an accuracy percentage for accented text.
     #[test]
     fn reads_rendered_text() {
         let Some(models) = Models::find() else {
             let required = std::env::var_os("PDFCRAFT_REQUIRE_OCR_MODELS")
-                .is_some_and(|value| !value.is_empty());
+                .map_or(false, |value| !value.is_empty());
             if required {
                 panic!("OCR models are required for this test but were not found");
             }
