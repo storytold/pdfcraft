@@ -268,6 +268,12 @@ impl PdfCraftApp {
                     v.set_cover(!v.cover);
                 }
             }
+            "view.layout.right_to_left" => {
+                if let Some(i) = active {
+                    let v = &mut self.views[i];
+                    v.set_right_to_left(!v.right_to_left);
+                }
+            }
             "view.fit_width_scrolling" | "view.fit_one_page" => {
                 use crate::canvas::{Fit, PageLayout};
                 // Fit one full page shows a single page on its own; fit width scrolls it.

@@ -469,6 +469,9 @@ pub struct DocView {
     pub snapshot: Option<Snapshot>,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
+    /// Two-page view: pages run right to left across a spread, as in an Arabic, Hebrew or
+    /// Japanese book (View ▸ Page display, or the document's `/ViewerPreferences /Direction /R2L`).
+    pub right_to_left: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
@@ -840,6 +843,7 @@ impl DocView {
             close_requested: false,
             snapshot: None,
             cover: false,
+            right_to_left: false,
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
@@ -1002,6 +1006,7 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        fresh.right_to_left = self.right_to_left;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);
@@ -1814,6 +1819,15 @@ impl DocView {
         }
     }
 
+    /// Set right-to-left page order in two-page view. A no-op unless something changed.
+    pub fn set_right_to_left(&mut self, right_to_left: bool) {
+        if self.right_to_left != right_to_left {
+            self.right_to_left = right_to_left;
+            self.goto = Some((self.current, 0.0));
+            self.reset_coarse_state();
+        }
+    }
+
     /// Whether the cover page setting applies: only two-page view has a cover page.
     pub fn cover_applies(&self) -> bool {
         self.layout == PageLayout::TwoUp
@@ -2445,7 +2459,8 @@ impl DocView {
                 }
             }
             PageLayout::TwoUp => {
-                // With a cover page, the first page sits alone on the right.
+                // With a cover page, the first page sits alone on the right (on the left when
+                // pages run right to left: the side the next page would otherwise take).
                 let rows: Vec<&[pdfcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
                     std::iter::once(&info.pages[..1]).chain(info.pages[1..].chunks(2)).collect()
                 } else {
@@ -2455,10 +2470,25 @@ impl DocView {
                     let sizes: Vec<Vec2> = pair.iter().map(page_size).collect();
                     let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
-                    for size in sizes {
-                        rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + gap;
+                    let lone_cover = self.cover && ri == 0;
+                    if self.right_to_left {
+                        // Lay the row out from its right edge, so the earlier page is on the right.
+                        // Rects stay in page order: hit-testing and scrolling index them by page.
+                        let mut right = if lone_cover {
+                            (content_w / 2.0 - gap / 2.0).max(SIDE + sizes.first().map_or(0.0, |v| v.x))
+                        } else {
+                            ((content_w - row_w) / 2.0).max(SIDE) + row_w
+                        };
+                        for size in sizes {
+                            rects.push(Rect::from_min_size(pos2(right - size.x, y + (row_h - size.y) / 2.0), size));
+                            right -= size.x + gap;
+                        }
+                    } else {
+                        let mut x = if lone_cover { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                        for size in sizes {
+                            rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
+                            x += size.x + gap;
+                        }
                     }
                     y += row_h + gap;
                 }
@@ -2778,12 +2808,15 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     }
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
+    // When a two-page spread runs right to left, the next page is to the left, so ← goes forward.
     let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
-    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    let (next_key, prev_key) =
+        if view.right_to_left && view.layout == PageLayout::TwoUp { (Key::ArrowLeft, Key::ArrowRight) } else { (Key::ArrowRight, Key::ArrowLeft) };
+    if key(next_key) || (key(Key::PageDown) && (command || !scrolls)) {
         view.step_page(true);
     }
-    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    if key(prev_key) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
     }
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
@@ -7761,6 +7794,37 @@ trailer << /Root 1 0 R >>
         (v.layout, v.continuous) = (PageLayout::TwoUp, false);
         v.fit_zoom(&info);
         assert!((v.zoom - windowed).abs() < 1e-4, "in the window, one zoom for the document");
+    }
+
+    /// A book bound on the right (`/Direction /R2L`) puts the earlier page of each spread on the
+    /// right, and a lone cover page on the left; rects stay in page order either way.
+    #[test]
+    fn right_to_left_spreads_put_the_earlier_page_on_the_right() {
+        let page =
+            |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+        let info = DocInfo { pages: vec![page(300.0, 400.0), page(300.0, 400.0), page(300.0, 400.0)], ..Default::default() };
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        (v.layout, v.zoom) = (PageLayout::TwoUp, 1.0);
+        let w = v.content_width(&info, 1200.0);
+        let ltr = v.layout(&info, w, 1.0);
+        assert!(ltr[0].min.x < ltr[1].min.x, "left to right by default");
+        v.set_right_to_left(true);
+        let rtl = v.layout(&info, w, 1.0);
+        assert_eq!(rtl.len(), 3, "one rect per page, in page order");
+        assert!(rtl[0].min.x > rtl[1].max.x, "page 1 is to the right of page 2: {:?} {:?}", rtl[0], rtl[1]);
+        assert!((rtl[0].min.y - rtl[1].min.y).abs() < 1e-3, "one spread, one row");
+        // The spread is the mirror image of the left-to-right one, and the same width.
+        assert!((rtl[0].min.x - ltr[1].min.x).abs() < 1e-3 && (rtl[1].min.x - ltr[0].min.x).abs() < 1e-3, "{rtl:?} vs {ltr:?}");
+        // A lone last page starts its row on the right, as the first page of a spread would.
+        assert!(rtl[2].min.y > rtl[0].max.y && (rtl[2].min.x - ltr[2].min.x).abs() < 1e-3, "a single page stays centred");
+        // With a cover page, the cover sits alone left of centre; pages 2 and 3 share a spread.
+        v.set_cover(true);
+        let covered = v.layout(&info, w, 1.0);
+        assert!(covered[0].max.x <= w / 2.0, "the cover is on the left: {:?} in {w}", covered[0]);
+        assert!(covered[1].min.x > covered[2].max.x && covered[1].min.y > covered[0].max.y, "{covered:?}");
+        // Narrow windows never push a page past the side margin.
+        let narrow = v.layout(&info, 100.0, 1.0);
+        assert!(narrow.iter().all(|r| r.min.x >= SIDE - 1e-3), "{narrow:?}");
     }
 
     #[test]
