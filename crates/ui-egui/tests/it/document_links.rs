@@ -45,6 +45,7 @@ fn fixture() -> Vec<u8> {
     out
 }
 
+/// Build a synthetic fixture with a GoToR link to `file` with `destination`.
 fn remote_fixture(file: &str, destination: &str) -> Vec<u8> {
     // canonicalize() uses a Windows device prefix; a PDF file specification uses the ordinary drive path.
     #[cfg(windows)]
@@ -71,6 +72,7 @@ fn remote_fixture(file: &str, destination: &str) -> Vec<u8> {
     out
 }
 
+/// Build a test harness configured with a remote GoToR fixture.
 fn remote_harness(source_path: Option<String>, file: &str, destination: &str) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -85,6 +87,55 @@ fn remote_harness(source_path: Option<String>, file: &str, destination: &str) ->
     h
 }
 
+/// Build a synthetic fixture containing GoToE links targeting child, parent, and missing documents.
+fn gotoe_fixture() -> Vec<u8> {
+    let inner = linked_pages(2, None);
+    let mut stream_obj = format!("<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Length {} >>\nstream\n", inner.len()).into_bytes();
+    stream_obj.extend_from_slice(&inner);
+    stream_obj.extend_from_slice(b"\nendstream");
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(inner.pdf) 8 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [50 300 250 340] /A << /S /GoToE /T << /R /C /N (inner.pdf) >> /D [1 /Fit] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [50 240 250 280] /A << /S /GoToE /T << /R /P >> /D [0 /Fit] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [50 180 250 220] /A << /S /GoToE /T << /R /C /N (missing.pdf) >> /D [0 /Fit] >> >>".to_vec(),
+        stream_obj,
+        b"<< /Type /Filespec /F (inner.pdf) /UF (inner.pdf) /EF << /F 7 0 R >> >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objects.len() + 1).as_bytes());
+    out
+}
+
+/// Harness configured with the GoToE fixture PDF.
+fn gotoe_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("gotoe.pdf", None, gotoe_fixture()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
+/// Create a multi-page PDF document with optional password protection.
 fn linked_pages(count: usize, password: Option<&str>) -> Vec<u8> {
     use pdfcraft_engine::{Edit, Protection, Session};
     let mut session = Session::new();
@@ -98,6 +149,7 @@ fn linked_pages(count: usize, password: Option<&str>) -> Vec<u8> {
     session.save_bytes(id).unwrap().as_ref().clone()
 }
 
+/// Build default link test harness.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
@@ -112,6 +164,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Simulate pointer click at given coordinates.
 fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.hover_at(at);
     h.run_steps(2);
@@ -127,14 +180,17 @@ fn click_link_at(h: &mut Harness<'static, PdfCraftApp>, y: f32) {
     click_at(h, at);
 }
 
+/// Click the remote link annotation.
 fn click_remote_link(h: &mut Harness<'static, PdfCraftApp>) {
     click_link(h);
 }
 
+/// Click link on page 1.
 fn click_link(h: &mut Harness<'static, PdfCraftApp>) {
     click_link_at(h, 325.0);
 }
 
+/// Click a form field by name.
 fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     let at = {
         let s = h.state();
@@ -177,6 +233,47 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     assert_eq!(h.state().active, Some(1));
     assert_eq!(h.state().views[1].current, 1, "the remote page destination is applied");
     assert_eq!(h.state().last_opened_url, None, "no URL or external launcher is involved");
+}
+
+/// An embedded Go-To link opens the attached child PDF in a new tab and applies its destination.
+#[test]
+fn an_embedded_gotoe_link_opens_in_a_tab_and_applies_its_destination() {
+    let _gpu = gpu();
+    let mut h = gotoe_harness();
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(h.state().active, Some(0));
+
+    // Link 1 (inner.pdf, page 2) is at y = 320.0
+    click_link_at(&mut h, 320.0);
+    support::wait_until(&mut h, "embedded document opens", |app| app.views.len() == 2);
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(h.state().active, Some(1));
+    assert_eq!(h.state().views[1].current, 1, "the embedded page destination is applied");
+    assert_eq!(h.state().last_opened_url, None, "no URL or external launcher is involved");
+}
+
+/// An embedded Go-To link to a parent or missing file opens no tab and notifies the user.
+#[test]
+fn an_embedded_gotoe_link_to_parent_or_missing_file_opens_no_tab() {
+    let _gpu = gpu();
+    let mut h = gotoe_harness();
+    assert_eq!(h.state().views.len(), 1);
+
+    // Link 2 (parent) is at y = 260.0
+    click_link_at(&mut h, 260.0);
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 1, "parent link does not open a tab");
+    assert!(
+        h.state().toast.as_ref().is_some_and(|(msg, _)| msg.contains("navigating to the parent document is not supported")),
+        "toast: {:?}",
+        h.state().toast
+    );
+
+    // Link 3 (missing.pdf) is at y = 200.0
+    click_link_at(&mut h, 200.0);
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 1, "missing link does not open a tab");
+    assert!(h.state().toast.as_ref().is_some_and(|(msg, _)| msg.contains("attached file was not found")), "toast: {:?}", h.state().toast);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

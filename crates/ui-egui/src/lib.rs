@@ -1393,6 +1393,26 @@ impl PdfCraftApp {
         self.open_bytes_with_focus(name, path, bytes, true)
     }
 
+    /// Open a document from memory, make it the active tab, and navigate to the given remote destination.
+    pub fn open_bytes_with_destination(
+        &mut self,
+        name: &str,
+        path: Option<String>,
+        bytes: Vec<u8>,
+        destination: Option<pdfcraft_render::RemoteDestination>,
+    ) -> Result<(), String> {
+        self.startup_superseded = true;
+        let active = self.active;
+        if let Some(r) = self.open_converted(name, &bytes) {
+            if active.is_none() {
+                self.active = active;
+            }
+            return r;
+        }
+        self.try_open_with_destination(name, path, std::sync::Arc::new(bytes), None, true, destination)
+    }
+
+    /// Open a document from memory, optionally activating the newly opened tab.
     fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
         // Images and text files become new, unsaved PDFs (Create a PDF).
         let active = self.active;
@@ -1529,6 +1549,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Try opening a document synchronously, prompting for a password if encrypted.
     fn try_open(
         &mut self,
         name: &str,
@@ -1536,6 +1557,19 @@ impl PdfCraftApp {
         bytes: std::sync::Arc<Vec<u8>>,
         password: Option<&str>,
         activate: bool,
+    ) -> Result<(), String> {
+        self.try_open_with_destination(name, path, bytes, password, activate, None)
+    }
+
+    /// Try opening a document synchronously and apply a destination once admitted.
+    fn try_open_with_destination(
+        &mut self,
+        name: &str,
+        path: Option<String>,
+        bytes: std::sync::Arc<Vec<u8>>,
+        password: Option<&str>,
+        activate: bool,
+        destination: Option<pdfcraft_render::RemoteDestination>,
     ) -> Result<(), String> {
         use pdfcraft_render::OpenError;
         let prepared = match self.session.prepare_open(name, path.clone(), bytes.clone(), password) {
@@ -1555,13 +1589,17 @@ impl PdfCraftApp {
                     activate,
                     recovered: None,
                     then: None,
-                    after_open: None,
+                    after_open: destination,
                 });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
         };
-        self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
+        self.finish_open(name, path, bytes.len(), prepared, activate)?;
+        if let Some(destination) = destination {
+            self.apply_remote_destination(destination);
+        }
+        Ok(())
     }
 
     fn finish_open(
@@ -2038,6 +2076,7 @@ impl PdfCraftApp {
         let _ = path;
     }
 
+    /// Follow a cross-PDF GoToR link action, resolving the target path and requesting consent if absolute.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_remote_link(&mut self, source: DocId, file: String, destination: pdfcraft_render::RemoteDestination) {
         if self.pending_remote_link.is_some() || self.pending_link.is_some() {
@@ -2070,6 +2109,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Schedule opening a verified remote link path in the background worker.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_resolved_remote_link(&mut self, path: std::path::PathBuf, destination: pdfcraft_render::RemoteDestination) {
         let path = path.to_string_lossy().into_owned();
@@ -2102,6 +2142,7 @@ impl PdfCraftApp {
         self.pending_remote_link = None;
     }
 
+    /// Apply a remote destination (page view or named destination) to the most recently opened tab.
     fn apply_remote_destination(&mut self, destination: pdfcraft_render::RemoteDestination) {
         let Some(index) = self.views.len().checked_sub(1) else { return };
         let Some(doc) = self.session.get(self.views[index].id) else { return };
@@ -2116,6 +2157,62 @@ impl PdfCraftApp {
         };
         if let Some(warning) = warning {
             self.notify_tr(warning);
+        }
+    }
+
+    /// Follow an embedded go-to link (ISO 32000-2 §12.6.4.4): open an attached child PDF in a new tab
+    /// at the given destination, or show a notice if the target is un-followable.
+    pub(crate) fn open_embedded_link(
+        &mut self,
+        source: DocId,
+        target: pdfcraft_render::EmbeddedTarget,
+        destination: pdfcraft_render::RemoteDestination,
+    ) {
+        let Some(source_doc) = self.session.get(source) else { return };
+        match target {
+            pdfcraft_render::EmbeddedTarget::Parent => {
+                self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("navigating to the parent document is not supported"))]);
+            }
+            pdfcraft_render::EmbeddedTarget::Name(name) => {
+                let att = source_doc.info.attachments.iter().find(|a| match &a.source {
+                    pdfcraft_render::AttachmentSource::Document { key } => key == &name,
+                    pdfcraft_render::AttachmentSource::Annotation { .. } => false,
+                });
+                let Some(att) = att else {
+                    self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the attached file was not found"))]);
+                    return;
+                };
+                self.open_embedded_attachment(source, att.clone(), destination);
+            }
+            pdfcraft_render::EmbeddedTarget::Annotation { page, index } => {
+                let att = source_doc.info.attachments.iter().find(|a| a.source == pdfcraft_render::AttachmentSource::Annotation { page, index });
+                let Some(att) = att else {
+                    self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the attached file was not found"))]);
+                    return;
+                };
+                self.open_embedded_attachment(source, att.clone(), destination);
+            }
+        }
+    }
+
+    /// Open an embedded attachment as a document in a new tab and navigate to `destination`.
+    fn open_embedded_attachment(&mut self, source: DocId, att: pdfcraft_render::Attachment, destination: pdfcraft_render::RemoteDestination) {
+        let Some(source_doc) = self.session.get(source) else { return };
+        let data = pdfcraft_render::attachment_data(&source_doc.bytes, source_doc.password.as_deref(), &att);
+        match data {
+            Err(e) => {
+                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+            }
+            Ok(bytes) => {
+                if !att.name.to_lowercase().ends_with(".pdf") && !bytes.starts_with(b"%PDF-") {
+                    self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the linked file is not a .pdf file"))]);
+                    return;
+                }
+                let tab_name = crate::files::attachment_file_name(&att.name);
+                if let Err(e) = self.open_bytes_with_destination(&tab_name, None, bytes, Some(destination)) {
+                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+                }
+            }
         }
     }
 

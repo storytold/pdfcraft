@@ -2623,6 +2623,7 @@ fn summary(d: &Document) -> Value {
     })
 }
 
+/// Build detailed document metadata and structure summary for `doc_info`.
 fn info(d: &Document) -> Value {
     let i = &d.info;
     let page1 = |p: usize| p + 1;
@@ -2690,6 +2691,20 @@ fn info(d: &Document) -> Value {
                 pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
                     "action": if *launch { "Launch" } else { "GoToR" },
                     "remote_document": file,
+                    "destination": match destination {
+                        pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
+                        pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
+                        pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
+                    },
+                    "new_window": new_window,
+                }),
+                pdfcraft_render::LinkTarget::EmbeddedGoTo { target, destination, new_window } => json!({
+                    "action": "GoToE",
+                    "target": match target {
+                        pdfcraft_render::EmbeddedTarget::Name(name) => json!({ "relationship": "child", "name": name }),
+                        pdfcraft_render::EmbeddedTarget::Annotation { page, index } => json!({ "relationship": "child", "page": page1(*page), "annotation": index }),
+                        pdfcraft_render::EmbeddedTarget::Parent => json!({ "relationship": "parent" }),
+                    },
                     "destination": match destination {
                         pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
                         pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),

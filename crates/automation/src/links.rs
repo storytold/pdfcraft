@@ -11,11 +11,13 @@ use std::path::Path;
 use crate::comments::parse_color;
 use crate::{Args, Automation, Result, ToolError, failed};
 
+/// Construct an invalid-argument error for link tools.
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
 
 impl Automation {
+    /// Convert an input rectangle in view points to user coordinates.
     fn view_rect(&self, a: &Args, page: usize) -> Result<Option<[f64; 4]>> {
         let Some(v) = a.get("rect") else { return Ok(None) };
         let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
@@ -25,6 +27,7 @@ impl Automation {
         Ok(Some([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64]))
     }
 
+    /// Parse a link destination action from `url` or `to_page`.
     fn link_action(&self, a: &Args) -> Result<Option<LinkAction>> {
         match (a.opt_str("url")?, a.opt_int("to_page")?) {
             (Some(_), Some(_)) => Err(bad("pass url or to_page, not both")),
@@ -40,6 +43,7 @@ impl Automation {
         }
     }
 
+    /// Parse visual style options for a link annotation.
     fn link_style(&self, a: &Args, base: LinkStyle) -> Result<LinkStyle> {
         let mut s = base;
         if let Some(v) = a.opt_bool("visible")? {
@@ -63,6 +67,7 @@ impl Automation {
         Ok(s)
     }
 
+    /// List all link annotations in a document.
     pub(crate) fn link_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let targets: std::collections::HashMap<(usize, usize), &LinkTarget> = doc.info.links.iter().map(|t| ((t.page, t.index), &t.target)).collect();
@@ -99,6 +104,7 @@ impl Automation {
         Ok(json!({ "count": items.len(), "links": items }))
     }
 
+    /// Open a linked PDF referenced by a GoToR or GoToE link action.
     pub(crate) fn link_open(&mut self, a: &Args) -> Result<Value> {
         let page_number = a.int("page")?;
         let index_number = a.int("index")?;
@@ -106,7 +112,7 @@ impl Automation {
             .map_err(|_| bad("page is out of range"))?;
         let index = usize::try_from(index_number.checked_sub(1).filter(|n| *n >= 0).ok_or_else(|| bad("index must be 1 or more"))?)
             .map_err(|_| bad("index is out of range"))?;
-        let (source_path, file, destination, new_window) = {
+        let (source_path, link_target) = {
             let source = self.doc(a)?;
             if page >= source.info.pages.len() {
                 return Err(bad(format!("page {page_number} is out of range: the document has {} pages", source.info.pages.len())));
@@ -117,54 +123,84 @@ impl Automation {
                 .iter()
                 .find(|link| link.page == page && link.index == index)
                 .ok_or_else(|| failed(format!("page {page_number} has no link {index_number} (see link_list)")))?;
-            let LinkTarget::RemoteGoTo { file, destination, new_window, .. } = &link.target else {
-                return Err(bad("the selected link is not a supported local PDF GoToR link"));
-            };
-            (source.path.clone(), file.clone(), destination.clone(), *new_window)
+            (source.path.clone(), link.target.clone())
         };
-        let path = resolve_remote_document_path(source_path.as_deref().map(Path::new), &file).map_err(failed)?;
-        let allow_absolute = a.opt_bool("allow_absolute")?.unwrap_or(false);
-        if remote_document_path_is_absolute(&file) && !allow_absolute {
-            return Err(failed(
-                "this GoToR link names an absolute local path; review the target with link_list and pass allow_absolute: true to open it",
-            ));
-        }
-        let path = self.resolve(&path.to_string_lossy(), false)?;
-        let bytes = read_remote_document(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let id =
-            self.session.open(name, Some(path.to_string_lossy().into_owned()), std::sync::Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
-        let opened = self.session.get(id).ok_or_else(|| failed("the linked document vanished"))?;
-        let (destination_applied, destination_value, warning) = match destination {
-            RemoteDestination::Default => (true, json!({ "kind": "default" }), None),
-            RemoteDestination::Named(name) => {
-                (false, json!({ "kind": "named", "name": name }), Some("The PDF opened, but the named destination was not applied."))
+        match link_target {
+            LinkTarget::RemoteGoTo { file, destination, new_window, .. } => {
+                let path = resolve_remote_document_path(source_path.as_deref().map(Path::new), &file).map_err(failed)?;
+                let allow_absolute = a.opt_bool("allow_absolute")?.unwrap_or(false);
+                if remote_document_path_is_absolute(&file) && !allow_absolute {
+                    return Err(failed(
+                        "this GoToR link names an absolute local path; review the target with link_list and pass allow_absolute: true to open it",
+                    ));
+                }
+                let path = self.resolve(&path.to_string_lossy(), false)?;
+                let bytes = read_remote_document(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let id = self
+                    .session
+                    .open(name, Some(path.to_string_lossy().into_owned()), std::sync::Arc::new(bytes), a.opt_str("password")?)
+                    .map_err(failed)?;
+                let opened = self.session.get(id).ok_or_else(|| failed("the linked document vanished"))?;
+                let (destination_applied, destination_value, warning) = apply_destination_to_opened(&destination, opened.info.pages.len());
+                let mut display_path = path.to_string_lossy().into_owned();
+                if let Some(root) = &self.root
+                    && let Ok(relative) = path.strip_prefix(root)
+                {
+                    display_path = relative.to_string_lossy().into_owned();
+                }
+                Ok(json!({
+                    "document": crate::summary(opened),
+                    "path": display_path,
+                    "destination_applied": destination_applied,
+                    "destination": destination_value,
+                    "warning": warning,
+                    "new_window_hint": new_window,
+                }))
             }
-            RemoteDestination::Page { page, view } if page < opened.info.pages.len() => {
-                (true, json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(view) }), None)
+            LinkTarget::EmbeddedGoTo { target, destination, new_window } => {
+                let (att_name, bytes) = {
+                    let source = self.doc(a)?;
+                    let att = match &target {
+                        pdfcraft_render::EmbeddedTarget::Parent => {
+                            return Err(failed("navigating to the parent document is not supported"));
+                        }
+                        pdfcraft_render::EmbeddedTarget::Name(name) => source.info.attachments.iter().find(|a| match &a.source {
+                            pdfcraft_render::AttachmentSource::Document { key } => key == name,
+                            pdfcraft_render::AttachmentSource::Annotation { .. } => false,
+                        }),
+                        pdfcraft_render::EmbeddedTarget::Annotation { page, index } => source
+                            .info
+                            .attachments
+                            .iter()
+                            .find(|a| a.source == pdfcraft_render::AttachmentSource::Annotation { page: *page, index: *index }),
+                    };
+                    let Some(att) = att else {
+                        return Err(failed("the attached file was not found"));
+                    };
+                    let bytes = pdfcraft_render::attachment_data(&source.bytes, source.password.as_deref(), att).map_err(failed)?;
+                    if !att.name.to_lowercase().ends_with(".pdf") && !bytes.starts_with(b"%PDF-") {
+                        return Err(failed("the linked file is not a .pdf file"));
+                    }
+                    (att.name.clone(), bytes)
+                };
+                let id = self.session.open(att_name.clone(), None, std::sync::Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
+                let opened = self.session.get(id).ok_or_else(|| failed("the linked document vanished"))?;
+                let (destination_applied, destination_value, warning) = apply_destination_to_opened(&destination, opened.info.pages.len());
+                Ok(json!({
+                    "document": crate::summary(opened),
+                    "attachment": att_name,
+                    "destination_applied": destination_applied,
+                    "destination": destination_value,
+                    "warning": warning,
+                    "new_window_hint": new_window,
+                }))
             }
-            RemoteDestination::Page { page, view } => (
-                false,
-                json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(view) }),
-                Some("The PDF opened, but the link's page destination is out of range."),
-            ),
-        };
-        let mut display_path = path.to_string_lossy().into_owned();
-        if let Some(root) = &self.root
-            && let Ok(relative) = path.strip_prefix(root)
-        {
-            display_path = relative.to_string_lossy().into_owned();
+            _ => Err(bad("the selected link is not a supported GoToR or GoToE link")),
         }
-        Ok(json!({
-            "document": crate::summary(opened),
-            "path": display_path,
-            "destination_applied": destination_applied,
-            "destination": destination_value,
-            "warning": warning,
-            "new_window_hint": new_window,
-        }))
     }
 
+    /// Add a new link annotation to a page.
     pub(crate) fn link_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let rect = self.view_rect(a, page)?.ok_or_else(|| bad("link_add needs rect"))?;
@@ -173,6 +209,7 @@ impl Automation {
         self.apply(a, Edit::AddLink { page, rect, action, style })
     }
 
+    /// Resolve a page and link index argument to the internal annotation index and current style.
     fn link_index(&self, a: &Args) -> Result<(usize, usize, LinkStyle)> {
         let page = self.page(a)?;
         let index = a.int("index")?;
@@ -185,6 +222,7 @@ impl Automation {
         Ok((page, l.index, l.style))
     }
 
+    /// Modify an existing link annotation's geometry, destination, or visual styling.
     pub(crate) fn link_edit(&mut self, a: &Args) -> Result<Value> {
         let (page, index, style) = self.link_index(a)?;
         let rect = self.view_rect(a, page)?;
@@ -193,11 +231,13 @@ impl Automation {
         self.apply(a, Edit::SetLink { page, index, rect, action, style: (new_style != style).then_some(new_style) })
     }
 
+    /// Delete a link annotation from a page.
     pub(crate) fn link_delete(&mut self, a: &Args) -> Result<Value> {
         let (page, index, _) = self.link_index(a)?;
         self.apply(a, Edit::DeleteLink { page, index })
     }
 
+    /// Detect web URLs in page text and convert them into link annotations.
     pub(crate) fn links_from_urls(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let found = self.session.find_urls(id);
@@ -210,6 +250,7 @@ impl Automation {
         Ok(out)
     }
 
+    /// Remove link annotations from specified pages or the whole document.
     pub(crate) fn links_remove(&mut self, a: &Args) -> Result<Value> {
         let pages = match a.opt_ints("pages")? {
             Some(_) => Some(self.pages(a, "pages")?),
@@ -225,6 +266,7 @@ impl Automation {
     }
 }
 
+/// Serialize a destination view into a JSON object for link reporting.
 fn dest_view_value(view: DestView) -> Value {
     match view {
         DestView::Top => json!({ "kind": "top" }),
@@ -233,5 +275,23 @@ fn dest_view_value(view: DestView) -> Value {
         DestView::FitH { top } => json!({ "kind": "fit_h", "top": top }),
         DestView::FitV { left } => json!({ "kind": "fit_v", "left": left }),
         DestView::FitR { rect } => json!({ "kind": "fit_r", "rect": rect }),
+    }
+}
+
+/// Apply a remote destination to an opened document, validating page bounds and returning destination status.
+fn apply_destination_to_opened(destination: &RemoteDestination, opened_pages: usize) -> (bool, Value, Option<&'static str>) {
+    match destination {
+        RemoteDestination::Default => (true, json!({ "kind": "default" }), None),
+        RemoteDestination::Named(name) => {
+            (false, json!({ "kind": "named", "name": name }), Some("The PDF opened, but the named destination was not applied."))
+        }
+        RemoteDestination::Page { page, view } if *page < opened_pages => {
+            (true, json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(*view) }), None)
+        }
+        RemoteDestination::Page { page, view } => (
+            false,
+            json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(*view) }),
+            Some("The PDF opened, but the link's page destination is out of range."),
+        ),
     }
 }

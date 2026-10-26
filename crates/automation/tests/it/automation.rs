@@ -64,6 +64,39 @@ fn remote_link_pdf(file: &str, destination: Option<&str>) -> Vec<u8> {
     bytes
 }
 
+/// Create a synthetic PDF containing embedded PDF attachments and GoToE link actions for testing.
+fn gotoe_fixture_pdf() -> Vec<u8> {
+    let inner = fixture(2);
+    let mut stream_obj = format!("<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Length {} >>\nstream\n", inner.len()).into_bytes();
+    stream_obj.extend_from_slice(&inner);
+    stream_obj.extend_from_slice(b"\nendstream");
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(inner.pdf) 8 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 80 30] /A << /S /GoToE /T << /R /C /N (inner.pdf) >> /D [1 /Fit] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [10 40 80 60] /A << /S /GoToE /T << /R /P >> /D [0 /Fit] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [10 70 80 90] /A << /S /GoToE /T << /R /C /N (missing.pdf) >> /D [0 /Fit] >> >>".to_vec(),
+        stream_obj,
+        b"<< /Type /Filespec /F (inner.pdf) /UF (inner.pdf) /EF << /F 7 0 R >> >>".to_vec(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn saving_a_pdf_keeps_the_destinations_extended_attributes() {
@@ -5230,6 +5263,7 @@ fn a_launch_link_to_a_pdf_opens_it_like_a_remote_link() {
     assert_eq!(a.session().docs().len(), before, "nothing was opened or launched");
 }
 
+/// Test that `link_open` refuses non-regular files and non-PDF targets.
 #[test]
 fn local_gotor_link_open_refuses_directories_devices_and_non_pdf_targets() {
     let (_base, root) = sandbox("gotor-not-a-file");
@@ -5258,6 +5292,7 @@ fn local_gotor_link_open_refuses_directories_devices_and_non_pdf_targets() {
     }
 }
 
+/// Test that local GoToR `link_open` applies destinations, honors root confinement, and respects passwords.
 #[test]
 fn local_gotor_link_open_applies_destinations_and_honors_root() {
     let (base, root) = sandbox("gotor-open");
@@ -5334,8 +5369,41 @@ fn local_gotor_link_open_applies_destinations_and_honors_root() {
     let missing_source = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     ok(&mut a, "link_add", json!({ "doc": missing_source, "page": 1, "rect": [20, 30, 80, 50], "url": "https://example.org" }));
     assert!(
-        matches!(err(&mut a, "link_open", json!({ "doc": missing_source, "page": 1, "index": 1 })), ToolError::InvalidArgs(m) if m.contains("not a supported local PDF GoToR"))
+        matches!(err(&mut a, "link_open", json!({ "doc": missing_source, "page": 1, "index": 1 })), ToolError::InvalidArgs(m) if m.contains("not a supported"))
     );
+}
+
+/// Test that headless `link_open` opens attached child PDFs and applies destination views (#4529).
+#[test]
+fn embedded_gotoe_link_open_applies_destinations() {
+    let (_base, root) = sandbox("gotoe-open");
+    std::fs::write(root.join("gotoe.pdf"), gotoe_fixture_pdf()).unwrap();
+
+    let mut a = auto(&root);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "gotoe.pdf" }))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "link_list", json!({ "doc": doc }));
+    assert_eq!(listed["links"].as_array().unwrap().len(), 3);
+    assert_eq!(listed["links"][0]["other"], "GoToE");
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["links"][0]["target"]["action"], "GoToE");
+    assert_eq!(info["links"][0]["target"]["target"]["relationship"], "child");
+    assert_eq!(info["links"][0]["target"]["target"]["name"], "inner.pdf");
+
+    // Link 1: opens inner.pdf at page 2
+    let opened = ok(&mut a, "link_open", json!({ "doc": doc, "page": 1, "index": 1 }));
+    assert_eq!(opened["attachment"], "inner.pdf");
+    assert_eq!(opened["destination_applied"], true);
+    assert_eq!(opened["destination"]["page"], 2);
+    assert_eq!(opened["destination"]["view"]["kind"], "fit");
+    assert_eq!(opened["document"]["pages"], 2);
+
+    // Link 2: parent document -> error
+    let err_parent = err(&mut a, "link_open", json!({ "doc": doc, "page": 1, "index": 2 }));
+    assert!(matches!(err_parent, ToolError::Failed(msg) if msg.contains("parent document is not supported")));
+
+    // Link 3: missing attachment -> error
+    let err_missing = err(&mut a, "link_open", json!({ "doc": doc, "page": 1, "index": 3 }));
+    assert!(matches!(err_missing, ToolError::Failed(msg) if msg.contains("attached file was not found")));
 }
 
 /// doc_info reports annotation and link rectangles in the tools' displayed-page convention,
