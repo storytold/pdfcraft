@@ -185,10 +185,11 @@ impl PdfCraftApp {
         if let Some(zoom) = v["organize_zoom"].as_f64().map(|z| z as f32).filter(|z| z.is_finite()) {
             self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
         }
-        if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
+        if let Ok(mut r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Entries whose files are gone leave once the window is up: asking here could block
             // startup on a mount that has stopped answering (#5682).
             self.recent_check.restored(r.iter().map(|f| f.path.clone()).collect());
+            r.sort_by_key(|f| !f.pinned);
             self.recent = r;
         }
         // Nonsense keeps the limit it had; settings from before the limit have none.

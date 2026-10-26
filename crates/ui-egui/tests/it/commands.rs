@@ -321,7 +321,7 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
-            app.recent.push(pdfcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0 });
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0, pinned: false });
             app
         }
     });
@@ -351,8 +351,9 @@ fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
     );
 }
 
+/// Build a synthetic unpinned `RecentFile` entry for menu and command tests.
 fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
-    pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 }
+    pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0, pinned: false }
 }
 
 /// Check that Clear Recent Files empties the list and disables Open Recent.

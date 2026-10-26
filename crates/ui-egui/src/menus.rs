@@ -752,7 +752,9 @@ mod tests {
     #[test]
     fn recent_files_and_open_documents_are_listed_once_each() {
         let (mut app, ctx) = app(&["a.pdf", "b.pdf"]);
-        app.recent = ["one.pdf", "two.pdf"].map(|n| crate::RecentFile { name: n.into(), path: format!("/nowhere/{n}"), pages: 1, size: 0 }).into();
+        app.recent = ["one.pdf", "two.pdf"]
+            .map(|n| crate::RecentFile { name: n.into(), path: format!("/nowhere/{n}"), pages: 1, size: 0, pinned: false })
+            .into();
         let bar = linux(&app, &ctx);
         for (i, name) in ["one.pdf", "two.pdf"].into_iter().enumerate() {
             assert_eq!(item(&bar, &CommandRef::with_params("file.open_recent", serde_json::json!({ "index": i }))).label, name);
