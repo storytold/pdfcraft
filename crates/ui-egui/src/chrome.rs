@@ -151,6 +151,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     data.insert_temp(id, state);
                     changed
                 });
+                // Mirrored, the tabs' reading start is the scroll area's far end: the strip goes
+                // there once when it starts to scroll, and the active tab is brought back in view.
+                let start_id = scroll_id.with("reading_start");
+                let (start, started) = mirrored_start(mirrored, max_offset, ui.data(|d| d.get_temp::<bool>(start_id)).unwrap_or(false));
+                ui.data_mut(|d| d.insert_temp(start_id, started));
+                let changed = changed || start.is_some();
                 let mut action = None;
                 let mut close = None;
                 // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
@@ -158,7 +164,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let show_tabs = |ui: &mut egui::Ui| {
                     ui.style_mut().always_scroll_the_only_direction = true;
                     let mut area = egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]);
-                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
+                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))).or(start) {
                         area = area.horizontal_scroll_offset(x);
                     }
                     let out = area.show(ui, |ui| {
@@ -269,6 +275,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
                     ui.data_mut(|d| d.insert_temp(scroll_id, (out.state.clamped_offset().x, max)));
+                    // The strip just started to scroll: the next frame takes it to its reading start.
+                    if mirrored_start(mirrored, max, started).0.is_some() {
+                        ui.ctx().request_repaint();
+                    }
                     // A tab dragged to either edge of a strip that scrolls brings the hidden tabs in.
                     if let Some(x) = drag_x
                         && max > 0.0
@@ -445,6 +455,16 @@ fn reading_order(slots: &[(usize, Rect)], mirrored: bool) -> Vec<(usize, Rect)> 
         return slots.to_vec();
     }
     slots.iter().rev().map(|(i, r)| (*i, Rect::from_x_y_ranges(-r.right()..=-r.left(), r.y_range()))).collect()
+}
+
+/// Where a mirrored strip that has just started to scroll goes (`max_offset`, the far end of a
+/// scroll area that runs left to right, is where its tabs start to read), and whether it has gone
+/// there. Once only, so the user's own scrolling stands; a strip that stops scrolling starts again.
+fn mirrored_start(mirrored: bool, max_offset: f32, started: bool) -> (Option<f32>, bool) {
+    if !mirrored || max_offset.is_nan() || max_offset <= 0.5 {
+        return (None, false);
+    }
+    if started { (None, true) } else { (Some(max_offset), true) }
 }
 
 /// How wide tabs of `natural` widths, each at most `cap`, are laid out `gap` apart.
@@ -978,6 +998,19 @@ mod tab_widths {
         // Unmirrored, nothing changes.
         assert_eq!(reading_order(&three_slots(), false), three_slots());
         assert!(reading_order(&[], true).is_empty());
+    }
+
+    /// A mirrored strip goes to its reading start (the far end) once when it starts to scroll,
+    /// then leaves the offset to the user until it no longer scrolls.
+    #[test]
+    fn a_mirrored_strip_starts_at_its_reading_start_once() {
+        use super::mirrored_start;
+        assert_eq!(mirrored_start(true, 0.0, false), (None, false), "nothing to scroll");
+        assert_eq!(mirrored_start(true, 240.0, false), (Some(240.0), true), "it just started to scroll");
+        assert_eq!(mirrored_start(true, 240.0, true), (None, true), "once only");
+        assert_eq!(mirrored_start(true, 0.0, true), (None, false), "it stopped scrolling: next time starts again");
+        assert_eq!(mirrored_start(false, 240.0, false), (None, false), "unmirrored, the start is offset 0");
+        assert_eq!(mirrored_start(true, f32::NAN, false), (None, false));
     }
 
     #[test]

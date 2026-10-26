@@ -756,6 +756,42 @@ fn dragging_a_tab_in_the_mirrored_title_bar_follows_its_reading_order() {
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[2], ids[1], ids[0]]);
 }
 
+/// A mirrored strip that starts to scroll (here Home shows and the window narrows) shows its
+/// reading start: the first tab beside Home, as the unmirrored strip does at its left end. It goes
+/// there once, so a step the user scrolls stands.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mirrored_strip_that_starts_to_scroll_shows_the_first_tab_beside_home() {
+    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
+    h.state_mut().active = None;
+    h.run_steps(4);
+    assert!(h.query_by_label("Scroll tabs left").is_none(), "wide, the tabs don't scroll yet");
+    h.set_size(egui::vec2(700.0, 600.0));
+    h.run_steps(6);
+    let home = h.get_by_label("Home").rect();
+    let first = h.get_by_label("first.pdf").rect();
+    assert!(first.right() <= home.left() && first.right() >= home.left() - 50.0, "first.pdf {first:?} beside Home {home:?}");
+    h.get_by_label("Scroll tabs left").click();
+    h.run_steps(6);
+    let scrolled = h.get_by_label("first.pdf").rect();
+    assert!(scrolled.left() > first.left() + 1.0, "the step stands: {first:?} -> {scrolled:?}");
+}
+
+/// Going to the reading start never hides the active tab: a document shown while the strip starts
+/// to scroll stays in view.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mirrored_strip_that_starts_to_scroll_keeps_the_active_tab_in_view() {
+    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
+    h.run_steps(4);
+    assert_eq!(h.state().active, Some(3));
+    h.set_size(egui::vec2(700.0, 600.0));
+    h.run_steps(6);
+    let (home, open) = (h.get_by_label("Home").rect(), h.get_by_label("Open").rect());
+    let last = h.get_by_label("last.pdf").rect();
+    assert!(last.left() >= open.right() && last.right() <= home.left(), "last.pdf {last:?} between Open {open:?} and Home {home:?}");
+}
+
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
