@@ -1511,10 +1511,28 @@ fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
     }
     assert!(n > 3, "→ scrolled across page 1 before turning ({n} presses)");
     assert_eq!(h.state().views[0].current, 1);
-    // ← scrolls back on page 2, ⌘→ turns at once.
-    let (page, _) = press(&mut h, Modifiers::NONE, Key::ArrowLeft);
-    assert_eq!(page, 1, "← scrolls back rather than turning");
-    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 2, "⌘→ turns the page at once");
+    // Page 2 starts at its left edge, as reading on across: → scrolls it rather than turning
+    // again at once.
+    let shown = |h: &Harness<'static, PdfCraftApp>, page: usize| {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(page).expect("on screen"), v.viewport_rect())
+    };
+    let (r, view) = shown(&h, 1);
+    assert!(r.left() >= view.left() && r.right() > view.right(), "page 2 from its left edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowRight).0, 1, "→ scrolls page 2 from its left edge");
+    // ← goes back to that edge and turns back: page 1 comes at its right edge, so the next ← scrolls it.
+    let mut n = 1;
+    while press(&mut h, Modifiers::NONE, Key::ArrowLeft).0 == 1 {
+        n += 1;
+        assert!(n < 50, "← never turned back from page 2");
+    }
+    assert_eq!(h.state().views[0].current, 0);
+    let (r, view) = shown(&h, 0);
+    assert!(r.right() <= view.right() && r.left() < view.left(), "page 1 from its right edge: {r:?} in {view:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowLeft).0, 0, "← scrolls page 1 from its right edge");
+    // ⌘→ turns at once.
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 1, "⌘→ turns the page at once");
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowRight).0, 2);
     // A page that fits across: → turns pages as before.
     h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
     h.run_steps(6);

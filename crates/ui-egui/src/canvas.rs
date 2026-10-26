@@ -492,6 +492,10 @@ pub struct DocView {
     pub forward: Vec<usize>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
+    /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
+    /// starts at the edge the reader comes from (`false`: its left, after →; `true`: its right,
+    /// after ←) instead of keeping the column.
+    pub(crate) goto_side: Option<bool>,
     /// Pending position within that page from a destination ([`Self::go_to_dest`]): the point
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
     /// from the viewport's top-left corner.
@@ -934,6 +938,7 @@ impl DocView {
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
+            goto_side: None,
             goto_point: None,
             key_scroll: 0.0,
             key_side: 0.0,
@@ -2481,6 +2486,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
         scroll = scroll.scroll_offset(anchored_scroll(point, rel, vec2(content_w, content_h), avail.size()));
     } else if let Some((page, frac)) = view.goto.take() {
+        let side = view.goto_side.take();
         let page = page.min(rects.len() - 1);
         let r = rects[page];
         // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - page_gap()
@@ -2496,7 +2502,27 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         // quick-action bar as the layout does.
         let (x, w) = (view.last_scroll.x, avail.width());
         let (left, right) = (r.left() - SIDE, r.right() + SIDE);
-        let target = if right - left <= w { if left >= x && right <= x + w { x } else { r.center().x - w / 2.0 } } else { x.clamp(left, right - w) };
+        // Turned by → / ← at an edge (`goto_side`): a page or spread wider than the window starts at
+        // the edge the reader comes from.
+        let row = shown_row(view).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
+        let (row_left, row_right) = (row.left() - SIDE, row.right() + SIDE);
+        let target = match side {
+            Some(from_right) if row_right - row_left > w => {
+                if from_right {
+                    row_right - w
+                } else {
+                    row_left
+                }
+            }
+            _ if right - left <= w => {
+                if left >= x && right <= x + w {
+                    x
+                } else {
+                    r.center().x - w / 2.0
+                }
+            }
+            _ => x.clamp(left, right - w),
+        };
         if (target - x).abs() > 0.5 {
             scroll = scroll.horizontal_scroll_offset(target.clamp(0.0, (content_w - w).max(0.0)));
         }
