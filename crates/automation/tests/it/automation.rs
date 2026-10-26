@@ -9481,6 +9481,25 @@ fn image_pages_go_on_a_chosen_paper_size_through_every_create_tool() {
     }
     assert!(!dir.join("refused.pdf").exists(), "a refused page_size leaves no file behind");
     assert!(!dir.join("refused").exists(), "nor a folder");
+
+    // page_size lays out images and nothing else. A PDF source is returned as it is and a .txt
+    // goes through create_from_text, so neither takes the sheet: #3273 asked for photos to stop
+    // dictating the page, not for every source to be re-sized. Covering it because the engine
+    // passes `page` only to the image arm of `convert_to_pdf_with`, which is easy to widen by
+    // accident later (@FredApps named this as the part he read but did not run).
+    std::fs::write(dir.join("notes.txt"), "Some notes").unwrap();
+    let mixed = ok(&mut a, "doc_create_multiple", json!({ "paths": ["a.pdf", "notes.txt", shots[0]], "page_size": "A4", "out": "mixed.pdf" }));
+    assert!(mixed["bytes"].as_u64().unwrap_or(0) > 0, "the mixed run produced a file: {mixed}");
+    let doc_mixed = ok(&mut a, "doc_open", json!({ "path": "mixed.pdf" }))["doc"].as_u64().unwrap();
+    let pages = ok(&mut a, "doc_info", json!({ "doc": doc_mixed }))["pages"].as_array().cloned().unwrap_or_default();
+    let a_pdf = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let kept = size(&mut a, a_pdf, 0);
+    assert!(!close(kept, A4) && !close(kept, (A4.1, A4.0)), "the fixture is not A4 already, or this test proves nothing: {kept:?}");
+    assert!(close(size(&mut a, doc_mixed, 0), kept), "the PDF's first page keeps its own size: {:?}", size(&mut a, doc_mixed, 0));
+    let last = pages.len() - 1;
+    let image_page = size(&mut a, doc_mixed, last);
+    assert!(close(image_page, A4) || close(image_page, (A4.1, A4.0)), "the image page did go on the sheet: {image_page:?}");
+    assert!(pages.len() > 2, "all three sources contributed pages: {}", pages.len());
 }
 
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
