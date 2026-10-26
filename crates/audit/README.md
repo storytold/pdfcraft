@@ -8,7 +8,7 @@ let findings: Vec<Finding> = audit_redactions(&doc)?;  // page, kind, rect, cove
 
 It reports two kinds of finding:
 
-- **faux redaction**: an opaque filled rectangle painted *after* text it overlaps, dark enough
+- **faux redaction**: an opaque filled rectangle or image painted *after* text it overlaps, dark enough
   against the text's colour (WCAG contrast below 3) to hide it, while the text is still
   extractable underneath; opaque filled Square annotations count as covers too;
 - **unapplied mark**: a Redact annotation that was marked but never applied.
@@ -23,7 +23,7 @@ holds no word, so a redaction box over it alone does not count.
 
 Limits, by design and documented rather than hidden:
 
-- only filled rectangles count as covers, drawn with `re` or as a single `m`/`l` subpath whose
+- Filled path covers use `re` or a single `m`/`l` subpath whose
   corners form an axis-aligned rectangle (not other paths, shadings or patterns), and a
   translucent one (`/ca` below 1) is not flagged;
 - covers inside form XObjects are found, but only text drawn directly in the page content is
@@ -31,6 +31,25 @@ Limits, by design and documented rather than hidden:
 - annotation rectangles are compared in unrotated user space, so `/Rotate` pages may misalign;
 - a cover that hides less than half of every word it touches, less than 40% of a line's box and
   less than 40% of its words (a sliver of a long value) is not flagged.
+
+Image XObjects, stencil image masks and inline images are checked sample by sample. DeviceGray,
+DeviceRGB and DeviceCMYK at 1/2/4/8/16 bits, Decode arrays and strict lossless stream filters are
+supported. Stencils use the current fill colour and their Decode polarity; unpainted bits do not
+cover text. Same-size DeviceGray soft masks contribute only fully opaque samples. Image coverage
+uses actual transformed polygons, including reflection, rotation and shear, intersected with
+convex path clips and form BBoxes. Paint order is checked for each text run, including runs
+joined into one line. These additions do not change path-fill detection (#3155) or add Type 3
+covers.
+
+Unsupported image codecs/colour spaces (including Default colour-space overrides), explicit image masks, interpolation, complex clips,
+optional content, transparency groups, graphics-state soft masks/blend/overprint/transfer effects and
+soft masks requiring resampling or matte removal return an **incomplete audit error**. Reordered
+text whose operators straddle an image also errors when run order cannot be established. Pages
+combining images with form text also error: the text extractor does not audit form text. A page
+is limited to one million decoded image/mask pixels, 100,000 coverage vertices and a coordinate
+range of ±1 billion points, in addition to the shared page decode and comparison budgets;
+exceeding a bound errors. Translucent samples
+follow the existing audit policy for translucent fills and are not flagged.
 
 It fails closed: an undecodable content stream, malformed `/Annots`, form XObjects nested deeper
 than 32 or in a cycle, a walk past the operator bound, more than 50 million cover-against-word

@@ -81,9 +81,9 @@ pub struct TextLine {
     /// so which way its glyphs advance is unknown. The line is listed as horizontal text.
     unreadable_mode: Option<String>,
     /// The runs the line joins, in content order: each one's text, the end of its words in
-    /// `ink`, and whether joining put a space before it. Empty when the line's text was put
+    /// `ink`, whether joining put a space before it, and its showing operator. Empty when the line's text was put
     /// into another order (see [`TextLine::runs`]).
-    runs: Vec<(String, usize, bool)>,
+    runs: Vec<(String, usize, bool, usize)>,
 }
 
 impl TextLine {
@@ -612,11 +612,27 @@ impl TextLine {
     /// visual-order Indic text): then only the line's text as a whole says what it reads.
     pub fn runs(&self) -> impl Iterator<Item = (&str, &[[f64; 4]], bool)> {
         let mut start = 0;
-        self.runs.iter().map(move |(text, end, spaced)| {
+        self.runs.iter().map(move |(text, end, spaced, _)| {
             let ink = self.ink.get(start..*end).unwrap_or_default();
             start = *end;
             (text.as_str(), ink, *spaced)
         })
+    }
+
+    /// Word boxes grouped by their text-showing operator, with its paint position. Empty for
+    /// lines reordered for reading, whose runs no longer map to the reordered words.
+    pub fn painted_word_runs(&self) -> impl Iterator<Item = ((usize, usize), &[[f64; 4]])> {
+        let mut start = 0;
+        self.runs.iter().map(move |(_, end, _, op)| {
+            let ink = self.ink.get(start..*end).unwrap_or_default();
+            start = *end;
+            ((self.stream, *op), ink)
+        })
+    }
+
+    /// Paint position of the last text-showing operator contributing to the line.
+    pub fn last_paint_pos(&self) -> (usize, usize) {
+        (self.stream, self.ops.iter().max().copied().unwrap_or(0))
     }
 
     fn rotation(&self) -> f64 {
@@ -1521,7 +1537,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
             l.frame = union(l.frame, s.frame);
             l.ink.extend(s.ink.iter().copied());
-            l.runs.push((s.text.clone(), l.ink.len(), spaced));
+            l.runs.push((s.text.clone(), l.ink.len(), spaced, s.op));
             l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
             l.decodable &= s.decodable;
@@ -1554,7 +1570,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
-                runs: vec![(s.text.clone(), s.ink.len(), false)],
+                runs: vec![(s.text.clone(), s.ink.len(), false, s.op)],
                 ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
                 origin: Origin {
                     tm: s.tm.0,
@@ -1636,7 +1652,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
         l.frame = union(l.frame, s.frame);
         l.ink.extend(s.ink.iter().copied());
-        l.runs.push((s.text.clone(), l.ink.len(), spaced));
+        l.runs.push((s.text.clone(), l.ink.len(), spaced, s.op));
         l.ops.push(s.op);
         l.ops.extend(s.extra_ops.iter().copied());
         l.decodable &= s.decodable;
@@ -1668,7 +1684,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
-            runs: vec![(s.text.clone(), s.ink.len(), false)],
+            runs: vec![(s.text.clone(), s.ink.len(), false, s.op)],
             ops: std::iter::once(s.op).chain(s.extra_ops.iter().copied()).collect(),
             origin: Origin {
                 tm: s.tm.0,

@@ -820,3 +820,288 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
 }
+
+const IMAGE_TEXT: &[u8] = b"BT /F1 24 Tf 72 700 Td (Hello secret world) Tj ET\n";
+const IMAGE_DRAW: &[u8] = b"q 72 0 0 28 130 692 cm /Im Do Q\n";
+
+/// Build a synthetic Letter page with text, an image XObject, reusable graphics states and
+/// optional extra streams for forms or soft masks, using stable object numbers.
+fn image_page(content: &[u8], image: &[u8], image_dict: &str, extras: &[(&[u8], &str)]) -> Vec<u8> {
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im 6 0 R /Fm 7 0 R >> /ExtGState << /Half << /ca 0.5 >> /Empty << /ca 0 >> /Other << /CA 0.5 >> /Soft << /SMask << /S /Alpha >> >> /Normal << /SMask /None /BM /Normal >> /Screen << /BM /Screen >> /Over << /op true >> /NoOver << /op false >> >> >> >>");
+    b.add_stream(content);
+    b.add(FONT);
+    b.add_stream_with(image, &format!("/Type /XObject /Subtype /Image {image_dict}"));
+    for &(data, dict) in extras {
+        b.add_stream_with(data, dict);
+    }
+    b.build()
+}
+/// Build an image-audit page whose image is one 8-bit DeviceGray sample.
+fn gray_image(content: &[u8], sample: u8) -> Vec<u8> {
+    image_page(content, &[sample], "/Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray", &[])
+}
+/// Concatenate content fragments without inserting separators; callers supply token boundaries.
+fn joined(parts: &[&[u8]]) -> Vec<u8> {
+    parts.concat()
+}
+
+/// Image XObjects, stencil masks and inline images from #3117 are reported as covers while
+/// the hidden text remains extractable, with the expected user-space cover rectangle.
+#[test]
+fn image_covers_from_issue_3117_are_found() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    for bytes in [
+        gray_image(&content, 0),
+        image_page(&content, &[0], "/Width 1 /Height 1 /ImageMask true /BitsPerComponent 1", &[]),
+        one_page(&joined(&[IMAGE_TEXT, b"q 72 0 0 28 130 692 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q"]), ""),
+    ] {
+        let doc = open(bytes);
+        assert!(pdfcraft_edit::text_lines(&doc, 0).unwrap().iter().any(|l| l.text.contains("secret")));
+        let f = audit_redactions(&doc).unwrap();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].covered_text.contains("secret"));
+        assert_eq!(f[0].rect, [130.0, 692.0, 202.0, 720.0]);
+    }
+}
+/// Images behind text, high-contrast white samples and unpainted stencil bits are not covers.
+#[test]
+fn image_backgrounds_white_samples_and_empty_stencils_are_not_covers() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    for bytes in [
+        gray_image(&joined(&[IMAGE_DRAW, IMAGE_TEXT]), 0),
+        gray_image(&content, 255),
+        image_page(&content, &[255], "/Width 1 /Height 1 /ImageMask true /BitsPerComponent 1", &[]),
+    ] {
+        assert!(audit_redactions(&open(bytes)).unwrap().is_empty());
+    }
+}
+/// Stencil Decode polarity selects painted bits and the current fill determines contrast;
+/// ordinary image samples retain their own colour regardless of the current fill.
+#[test]
+fn image_stencil_decode_and_fill_are_respected() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    for (sample, decode, expected) in [(0, "[0 1]", 1), (255, "[0 1]", 0), (0, "[1 0]", 0), (255, "[1 0]", 1)] {
+        let bytes = image_page(&content, &[sample], &format!("/Width 1 /Height 1 /ImageMask true /BitsPerComponent 1 /Decode {decode}"), &[]);
+        assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), expected);
+    }
+    let content = joined(&[IMAGE_TEXT, b"1 g\n", IMAGE_DRAW]);
+    let bytes = image_page(&content, &[0], "/Width 1 /Height 1 /ImageMask true /BitsPerComponent 1", &[]);
+    assert!(audit_redactions(&open(bytes)).unwrap().is_empty());
+    // Ordinary images ignore the current nonstroking colour.
+    assert_eq!(audit_redactions(&open(gray_image(&content, 0))).unwrap().len(), 1);
+}
+/// Reflection, rotation, composed transforms and shear use actual image polygons, so a thin
+/// diagonal whose bounding box overlaps text does not become a false cover.
+#[test]
+fn image_ctm_and_exact_rotated_geometry_are_respected() {
+    for draw in
+        [b"q -72 0 0 28 202 692 cm /Im Do Q".as_slice(), b"q 0 28 -72 0 202 692 cm /Im Do Q", b"q 1 0 0 1 130 692 cm 72 0 0 28 0 0 cm /Im Do Q"]
+    {
+        assert_eq!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, draw]), 0))).unwrap().len(), 1);
+    }
+    // A thin diagonal's bounding box covers the word, its actual painted area does not.
+    let draw = b"q 72 28 -0.1 0.1 130 692 cm /Im Do Q";
+    assert!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, draw]), 0))).unwrap().is_empty());
+    // A sheared image that really covers the word is still detected.
+    let draw = b"q 100 0 10 40 120 685 cm /Im Do Q";
+    assert_eq!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, draw]), 0))).unwrap().len(), 1);
+}
+/// Image detection intersects active and nested clips and restores them with `Q`, retaining
+/// real overlaps and discarding clipped-out or insufficient painted coverage.
+#[test]
+fn image_clips_apply_only_to_images_and_restore_with_q() {
+    for clip in [b"0 0 10 10 re W n\n".as_slice(), b"130 692 1 28 re W* n\n", b"0 0 10 10 re W n 100 100 10 10 re W n\n"] {
+        let content = joined(&[IMAGE_TEXT, b"q ", clip, IMAGE_DRAW, b" Q"]);
+        assert!(audit_redactions(&open(gray_image(&content, 0))).unwrap().is_empty());
+    }
+    let content = joined(&[IMAGE_TEXT, b"q 0 0 10 10 re W n Q\n", IMAGE_DRAW]);
+    assert_eq!(audit_redactions(&open(gray_image(&content, 0))).unwrap().len(), 1);
+    let content = joined(&[IMAGE_TEXT, b"q 130 692 72 28 re W n\n", IMAGE_DRAW, b"Q"]);
+    assert_eq!(audit_redactions(&open(gray_image(&content, 0))).unwrap().len(), 1);
+}
+/// Nonstroking alpha survives ExtGStates that omit it and is restored by `Q`; transparent
+/// and translucent images follow the existing policy of not counting as opaque covers.
+#[test]
+fn image_alpha_retains_unspecified_extgstate_entries() {
+    for prefix in [b"/Half gs ".as_slice(), b"/Empty gs ", b"/Half gs /Other gs "] {
+        assert!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, prefix, IMAGE_DRAW]), 0))).unwrap().is_empty());
+    }
+    let content = joined(&[IMAGE_TEXT, b"q /Half gs Q ", IMAGE_DRAW]);
+    assert_eq!(audit_redactions(&open(gray_image(&content, 0))).unwrap().len(), 1);
+}
+/// Images reached through forms obey the form BBox and matrix and can cover earlier page text.
+#[test]
+fn image_form_matrix_bbox_and_paint_order() {
+    let draw = b"q 72 0 0 28 130 692 cm /Im Do Q";
+    for (bbox, expected) in [("[0 0 10 10]", 0), ("[130 692 202 720]", 1)] {
+        // Forms must have their own resources; Im references the page's image object.
+        let form = format!("/Subtype /Form /BBox {bbox} /Resources << /XObject << /Im 6 0 R >> >>");
+        let content = joined(&[IMAGE_TEXT, b"/Fm Do"]);
+        let bytes = image_page(&content, &[0], "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", &[(draw, &form)]);
+        assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), expected);
+    }
+    let form = "/Subtype /Form /BBox [0 0 1 1] /Matrix [72 0 0 28 130 692] /Resources << /XObject << /Im 6 0 R >> >>";
+    let bytes =
+        image_page(&joined(&[IMAGE_TEXT, b"/Fm Do"]), &[0], "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", &[(b"/Im Do", form)]);
+    assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), 1);
+}
+/// Sample rows run top to bottom, and only fully opaque soft-mask samples contribute area;
+/// coverage of the upper and lower halves is measured against the word's actual position.
+#[test]
+fn image_sample_rows_and_partial_soft_masks() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    let image = "/Width 1 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 7 0 R";
+    let mask = "/Subtype /Image /Width 1 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    for (alpha, expected) in [([255, 255], 1), ([0, 0], 0), ([128, 128], 0), ([0, 255], 0)] {
+        let bytes = image_page(&content, &[0, 0], image, &[(&alpha, mask)]);
+        assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), expected);
+    }
+    // Top half is black. It covers enough of the word; the bottom half alone does not.
+    for (data, expected) in [([0, 255], 1), ([255, 0], 0)] {
+        let bytes = image_page(&content, &data, "/Width 1 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8", &[]);
+        assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), expected);
+    }
+}
+/// Unsupported formats, excessive or truncated samples, complex clips, transparency and
+/// optional content fail the audit instead of producing an incomplete clean result.
+#[test]
+fn image_incomplete_analysis_is_an_error() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    for dict in [
+        "/Width 1 /Height 1 /ColorSpace /CalGray /BitsPerComponent 8",
+        "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode",
+        "/Width 1000001 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8",
+        "/Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8",
+        "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true",
+        "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Mask [0 0]",
+    ] {
+        assert!(audit_redactions(&open(image_page(&content, &[0], dict, &[]))).is_err(), "{dict}");
+    }
+    for prefix in [b"0 0 m 10 10 l W n ".as_slice(), b"/Soft gs ", b"/OC /Hidden BDC "] {
+        assert!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, prefix, IMAGE_DRAW]), 0))).is_err());
+    }
+    let bytes = one_page(b"BI /W 1 /H 1 /BPC 8 /CS /G ID truncated", "");
+    assert!(audit_redactions(&open(bytes)).is_err());
+}
+
+/// Inline abbreviations and lossless filters decode correctly alongside packed samples,
+/// inverted Decode arrays and supported DeviceRGB/DeviceCMYK image colours.
+#[test]
+fn image_inline_filters_decode_and_packed_samples() {
+    for image in [b"BI /W 1 /H 1 /CS /G /BPC 8 /F /AHx ID 00> EI".as_slice(), b"BI /W 1 /H 1 /IM true /BPC 1 /D [1 0] ID \xff EI"] {
+        let content = joined(&[IMAGE_TEXT, b"q 72 0 0 28 130 692 cm ", image, b" Q"]);
+        assert_eq!(audit_redactions(&open(one_page(&content, ""))).unwrap().len(), 1);
+    }
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    for (data, dict) in [
+        (&[0, 0, 0][..], "/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8"),
+        (&[0, 0, 0, 255][..], "/Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8"),
+        (&[0][..], "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 1"),
+        (&[255][..], "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [1 0]"),
+    ] {
+        assert_eq!(audit_redactions(&open(image_page(&content, data, dict, &[]))).unwrap().len(), 1);
+    }
+}
+/// Image comparisons and stored coverage vertices consume bounded work and error on excess.
+#[test]
+fn image_comparisons_and_coverage_are_bounded() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    let doc = open(gray_image(&content, 0));
+    let limits = crate::Limits { comparisons: 1, covered_text: usize::MAX };
+    assert!(matches!(crate::audit(&doc, limits), Err(crate::AuditError::TooManyComparisons)));
+    let doc = open(image_page(&content, &vec![0; 100_001], "/Width 1 /Height 100001 /BitsPerComponent 8 /ColorSpace /DeviceGray", &[]));
+    assert!(audit_redactions(&doc).is_err());
+}
+/// Compound clipping paths fail as unsupported, while simple convex polygon clips are
+/// evaluated exactly for both included and excluded image coverage.
+#[test]
+fn image_compound_clipping_requires_complete_analysis() {
+    let content = joined(&[IMAGE_TEXT, b"0 0 10 10 re 130 692 72 28 re W n ", IMAGE_DRAW]);
+    assert!(audit_redactions(&open(gray_image(&content, 0))).is_err());
+    for (path, expected) in [(b"0 0 m 10 0 l 10 10 l 0 10 l h W n ".as_slice(), 0), (b"130 692 m 202 692 l 202 720 l 130 720 l h W n ", 1)] {
+        assert_eq!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, path, IMAGE_DRAW]), 0))).unwrap().len(), expected);
+    }
+}
+
+/// Joined text lines retain each run's paint order: images cover earlier overlapped glyphs,
+/// and do not hide text painted after the image merely because its line starts earlier.
+#[test]
+fn image_paint_order_is_checked_per_run_of_a_joined_line() {
+    // Geometry joins these separate text-showing operators into one line. The image precedes
+    // every glyph it overlaps, even though it follows the line's first operator.
+    let content = joined(&[b"BT /F1 24 Tf 72 700 Td (Hello ) Tj ET\n", IMAGE_DRAW, b"BT /F1 24 Tf 133.344 700 Td (secret world) Tj ET"]);
+    assert!(audit_redactions(&open(gray_image(&content, 0))).unwrap().is_empty());
+    let content = joined(&[b"BT /F1 24 Tf 72 700 Td (Hello secret ) Tj ET\n", IMAGE_DRAW, b"BT /F1 24 Tf 205.368 700 Td (world) Tj ET"]);
+    assert_eq!(audit_redactions(&open(gray_image(&content, 0))).unwrap().len(), 1);
+}
+
+/// A page combining images with text inside forms errors because that text is not fully audited.
+#[test]
+fn image_with_unaudited_form_text_is_incomplete() {
+    let content = b"/Fm Do\n";
+    let form = "/Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Im 6 0 R >> >>";
+    let bytes =
+        image_page(content, &[0], "/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", &[(&joined(&[IMAGE_TEXT, IMAGE_DRAW]), form)]);
+    assert!(audit_redactions(&open(bytes)).is_err());
+}
+/// Optional-content scope follows marked-content boundaries, independently of graphics-state
+/// save/restore; an image inside it requires further analysis, even after `Q`.
+#[test]
+fn image_optional_content_state_does_not_follow_q_and_q_restore() {
+    let content = joined(&[IMAGE_TEXT, b"q /OC /L1 BDC Q ", IMAGE_DRAW, b"EMC"]);
+    assert!(audit_redactions(&open(gray_image(&content, 0))).is_err());
+    let content = joined(&[IMAGE_TEXT, b"/OC /L1 BDC EMC ", IMAGE_DRAW]);
+    assert_eq!(audit_redactions(&open(gray_image(&content, 0))).unwrap().len(), 1);
+}
+/// Overflowing or out-of-range transforms fail image analysis before geometry can be trusted.
+#[test]
+fn image_extreme_geometry_is_incomplete() {
+    for draw in [b"q 1e300 0 0 28 130 692 cm /Im Do Q".as_slice(), b"q 1000000000000 0 0 28 130 692 cm /Im Do Q"] {
+        assert!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, draw]), 0))).is_err());
+    }
+}
+
+/// Excessive graphics-state saves return an incomplete-audit error rather than grow unbounded.
+#[test]
+fn image_graphics_state_stack_is_bounded() {
+    let content = joined(&[IMAGE_TEXT, &b"q ".repeat(4097), IMAGE_DRAW]);
+    assert!(audit_redactions(&open(gray_image(&content, 0))).is_err());
+}
+
+/// Disconnected dark samples and stencil bits contribute their combined painted area,
+/// excluding light samples and holes rather than treating the image bounds as opaque.
+#[test]
+fn image_sparse_samples_are_measured_as_a_union() {
+    let content = joined(&[IMAGE_TEXT, IMAGE_DRAW]);
+    for (data, expected) in [([0, 255, 0], 1), ([0, 255, 255], 0), ([255, 255, 255], 0)] {
+        let bytes = image_page(&content, &data, "/Width 3 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", &[]);
+        assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), expected);
+    }
+    let bytes = image_page(&content, &[0b01000000], "/Width 3 /Height 1 /ImageMask true /BitsPerComponent 1", &[]);
+    assert_eq!(audit_redactions(&open(bytes)).unwrap().len(), 1);
+}
+/// Split content streams share transforms and paint order for inline images, detecting
+/// images after text while leaving images painted before it unflagged.
+#[test]
+fn image_state_and_order_carry_across_content_streams() {
+    let first = joined(&[IMAGE_TEXT, b"q 72 0 0 28 130 692 cm\n"]);
+    let second = b"BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q";
+    assert_eq!(audit_redactions(&open(two_streams(&first, second))).unwrap().len(), 1);
+    let before = joined(&[b"q 72 0 0 28 130 692 cm\n", second]);
+    assert!(audit_redactions(&open(two_streams(&before, IMAGE_TEXT))).unwrap().is_empty());
+}
+
+/// Unsupported blend, soft-mask and overprint states fail closed; explicit resets to normal
+/// opaque compositing restore the ability to report an image cover.
+#[test]
+fn image_compositing_requires_opaque_normal_paint() {
+    for prefix in [b"/Screen gs ".as_slice(), b"/Over gs "] {
+        assert!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, prefix, IMAGE_DRAW]), 0))).is_err());
+    }
+    for prefix in [b"/Screen gs /Normal gs ".as_slice(), b"/Soft gs /Normal gs ", b"/Over gs /NoOver gs "] {
+        assert_eq!(audit_redactions(&open(gray_image(&joined(&[IMAGE_TEXT, prefix, IMAGE_DRAW]), 0))).unwrap().len(), 1);
+    }
+}
