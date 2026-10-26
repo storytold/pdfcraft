@@ -293,15 +293,14 @@ fn palette_arrow_keys_select_results_and_enter_runs_the_selection() {
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages[0].rotation, 270);
 }
 
-/// Check that choosing Delete pages from the Pages menu reduces the document page count.
+/// Check that choosing Edit ▸ Pages ▸ Delete pages in the menu bar reduces the page count once.
 #[test]
 fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("Pages").hover();
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Pages").hover();
     h.run_steps(3);
-    h.get_by_label_contains("Delete pages").click();
+    support::menu_row(&h, "Delete pages").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);
@@ -327,14 +326,11 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
         }
     });
     h.run_steps(4);
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File").hover();
-    h.run_steps(3);
-    h.get_by_label("Open Recent").hover();
+    support::open_menu(&mut h, "File");
+    support::menu_row(&h, "Open Recent").hover();
     h.run_steps(3);
     let original = h.state().views[0].id;
-    h.get_by_label_contains("recent.pdf").click();
+    support::menu_row(&h, "recent.pdf").click();
     support::wait_until(&mut h, "recent document", |app| app.views.len() == 2 && app.password_prompt.is_none());
     let app = h.state();
     let active = app.active.unwrap();
@@ -348,10 +344,7 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
 #[test]
 fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
     let mut h = harness();
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File").hover();
-    h.run_steps(3);
+    support::open_menu(&mut h, "File");
     assert!(
         h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(),
         "Open Recent is disabled while no file has been opened"
@@ -373,19 +366,13 @@ fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
         app
     });
     h.run_steps(4);
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File").hover();
+    support::open_menu(&mut h, "File");
+    support::menu_row(&h, "Open Recent").hover();
     h.run_steps(3);
-    h.get_by_label("Open Recent").hover();
-    h.run_steps(3);
-    h.get_by_label("Clear Recent Files").click();
+    support::menu_row(&h, "Clear Recent Files").click();
     h.run_steps(3);
     assert!(h.state().recent.is_empty(), "the list is empty");
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File").hover();
-    h.run_steps(3);
+    support::open_menu(&mut h, "File");
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
 }
 
@@ -458,13 +445,13 @@ fn localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings(
     assert!(!doc.dirty);
 }
 
-/// Menu ▸ View open, with egui told the app runs on `os`.
+/// View ▸ Zoom open in the menu bar, with egui told the app runs on `os`.
 fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
     let mut h = harness();
     h.ctx.set_os(os);
-    h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("View").hover();
+    support::open_menu(&mut h, "View");
+    support::menu_row(&h, "Zoom").hover();
     h.run_steps(3);
     h
 }
@@ -473,21 +460,14 @@ fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
 fn view_menu_and_tooltips_write_shortcuts_for_the_platform() {
     // On Linux, View ▸ Zoom and Page navigation showed ⌘1, ⌘[ … (hard-coded) while the
     // registered items under them showed Ctrl+K; tooltips showed ⌘ too.
+    // The menu bar writes its shortcuts for the build's platform (craft-menu tests that).
     let h = view_menu(OperatingSystem::Nix);
-    h.get_by_label("Actual size Ctrl+1");
-    h.get_by_label("Zoom to page level Ctrl+0");
-    h.get_by_label("Rotate view counterclockwise Ctrl+Shift+−");
-    h.get_by_label("Previous view Ctrl+[");
-    h.get_by_label("Find tools and commands… Ctrl+K");
     h.get_by_label("Zoom in (Ctrl++)");
     h.get_by_label("Print (Ctrl+P)");
     assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
     assert_eq!(h.query_all_by_label_contains("Fit visible").count(), 1, "View lists Fit visible once");
-    h.get_by_label("Fit visible Ctrl+3");
 
     let h = view_menu(OperatingSystem::Mac);
-    h.get_by_label("Actual size ⌘1");
-    h.get_by_label("Fit visible ⌘3");
     h.get_by_label("Rotate view clockwise (⇧⌘+)");
     assert_eq!(h.query_all_by_label_contains("Ctrl+").count(), 0, "no Ctrl+ on macOS");
 }
@@ -623,6 +603,9 @@ fn palette_ime_idle_frames_and_reopen_do_not_interrupt_composition() {
 
 #[test]
 fn palette_ime_chinese_preedit_commit_and_cancel_remain_uninterrupted() {
+    if crate::support::skip_without_glyphs("palette_ime_chinese_preedit_commit_and_cancel_remain_uninterrupted", "en", "你") {
+        return;
+    }
     let mut h = harness();
     let mut interruptions = Vec::new();
     h.state_mut().run_command("view.palette");

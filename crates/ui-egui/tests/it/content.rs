@@ -335,6 +335,9 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
 /// written to the page as `?` (or lost).
 #[test]
 fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
+    if crate::support::skip_without_glyphs("text_the_standard_fonts_cant_draw_stays_in_the_editor", "en", "Hello 世界") {
+        return;
+    }
     let _gpu = gpu();
     let mut h = harness();
     assert!(h.state_mut().execute("edit.text"));
@@ -372,6 +375,9 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
 /// is left blocking Save out of sight.
 #[test]
 fn a_kept_draft_goes_with_its_deleted_page() {
+    if crate::support::skip_without_glyphs("a_kept_draft_goes_with_its_deleted_page", "en", "日本語") {
+        return;
+    }
     let mut h = harness();
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 }));
     h.run_steps(2);

@@ -11,6 +11,12 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
+# The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
+craft-menu = { workspace = true }
+craft-keymap = { workspace = true }
+# Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
+# close also quits through `terminate:` (the Touch Bar crash, #1136).
+craft-quit = { workspace = true, features = ["egui"] }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
@@ -55,9 +61,6 @@ pollster = "1.0"
 fontconfig-parser = "0.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# macOS: a window close quits through `terminate:` (the Touch Bar crash, #1136); elsewhere a no-op.
-# The egui feature binds `on_close_request` to the app's egui Context, so it stays macOS-only.
-craft-quit = { workspace = true, features = ["egui"] }
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
 # The Objective-C wrappers and block support are already in the tree through arboard and rfd.
 objc2 = "0.6"

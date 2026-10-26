@@ -504,6 +504,9 @@ fn language_switch_preserves_document_and_command_ids() {
     assert_eq!(documents[0]["dirty"], true);
     let commands = ok(&mut h, &c, "ui.commands", json!({}));
     for code in ["ja", "zh-hans", "fr", "de", "uk", "lt", "en"] {
+        if crate::support::skip_without_glyphs(&format!("language_switch_preserves_document_and_command_ids ({code})"), code, "") {
+            continue;
+        }
         ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
         h.run_steps(2);
         let state = ok(&mut h, &c, "ui.state", json!({}));
@@ -512,12 +515,16 @@ fn language_switch_preserves_document_and_command_ids() {
         assert_eq!(ok(&mut h, &c, "ui.commands", json!({})), commands);
 
         let lang = i18n::Lang::from_code(code).unwrap();
-        h.get_by_label(i18n::tr(lang, "Menu")).click();
+        // A title without an ASCII letter shows its mnemonic after it ("ファイル(F)").
+        let file = i18n::tr(lang, "File");
+        h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(file))).click();
         h.run_steps(2);
-        h.get_by_label(i18n::tr(lang, "File")).hover();
-        h.run_steps(3);
-        h.get_by_label_contains(i18n::tr(lang, "Open…"));
-        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        // The mnemonic goes before an ellipsis: "開く(O)…".
+        let open = i18n::tr(lang, "Open…").trim_end_matches('…');
+        let open_row = |n: &egui_kittest::kittest::AccessKitNode<'_>| {
+            n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(open))
+        };
+        assert!(h.query_all_by(open_row).next().is_some(), "File lists Open… in {code}");
         ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
         h.run_steps(2);
     }
@@ -908,6 +915,9 @@ fn state_and_view_options() {
 
 #[test]
 fn japanese_controls_and_search_keep_command_ids() {
+    if crate::support::skip_without_glyphs("japanese_controls_and_search_keep_command_ids", "ja", "") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "ja");
@@ -1002,20 +1012,22 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
 
 #[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
+    if crate::support::skip_without_glyphs("preferences_menu_and_shortcut_allow_switching_interface_languages", "ja", "") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
-    ok(&mut h, &c, "ui.click", json!({ "label": "メニュー" }));
+    // The menu bar's Edit menu holds Preferences. Titles and rows carry their mnemonic
+    // ("編集(E)", "環境設定(P)…"), so match by the start of the label.
+    let menu_row = |text: &'static str| {
+        move |n: &egui_kittest::kittest::AccessKitNode<'_>| {
+            n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(text))
+        }
+    };
+    h.get_by(menu_row("編集")).click();
     h.run_steps(2);
-    // The open menu's Edit entry and the left panel's Edit tool share the visible label. Pick
-    // the popup entry by its id, not by its visible text.
-    let edits = ok(&mut h, &c, "ui.inspect", json!({ "query": "編集", "role": "Button" }));
-    // The tool button reports its toggle state; the popup's menu button does not.
-    let edit = edits["widgets"].as_array().unwrap().iter().find(|w| w.get("toggled").is_none()).expect("the Edit menu entry");
-    ok(&mut h, &c, "ui.click", json!({ "id": edit["id"] }));
+    h.get_by(menu_row("環境設定")).click();
     h.run_steps(2);
-    let menu = ok(&mut h, &c, "ui.inspect", json!({ "query": "環境設定…" }));
-    let prefs = menu["widgets"].as_array().unwrap().iter().find(|w| w["clickable"] == true).expect("Preferences menu item");
-    ok(&mut h, &c, "ui.click", json!({ "id": prefs["id"] }));
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {
         let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
@@ -1044,6 +1056,9 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
 
 #[test]
 fn japanese_dialogs_errors_and_custom_action_names() {
+    if crate::support::skip_without_glyphs("japanese_dialogs_errors_and_custom_action_names", "ja", "") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key": "language", "value": "ja"}));
     for (dialog, label) in [
@@ -1084,6 +1099,9 @@ fn japanese_dialogs_errors_and_custom_action_names() {
 
 #[test]
 fn simplified_chinese_about_tabs_and_credit_controls() {
+    if crate::support::skip_without_glyphs("simplified_chinese_about_tabs_and_credit_controls", "zh-hans", "") {
+        return;
+    }
     let (mut h, c) = harness();
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     ok(&mut h, &c, "ui.set", json!({"key": "language", "value": "zh-hans"}));
@@ -1113,6 +1131,9 @@ fn simplified_chinese_about_tabs_and_credit_controls() {
 
 #[test]
 fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
+    if crate::support::skip_without_glyphs("simplified_chinese_signature_prompts_and_errors_keep_document_state", "zh-hans", "") {
+        return;
+    }
     let (mut h, c) = harness();
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     ok(&mut h, &c, "ui.set", json!({"key": "language", "value": "zh-hans"}));
@@ -1721,6 +1742,9 @@ fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
 
 #[test]
 fn control_quit_retains_blocked_content_typing_after_cancel() {
+    if crate::support::skip_without_glyphs("control_quit_retains_blocked_content_typing_after_cancel", "en", "Keep 世界") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.command", json!({"id":"edit.text"}));
     h.run_steps(3);

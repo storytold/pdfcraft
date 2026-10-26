@@ -10,7 +10,6 @@ use pdfcraft_engine::commands::{self, COMMANDS, CommandSpec, Shortcut};
 use crate::{
     Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, SaveTarget,
     theme::{ThemeKind, ThemePreference},
-    widgets,
 };
 
 /// Keys the document view handles itself (`canvas::shortcuts`), for the View menu, tooltips and
@@ -724,11 +723,6 @@ impl PdfCraftApp {
         // Buttons also own keyboard focus for Tab/Enter activation, but they must not
         // suppress document shortcuts. Text editors retain their own undo/redo handling.
         let typing = ctx.text_edit_focused();
-        // A form field's editor is open on the page: its text isn't in the document until
-        // committed. (Not egui's keyboard focus: an Escape in this frame has already cleared that,
-        // while the field has yet to see the Escape and discard its draft.)
-        let active = self.active_ids();
-        let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
         let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
         specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
         for spec in specs {
@@ -752,21 +746,27 @@ impl PdfCraftApp {
                 m |= Modifiers::CTRL;
             }
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, key))) {
-                if form_typing {
-                    // A form field has the keyboard: let it take this frame's typing (and
-                    // Escape) first, so ⌘S saves what's on screen (#166). Runs next frame, for
-                    // this document only.
-                    self.deferred_commands.push((spec.id, active.map(|(_, id)| id)));
-                    ctx.request_repaint();
-                } else if spec.id == "file.close" && active.is_none() && crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") {
-                    // macOS ⌘W closes the last window when no document tabs remain (#869).
-                    // Route through the normal viewport-close path (and its quit guard),
-                    // not the disabled document-only `file.close` command.
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                } else {
-                    self.execute(spec.id);
-                }
+                self.dispatch_command(ctx, spec.id);
             }
+        }
+    }
+
+    /// Run a registry command from its shortcut or a menu, which share this path.
+    pub(crate) fn dispatch_command(&mut self, ctx: &egui::Context, id: &'static str) {
+        let active = self.active_ids();
+        let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
+        if form_typing {
+            // A form field has the keyboard: let it take this frame's typing (and Escape) first,
+            // so ⌘S saves what's on screen (#166). Runs next frame, for this document only.
+            self.deferred_commands.push((id, active.map(|(_, id)| id)));
+            ctx.request_repaint();
+        } else if id == "file.close" && active.is_none() && crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") {
+            // macOS ⌘W closes the last window when no document tabs remain (#869). Route through
+            // the normal viewport-close path (and its quit guard), not the disabled document-only
+            // `file.close` command.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.execute(id);
         }
     }
 }
@@ -787,57 +787,6 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
         }
         (Some(i), false) => i.checked_sub(1).unwrap_or(last),
     })
-}
-
-/// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
-pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
-    for spec in commands::menu(menu) {
-        let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
-        let label = crate::i18n::menu_label(spec.id, &label);
-        // Open Recent is a submenu of the live recent list, not one action: disabled while the
-        // list is empty, otherwise each entry opens its file (or focuses the tab showing it), and
-        // Clear Recent Files at the foot empties the list (#430).
-        if spec.id == "file.open_recent" {
-            if app.recent.is_empty() {
-                ui.add_enabled(false, egui::Button::new(label));
-                continue;
-            }
-            let mut open: Option<String> = None;
-            let mut clear = false;
-            ui.menu_button(label, |ui| {
-                crate::chrome::scroll_menu(ui, |ui| {
-                    for r in &app.recent {
-                        if ui.button(&r.name).on_hover_text(&r.path).clicked() {
-                            open = Some(r.path.clone());
-                            ui.close();
-                        }
-                    }
-                    ui.separator();
-                    if ui.button(tl!("Clear Recent Files")).clicked() {
-                        clear = true;
-                        ui.close();
-                    }
-                })
-            });
-            if let Some(p) = open {
-                app.open_recent(&p);
-                ui.close();
-            }
-            if clear {
-                app.execute("file.clear_recent");
-                ui.close();
-            }
-            continue;
-        }
-        let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
-        let enabled = app.command_enabled(spec);
-        let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
-        if resp.clicked() {
-            app.execute(spec.id);
-            ui.close();
-        }
-    }
-    let _ = widgets::menu_item;
 }
 
 #[cfg(test)]
