@@ -1148,6 +1148,7 @@
 	Sent to {printer}: {msg}	Στάλθηκε στον εκτυπωτή {printer}: {msg}
 	Choose a folder for the searchable files	Επιλέξτε φάκελο για τα αρχεία με δυνατότητα αναζήτησης
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Τα αρχεία συνδυάζονται από πάνω προς τα κάτω. Αφήστε κενό το πεδίο Σελίδες για να συμπεριληφθούν όλες.
+	Add a bookmark for each file	Προσθήκη σελιδοδείκτη για κάθε αρχείο
 	Unlock…	Ξεκλείδωμα…
 	Select a password-protected file first	Επιλέξτε πρώτα αρχείο προστατευμένο με κωδικό πρόσβασης
 	Enter the permissions password to allow combining	Εισαγάγετε τον κωδικό δικαιωμάτων για να επιτραπεί ο συνδυασμός

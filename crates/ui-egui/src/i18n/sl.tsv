@@ -788,6 +788,7 @@
 	File name	Ime datoteke
 	File size	Velikost datoteke
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Datoteke se združijo od zgoraj navzdol. Če pustite Strani prazno, se vzamejo vse strani.
+	Add a bookmark for each file	Dodaj zaznamek za vsako datoteko
 	Files are combined in this order. Leave Pages empty to take every page.	Datoteke se združijo v tem vrstnem redu. Če pustite Strani prazno, se vzamejo vse strani.
 	Files for {name}	Datoteke za {name}
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Datoteke, ki jih odprete v PdfCraftu, se prikažejo tukaj. Spustite PDF kamor koli, da ga odprete.

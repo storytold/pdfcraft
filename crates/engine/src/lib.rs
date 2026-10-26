@@ -46,7 +46,7 @@ pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::StampPreview;
 pub use text_preview::TextEditPreview;
 
-pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
+pub use pdfcraft_organize::{BoxSpec, CombineOptions, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
 
 /// One file produced by a split: (1-based first page, last page, PDF bytes).
 pub use pdfcraft_organize::LabelStyle;
@@ -4911,12 +4911,13 @@ impl Session {
         docs.iter().map(|d| if d.is_some() { opened.next().unwrap_or_default() } else { Default::default() }).collect()
     }
 
-    /// [`Self::combine_unlocked`] reporting what the conflict resolution renamed.
+    /// [`Self::combine_unlocked`] built as `options` says (a `FieldConflicts` alone keeps the other
+    /// defaults), reporting what the conflict resolution renamed.
     pub fn combine_unlocked_reporting(
         &self,
         sources: &[CombineSource],
         passwords: &[Option<&str>],
-        field_conflicts: pdfcraft_organize::FieldConflicts,
+        options: impl Into<pdfcraft_organize::CombineOptions>,
     ) -> Result<Combined, EditError> {
         let docs = sources
             .iter()
@@ -4938,7 +4939,7 @@ impl Session {
         }
         let named: Vec<(&str, &pdfcraft_cos::Document, Option<&[usize]>)> =
             sources.iter().zip(docs.iter()).zip(&pages).map(|(((n, _, _), d), p)| (n.as_str(), d, p.as_deref())).collect();
-        let out = pdfcraft_organize::combine_selected_with(&named, field_conflicts)?;
+        let out = pdfcraft_organize::combine_selected_with(&named, options)?;
         let bytes = self.write_new(&out.doc)?;
         Ok(Combined { bytes, renamed_fields: out.renamed_fields })
     }
@@ -4952,13 +4953,14 @@ impl Session {
         Ok(self.combine_grouped_reporting(sources, groups, passwords, pdfcraft_organize::FieldConflicts::Rename)?.bytes)
     }
 
-    /// [`Self::combine_grouped`] reporting what the conflict resolution renamed.
+    /// [`Self::combine_grouped`] built as `options` says (a `FieldConflicts` alone keeps the other
+    /// defaults), reporting what the conflict resolution renamed.
     pub fn combine_grouped_reporting(
         &self,
         sources: &[CombineSource],
         groups: &[u64],
         passwords: &[Option<&str>],
-        field_conflicts: pdfcraft_organize::FieldConflicts,
+        options: impl Into<pdfcraft_organize::CombineOptions>,
     ) -> Result<Combined, EditError> {
         let (mut keys, mut docs, mut file): (Vec<Option<u64>>, Vec<pdfcraft_cos::Document>, Vec<usize>) = (Vec::new(), Vec::new(), Vec::new());
         for (i, (name, bytes, _)) in sources.iter().enumerate() {
@@ -4993,7 +4995,7 @@ impl Session {
             let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
             runs.push((*at, name.as_str(), d, p.as_deref()));
         }
-        let out = pdfcraft_organize::combine_grouped_with(&runs, field_conflicts)?;
+        let out = pdfcraft_organize::combine_grouped_with(&runs, options)?;
         let bytes = self.write_new(&out.doc)?;
         Ok(Combined { bytes, renamed_fields: out.renamed_fields })
     }

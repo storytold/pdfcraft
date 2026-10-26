@@ -561,6 +561,7 @@
 	File Name	Failo pavadinimas
 	File size	Failo dydis
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Failai jungiami iš viršaus į apačią. Palikite lauką „Puslapiai“ tuščią, jei norite įtraukti visus puslapius.
+	Add a bookmark for each file	Pridėti žymelę kiekvienam failui
 	Files are combined in the order shown. Drag them to change it.	Failai sujungiami rodoma tvarka. Vilkite juos, kad ją pakeistumėte.
 	Files for {name}	Failai: {name}
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Čia rodomi „PdfCraft“ atverti failai. Įkelkite PDF bet kurioje vietoje, kad jį atvertumėte.

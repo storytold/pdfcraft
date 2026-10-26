@@ -1151,6 +1151,24 @@ fn combine_extract_and_split() {
     let apart = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "b.pdf", "a.pdf"], "pages": ["1", null, "3, 2"], "open": true }));
     let apart = ok(&mut a, "bookmark_list", json!({ "doc": apart["document"]["doc"].as_u64().unwrap() }))["bookmarks"].clone();
     assert_eq!(apart.as_array().unwrap().len(), 3);
+    // file_bookmarks false adds no entry per file (#3679): the files' own bookmarks are the top
+    // level (ab.pdf's "a" and "b", at its pages), and files without bookmarks give none.
+    let titled = |a: &mut Automation, result: &Value| {
+        let marks = ok(a, "bookmark_list", json!({ "doc": result["document"]["doc"].as_u64().unwrap() }))["bookmarks"].clone();
+        marks.as_array().unwrap().iter().map(|b| (b["title"].as_str().unwrap().to_string(), b["page"].as_u64().unwrap())).collect::<Vec<_>>()
+    };
+    let own = ok(&mut a, "doc_combine", json!({ "paths": ["ab.pdf", "b.pdf"], "file_bookmarks": false, "open": true }));
+    assert_eq!(own["document"]["pages"], 7);
+    assert_eq!(titled(&mut a, &own), [("a".to_string(), 1), ("b".to_string(), 4)]);
+    let plain = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "b.pdf"], "file_bookmarks": false, "open": true }));
+    assert!(titled(&mut a, &plain).is_empty());
+    let grouped = ok(
+        &mut a,
+        "doc_combine",
+        json!({ "paths": ["a.pdf", "b.pdf", "a.pdf"], "pages": ["1", null, "2"], "groups": [4, null, 4], "file_bookmarks": false, "open": true }),
+    );
+    assert!(titled(&mut a, &grouped).is_empty());
+    assert!(matches!(a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "file_bookmarks": "no" })), Err(ToolError::InvalidArgs(_))));
     // A group names one file; groups must be in step with paths and whole numbers.
     let not_same = a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "groups": [1, 1] }));
     assert!(matches!(not_same, Err(ToolError::InvalidArgs(e)) if e.contains("group 1")));

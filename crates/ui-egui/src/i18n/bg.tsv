@@ -1622,6 +1622,7 @@
 	Sending to {printer}…	Изпращане до {printer}…
 	Choose a folder for the searchable files	Изберете папка за файловете с възможност за търсене
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файловете се обединяват отгоре надолу. Оставете „Страници“ празно, за да се вземат всички страници.
+	Add a bookmark for each file	Добави отметка за всеки файл
 	Unlock…	Отключи…
 	Select a password-protected file first	Първо изберете файл, защитен с парола
 	Enter the permissions password to allow combining	Въведете паролата за разрешения, за да позволите обединяването

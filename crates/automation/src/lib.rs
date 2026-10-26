@@ -1869,6 +1869,7 @@ impl Automation {
                 return Err(ToolError::InvalidArgs(format!("field_conflicts must be \"rename\" or \"merge\", not {other:?}")));
             }
         };
+        let options = pdfcraft_organize::CombineOptions { field_conflicts, file_bookmarks: a.opt_bool("file_bookmarks")?.unwrap_or(true) };
         let mut sources: Vec<CombineSource> = Vec::new();
         let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
         for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
@@ -1897,7 +1898,7 @@ impl Automation {
         }
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
         let combined = match groups {
-            None => self.session.combine_unlocked_reporting(&sources, &passwords, field_conflicts),
+            None => self.session.combine_unlocked_reporting(&sources, &passwords, options),
             Some(groups) => {
                 // A path without a group is a file of its own: give it a key no group uses.
                 let mut next = groups.iter().flatten().max().map_or(Some(0), |m| m.checked_add(1));
@@ -1912,7 +1913,7 @@ impl Automation {
                         }
                     });
                 }
-                self.session.combine_grouped_reporting(&sources, &keys, &passwords, field_conflicts)
+                self.session.combine_grouped_reporting(&sources, &keys, &passwords, options)
             }
         }
         .map_err(failed)?;

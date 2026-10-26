@@ -558,6 +558,7 @@ theme	Appearance	Giao diện
 	File Name	Tên tệp
 	File size	Kích thước tệp
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Các tệp được kết hợp từ trên xuống dưới. Để trống mục Trang để lấy mọi trang.
+	Add a bookmark for each file	Thêm dấu trang cho từng tệp
 	Files are combined in the order shown. Drag them to change it.	Các tệp được kết hợp theo thứ tự hiển thị. Kéo chúng để thay đổi.
 	Files for {name}	Tệp cho {name}
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Các tệp bạn mở trong PdfCraft sẽ xuất hiện ở đây. Thả một PDF vào bất kỳ đâu để mở.

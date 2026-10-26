@@ -879,6 +879,9 @@ pub struct PdfCraftApp {
     /// How large Organize pages draws its grid, for every document (1.0 = the usual; kept in
     /// the settings).
     pub organize_zoom: f32,
+    /// Whether Combine files gives each file a bookmark holding its own (kept in the settings).
+    /// Off, the files' own bookmarks are the result's top level (#3679).
+    pub combine_file_bookmarks: bool,
     /// The Combine grid's thumbnails: rendered off the UI thread, a few at a time.
     pub(crate) combine_thumbs: combine_grid::Thumbs,
     /// Images waiting for the resolution choice (released on cancel).
@@ -1240,6 +1243,7 @@ impl PdfCraftApp {
             combine_view: Default::default(),
             combine_zoom: 1.0,
             organize_zoom: 1.0,
+            combine_file_bookmarks: true,
             combine_thumbs: Default::default(),
             image_import: None,
             custom_stamps: Vec::new(),
@@ -2695,6 +2699,7 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["combine_file_bookmarks"] = serde_json::Value::Bool(self.combine_file_bookmarks);
         v.to_string()
     }
 
@@ -2719,6 +2724,9 @@ impl PdfCraftApp {
         // Clamped like any grid zoom when the grid next shows; nonsense keeps the usual size.
         if let Some(zoom) = v["organize_zoom"].as_f64().map(|z| z as f32).filter(|z| z.is_finite()) {
             self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
+        }
+        if let Some(on) = v["combine_file_bookmarks"].as_bool() {
+            self.combine_file_bookmarks = on;
         }
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
@@ -3240,6 +3248,14 @@ impl PdfCraftApp {
                     return Err(format!("combine-zoom must be between {} and {}", lo * 100.0, hi * 100.0));
                 }
                 self.set_combine_zoom(percent / 100.0);
+            }
+            // `--combine-file-bookmarks false`: Combine files adds no bookmark per file.
+            ("combine-file-bookmarks", _) => {
+                self.combine_file_bookmarks = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("combine-file-bookmarks must be true or false".into()),
+                };
             }
             (k, None)
                 if [
