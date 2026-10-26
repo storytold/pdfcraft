@@ -154,6 +154,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             let mut open = None;
             let mut remove = None;
+            let mut pin = None;
             for r in &app.recent {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
@@ -165,6 +166,26 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
                 } else {
                     press.wash(ui, rect, 8, false);
+                }
+                // Pin or unpin this file so it stays at the top of Recent across Clear (#4772).
+                // The interaction is always present so keyboard users can focus and activate it;
+                // the icon is drawn when the row is hovered, focused, or already pinned.
+                let pin_rect = Rect::from_center_size(rect.right_center() - vec2(58.0, 0.0), vec2(28.0, 28.0));
+                let p = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
+                let (label, hover) = if r.pinned {
+                    (crate::i18n::fmt(tl!("Unpin {name} from Recent"), &[("name", &r.name)]), tl!("Unpin from Recent"))
+                } else {
+                    (crate::i18n::fmt(tl!("Pin {name} to Recent"), &[("name", &r.name)]), tl!("Pin to Recent"))
+                };
+                p.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                if hovered || r.pinned || p.has_focus() {
+                    if p.hovered() || p.has_focus() {
+                        ui.painter().rect_filled(pin_rect, CornerRadius::same(6), t.pressed);
+                    }
+                    icons::paint(ui, pin_rect.shrink(6.0), "pin", 16.0, if r.pinned { t.accent_text } else { t.icon });
+                }
+                if p.on_hover_text(hover).clicked() {
+                    pin = Some(r.path.clone());
                 }
                 if hovered {
                     // Remove just this file from the list (#430); the file itself is untouched.
@@ -188,9 +209,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
-                // Room on the right for the remove button.
+                // Room on the right for the pin and remove buttons.
                 let detail = ui.painter().text(
-                    body.right_center() - vec2(48.0, 0.0),
+                    body.right_center() - vec2(80.0, 0.0),
                     Align2::RIGHT_CENTER,
                     format!("{}  ·  {}", crate::i18n::trn(crate::i18n::current(), r.pages as u64, "{n} page", "{n} pages"), human_size(r.size)),
                     theme::regular(12.0),
@@ -206,6 +227,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             if let Some(p) = open {
                 app.open_recent(&p);
+            }
+            if let Some(p) = pin {
+                if let Some(r) = app.recent.iter_mut().find(|r| r.path == p) {
+                    r.pinned = !r.pinned;
+                }
+                app.recent.sort_by_key(|r| !r.pinned);
             }
             if let Some(p) = remove {
                 app.recent.retain(|r| r.path != p);
@@ -227,6 +254,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
+    /// Verify that translated tool card descriptions wrap without overlapping the action label.
     #[test]
     fn translated_card_description_leaves_room_for_the_action() {
         let de = crate::i18n::Lang::from_code("de").unwrap();

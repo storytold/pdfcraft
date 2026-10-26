@@ -112,6 +112,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Run `id` against the current state (called behind [`Self::execute`]'s `catch_unwind` guard).
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -169,7 +170,7 @@ impl PdfCraftApp {
                 None => self.notify_tr("No recent files"),
             },
             "file.clear_recent" if self.recent.is_empty() => self.notify_tr("No recent files"),
-            "file.clear_recent" => self.recent.clear(),
+            "file.clear_recent" => self.recent.retain(|r| r.pinned),
             "file.pin_folder" => self.pin_folder_dialog(),
             "page.combine" => self.open_combine_tab(),
             "file.save" => {

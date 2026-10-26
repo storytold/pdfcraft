@@ -706,6 +706,7 @@ mod tests {
         assert_eq!(kind(&app, "view.side_panel"), ItemKind::Check(true));
     }
 
+    /// Verify that an open modal dialog disables document menu commands while leaving Quit enabled.
     #[test]
     fn a_dialog_greys_document_commands_and_drops_their_clicks() {
         let (mut app, ctx) = app(&["a.pdf"]);
@@ -721,10 +722,13 @@ mod tests {
         assert!(app.menu_gate(&ctx).allows_command(&Builtin::Quit.command()));
     }
 
+    /// Verify that Open Recent and Window list each recent file and open document once in order.
     #[test]
     fn recent_files_and_open_documents_are_listed_once_each() {
         let (mut app, ctx) = app(&["a.pdf", "b.pdf"]);
-        app.recent = ["one.pdf", "two.pdf"].map(|n| crate::RecentFile { name: n.into(), path: format!("/nowhere/{n}"), pages: 1, size: 0 }).into();
+        app.recent = ["one.pdf", "two.pdf"]
+            .map(|n| crate::RecentFile { name: n.into(), path: format!("/nowhere/{n}"), pages: 1, size: 0, pinned: false })
+            .into();
         let bar = linux(&app, &ctx);
         for (i, name) in ["one.pdf", "two.pdf"].into_iter().enumerate() {
             assert_eq!(item(&bar, &CommandRef::with_params("file.open_recent", serde_json::json!({ "index": i }))).label, name);
