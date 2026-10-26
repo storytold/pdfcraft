@@ -118,6 +118,31 @@ impl<'a> Type3<'a> {
             })
     }
 
+    /// PdfCraft patch: the vertical extent of a glyph in glyph space (1000 units per em). It comes
+    /// from the `d1` bounding box of the glyph procedure, else from a non-empty `/FontBBox`.
+    pub(crate) fn glyph_bounds(&self, glyph_id: GlyphId) -> Option<Rect> {
+        let name = self.glyph_simulator.glyph_to_string(glyph_id)?;
+        let program = self.char_procs.get(&name)?;
+        let decoded = crate::context::decode_content(program)?;
+        // `TypedIter` is not an `Iterator` (its items borrow it), so scan it as `render_glyph` does.
+        let mut iter = TypedIter::new(decoded.as_ref());
+        let mut from_glyph = None;
+        while let Some(op) = iter.next() {
+            match op {
+                TypedInstruction::ShapeGlyph(d) => {
+                    from_glyph = Some(Rect::new(d.2.as_f64(), d.3.as_f64(), d.4.as_f64(), d.5.as_f64()));
+                    break;
+                }
+                TypedInstruction::ColorGlyph(_) => break,
+                _ => {}
+            }
+        }
+        let bounds = from_glyph.or_else(|| (self.font_bbox.width() * self.font_bbox.height() > 0.0).then_some(self.font_bbox))?;
+        let scale = Affine::scale(UNITS_PER_EM as f64);
+        let r = (scale * self.matrix).transform_rect_bbox(bounds.abs());
+        (r.y0.is_finite() && r.y1.is_finite() && r.height() > 0.0).then_some(r)
+    }
+
     pub(crate) fn render_glyph(
         &self,
         glyph: &Type3Glyph<'a>,

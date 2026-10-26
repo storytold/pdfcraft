@@ -223,6 +223,12 @@ impl<'a> Type3Glyph<'a> {
         self.font.char_code_to_unicode(self.char_code)
     }
 
+    /// PdfCraft patch: the vertical extent of the glyph in glyph space (1000 units per em), as
+    /// `(bottom, top)`, from its `d1` bounding box or the font's `/FontBBox`.
+    pub fn vertical_bounds(&self) -> Option<(f64, f64)> {
+        self.font.glyph_bounds(self.glyph_id).map(|r| (r.y0, r.y1))
+    }
+
     /// PdfCraft patch: the advance width in glyph space (1000 units per em), from `/Widths`.
     pub fn advance_width(&self) -> Option<f32> {
         u8::try_from(self.char_code).ok().map(|c| self.font.glyph_width(c))
