@@ -1537,13 +1537,18 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if props_now && let Some(d) = app.comment_props.take() {
         let mut edits = crate::comment_props::edits(&d);
-        match edits.len() {
-            0 => {}
-            1 => {
-                app.apply_edit(edits.remove(0));
-            }
-            _ => {
-                app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+        let applied = match edits.len() {
+            0 => false,
+            1 => app.apply_edit(edits.remove(0)),
+            _ => app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits }),
+        };
+        if applied {
+            for (before, after) in [(d.original.color, d.edited.color), (d.original.fill, d.edited.fill)] {
+                if before != after
+                    && let Some(c) = after
+                {
+                    crate::comments::remember_custom_colour(ctx, c);
+                }
             }
         }
         // Make Properties Default: the look chosen here, even when it was already the comment's.

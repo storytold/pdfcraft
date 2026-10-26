@@ -2124,15 +2124,36 @@ fn other_colour_swatch(ui: &mut egui::Ui, open: bool) -> egui::Response {
 /// quick colours offer) and, once used, the recent custom colours; returns the colour chosen.
 /// The "+" sits in the first row, so the grid is no taller than before until the picker opens.
 pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
+    let id = ui.next_auto_id().with("colour-picker");
+    let mut state = ui.data(|d| d.get_temp::<ColourPickerDraft>(id)).unwrap_or_default();
+    let picked = swatch_grid_body(ui, current, &mut state, false);
+    ui.data_mut(|d| d.insert_temp(id, state));
+    picked
+}
+
+/// Picker state owned by one dialog draft, discarded when that dialog closes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ColourPickerDraft {
+    open: bool,
+    value: Color32,
+}
+
+/// Unlike immediate-action palettes, a properties dialog commits its entire draft on OK.
+pub(crate) fn draft_swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>, state: &mut ColourPickerDraft) -> Option<Rgb> {
+    swatch_grid_body(ui, current, state, true)
+}
+
+/// Render the shared palette and custom picker, updating `state` without editing a document.
+/// Draft mode returns RGB changes immediately and keeps the picker open; immediate-action
+/// mode returns custom colours only on Apply. Choosing a palette swatch closes either picker.
+fn swatch_grid_body(ui: &mut egui::Ui, current: Option<Rgb>, state: &mut ColourPickerDraft, draft: bool) -> Option<Rgb> {
     let mut picked = None;
     let on = |c: &Rgb| current.is_some_and(|cur| same_colour(&cur, c));
     // Keyed on this grid's own place in the parent, so two grids in one dialog open their
     // pickers separately.
     let base = ui.next_auto_id();
     ui.skip_ahead_auto_ids(1);
-    let open_id = base.with("other-colour");
-    let value_id = open_id.with("value");
-    let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    let mut open = state.open;
     egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
         for (i, (name, c)) in SWATCHES.iter().enumerate() {
             if swatch(ui, *c, on(c), tl!(name)).clicked() {
@@ -2141,7 +2162,7 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
             if i == 4 && other_colour_swatch(ui, open).clicked() {
                 open = !open;
                 // Start from the current colour each time the picker opens.
-                ui.data_mut(|d| d.insert_temp(value_id, current.map_or(Color32::BLACK, color32)));
+                state.value = current.map_or(Color32::BLACK, color32);
             }
             if i % 5 == 4 {
                 ui.end_row();
@@ -2162,20 +2183,24 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
         });
     }
     if open && picked.is_none() {
-        let mut value = ui.data(|d| d.get_temp::<Color32>(value_id)).unwrap_or_else(|| current.map_or(Color32::BLACK, color32));
-        egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
-        ui.data_mut(|d| d.insert_temp(value_id, value));
-        // Dragging in the picker previews nothing; Apply commits once (one undo step).
-        if ui.button(tl!("Apply")).clicked() {
+        let mut value = state.value;
+        let changed = egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
+        state.value = value;
+        // Immediate-action palettes commit only on Apply; dialogs edit a draft until OK.
+        if !draft && ui.button(tl!("Apply")).clicked() {
             let c = rgb_of(value);
             remember_custom_colour(ui.ctx(), c);
             picked = Some(c);
+        } else if draft && changed {
+            // The enclosing dialog owns the transaction: update its draft, not the document.
+            state.open = open;
+            return Some(rgb_of(value));
         }
     }
     if picked.is_some() {
         open = false;
     }
-    ui.data_mut(|d| d.insert_temp(open_id, open));
+    state.open = open;
     picked
 }
 
