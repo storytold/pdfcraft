@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use pdfcraft_fonts::{literal, win_ansi};
+use pdfcraft_fonts::{LATIN_EXTRA, literal, win_ansi_extra};
 
 use crate::XfaError;
 use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
@@ -118,7 +118,15 @@ fn standard_font(base: &str) -> Object {
     f.set(b"Type".to_vec(), Object::name("Font"));
     f.set(b"Subtype".to_vec(), Object::name("Type1"));
     f.set(b"BaseFont".to_vec(), Object::name(base));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    // WinAnsi plus the Romanian and Polish letters it lacks (`LATIN_EXTRA`, codes 1..), which
+    // `win_ansi_extra` writes: a plain WinAnsiEncoding drew them as `?`.
+    let mut enc = Dict::new();
+    enc.set(b"Type".to_vec(), Object::name("Encoding"));
+    enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    // One `code /name` pair per letter: the codes skip the white-space controls, so they are not one run.
+    let diffs: Vec<Object> = LATIN_EXTRA.iter().flat_map(|e| [Object::Int(i64::from(e.1)), Object::name(e.2)]).collect();
+    enc.set(b"Differences".to_vec(), Object::Array(diffs));
+    f.set(b"Encoding".to_vec(), Object::Dict(enc));
     Object::Dict(f)
 }
 
@@ -837,7 +845,7 @@ impl Emitter<'_> {
                         format!("{open} /{name} {} Tf {} rg{tz} 1 0 0 1 {} {} Tm ", n(s.face.size), rgb(s.face.color), n(s.x), n(h - s.baseline))
                             .bytes(),
                     );
-                    content.extend(literal(&win_ansi(&s.text)));
+                    content.extend(literal(&win_ansi_extra(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
                     if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
                         annots.push(Object::Ref(r));
@@ -1418,6 +1426,22 @@ pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
 #[cfg(test)]
 mod tests {
     use super::parse_hex32;
+
+    #[test]
+    fn standard_fonts_name_the_extra_latin_letters_in_their_encoding() {
+        let font = super::standard_font("Helvetica");
+        let enc = font.as_dict().and_then(|f| f.get(b"Encoding")).and_then(|e| e.as_dict()).expect("an /Encoding dictionary");
+        assert_eq!(enc.get(b"BaseEncoding").and_then(|b| b.as_name()), Some(&b"WinAnsiEncoding"[..]));
+        let diffs = enc.get(b"Differences").and_then(|d| d.as_array()).expect("/Differences");
+        assert_eq!(diffs.len(), pdfcraft_fonts::LATIN_EXTRA.len() * 2);
+        assert_eq!((diffs[0].as_int(), diffs[1].as_name()), (Some(1), Some(&b"abreve"[..])));
+        assert_eq!((diffs[4].as_int(), diffs[5].as_name()), (Some(3), Some(&b"scommaaccent"[..])));
+        // ț by its code point: `tcommaaccent` means U+0163 ţ in the glyph list
+        assert_eq!((diffs[8].as_int(), diffs[9].as_name()), (Some(5), Some(&b"uni021B"[..])));
+        // ţ (cedilla) must not sit on tab or line feed, where viewers draw nothing
+        let tcedilla = diffs.chunks(2).find(|p| p[1].as_name() == Some(&b"tcedilla"[..])).and_then(|p| p[0].as_int());
+        assert!(tcedilla.is_some_and(|c| ![9, 10, 12, 13].contains(&c)));
+    }
 
     #[test]
     fn parse_hex32_rejects_non_hex_digits() {

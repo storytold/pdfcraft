@@ -132,7 +132,7 @@ impl Face {
     pub fn width(&self, s: &str) -> f64 {
         #[cfg(test)]
         MEASURED.with(|m| m.set(m.get().saturating_add(s.len() as u64)));
-        self.family.std14(self.bold, self.italic).text_width(s, self.size) * self.h_scale
+        self.family.std14(self.bold, self.italic).text_width_extra(s, self.size) * self.h_scale
     }
 }
 

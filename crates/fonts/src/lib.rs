@@ -159,6 +159,61 @@ pub fn win_ansi(s: &str) -> Vec<u8> {
     s.chars().map(|c| if c == '\t' { b' ' } else { win_ansi_byte(c).unwrap_or(b'?') }).collect()
 }
 
+/// Latin letters outside WinAnsiEncoding that Romanian and Polish forms use, as (character, code,
+/// glyph name, base letter). ț Ț are named `uni021B`/`uni021A`: the glyph list maps
+/// `tcommaaccent`/`Tcommaaccent` to the cedilla letters U+0163/U+0162, so text extracted from
+/// those names would read ţ Ţ. XFA layout draws text in the standard-14 fonts; their
+/// `/Encoding` adds these through `/Differences` at control codes WinAnsiEncoding leaves
+/// undefined (0x01-0x08, 0x0B, 0x0E-0x1F), so no WinAnsi character is displaced. 0x09, 0x0A,
+/// 0x0C and 0x0D are skipped: viewers treat tab and line feed as white space when drawing, a
+/// literal string turns an unescaped carriage return into a line feed, and form feed separates
+/// pages in extracted text. In the standard-14 metrics each glyph has its base letter's advance width.
+pub const LATIN_EXTRA: &[(char, u8, &str, char)] = &[
+    ('ă', 0x01, "abreve", 'a'),
+    ('Ă', 0x02, "Abreve", 'A'),
+    ('ș', 0x03, "scommaaccent", 's'),
+    ('Ș', 0x04, "Scommaaccent", 'S'),
+    ('ț', 0x05, "uni021B", 't'),
+    ('Ț', 0x06, "uni021A", 'T'),
+    ('ş', 0x07, "scedilla", 's'),
+    ('Ş', 0x08, "Scedilla", 'S'),
+    ('ţ', 0x0b, "tcedilla", 't'),
+    ('Ţ', 0x0e, "Tcedilla", 'T'),
+    ('ą', 0x0f, "aogonek", 'a'),
+    ('Ą', 0x10, "Aogonek", 'A'),
+    ('ę', 0x11, "eogonek", 'e'),
+    ('Ę', 0x12, "Eogonek", 'E'),
+    ('ł', 0x13, "lslash", 'l'),
+    ('Ł', 0x14, "Lslash", 'L'),
+    ('ś', 0x15, "sacute", 's'),
+    ('Ś', 0x16, "Sacute", 'S'),
+    ('ż', 0x17, "zdotaccent", 'z'),
+    ('Ż', 0x18, "Zdotaccent", 'Z'),
+    ('ź', 0x19, "zacute", 'z'),
+    ('Ź', 0x1a, "Zacute", 'Z'),
+    ('ć', 0x1b, "cacute", 'c'),
+    ('Ć', 0x1c, "Cacute", 'C'),
+    ('ń', 0x1d, "nacute", 'n'),
+    ('Ń', 0x1e, "Nacute", 'N'),
+];
+
+/// Encode text in WinAnsiEncoding plus [`LATIN_EXTRA`]: those letters become their codes, the
+/// rest as [`win_ansi`] encodes them (tabs become spaces, unmappable characters `?`).
+pub fn win_ansi_extra(s: &str) -> Vec<u8> {
+    s.chars()
+        .map(|c| match LATIN_EXTRA.iter().find(|e| e.0 == c) {
+            Some(e) => e.1,
+            None if c == '\t' => b' ',
+            None => win_ansi_byte(c).unwrap_or(b'?'),
+        })
+        .collect()
+}
+
+/// The base letter a [`LATIN_EXTRA`] character is measured as, if `c` is one.
+pub fn extra_base_letter(c: char) -> Option<char> {
+    LATIN_EXTRA.iter().find(|e| e.0 == c).map(|e| e.3)
+}
+
 /// The character encoding of a predefined Unicode CMap (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, …;
 /// ISO 32000-2 §9.7.5.2), which maps Unicode text straight to codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,6 +347,37 @@ pub fn literal(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn win_ansi_extra_encodes_romanian_and_polish_letters_without_question_marks() {
+        let bytes = win_ansi_extra("Declarație ș Łódź");
+        assert_eq!(&bytes[..7], win_ansi("Declara").as_slice());
+        assert_eq!(bytes[7], 0x05, "ț");
+        assert_eq!(bytes[11], 0x03, "ș");
+        assert!(!bytes.contains(&b'?'));
+        // ó is WinAnsi (0xF3) and stays so; Ł and ź come from the extra table
+        assert_eq!(&bytes[13..], &[0x14, 0xf3, b'd', 0x19]);
+    }
+
+    #[test]
+    fn win_ansi_extra_leaves_winansi_text_as_win_ansi_writes_it() {
+        let text = "AaBb 0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ âîé€ Š\t";
+        assert_eq!(win_ansi_extra(text), win_ansi(text));
+        // still `?` for what neither table holds
+        assert_eq!(win_ansi_extra("Ω"), b"?".to_vec());
+    }
+
+    #[test]
+    fn latin_extra_codes_are_distinct_control_codes_and_never_white_space() {
+        let mut seen = std::collections::HashSet::new();
+        for e in LATIN_EXTRA {
+            assert!((0x01..0x20).contains(&e.1), "{:?} code {:#x}", e.0, e.1);
+            assert!(![0x09, 0x0a, 0x0c, 0x0d].contains(&e.1), "{:?} on a white-space code {:#x}", e.0, e.1);
+            assert!(seen.insert(e.1), "code {:#x} used twice", e.1);
+            assert!(win_ansi_byte(e.0).is_none(), "{:?} is already WinAnsi", e.0);
+            assert_eq!(extra_base_letter(e.0), Some(e.3));
+        }
+    }
 
     #[test]
     fn wrap_keeps_leading_spaces() {
