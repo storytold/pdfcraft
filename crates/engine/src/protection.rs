@@ -150,9 +150,9 @@ impl Protection {
     }
 }
 
-/// Opened as owner, or nothing is restricted (no permissions password was set): security may
-/// be changed, as in Acrobat.
+/// Opened as owner (with the permissions password, or a file without one): security may be
+/// changed, as in Acrobat. `/P` granting everything is no proof that there is no permissions
+/// password (#2956).
 pub(crate) fn unrestricted(p: &pdfcraft_cos::Permissions) -> bool {
-    const ALL: i32 = 0b1111_0011_1100; // bits 3–6 and 9–12
-    p.owner || p.bits & ALL == ALL
+    p.owner
 }

@@ -85,7 +85,8 @@ fn expected_auth(algorithm: Algorithm, user_target: &[u8], owner_target: &[u8], 
     if tried.iter().any(|c| c == owner_target) {
         Some(Auth::Owner)
     } else if tried.iter().any(|c| c == user_target) {
-        Some(Auth::User)
+        // An empty owner password is no permissions password: the user password opens as owner (#2956).
+        Some(if candidates(algorithm, "").iter().any(|c| c == owner_target) { Auth::Owner } else { Auth::User })
     } else {
         None
     }

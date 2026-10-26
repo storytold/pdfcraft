@@ -1542,13 +1542,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::Protect(p) => {
             p.validate()?;
             let seed = cx.entropy();
-            // Without a permissions password nothing is restricted, so the owner password is a
-            // random one nobody needs.
-            let random_owner: String = cx.entropy().iter().map(|b| format!("{b:02x}")).collect();
+            // Without a permissions password nothing is restricted: the open password is the owner
+            // password too, so whoever opens the file may change its security (#2956). Not an
+            // empty one: opening without a password would authenticate as owner (#603).
             let params = pdfcraft_cos::NewEncryption {
                 algorithm: p.algorithm,
                 user_password: p.open_password.as_deref().unwrap_or(""),
-                owner_password: p.permissions_password.as_deref().unwrap_or(&random_owner),
+                owner_password: p.permissions_password.as_deref().or(p.open_password.as_deref()).unwrap_or(""),
                 permissions: p.permission_bits(),
                 encrypt_metadata: p.encrypt_metadata,
                 seed,

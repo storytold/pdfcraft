@@ -219,6 +219,16 @@ impl SecurityHandler {
             }
             r => return Err(CryptError::Unsupported(format!("revision {r}"))),
         };
+        // An empty owner password is no permissions password: anyone can give it (opening
+        // without a password does), so the user password gives owner access too (#2956).
+        if auth == Auth::User
+            && !pw.is_empty()
+            && let Ok(owner) = Self::open(dict.clone(), id0, None)
+            && owner.auth == Auth::Owner
+            && owner.key == key
+        {
+            return Ok(owner);
+        }
         Ok(Self::new(dict, key, auth, recovered_user))
     }
 

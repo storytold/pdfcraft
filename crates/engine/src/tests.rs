@@ -1642,6 +1642,19 @@ fn remove_security_from_a_file_with_its_encrypt_dictionary_in_the_trailer() {
 }
 
 #[test]
+fn removing_security_needs_the_permissions_password_even_when_everything_is_allowed() {
+    // #2956: every /P bit set and a separate owner password; the open password must not strip it.
+    for (owner, allowed) in [("owner", false), ("user", true), ("", true)] {
+        for permissions in [-4, 0b0100] {
+            let mut s = Session::new();
+            let id = s.open("r.pdf", None, protected("user", owner, permissions), Some("user")).unwrap();
+            assert_eq!(s.get(id).unwrap().allows_security_change(), allowed, "{owner:?} {permissions}");
+            assert_eq!(s.apply(id, Edit::RemoveProtection).is_ok(), allowed, "{owner:?} {permissions}");
+        }
+    }
+}
+
+#[test]
 fn unlocking_needs_the_permissions_password_not_the_open_password() {
     let mut s = Session::new();
     let id = s.open("r.pdf", None, protected("open", "perms", 0b0100), Some("open")).unwrap();
