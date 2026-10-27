@@ -2375,6 +2375,7 @@ fn detection_finds_blanks_rules_boxes_and_names_them() {
     assert!(again.is_empty(), "{again:?}");
 }
 
+/// Equal touching answer cells become one labelled comb; separated squares and table cells do not.
 #[test]
 fn detection_makes_a_row_of_touching_cells_one_comb_field() {
     use crate::detect::*;
@@ -2423,6 +2424,57 @@ fn detection_makes_a_row_of_touching_cells_one_comb_field() {
     }
 }
 
+/// RTL labels beside text blanks keep their logical word order, including embedded LTR runs.
+#[test]
+fn detection_names_text_blanks_from_rtl_labels_on_the_right() {
+    use crate::detect::*;
+    let w = |text: &str, x0: f64, y: f64, x1: f64| Word { text: text.into(), rect: [x0, y, x1, y + 10.0] };
+    let words = vec![
+        w("Heading", 100.0, 720.0, 200.0),
+        w("اسم", 375.0, 700.0, 395.0),
+        w("الشركة:", 320.0, 700.0, 370.0),
+        w("________", 100.0, 699.0, 250.0),
+        w("שם", 330.0, 650.0, 350.0),
+        w("חברה:", 280.0, 650.0, 325.0),
+        w("________", 100.0, 649.0, 250.0),
+        w("رقم", 340.0, 600.0, 365.0),
+        w("ABC", 270.0, 600.0, 300.0),
+        w("123:", 305.0, 600.0, 335.0),
+        w("________", 100.0, 599.0, 250.0),
+    ];
+    let found = detect(&words, &Shapes::default(), &[], &[]);
+    assert_eq!(found.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["اسم الشركة", "שם חברה", "رقم ABC 123"]);
+    assert!(found.iter().all(|c| c.kind == Kind::Text));
+    assert!(detect(&words, &Shapes::default(), &found.iter().map(|c| c.rect).collect::<Vec<_>>(), &[]).is_empty());
+}
+
+/// Nearby RTL labels beat distant neighbours and headings, while unrelated right text is ignored.
+#[test]
+fn detection_bounds_rtl_label_groups_and_preserves_ltr_labels() {
+    use crate::detect::*;
+    let w = |text: &str, x0: f64, y: f64, x1: f64| Word { text: text.into(), rect: [x0, y, x1, y + 10.0] };
+    let names = |words: Vec<Word>, shapes: Shapes| detect(&words, &shapes, &[], &[]).into_iter().map(|c| c.name).collect::<Vec<_>>();
+    let blank = || w("________", 100.0, 699.0, 250.0);
+    assert_eq!(names(vec![w("Account", 40.0, 700.0, 95.0), blank(), w("اسم", 270.0, 700.0, 295.0)], Shapes::default()), ["Account"]);
+    assert_eq!(names(vec![w("Account", 0.0, 700.0, 20.0), blank(), w("اسم", 255.0, 700.0, 280.0)], Shapes::default()), ["اسم"]);
+    assert_eq!(names(vec![w("Account", 40.0, 700.0, 90.0), blank(), w("اسم", 260.0, 700.0, 285.0)], Shapes::default()), ["Account"]);
+    for text in ["Reference", "123", ":"] {
+        assert_eq!(names(vec![blank(), w(text, 270.0, 700.0, 300.0)], Shapes::default()), ["Text1"]);
+    }
+    assert_eq!(names(vec![blank(), w(":", 255.0, 700.0, 258.0), w("اسم", 300.0, 700.0, 330.0)], Shapes::default()), ["Text1"]);
+    assert_eq!(names(vec![blank(), w("اسم", 510.0, 700.0, 540.0)], Shapes::default()), ["Text1"]);
+    let words = vec![w("Heading", 100.0, 445.0, 200.0), w("الأعلى", 270.0, 434.0, 320.0), w("القريب:", 270.0, 416.0, 320.0)];
+    assert_eq!(names(words, Shapes { boxes: vec![[100.0, 400.0, 250.0, 440.0]], rules: vec![] }), ["القريب"]);
+    assert_eq!(
+        names(
+            vec![w("I", 120.0, 700.0, 123.0), w("agree", 126.0, 700.0, 151.0)],
+            Shapes { boxes: vec![[100.0, 700.0, 112.0, 712.0]], rules: vec![] }
+        ),
+        ["I agree"]
+    );
+}
+
+/// Detection reads answer boxes and horizontal rules from both rectangle and segment paths.
 #[test]
 fn page_shapes_reads_boxes_and_rules() {
     let mut doc = fixture();

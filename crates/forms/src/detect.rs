@@ -10,7 +10,8 @@ use pdfcraft_cos::{Document, Object};
 
 pub mod raster;
 
-/// A piece of text on the page, in user space.
+/// A piece of logical text on the page, in user space.
+/// Supply words in logical reading order, as the engine's page-text adapter does.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub text: String,
@@ -250,6 +251,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     out
 }
 
+/// The vertical centre of a PDF-space rectangle, used to group words on the same line.
 fn mid(r: [f64; 4]) -> f64 {
     (r[1] + r[3]) / 2.0
 }
@@ -261,8 +263,43 @@ fn clean(label: &str) -> String {
     s.chars().take(40).collect::<String>().trim().to_string()
 }
 
-/// The label for a field at `rect`: the words to its left on the same line, else the words
-/// just above it.
+/// A nearby right-side label whose first strong character is RTL.
+/// Geometry selects the nearest row and contiguous group; the input's logical reading order
+/// is retained within that group, including embedded LTR words and numbers.
+fn rtl_label(words: &[Word], rect: [f64; 4]) -> Option<(String, f64)> {
+    let h = (rect[3] - rect[1]).max(10.0);
+    let mut right: Vec<(usize, &Word)> = words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| (mid(w.rect) - mid(rect)).abs() < h * 0.7 && w.rect[0] >= rect[2] - 1.0 && w.rect[0] - rect[2] < 250.0)
+        .collect();
+    let (_, nearest) = right
+        .iter()
+        .min_by(|(_, a), (_, b)| (mid(a.rect) - mid(rect)).abs().total_cmp(&(mid(b.rect) - mid(rect)).abs()).then(a.rect[0].total_cmp(&b.rect[0])))?;
+    let line = mid(nearest.rect);
+    right.retain(|(_, w)| (mid(w.rect) - line).abs() < 3.0);
+    right.sort_by(|(_, a), (_, b)| a.rect[0].total_cmp(&b.rect[0]));
+    let gap = right.first()?.1.rect[0] - rect[2];
+    let mut picked = Vec::new();
+    let mut x = rect[2];
+    for (index, w) in right {
+        if !picked.is_empty() && w.rect[0] - x > 24.0 {
+            break;
+        }
+        picked.push((index, w.text.as_str()));
+        x = w.rect[2];
+    }
+    picked.sort_by_key(|(index, _)| *index);
+    let label = picked.iter().map(|(_, text)| *text).collect::<Vec<_>>().join(" ");
+    if unicode_bidi::get_base_direction(label.as_str()) != unicode_bidi::Direction::Rtl {
+        return None;
+    }
+    let label = clean(&label);
+    (!label.is_empty()).then_some((label, gap))
+}
+
+/// Text fields use the closest same-line label to their left or strong RTL label to their
+/// right, then the words just above. Check boxes use the words immediately to their right.
 fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
     let h = (rect[3] - rect[1]).max(8.0);
     let same_line = |w: &Word| (mid(w.rect) - mid(rect)).abs() < h.max(10.0) * 0.7;
@@ -299,6 +336,11 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
         x = w.rect[0];
     }
     let l = clean(&picked.join(" "));
+    if let Some((rtl, gap)) = rtl_label(words, rect)
+        && (l.is_empty() || left.last().is_some_and(|w| gap < rect[0] - w.rect[2]))
+    {
+        return rtl;
+    }
     if !l.is_empty() {
         return l;
     }

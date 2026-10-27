@@ -6618,6 +6618,47 @@ fn detecting_form_fields_preserves_content_piece_comments() {
     }
 }
 
+/// Release-font Arabic labels name their neighbouring blanks before and after fields are added.
+#[test]
+fn detecting_rtl_text_fields_uses_their_right_hand_labels() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        eprintln!("Arabic integration coverage needs the pinned CRAFT_FONTS_DIR build input; pure detection tests always run");
+        return;
+    }
+    let dir = workdir("rtl-field-labels");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 595, "height": 842 }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({ "doc": doc, "page": 1, "text": "نموذج تسجيل مورد", "rect": [323, 60, 523, 80], "size": 16, "align": "right" }),
+    );
+    let labels = ["اسم الشركة", "الشخص المسؤول", "رقم الهاتف"];
+    for (i, label) in labels.iter().enumerate() {
+        let y = 100 + 30 * i;
+        ok(
+            &mut a,
+            "page_add_text",
+            json!({ "doc": doc, "page": 1, "text": format!("{label}:"), "rect": [423, y, 523, y + 16], "size": 11, "align": "right" }),
+        );
+        ok(
+            &mut a,
+            "page_add_text",
+            json!({ "doc": doc, "page": 1, "text": "______________________________", "rect": [223, y, 420, y + 16], "size": 11 }),
+        );
+    }
+    let proposed = ok(&mut a, "form_detect_fields", json!({ "doc": doc, "add": false }));
+    let names = |value: &Value| value["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names(&proposed), labels);
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["count"], 0);
+    assert_eq!(ok(&mut a, "form_detect_fields", json!({ "doc": doc })), proposed);
+    assert_eq!(names(&ok(&mut a, "form_fields", json!({ "doc": doc }))), labels);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "rtl-fields.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "rtl-fields.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(names(&ok(&mut a, "form_fields", json!({ "doc": reopened }))), labels);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn detecting_comb_boxes_through_tools() {
     let mut body = String::from("BT /F1 10 Tf 40 105 Td (Postcode) Tj ET\n");
