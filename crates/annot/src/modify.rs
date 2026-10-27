@@ -541,7 +541,7 @@ pub fn set_style(
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build_with_doc(Some(doc), &d).is_none() {
+    if appearance::build_with_doc(Some(&mut doc.clone()), &d).is_none() {
         return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
@@ -725,7 +725,7 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
-    if appearance::build_with_doc(Some(doc), &d).is_none() {
+    if appearance::build_with_doc(Some(&mut doc.clone()), &d).is_none() {
         return Err(AnnotError::Unsupported(subtype));
     }
     if fill.is_some_and(|c| !finite(&c)) {
