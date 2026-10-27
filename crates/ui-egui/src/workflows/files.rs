@@ -1169,27 +1169,33 @@ impl PdfCraftApp {
 /// Resolve a dropped file path, stripping `file://` URI schemes and percent-decoding
 /// paths sent by Linux desktop environments (e.g. KDE Plasma / Dolphin) and other file managers.
 pub(crate) fn clean_dropped_path(raw: &std::path::Path) -> Option<std::path::PathBuf> {
-    let s = raw.to_string_lossy();
-    let trimmed = s.trim().trim_matches(|c| c == '\r' || c == '\n');
-    if trimmed.is_empty() {
-        return None;
+    if raw.is_absolute() {
+        let s = raw.to_string_lossy();
+        let lower = s.to_ascii_lowercase();
+        if !lower.starts_with("file:") {
+            return Some(raw.to_path_buf());
+        }
     }
-
-    let lower = trimmed.to_ascii_lowercase();
+    let s = raw.to_string_lossy();
+    let s_no_lines = s.trim_end_matches(|c| c == '\r' || c == '\n');
+    let lower = s_no_lines.to_ascii_lowercase();
     let cleaned = if let Some(rest) = lower.strip_prefix("file://") {
         let after_host = if rest.starts_with("localhost/") {
-            trimmed.get("file://localhost".len()..).unwrap_or("")
+            s_no_lines.get("file://localhost".len()..).unwrap_or("")
         } else {
-            trimmed.get("file://".len()..).unwrap_or("")
+            s_no_lines.get("file://".len()..).unwrap_or("")
         };
         decode_uri_path(after_host)
     } else if lower.starts_with("file:/") {
-        let after_scheme = trimmed.get("file:".len()..).unwrap_or("");
+        let after_scheme = s_no_lines.get("file:".len()..).unwrap_or("");
         decode_uri_path(after_scheme)
     } else {
-        trimmed.to_string()
+        s_no_lines.to_string()
     };
 
+    if cleaned.is_empty() {
+        return None;
+    }
     let p = std::path::PathBuf::from(cleaned);
     if p.is_absolute() || raw.is_absolute() { Some(p) } else { None }
 }
@@ -1198,15 +1204,14 @@ pub(crate) fn clean_dropped_path(raw: &std::path::Path) -> Option<std::path::Pat
 fn decode_uri_path(s: &str) -> String {
     let bytes = percent_decode(s);
     let decoded = String::from_utf8_lossy(&bytes).into_owned();
-    let trimmed = decoded.trim();
-    if trimmed.len() >= 3
-        && (trimmed.starts_with('/') || trimmed.starts_with('\\'))
-        && trimmed.as_bytes().get(1).is_some_and(|b| b.is_ascii_alphabetic())
-        && trimmed.as_bytes().get(2) == Some(&b':')
+    if decoded.len() >= 3
+        && (decoded.starts_with('/') || decoded.starts_with('\\'))
+        && decoded.as_bytes().get(1).is_some_and(|b| b.is_ascii_alphabetic())
+        && decoded.as_bytes().get(2) == Some(&b':')
     {
-        trimmed.get(1..).unwrap_or("").to_string()
+        decoded.get(1..).unwrap_or("").to_string()
     } else {
-        trimmed.to_string()
+        decoded
     }
 }
 
