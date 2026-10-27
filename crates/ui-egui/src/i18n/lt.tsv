@@ -2818,3 +2818,144 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+	Scanning page {n}…	Nuskaitomas {n} puslapis…
+	Scanning page {n} of {t}…	Nuskaitomas {n} puslapis iš {t}…
+	All pages asks the driver for the whole stack.	„Visi puslapiai“ paprašo tvarkyklės nuskaityti visą krūvą.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Puslapių skaičius sustabdo tiekiklį po tiek lapų. Atšaukimas baigia perdavimą anksčiau; jau gauti puslapiai lieka dokumente.
+	Created Scan.pdf	Sukurtas Scan.pdf
+	Inserted scanned pages	Nuskaityti puslapiai įterpti
+	A cover on the scanner is open.	Skaitytuvo dangtis atidarytas.
+	Advanced…	Išplėstiniai…
+	Auto-deskew	Automatinis ištiesinimas
+	Bed	Stiklas
+	Brightness	Ryškumas
+	Cancel reverse sides	Atšaukti kitas puses
+	Clear region	Išvalyti sritį
+	Color document	Spalvotas dokumentas
+	Connected by USB.	Prijungta per USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Prijungta per tinklą (Web Services). Parinktis pateikia ši tvarkyklė, o ne USB tvarkyklė.
+	Contrast	Kontrastas
+	Create PDF	Sukurti PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Vilkite peržiūroje, kad pasirinktumėte sritį. Tuščias pasirinkimas nuskaito visą plotą.
+	Driver default	Tvarkyklės numatytoji
+	Duplex	Dvipusis
+	Duplex is not offered.	Dvipusis nuskaitymas nesiūlomas.
+	Feeder	Tiekiklis
+	From scanner…	Iš skaitytuvo…
+	Full area	Visas plotas
+	Insert scanned pages	Įterpti nuskaitytus puslapius
+	Intent	Paskirtis
+	Invert tones	Apversti tonus
+	Lamp	Lempa
+	Lamp on	Lempa įjungta
+	Large scan	Didelis nuskaitymas
+	Listing scanners…	Ieškoma skaitytuvų…
+	Manual duplex needs one reverse side for each front.	Rankiniam dvipusiam nuskaitymui reikia po vieną kitą pusę kiekvienai pirmajai.
+	Mirror	Veidrodis
+	Mirror the page	Atspindėti puslapį
+	No scanner is connected.	Joks skaitytuvas neprijungtas.
+	Optical resolution {x} × {y} dpi.	Optinė skyra {x} × {y} dpi.
+	Orientation	Orientacija
+	Photometric	Fotometrinis
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Peržiūra skirta stiklui. Žemiau nurodykite sritį coliais arba palikite tuščią, kad būtų nuskaitytas visas lapas.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Peržiūrai naudojamas stiklas. Perjunkite šaltinį į Stiklą arba nuskaitykite be peržiūros.
+	Refresh lists scanners. It does not feed paper.	Atnaujinimas parodo skaitytuvų sąrašą. Jis netraukia popieriaus.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Sritis coliais. Palikite plotį arba aukštį lygų nuliui, kad būtų nuskaitytas visas plotas.
+	Reverse sides	Kitos pusės
+	Reverse sides interleaved.	Kitos pusės sudėtos pakaitomis.
+	Scan reverse sides	Nuskaityti kitas puses
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Nuskaitykite pirmąją pusę, apverskite lapą ant stiklo ir nuskaitykite kitą pusę.
+	Scan the fronts before the reverse sides.	Prieš kitas puses nuskaitykite pirmąsias.
+	Scan interrupted	Nuskaitymas pertrauktas
+	The scanner has a paper jam.	Skaitytuve įstrigo popierius.
+	The feeder ran out of paper.	Tiekiklyje pasibaigė popierius.
+	The feeder took more than one sheet.	Tiekiklis paėmė daugiau nei vieną lapą.
+	The scanner is offline or needs attention.	Skaitytuvas atjungtas arba reikalauja dėmesio.
+	The scanner is busy.	Skaitytuvas užimtas.
+	The scan was interrupted.	Nuskaitymas buvo pertrauktas.
+	The scan was cancelled at the scanner.	Nuskaitymas buvo atšauktas skaitytuve.
+	No pages were scanned.	Nenuskaityta jokių puslapių.
+	1 page was scanned.	Nuskaitytas 1 puslapis.
+	{n} pages were scanned.	Nuskaityta puslapių: {n}.
+	{n} of {m} pages were scanned.	Nuskaityta puslapių: {n} iš {m}.
+	The pages already scanned were kept in the document.	Jau nuskaityti puslapiai palikti dokumente.
+	The fronts already scanned are kept for the reverse-side pass.	Jau nuskaitytos pirmosios pusės paliekamos kitų pusių perėjimui.
+	The reverse sides already scanned are kept.	Jau nuskaitytos kitos pusės paliekamos.
+	Close the feeder cover and check the paper, then choose Continue.	Uždarykite tiekiklio dangtį ir patikrinkite popierių, tada pasirinkite Tęsti.
+	Close the feeder cover and check the paper, then choose Try again.	Uždarykite tiekiklio dangtį ir patikrinkite popierių, tada pasirinkite Bandyti dar kartą.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Pašalinkite įstrigusį popierių ir lygiai įdėkite likusius lapus, tada pasirinkite Tęsti.
+	Clear the jam and load the sheets squarely, then choose Try again.	Pašalinkite įstrigusį popierių ir lygiai įdėkite lapus, tada pasirinkite Bandyti dar kartą.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Įdėkite daugiau lapų ir pasirinkite Tęsti arba pasirinkite Baigti, kad išliktų nuskaityta.
+	Load sheets in the feeder, then choose Try again.	Įdėkite lapus į tiekiklį, tada pasirinkite Bandyti dar kartą.
+	Separate the sheets and load the remaining ones, then choose Continue.	Atskirkite lapus ir įdėkite likusius, tada pasirinkite Tęsti.
+	Separate the sheets and load them again, then choose Try again.	Atskirkite lapus ir įdėkite juos iš naujo, tada pasirinkite Bandyti dar kartą.
+	Check the scanner is on and connected, then choose Continue.	Patikrinkite, ar skaitytuvas įjungtas ir prijungtas, tada pasirinkite Tęsti.
+	Check the scanner is on and connected, then choose Try again.	Patikrinkite, ar skaitytuvas įjungtas ir prijungtas, tada pasirinkite Bandyti dar kartą.
+	Scan the missing reverse sides, then choose Finish.	Nuskaitykite trūkstamas kitas puses, tada pasirinkite Baigti.
+	Try again	Bandyti dar kartą
+	Continue scanning	Tęsti nuskaitymą
+	Continue scanning fronts	Tęsti pirmųjų pusių nuskaitymą
+	Continue scanning reverse sides	Tęsti kitų pusių nuskaitymą
+	Scan reverse side now (1 front)	Nuskaityti kitą pusę dabar (1 pirmoji)
+	Scan reverse sides now ({n} fronts)	Nuskaityti kitas puses dabar (pirmųjų: {n})
+	Finish	Baigti
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Nuskaityta pirmųjų pusių: {n}. Apverskite lapą ant stiklo, tada pasirinkite Nuskaityti kitas puses.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Nuskaityta pirmųjų pusių: {n}. Apverskite krūvą, kad viršuje būtų paskutinis lapas, įdėkite ją iš naujo, tada pasirinkite Nuskaityti kitas puses.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Nuskaitykite pirmąsias puses, apverskite krūvą (viršuje paskutinis lapas), tada nuskaitykite kitas puses. Puslapiai sudedami pakaitomis: pirmoji, kita, …
+	Scanner settings	Skaitytuvo nustatymai
+	Scanning front {n} of {t}…	Nuskaitoma pirmoji pusė {n} iš {t}…
+	Scanning front {n}…	Nuskaitoma pirmoji pusė {n}…
+	Scanning reverse side {n} of {t}…	Nuskaitoma kita pusė {n} iš {t}…
+	Scanning reverse side {n}…	Nuskaitoma kita pusė {n}…
+	Scanning…	Nuskaitoma…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Šio šaltinio siūlomi nustatymai. Palikite valdiklį nepakeistą, kad būtų išlaikyta tvarkyklės reikšmė.
+	Stop	Stop
+	Straighten the page	Ištiesinti puslapį
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Stiklas nuskaito po vieną puslapį. Nuskaitykite pirmąją pusę, apverskite ir nuskaitykite kitą pusę.
+	The driver may accept a turn and leave the picture as it was.	Tvarkyklė gali priimti pasukimą, bet palikti vaizdą nepakeistą.
+	The driver reports a paper jam.	Tvarkyklė praneša apie įstrigusį popierių.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Tvarkyklė praneša, kad laukia lapas. Šis požymis gali likti įjungtas ir ištuštėjus dėklui.
+	The preview could not be shown.	Nepavyko parodyti peržiūros.
+	The scan could not be started.	Nepavyko pradėti nuskaitymo.
+	The scan produced no pages.	Nuskaitant nesukurta jokių puslapių.
+	The scanner list could not be refreshed.	Nepavyko atnaujinti skaitytuvų sąrašo.
+	Threshold	Slenkstis
+	Transfer format: {format}.	Perdavimo formatas: {format}.
+	Turned left	Pasukta į kairę
+	Upside down	Aukštyn kojomis
+	Vertical resolution	Vertikalioji skyra
+	Will use the bed.	Bus naudojamas stiklas.
+	Will use the feeder.	Bus naudojamas tiekiklis.
+	front(s)	pirmosios pusės
+	reverse side(s)	kitos pusės
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} col., {pxw} × {pxh} pikselių, {size}
+	Created {n} scanned files	Sukurta nuskaitytų failų: {n}
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Skaitytuvas pranešė apie popieriaus problemą (įstrigimą arba kelių lapų paėmimą kartu).
+	The scanner needs attention.	Skaitytuvas reikalauja dėmesio.
+	The scanner reported a lamp or device error.	Skaitytuvas pranešė apie lempos arba įrenginio klaidą.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Atidarykite dangtį, pašalinkite įstrigusį popierių ar kartu paimtus lapus, lygiai įdėkite likusius lapus, tada pasirinkite Tęsti.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Atidarykite dangtį, pašalinkite įstrigusį popierių ar kartu paimtus lapus, lygiai įdėkite lapus, tada pasirinkite Bandyti dar kartą.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Pažiūrėkite, ar skaitytuve nėra pranešimo arba atidarytų durelių ar dangčio, išspręskite problemą, tada pasirinkite Tęsti.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Pažiūrėkite, ar skaitytuve nėra pranešimo arba atidarytų durelių ar dangčio, išspręskite problemą, tada pasirinkite Bandyti dar kartą.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Palaukite, kol skaitytuvas baigs darbą, arba uždarykite kitas jį naudojančias programas, tada pasirinkite Tęsti.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Palaukite, kol skaitytuvas baigs darbą, arba uždarykite kitas jį naudojančias programas, tada pasirinkite Bandyti dar kartą.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Išjunkite ir vėl įjunkite skaitytuvą, palaukite, kol jis bus paruoštas, tada pasirinkite Tęsti.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Išjunkite ir vėl įjunkite skaitytuvą, palaukite, kol jis bus paruoštas, tada pasirinkite Bandyti dar kartą.
+	Scanner	Skaitytuvas
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Tikrinamas skaitytuvas…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Skaitytuvas užimtas arba tiekiklyje nėra popieriaus.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Patikrinkite, ar tiekiklyje yra popieriaus, arba palaukite, kol skaitytuvas baigs darbą, tada pasirinkite Tęsti.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Patikrinkite, ar tiekiklyje yra popieriaus, arba palaukite, kol skaitytuvas baigs darbą, tada pasirinkite Bandyti dar kartą.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Tinklas
+	The same printer is also available over USB.	Tas pats spausdintuvas pasiekiamas ir per USB.
+	The same printer is also available over the network.	Tas pats spausdintuvas pasiekiamas ir per tinklą.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Šioje versijoje nuskaitymui reikia Windows (WIA).
+# Machine-drafted rows for native-speaker review (scanner dialog, 2026-10-18).
+	The reverse sides were cancelled: their document was closed.	Antrųjų pusių nuskaitymas atšauktas: jų dokumentas uždarytas.
+	The scan was stopped: its document was closed.	Nuskaitymas sustabdytas: jo dokumentas uždarytas.

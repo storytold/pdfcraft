@@ -2824,3 +2824,139 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+# Machine-drafted rows for native-speaker review (scanner dialog, 2026-10-18).
+	1 page was scanned.	Đã quét 1 trang.
+	A cover on the scanner is open.	Một nắp của máy quét đang mở.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Số trang sẽ dừng khay nạp sau ngần ấy tờ. Hủy sẽ kết thúc quá trình truyền sớm; các trang đã nhận vẫn ở lại trong tài liệu.
+	Advanced…	Nâng cao…
+	All pages asks the driver for the whole stack.	Tất cả các trang yêu cầu trình điều khiển quét toàn bộ xấp giấy.
+	Auto-deskew	Tự động chỉnh thẳng
+	Bed	Mặt kính
+	Brightness	Độ sáng
+	Cancel reverse sides	Hủy quét mặt sau
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Kiểm tra khay nạp có giấy, hoặc chờ máy quét xong, rồi chọn Tiếp tục.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Kiểm tra khay nạp có giấy, hoặc chờ máy quét xong, rồi chọn Thử lại.
+	Check the scanner is on and connected, then choose Continue.	Kiểm tra máy quét đã bật và được kết nối, rồi chọn Tiếp tục.
+	Check the scanner is on and connected, then choose Try again.	Kiểm tra máy quét đã bật và được kết nối, rồi chọn Thử lại.
+	Checking the scanner…	Đang kiểm tra máy quét…
+	Clear region	Xóa vùng chọn
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Gỡ giấy kẹt và nạp ngay ngắn các tờ còn lại, rồi chọn Tiếp tục.
+	Clear the jam and load the sheets squarely, then choose Try again.	Gỡ giấy kẹt và nạp ngay ngắn các tờ, rồi chọn Thử lại.
+	Close the feeder cover and check the paper, then choose Continue.	Đóng nắp khay nạp và kiểm tra giấy, rồi chọn Tiếp tục.
+	Close the feeder cover and check the paper, then choose Try again.	Đóng nắp khay nạp và kiểm tra giấy, rồi chọn Thử lại.
+	Color document	Tài liệu màu
+	Connected by USB.	Kết nối qua USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Kết nối qua mạng (Dịch vụ Web). Các tùy chọn lấy từ trình điều khiển đó, không phải trình điều khiển USB.
+	Continue scanning	Tiếp tục quét
+	Continue scanning fronts	Tiếp tục quét mặt trước
+	Continue scanning reverse sides	Tiếp tục quét mặt sau
+	Contrast	Độ tương phản
+	Create PDF	Tạo PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Kéo trên bản xem trước để chọn một vùng. Không chọn gì thì quét toàn bộ vùng.
+	Driver default	Mặc định của trình điều khiển
+	Duplex	Hai mặt
+	Duplex is not offered.	Không hỗ trợ quét hai mặt.
+	Feeder	Khay nạp
+	Finish	Hoàn tất
+	From scanner…	Từ máy quét…
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Đã quét mặt trước: {n}. Lật tờ giấy trên mặt kính, rồi chọn Quét mặt sau.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Đã quét mặt trước: {n}. Lật xấp giấy để tờ cuối nằm trên cùng, nạp lại, rồi chọn Quét mặt sau.
+	Full area	Toàn bộ vùng
+	Insert scanned pages	Chèn các trang đã quét
+	Intent	Mục đích
+	Invert tones	Đảo ngược tông màu
+	Lamp	Đèn
+	Lamp on	Bật đèn
+	Large scan	Bản quét lớn
+	Listing scanners…	Đang liệt kê máy quét…
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Nạp thêm giấy rồi chọn Tiếp tục; hoặc chọn Hoàn tất để giữ những gì đã quét.
+	Load sheets in the feeder, then choose Try again.	Nạp giấy vào khay nạp, rồi chọn Thử lại.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Xem máy quét có thông báo hoặc cửa hay nắp đang mở không, khắc phục, rồi chọn Tiếp tục.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Xem máy quét có thông báo hoặc cửa hay nắp đang mở không, khắc phục, rồi chọn Thử lại.
+	Manual duplex needs one reverse side for each front.	Quét hai mặt thủ công cần một mặt sau cho mỗi mặt trước.
+	Mirror	Lật gương
+	Mirror the page	Lật gương trang
+	No pages were scanned.	Không quét được trang nào.
+	No scanner is connected.	Không có máy quét nào được kết nối.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Mở nắp, gỡ giấy kẹt hoặc các tờ bị nạp dính nhau, nạp ngay ngắn các tờ còn lại, rồi chọn Tiếp tục.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Mở nắp, gỡ giấy kẹt hoặc các tờ bị nạp dính nhau, nạp ngay ngắn các tờ, rồi chọn Thử lại.
+	Optical resolution {x} × {y} dpi.	Độ phân giải quang học {x} × {y} dpi.
+	Orientation	Hướng
+	Photometric	Trắc quang
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Bản xem trước dành cho mặt kính. Đặt một vùng tính bằng inch bên dưới, hoặc để trống để quét cả tờ.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Bản xem trước dùng mặt kính. Chuyển nguồn sang Mặt kính, hoặc quét mà không xem trước.
+	Refresh lists scanners. It does not feed paper.	Làm mới sẽ liệt kê lại máy quét. Thao tác này không nạp giấy.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Vùng tính bằng inch. Để chiều rộng hoặc chiều cao bằng không để quét toàn bộ vùng.
+	Reverse sides	Mặt sau
+	Reverse sides interleaved.	Đã xen kẽ các mặt sau.
+	Scan interrupted	Quá trình quét bị gián đoạn
+	Scan reverse side now (1 front)	Quét mặt sau ngay (1 mặt trước)
+	Scan reverse sides	Quét mặt sau
+	Scan reverse sides now ({n} fronts)	Quét các mặt sau ngay ({n} mặt trước)
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Quét mặt trước, lật tờ giấy trên mặt kính, rồi quét mặt sau.
+	Scan the fronts before the reverse sides.	Quét các mặt trước trước khi quét mặt sau.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Quét các mặt trước, lật xấp giấy (tờ cuối nằm trên cùng), rồi quét các mặt sau. Các trang được xen kẽ: trước, sau, …
+	Scan the missing reverse sides, then choose Finish.	Quét các mặt sau còn thiếu, rồi chọn Hoàn tất.
+	Scanner	Máy quét
+	Scanner settings	Cài đặt máy quét
+	Scanning front {n} of {t}…	Đang quét mặt trước {n}/{t}…
+	Scanning front {n}…	Đang quét mặt trước {n}…
+	Scanning needs Windows (WIA) in this version.	Phiên bản này cần Windows (WIA) để quét.
+	Scanning page {n} of {t}…	Đang quét trang {n}/{t}…
+	Scanning page {n}…	Đang quét trang {n}…
+	Scanning reverse side {n} of {t}…	Đang quét mặt sau {n}/{t}…
+	Scanning reverse side {n}…	Đang quét mặt sau {n}…
+	Scanning…	Đang quét…
+	Separate the sheets and load the remaining ones, then choose Continue.	Tách các tờ và nạp những tờ còn lại, rồi chọn Tiếp tục.
+	Separate the sheets and load them again, then choose Try again.	Tách các tờ và nạp lại, rồi chọn Thử lại.
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Các cài đặt nguồn này cung cấp. Để nguyên một điều khiển để giữ giá trị của trình điều khiển.
+	Stop	Dừng
+	Straighten the page	Làm thẳng trang
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Tắt rồi bật lại máy quét, chờ đến khi sẵn sàng, rồi chọn Tiếp tục.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Tắt rồi bật lại máy quét, chờ đến khi sẵn sàng, rồi chọn Thử lại.
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Mặt kính quét từng trang một. Quét một mặt trước, lật tờ giấy, rồi quét mặt sau của nó.
+	The driver may accept a turn and leave the picture as it was.	Trình điều khiển có thể chấp nhận lệnh xoay nhưng giữ nguyên hình ảnh.
+	The driver reports a paper jam.	Trình điều khiển báo kẹt giấy.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Trình điều khiển báo có tờ đang chờ. Cờ này có thể vẫn bật sau khi khay đã trống.
+	The feeder ran out of paper.	Khay nạp đã hết giấy.
+	The feeder took more than one sheet.	Khay nạp đã lấy nhiều hơn một tờ.
+	The fronts already scanned are kept for the reverse-side pass.	Các mặt trước đã quét được giữ lại cho lượt quét mặt sau.
+	The pages already scanned were kept in the document.	Các trang đã quét được giữ lại trong tài liệu.
+	The preview could not be shown.	Không thể hiển thị bản xem trước.
+	The reverse sides already scanned are kept.	Các mặt sau đã quét được giữ lại.
+	The scan could not be started.	Không thể bắt đầu quét.
+	The scan produced no pages.	Quá trình quét không tạo ra trang nào.
+	The scan was cancelled at the scanner.	Quá trình quét đã bị hủy tại máy quét.
+	The scan was interrupted.	Quá trình quét bị gián đoạn.
+	The scanner has a paper jam.	Máy quét bị kẹt giấy.
+	The scanner is busy, or the feeder has no paper.	Máy quét đang bận, hoặc khay nạp không có giấy.
+	The scanner is busy.	Máy quét đang bận.
+	The scanner is offline or needs attention.	Máy quét đang ngoại tuyến hoặc cần được kiểm tra.
+	The scanner list could not be refreshed.	Không thể làm mới danh sách máy quét.
+	The scanner needs attention.	Máy quét cần được kiểm tra.
+	The scanner reported a lamp or device error.	Máy quét báo lỗi đèn hoặc lỗi thiết bị.
+	The scanner reported a paper problem (a jam or several sheets fed together).	Máy quét báo sự cố giấy (kẹt giấy hoặc nhiều tờ bị nạp cùng lúc).
+	Threshold	Ngưỡng
+	Transfer format: {format}.	Định dạng truyền: {format}.
+	Try again	Thử lại
+	Turned left	Xoay sang trái
+	Upside down	Lộn ngược
+	Vertical resolution	Độ phân giải dọc
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Chờ máy quét xong, hoặc đóng mọi chương trình khác đang dùng nó, rồi chọn Tiếp tục.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Chờ máy quét xong, hoặc đóng mọi chương trình khác đang dùng nó, rồi chọn Thử lại.
+	Will use the bed.	Sẽ dùng mặt kính.
+	Will use the feeder.	Sẽ dùng khay nạp.
+	front(s)	mặt trước
+	reverse side(s)	mặt sau
+	{n} of {m} pages were scanned.	Đã quét {n}/{m} trang.
+	{n} pages were scanned.	Đã quét {n} trang.
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} inch, {pxw} × {pxh} điểm ảnh, {size}
+	Created Scan.pdf	Đã tạo Scan.pdf
+	Created {n} scanned files	Đã tạo {n} tệp đã quét
+	Inserted scanned pages	Đã chèn các trang đã quét
+	Network	Mạng
+	USB	USB
+	The same printer is also available over USB.	Máy in này cũng có thể dùng qua USB.
+	The same printer is also available over the network.	Máy in này cũng có thể dùng qua mạng.
+	The reverse sides were cancelled: their document was closed.	Đã hủy quét mặt sau: tài liệu của chúng đã bị đóng.
+	The scan was stopped: its document was closed.	Đã dừng quét: tài liệu của nó đã bị đóng.

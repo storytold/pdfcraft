@@ -2521,3 +2521,143 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+	Scanning page {n}…	正在扫描第 {n} 页…
+	Scanning page {n} of {t}…	正在扫描第 {n} / {t} 页…
+	All pages asks the driver for the whole stack.	“全部页面”会向驱动程序请求整叠纸张。
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	指定页数会在扫完这些页后停止进纸器。取消会提前结束传输；已收到的页面仍保留在文档中。
+	Created Scan.pdf	已创建 Scan.pdf
+	Inserted scanned pages	已插入扫描页
+	A cover on the scanner is open.	扫描仪盖板处于打开状态。
+	Advanced…	高级…
+	Auto-deskew	自动纠偏
+	Bed	稿台
+	Brightness	亮度
+	Cancel reverse sides	取消背面扫描
+	Clear region	清除区域
+	Color	彩色
+	Color document	彩色文档
+	Connected by USB.	已通过 USB 连接。
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	通过网络（Web 服务）连接。选项来自该驱动，而非 USB 驱动。
+	Contrast	对比度
+	Create PDF	创建 PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	在预览上拖选区域。空选则扫描整页。
+	Driver default	驱动默认
+	Duplex	双面
+	Duplex is not offered.	不提供双面。
+	Feeder	进纸器
+	From scanner…	从扫描仪…
+	Full area	整页
+	Insert scanned pages	插入扫描页
+	Intent	用途
+	Invert tones	反转色调
+	Lamp	灯
+	Lamp on	开灯
+	Large scan	大图扫描
+	Listing scanners…	正在列出扫描仪…
+	Manual duplex needs one reverse side for each front.	手动双面要求每一张正面都有一张背面。
+	Mirror	镜像
+	Mirror the page	镜像页面
+	No scanner is connected.	未连接扫描仪。
+	Optical resolution {x} × {y} dpi.	光学分辨率 {x} × {y} dpi。
+	Orientation	方向
+	Photometric	光度
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	预览用于稿台。在下方用英寸设置区域，留空则扫描整张。
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	预览使用稿台。将来源改为稿台，或不预览直接扫描。
+	Refresh	刷新
+	Refresh lists scanners. It does not feed paper.	刷新会重新列出扫描仪。不会进纸。
+	Region in inches. Leave the width or the height at zero to scan the whole area.	区域（英寸）。宽度或高度留 0 则扫描整页。
+	Reverse sides	背面
+	Reverse sides interleaved.	已交错插入背面。
+	Scan reverse sides	扫描背面
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	扫描正面，在稿台上翻面，再扫描背面。
+	Scan the fronts before the reverse sides.	请先扫描正面，再扫描背面。
+	Scan interrupted	扫描已中断
+	The scanner has a paper jam.	扫描仪卡纸了。
+	The feeder ran out of paper.	进纸器中的纸用完了。
+	The feeder took more than one sheet.	进纸器一次送入了多张纸。
+	The scanner is offline or needs attention.	扫描仪已脱机或需要处理。
+	The scanner is busy.	扫描仪正忙。
+	The scan was interrupted.	扫描被中断了。
+	The scan was cancelled at the scanner.	扫描已在扫描仪上取消。
+	No pages were scanned.	没有扫描任何页面。
+	1 page was scanned.	已扫描 1 页。
+	{n} pages were scanned.	已扫描 {n} 页。
+	{n} of {m} pages were scanned.	已扫描 {n} / {m} 页。
+	The pages already scanned were kept in the document.	已扫描的页面已保留在文档中。
+	The fronts already scanned are kept for the reverse-side pass.	已扫描的正面已保留，供扫描背面使用。
+	The reverse sides already scanned are kept.	已扫描的背面已保留。
+	Close the feeder cover and check the paper, then choose Continue.	请合上进纸器盖板并检查纸张，然后选择“继续扫描”。
+	Close the feeder cover and check the paper, then choose Try again.	请合上进纸器盖板并检查纸张，然后选择“重试”。
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	请清除卡纸，并将剩余纸张摆放整齐后装入，然后选择“继续扫描”。
+	Clear the jam and load the sheets squarely, then choose Try again.	请清除卡纸，并将纸张摆放整齐后装入，然后选择“重试”。
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	请装入更多纸张后选择“继续扫描”，或选择“完成”以保留已扫描的内容。
+	Load sheets in the feeder, then choose Try again.	请将纸张装入进纸器，然后选择“重试”。
+	Separate the sheets and load the remaining ones, then choose Continue.	请将纸张分开，装入剩余的纸张，然后选择“继续扫描”。
+	Separate the sheets and load them again, then choose Try again.	请将纸张分开，重新装入，然后选择“重试”。
+	Check the scanner is on and connected, then choose Continue.	请检查扫描仪已开机并已连接，然后选择“继续扫描”。
+	Check the scanner is on and connected, then choose Try again.	请检查扫描仪已开机并已连接，然后选择“重试”。
+	Scan the missing reverse sides, then choose Finish.	请扫描缺少的背面，然后选择“完成”。
+	Try again	重试
+	Continue scanning	继续扫描
+	Continue scanning fronts	继续扫描正面
+	Continue scanning reverse sides	继续扫描背面
+	Scan reverse side now (1 front)	立即扫描背面（1 张正面）
+	Scan reverse sides now ({n} fronts)	立即扫描背面（{n} 张正面）
+	Finish	完成
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	已扫描正面：{n}。请翻转玻璃板上的纸张，然后选择“扫描背面”。
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	已扫描正面：{n}。请翻转整叠纸张，使最后一张在最上面，重新装入，然后选择“扫描背面”。
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	扫描正面，将纸叠翻面（最后一页在上），再扫描背面。页面按正、背、…交错…
+	Scanner settings	扫描仪设置
+	Scanning front {n} of {t}…	正在扫描正面 {n} / {t}…
+	Scanning front {n}…	正在扫描正面 {n}…
+	Scanning reverse side {n} of {t}…	正在扫描背面 {n} / {t}…
+	Scanning reverse side {n}…	正在扫描背面 {n}…
+	Scanning…	正在扫描…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	此来源提供的设置。不改动则保留驱动的值。
+	Stop	停止
+	Straighten the page	扶正页面
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	稿台一次扫描一页。先扫正面，翻面后再扫背面。
+	The driver may accept a turn and leave the picture as it was.	驱动可能接受旋转设置，却仍按原样返回图像。
+	The driver reports a paper jam.	驱动报告卡纸。
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	驱动报告有纸等待。纸盒空了后该位仍可能保持。
+	The preview could not be shown.	无法显示预览。
+	The scan could not be started.	无法开始扫描。
+	The scan produced no pages.	扫描未产生页面。
+	The scanner list could not be refreshed.	无法刷新扫描仪列表。
+	Threshold	阈值
+	Transfer format: {format}.	传输格式：{format}。
+	Turned left	向左旋转
+	Upside down	上下颠倒
+	Vertical resolution	垂直分辨率
+	Will use the bed.	将使用稿台。
+	Will use the feeder.	将使用进纸器。
+	front(s)	正面
+	reverse side(s)	背面
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} 英寸，{pxw} × {pxh} 像素，{size}
+	Created {n} scanned files	已创建 {n} 个扫描文件
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	扫描仪报告了纸张问题（卡纸或多张纸一同送入）。
+	The scanner needs attention.	扫描仪需要处理。
+	The scanner reported a lamp or device error.	扫描仪报告了灯管或设备错误。
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	请打开盖板，清除可能的卡纸或一同送入的纸张，并将剩余纸张摆放整齐后装入，然后选择“继续扫描”。
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	请打开盖板，清除可能的卡纸或一同送入的纸张，并将纸张摆放整齐后装入，然后选择“重试”。
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	请查看扫描仪是否显示消息，或是否有门或盖板未关好，并排除问题，然后选择“继续扫描”。
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	请查看扫描仪是否显示消息，或是否有门或盖板未关好，并排除问题，然后选择“重试”。
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	请等待扫描仪完成，或关闭其他正在使用它的程序，然后选择“继续扫描”。
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	请等待扫描仪完成，或关闭其他正在使用它的程序，然后选择“重试”。
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	请关闭扫描仪后重新开机，并等待其就绪，然后选择“继续扫描”。
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	请关闭扫描仪后重新开机，并等待其就绪，然后选择“重试”。
+	Scanner	扫描仪
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	正在检查扫描仪…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	扫描仪正忙，或进纸器中没有纸张。
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	请检查进纸器中是否有纸张，或等待扫描仪完成，然后选择“继续扫描”。
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	请检查进纸器中是否有纸张，或等待扫描仪完成，然后选择“重试”。
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	网络
+	The same printer is also available over USB.	同一台打印机也可通过 USB 使用。
+	The same printer is also available over the network.	同一台打印机也可通过网络使用。
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	此版本的扫描功能需要 Windows (WIA)。

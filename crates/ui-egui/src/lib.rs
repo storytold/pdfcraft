@@ -64,6 +64,7 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
+mod scan_ui;
 mod state;
 mod tools;
 mod workflows;
@@ -439,6 +440,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Scan & OCR ▸ From scanner.
+    pub scan: scan_ui::ScanUi,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
@@ -496,6 +499,8 @@ pub struct PdfCraftApp {
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
+    /// Which job last wrote [`Self::progress_notice`], so Cancel stops that job and not another one that runs too.
+    pub progress_owner: widgets::ProgressOwner,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.

@@ -2556,3 +2556,143 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+	Scanning page {n}…	{n}. oldal szkennelése…
+	Scanning page {n} of {t}…	{n}. / {t}. oldal szkennelése…
+	All pages asks the driver for the whole stack.	A „Minden oldal” a teljes köteget kéri a meghajtótól.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Az oldalszám ennyi lap után leállítja az adagolót. A megszakítás korábban véget vet az átvitelnek; a már megkapott oldalak a dokumentumban maradnak.
+	Created Scan.pdf	Scan.pdf létrehozva
+	Inserted scanned pages	Beolvasott oldalak beillesztve
+	A cover on the scanner is open.	A szkenner fedele nyitva van.
+	Advanced…	Speciális…
+	Auto-deskew	Automatikus egyenesítés
+	Bed	Üveg
+	Brightness	Fényerő
+	Cancel reverse sides	Hátoldalak megszakítása
+	Clear region	Terület törlése
+	Color	Szín
+	Color document	Színes dokumentum
+	Connected by USB.	USB-n csatlakozik.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Hálózaton (webservices) csatlakozik. A beállítások ettől a meghajtótól jönnek, nem az USB-től.
+	Contrast	Kontraszt
+	Create PDF	PDF létrehozása
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Húzzon az előnézeten a terület kiválasztásához. Üres kijelölés a teljes területet beolvassa.
+	Driver default	Meghajtó alapértelmezett
+	Duplex	Kétoldalas
+	Duplex is not offered.	Kétoldalas beolvasás nem elérhető.
+	Feeder	Adagoló
+	From scanner…	Szkennerből…
+	Full area	Teljes terület
+	Insert scanned pages	Beolvasott oldalak beillesztése
+	Intent	Szándék
+	Invert tones	Tónusok invertálása
+	Lamp	Lámpa
+	Lamp on	Lámpa be
+	Large scan	Nagy beolvasás
+	Listing scanners…	Szkennerek listázása…
+	Manual duplex needs one reverse side for each front.	Kézi kétoldalas beolvasáshoz minden előlaphoz egy hátlap kell.
+	Mirror	Tükrözés
+	Mirror the page	Oldal tükrözése
+	No scanner is connected.	Nincs csatlakoztatott szkenner.
+	Optical resolution {x} × {y} dpi.	Optikai felbontás {x} × {y} dpi.
+	Orientation	Tájolás
+	Photometric	Fotometria
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Az előnézet az üveghez van. Állítson be lent hüvelykben egy területet, vagy hagyja üresen a teljes laphoz.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Az előnézet az üveget használja. Állítsa a forrást Üvegre, vagy olvasson be előnézet nélkül.
+	Refresh	Frissítés
+	Refresh lists scanners. It does not feed paper.	A frissítés újra listázza a szkennereket. Nem húz be papírt.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Terület hüvelykben. Hagyja a szélességet vagy magasságot nullán a teljes területhez.
+	Reverse sides	Hátoldalak
+	Reverse sides interleaved.	Hátoldalak beszúrva.
+	Scan reverse sides	Hátoldalak beolvasása
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Olvassa be az előlapot, fordítsa meg a lapot az üvegen, majd a hátlapot.
+	Scan the fronts before the reverse sides.	A hátoldalak előtt olvassa be az előlapokat.
+	Scan interrupted	Megszakadt beolvasás
+	The scanner has a paper jam.	Papírelakadás van a lapolvasóban.
+	The feeder ran out of paper.	Az adagolóból kifogyott a papír.
+	The feeder took more than one sheet.	Az adagoló egynél több lapot húzott be.
+	The scanner is offline or needs attention.	A lapolvasó offline állapotban van, vagy figyelmet igényel.
+	The scanner is busy.	A lapolvasó foglalt.
+	The scan was interrupted.	A beolvasás megszakadt.
+	The scan was cancelled at the scanner.	A beolvasást a lapolvasón törölték.
+	No pages were scanned.	Egy oldal sem lett beolvasva.
+	1 page was scanned.	1 oldal lett beolvasva.
+	{n} pages were scanned.	{n} oldal lett beolvasva.
+	{n} of {m} pages were scanned.	{n} / {m} oldal lett beolvasva.
+	The pages already scanned were kept in the document.	A már beolvasott oldalak megmaradtak a dokumentumban.
+	The fronts already scanned are kept for the reverse-side pass.	A már beolvasott előlapok megmaradtak a hátoldalak menetéhez.
+	The reverse sides already scanned are kept.	A már beolvasott hátoldalak megmaradtak.
+	Close the feeder cover and check the paper, then choose Continue.	Zárja be az adagoló fedelét, ellenőrizze a papírt, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Close the feeder cover and check the paper, then choose Try again.	Zárja be az adagoló fedelét, ellenőrizze a papírt, majd válassza a(z) „Újra” lehetőséget.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Szüntesse meg az elakadást, és egyenesen töltse be a hátralévő lapokat, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Clear the jam and load the sheets squarely, then choose Try again.	Szüntesse meg az elakadást, és egyenesen töltse be a lapokat, majd válassza a(z) „Újra” lehetőséget.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Töltsön be további lapokat, majd válassza a(z) „Beolvasás folytatása” lehetőséget, vagy a(z) „Befejezés” lehetőséget a beolvasottak megtartásához.
+	Load sheets in the feeder, then choose Try again.	Töltsön lapokat az adagolóba, majd válassza a(z) „Újra” lehetőséget.
+	Separate the sheets and load the remaining ones, then choose Continue.	Válassza szét a lapokat, és töltse be a hátralévőket, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Separate the sheets and load them again, then choose Try again.	Válassza szét a lapokat, és töltse be őket újra, majd válassza a(z) „Újra” lehetőséget.
+	Check the scanner is on and connected, then choose Continue.	Ellenőrizze, hogy a lapolvasó be van-e kapcsolva és csatlakoztatva van-e, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Check the scanner is on and connected, then choose Try again.	Ellenőrizze, hogy a lapolvasó be van-e kapcsolva és csatlakoztatva van-e, majd válassza a(z) „Újra” lehetőséget.
+	Scan the missing reverse sides, then choose Finish.	Olvassa be a hiányzó hátoldalakat, majd válassza a(z) „Befejezés” lehetőséget.
+	Try again	Újra
+	Continue scanning	Beolvasás folytatása
+	Continue scanning fronts	Előlapok beolvasásának folytatása
+	Continue scanning reverse sides	Hátoldalak beolvasásának folytatása
+	Scan reverse side now (1 front)	Hátoldal beolvasása most (1 előlap)
+	Scan reverse sides now ({n} fronts)	Hátoldalak beolvasása most ({n} előlap)
+	Finish	Befejezés
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Beolvasott előlapok: {n}. Fordítsa meg a lapot az üvegen, majd válassza a(z) „Hátoldalak beolvasása” lehetőséget.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Beolvasott előlapok: {n}. Fordítsa meg a köteget úgy, hogy az utolsó lap legyen felül, töltse be újra, majd válassza a(z) „Hátoldalak beolvasása” lehetőséget.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Olvassa be az előlapokat, fordítsa meg a köteget (utolsó lap felül), majd a hátoldalakat. Az oldalak előlap, hátlap, … sorrendben kerülnek be…
+	Scanner settings	Szkennerbeállítások
+	Scanning front {n} of {t}…	{n} / {t}. előlap beolvasása…
+	Scanning front {n}…	{n}. előlap beolvasása…
+	Scanning reverse side {n} of {t}…	{n} / {t}. hátlap beolvasása…
+	Scanning reverse side {n}…	{n}. hátlap beolvasása…
+	Scanning…	Beolvasás…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Az ehhez a forráshoz tartozó beállítások. Hagyjon egy vezérlőt, ha a meghajtó értékét akarja.
+	Stop	Leállítás
+	Straighten the page	Oldal egyenesítése
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Az üveg egyszerre egy oldalt olvas. Olvassa be az előlapot, fordítsa meg, majd a hátlapot.
+	The driver may accept a turn and leave the picture as it was.	A meghajtó elfogadhat egy forgatást, és mégis az eredeti képet adja vissza.
+	The driver reports a paper jam.	A meghajtó papírelakadást jelez.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	A meghajtó várakozó lapot jelez. A bit üres tálca után is bekapcsolva maradhat.
+	The preview could not be shown.	Az előnézetet nem lehetett megjeleníteni.
+	The scan could not be started.	A beolvasást nem lehetett elindítani.
+	The scan produced no pages.	A beolvasás nem hozott létre oldalakat.
+	The scanner list could not be refreshed.	A szkennerlista nem frissíthető.
+	Threshold	Küszöb
+	Transfer format: {format}.	Átviteli formátum: {format}.
+	Turned left	Balra forgatva
+	Upside down	Fejjel lefelé
+	Vertical resolution	Függőleges felbontás
+	Will use the bed.	Az üveget fogja használni.
+	Will use the feeder.	Az adagolót fogja használni.
+	front(s)	előlap
+	reverse side(s)	hátlap
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} hüvelyk, {pxw} × {pxh} képpont, {size}
+	Created {n} scanned files	{n} beolvasott fájl létrehozva
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	A lapolvasó papírhibát jelzett (elakadás vagy több lap együttes behúzása).
+	The scanner needs attention.	A lapolvasó figyelmet igényel.
+	The scanner reported a lamp or device error.	A lapolvasó lámpa- vagy készülékhibát jelzett.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Nyissa fel a fedelet, szüntesse meg az esetleges elakadást vagy az együtt behúzott lapokat, és egyenesen töltse be a hátralévő lapokat, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Nyissa fel a fedelet, szüntesse meg az esetleges elakadást vagy az együtt behúzott lapokat, és egyenesen töltse be a lapokat, majd válassza a(z) „Újra” lehetőséget.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Nézze meg, hogy a lapolvasó üzenetet jelez-e, vagy nyitva van-e egy ajtó vagy fedél, és hárítsa el a problémát, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Nézze meg, hogy a lapolvasó üzenetet jelez-e, vagy nyitva van-e egy ajtó vagy fedél, és hárítsa el a problémát, majd válassza a(z) „Újra” lehetőséget.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Várja meg, amíg a lapolvasó végez, vagy zárjon be minden más, a lapolvasót használó programot, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Várja meg, amíg a lapolvasó végez, vagy zárjon be minden más, a lapolvasót használó programot, majd válassza a(z) „Újra” lehetőséget.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Kapcsolja ki, majd be a lapolvasót, és várja meg, amíg készen áll, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Kapcsolja ki, majd be a lapolvasót, és várja meg, amíg készen áll, majd válassza a(z) „Újra” lehetőséget.
+	Scanner	Lapolvasó
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	A szkenner ellenőrzése…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	A lapolvasó foglalt, vagy nincs papír az adagolóban.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Ellenőrizze, hogy van-e papír az adagolóban, vagy várja meg, amíg a lapolvasó végez, majd válassza a(z) „Beolvasás folytatása” lehetőséget.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Ellenőrizze, hogy van-e papír az adagolóban, vagy várja meg, amíg a lapolvasó végez, majd válassza a(z) „Újra” lehetőséget.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Hálózat
+	The same printer is also available over USB.	Ugyanez a nyomtató USB-n keresztül is elérhető.
+	The same printer is also available over the network.	Ugyanez a nyomtató a hálózaton keresztül is elérhető.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	A beolvasáshoz ebben a verzióban Windows (WIA) szükséges.

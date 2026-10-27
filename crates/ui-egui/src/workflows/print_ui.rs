@@ -369,6 +369,7 @@ impl PdfCraftApp {
             _ => (crate::i18n::fmt(tl!("Sending to {printer}…"), &[("printer", printer)]), 0.0),
         };
         self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction, cancellable: false });
+        self.progress_owner = crate::widgets::ProgressOwner::Other;
         self.print_tasks.showing_progress = true;
         // The bar's sweep keeps moving between sheets.
         if let Some(ctx) = &self.ctx {

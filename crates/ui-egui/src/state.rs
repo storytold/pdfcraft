@@ -162,6 +162,10 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ From scanner.
+    Scanner,
+    /// A scan stopped early (cover open, jam, empty feeder): Continue or Finish.
+    ScanInterrupted,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.

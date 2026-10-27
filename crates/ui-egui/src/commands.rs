@@ -112,6 +112,8 @@ impl PdfCraftApp {
         }
     }
 
+    /// `execute` without the panic guard. An unknown id or a disabled command returns `false`; a disabled one also
+    /// tells the user why.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -419,6 +421,7 @@ impl PdfCraftApp {
             "a11y.check" => self.start_accessibility_check(),
             "a11y.find_untagged" => self.find_untagged_content(),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "scan.acquire" => self.dialog = Some(Dialog::Scanner),
             "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
             "tools.document_js" => {
                 self.doc_js = Default::default();

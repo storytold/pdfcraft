@@ -2823,3 +2823,141 @@ certificate	Version	Version
 	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
+	Scanning page {n}…	Numérisation de la page {n}…
+	Scanning page {n} of {t}…	Numérisation de la page {n} sur {t}…
+	All pages asks the driver for the whole stack.	« Toutes les pages » demande au pilote toute la pile.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Un nombre de pages arrête le chargeur après autant de feuilles. Annuler interrompt le transfert plus tôt ; les pages déjà reçues restent dans le document.
+	Created Scan.pdf	Scan.pdf créé
+	Inserted scanned pages	Pages numérisées insérées
+	A cover on the scanner is open.	Un couvercle du scanner est ouvert.
+	Advanced…	Avancé…
+	Auto-deskew	Redressement auto
+	Bed	Vitre
+	Brightness	Luminosité
+	Cancel reverse sides	Annuler les verso
+	Clear region	Effacer la zone
+	Color document	Document couleur
+	Connected by USB.	Connecté en USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Connecté via le réseau (services Web). Les options viennent de ce pilote, pas de celui USB.
+	Contrast	Contraste
+	Create PDF	Créer un PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Glissez sur l’aperçu pour choisir une zone. Une sélection vide numérise toute la surface.
+	Driver default	Valeur du pilote
+	Duplex	Recto verso
+	Duplex is not offered.	Le recto verso n’est pas proposé.
+	Feeder	Chargeur
+	From scanner…	Depuis le scanner…
+	Full area	Zone entière
+	Insert scanned pages	Insérer les pages numérisées
+	Intent	Intention
+	Invert tones	Inverser les tons
+	Lamp	Lampe
+	Lamp on	Lampe allumée
+	Large scan	Grande numérisation
+	Listing scanners…	Liste des scanners…
+	Manual duplex needs one reverse side for each front.	Le recto verso manuel exige un verso pour chaque recto.
+	Mirror	Miroir
+	Mirror the page	Miroir de la page
+	No scanner is connected.	Aucun scanner n’est connecté.
+	Optical resolution {x} × {y} dpi.	Résolution optique {x} × {y} dpi.
+	Orientation	Orientation
+	Photometric	Photométrie
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	L’aperçu sert à la vitre. Définissez une zone en pouces ci-dessous, ou laissez vide pour toute la feuille.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	L’aperçu utilise la vitre. Passez la source sur Vitre, ou numérisez sans aperçu.
+	Refresh lists scanners. It does not feed paper.	Actualiser reliste les scanners. Cela n’entraîne pas de papier.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Zone en pouces. Laissez la largeur ou la hauteur à zéro pour numériser toute la surface.
+	Reverse sides	Verso
+	Reverse sides interleaved.	Verso intercalés.
+	Scan reverse sides	Numériser les verso
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Numérisez le recto, retournez la feuille sur la vitre, puis numérisez le verso.
+	Scan the fronts before the reverse sides.	Numérisez les recto avant les verso.
+	Scan interrupted	Numérisation interrompue
+	The scanner has a paper jam.	Le scanner a un bourrage papier.
+	The feeder ran out of paper.	Le chargeur n’a plus de papier.
+	The feeder took more than one sheet.	Le chargeur a entraîné plus d’une feuille.
+	The scanner is offline or needs attention.	Le scanner est hors ligne ou nécessite une intervention.
+	The scanner is busy.	Le scanner est occupé.
+	The scan was interrupted.	La numérisation a été interrompue.
+	The scan was cancelled at the scanner.	La numérisation a été annulée sur le scanner.
+	No pages were scanned.	Aucune page n’a été numérisée.
+	1 page was scanned.	1 page a été numérisée.
+	{n} pages were scanned.	{n} pages ont été numérisées.
+	{n} of {m} pages were scanned.	{n} pages sur {m} ont été numérisées.
+	The pages already scanned were kept in the document.	Les pages déjà numérisées ont été conservées dans le document.
+	The fronts already scanned are kept for the reverse-side pass.	Les recto déjà numérisés sont conservés pour le passage des verso.
+	The reverse sides already scanned are kept.	Les verso déjà numérisés sont conservés.
+	Close the feeder cover and check the paper, then choose Continue.	Fermez le capot du chargeur et vérifiez le papier, puis choisissez « Continuer la numérisation ».
+	Close the feeder cover and check the paper, then choose Try again.	Fermez le capot du chargeur et vérifiez le papier, puis choisissez « Réessayer ».
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Dégagez le bourrage et rechargez les feuilles restantes bien droites, puis choisissez « Continuer la numérisation ».
+	Clear the jam and load the sheets squarely, then choose Try again.	Dégagez le bourrage et chargez les feuilles bien droites, puis choisissez « Réessayer ».
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Chargez d’autres feuilles puis choisissez « Continuer la numérisation », ou choisissez « Terminer » pour conserver ce qui a été numérisé.
+	Load sheets in the feeder, then choose Try again.	Chargez des feuilles dans le chargeur, puis choisissez « Réessayer ».
+	Separate the sheets and load the remaining ones, then choose Continue.	Séparez les feuilles et rechargez celles qui restent, puis choisissez « Continuer la numérisation ».
+	Separate the sheets and load them again, then choose Try again.	Séparez les feuilles et rechargez-les, puis choisissez « Réessayer ».
+	Check the scanner is on and connected, then choose Continue.	Vérifiez que le scanner est allumé et connecté, puis choisissez « Continuer la numérisation ».
+	Check the scanner is on and connected, then choose Try again.	Vérifiez que le scanner est allumé et connecté, puis choisissez « Réessayer ».
+	Scan the missing reverse sides, then choose Finish.	Numérisez les verso manquants, puis choisissez « Terminer ».
+	Try again	Réessayer
+	Continue scanning	Continuer la numérisation
+	Continue scanning fronts	Continuer avec les recto
+	Continue scanning reverse sides	Continuer avec les verso
+	Scan reverse side now (1 front)	Numériser le verso maintenant (1 recto)
+	Scan reverse sides now ({n} fronts)	Numériser les verso maintenant ({n} recto)
+	Finish	Terminer
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Recto numérisés : {n}. Retournez la feuille sur la vitre, puis choisissez « Numériser les verso ».
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Recto numérisés : {n}. Retournez la pile pour que la dernière feuille soit dessus, rechargez-la, puis choisissez « Numériser les verso ».
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Numérisez les recto, retournez la pile (dernière feuille dessus), puis les verso. Les pages sont intercalées recto, verso, …
+	Scanner settings	Réglages du scanner
+	Scanning front {n} of {t}…	Recto {n} sur {t}…
+	Scanning front {n}…	Recto {n}…
+	Scanning reverse side {n} of {t}…	Verso {n} sur {t}…
+	Scanning reverse side {n}…	Verso {n}…
+	Scanning…	Numérisation…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Réglages proposés par cette source. Laissez un contrôle pour garder la valeur du pilote.
+	Stop	Arrêter
+	Straighten the page	Redresser la page
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	La vitre numérise une page à la fois. Numérisez un recto, retournez, puis le verso.
+	The driver may accept a turn and leave the picture as it was.	Le pilote peut accepter une rotation et quand même laisser l’image telle quelle.
+	The driver reports a paper jam.	Le pilote signale un bourrage papier.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Le pilote signale une feuille en attente. Le bit peut rester après un bac vide.
+	The preview could not be shown.	L’aperçu n’a pas pu être affiché.
+	The scan could not be started.	La numérisation n’a pas pu démarrer.
+	The scan produced no pages.	La numérisation n’a produit aucune page.
+	The scanner list could not be refreshed.	La liste des scanners n’a pas pu être actualisée.
+	Threshold	Seuil
+	Transfer format: {format}.	Format de transfert : {format}.
+	Turned left	Tourné à gauche
+	Upside down	À l’envers
+	Vertical resolution	Résolution verticale
+	Will use the bed.	Utilisera la vitre.
+	Will use the feeder.	Utilisera le chargeur.
+	front(s)	recto(s)
+	reverse side(s)	verso(s)
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} po, {pxw} × {pxh} pixels, {size}
+	Created {n} scanned files	{n} fichiers numérisés créés
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Le scanner signale un problème de papier (bourrage ou plusieurs feuilles entraînées ensemble).
+	The scanner needs attention.	Le scanner nécessite une intervention.
+	The scanner reported a lamp or device error.	Le scanner signale une erreur de lampe ou de l’appareil.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Ouvrez le capot, dégagez tout bourrage ou toute feuille entraînée avec une autre et rechargez les feuilles restantes bien droites, puis choisissez « Continuer la numérisation ».
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Ouvrez le capot, dégagez tout bourrage ou toute feuille entraînée avec une autre et rechargez les feuilles bien droites, puis choisissez « Réessayer ».
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Regardez si le scanner affiche un message ou si une porte ou un capot est ouvert, et corrigez le problème, puis choisissez « Continuer la numérisation ».
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Regardez si le scanner affiche un message ou si une porte ou un capot est ouvert, et corrigez le problème, puis choisissez « Réessayer ».
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Attendez que le scanner ait terminé, ou fermez tout autre programme qui l’utilise, puis choisissez « Continuer la numérisation ».
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Attendez que le scanner ait terminé, ou fermez tout autre programme qui l’utilise, puis choisissez « Réessayer ».
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Éteignez puis rallumez le scanner et attendez qu’il soit prêt, puis choisissez « Continuer la numérisation ».
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Éteignez puis rallumez le scanner et attendez qu’il soit prêt, puis choisissez « Réessayer ».
+	Scanner	Scanner
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Vérification du scanner…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Le scanner est occupé, ou le chargeur n’a pas de papier.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Vérifiez que le chargeur contient du papier, ou attendez que le scanner ait terminé, puis choisissez « Continuer la numérisation ».
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Vérifiez que le chargeur contient du papier, ou attendez que le scanner ait terminé, puis choisissez « Réessayer ».
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Réseau
+	The same printer is also available over USB.	La même imprimante est aussi disponible par USB.
+	The same printer is also available over the network.	La même imprimante est aussi disponible via le réseau.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	La numérisation nécessite Windows (WIA) dans cette version.

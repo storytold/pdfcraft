@@ -2733,3 +2733,139 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+# Untranslated: English text until a translator fills these in.
+	{n} of {m} pages were scanned.	{n} of {m} pages were scanned.
+	Scanning reverse side {n}…	Scanning reverse side {n}…
+	The preview could not be shown.	The preview could not be shown.
+	Clear the jam and load the sheets squarely, then choose Try again.	Clear the jam and load the sheets squarely, then choose Try again.
+	Photometric	Photometric
+	Finish	Finish
+	Intent	Intent
+	Scanner settings	Scanner settings
+	The reverse sides were cancelled: their document was closed.	The reverse sides were cancelled: their document was closed.
+	Threshold	Threshold
+	Reverse sides interleaved.	Reverse sides interleaved.
+	Scanning needs Windows (WIA) in this version.	Scanning needs Windows (WIA) in this version.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Region in inches. Leave the width or the height at zero to scan the whole area.
+	The scanner list could not be refreshed.	The scanner list could not be refreshed.
+	Scan the missing reverse sides, then choose Finish.	Scan the missing reverse sides, then choose Finish.
+	The scan could not be started.	The scan could not be started.
+	The driver may accept a turn and leave the picture as it was.	The driver may accept a turn and leave the picture as it was.
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Scan the front, flip the sheet on the bed, then scan the reverse side.
+	Network	Network
+	Duplex	Duplex
+	Continue scanning reverse sides	Continue scanning reverse sides
+	Scan reverse sides	Scan reverse sides
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Clear the jam and load the remaining sheets squarely, then choose Continue.
+	The pages already scanned were kept in the document.	The pages already scanned were kept in the document.
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Settings this source offers. Leave a control alone to keep the driver’s value.
+	The driver reports a paper jam.	The driver reports a paper jam.
+	Vertical resolution	Vertical resolution
+	Close the feeder cover and check the paper, then choose Try again.	Close the feeder cover and check the paper, then choose Try again.
+	Scan reverse sides now ({n} fronts)	Scan reverse sides now ({n} fronts)
+	From scanner…	From scanner…
+	Created Scan.pdf	Created Scan.pdf
+	The feeder took more than one sheet.	The feeder took more than one sheet.
+	The feeder ran out of paper.	The feeder ran out of paper.
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} in, {pxw} × {pxh} pixels, {size}
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …
+	Inserted scanned pages	Inserted scanned pages
+	Refresh lists scanners. It does not feed paper.	Refresh lists scanners. It does not feed paper.
+	Scanning page {n} of {t}…	Scanning page {n} of {t}…
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Wait for the scanner to finish, or close any other program using it, then choose Try again.
+	Full area	Full area
+	The scan was stopped: its document was closed.	The scan was stopped: its document was closed.
+	Lamp	Lamp
+	The scanner reported a lamp or device error.	The scanner reported a lamp or device error.
+	Will use the bed.	Will use the bed.
+	A cover on the scanner is open.	A cover on the scanner is open.
+	Create PDF	Create PDF
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.
+	Try again	Try again
+	Orientation	Orientation
+	The same printer is also available over the network.	The same printer is also available over the network.
+	Driver default	Driver default
+	{n} pages were scanned.	{n} pages were scanned.
+	The scanner needs attention.	The scanner needs attention.
+	Large scan	Large scan
+	Scanning front {n} of {t}…	Scanning front {n} of {t}…
+	The scanner reported a paper problem (a jam or several sheets fed together).	The scanner reported a paper problem (a jam or several sheets fed together).
+	USB	USB
+	Check the scanner is on and connected, then choose Try again.	Check the scanner is on and connected, then choose Try again.
+	Invert tones	Invert tones
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.
+	The same printer is also available over USB.	The same printer is also available over USB.
+	Scanning front {n}…	Scanning front {n}…
+	Scan reverse side now (1 front)	Scan reverse side now (1 front)
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.
+	The scanner has a paper jam.	The scanner has a paper jam.
+	Turned left	Turned left
+	The scanner is busy.	The scanner is busy.
+	1 page was scanned.	1 page was scanned.
+	Scanner	Scanner
+	Bed	Bed
+	The scanner is busy, or the feeder has no paper.	The scanner is busy, or the feeder has no paper.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Connected over the network (Web Services). Options come from that driver, not the USB one.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Switch the scanner off and on again, wait until it is ready, then choose Continue.
+	Created {n} scanned files	Created {n} scanned files
+	The fronts already scanned are kept for the reverse-side pass.	The fronts already scanned are kept for the reverse-side pass.
+	No pages were scanned.	No pages were scanned.
+	Color document	Color document
+	Check the scanner is on and connected, then choose Continue.	Check the scanner is on and connected, then choose Continue.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Wait for the scanner to finish, or close any other program using it, then choose Continue.
+	front(s)	front(s)
+	Insert scanned pages	Insert scanned pages
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.
+	Cancel reverse sides	Cancel reverse sides
+	Scanning page {n}…	Scanning page {n}…
+	Separate the sheets and load the remaining ones, then choose Continue.	Separate the sheets and load the remaining ones, then choose Continue.
+	Checking the scanner…	Checking the scanner…
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.
+	Will use the feeder.	Will use the feeder.
+	Manual duplex needs one reverse side for each front.	Manual duplex needs one reverse side for each front.
+	Duplex is not offered.	Duplex is not offered.
+	Feeder	Feeder
+	The scan was interrupted.	The scan was interrupted.
+	Stop	Stop
+	Continue scanning	Continue scanning
+	The reverse sides already scanned are kept.	The reverse sides already scanned are kept.
+	Continue scanning fronts	Continue scanning fronts
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.
+	Advanced…	Advanced…
+	Load sheets in the feeder, then choose Try again.	Load sheets in the feeder, then choose Try again.
+	Lamp on	Lamp on
+	Mirror	Mirror
+	Scan interrupted	Scan interrupted
+	Contrast	Contrast
+	reverse side(s)	reverse side(s)
+	The scan was cancelled at the scanner.	The scan was cancelled at the scanner.
+	Separate the sheets and load them again, then choose Try again.	Separate the sheets and load them again, then choose Try again.
+	Straighten the page	Straighten the page
+	Upside down	Upside down
+	Connected by USB.	Connected by USB.
+	Transfer format: {format}.	Transfer format: {format}.
+	Brightness	Brightness
+	Mirror the page	Mirror the page
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.
+	No scanner is connected.	No scanner is connected.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	The driver reports a sheet waiting. The bit can stay on after the tray is empty.
+	Listing scanners…	Listing scanners…
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Switch the scanner off and on again, wait until it is ready, then choose Try again.
+	Close the feeder cover and check the paper, then choose Continue.	Close the feeder cover and check the paper, then choose Continue.
+	Scanning reverse side {n} of {t}…	Scanning reverse side {n} of {t}…
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.
+	Scan the fronts before the reverse sides.	Scan the fronts before the reverse sides.
+	Optical resolution {x} × {y} dpi.	Optical resolution {x} × {y} dpi.
+	All pages asks the driver for the whole stack.	All pages asks the driver for the whole stack.
+	The scan produced no pages.	The scan produced no pages.
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Drag on the preview to choose a region. An empty selection scans the whole area.
+	Clear region	Clear region
+	Auto-deskew	Auto-deskew
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Preview uses the bed. Switch the source to Bed, or scan without a preview.
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.
+	Reverse sides	Reverse sides
+	Scanning…	Scanning…
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.
+	The scanner is offline or needs attention.	The scanner is offline or needs attention.

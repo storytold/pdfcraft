@@ -2520,3 +2520,143 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+	Scanning page {n}…	Сканиране на страница {n}…
+	Scanning page {n} of {t}…	Сканиране на страница {n} от {t}…
+	All pages asks the driver for the whole stack.	„Всички страници“ иска от драйвера целия стек.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Броят страници спира подавача след толкова листа. Отказът спира прехвърлянето по-рано; вече получените страници остават в документа.
+	Created Scan.pdf	Създаден е Scan.pdf
+	Inserted scanned pages	Вмъкнати са сканираните страници
+	A cover on the scanner is open.	Капак на скенера е отворен.
+	Advanced…	Разширени…
+	Auto-deskew	Автоматично изравняване
+	Bed	Стъкло
+	Brightness	Яркост
+	Cancel reverse sides	Отмени оборотните страни
+	Clear region	Изчисти областта
+	Color	Цвят
+	Color document	Цветен документ
+	Connected by USB.	Свързан чрез USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Свързан през мрежата (уеб услуги). Опциите идват от този драйвер, не от USB.
+	Contrast	Контраст
+	Create PDF	Създай PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Плъзнете върху прегледа за област. Празната селекция сканира цялата площ.
+	Driver default	По подразбиране на драйвера
+	Duplex	Двустранно
+	Duplex is not offered.	Двустранното сканиране не се предлага.
+	Feeder	Подавач
+	From scanner…	От скенер…
+	Full area	Цялата площ
+	Insert scanned pages	Вмъкни сканираните страници
+	Intent	Предназначение
+	Invert tones	Обърни тоновете
+	Lamp	Лампа
+	Lamp on	Лампата е включена
+	Large scan	Голямо сканиране
+	Listing scanners…	Изброяване на скенери…
+	Manual duplex needs one reverse side for each front.	Ръчният двустранен режим изисква обратна страна за всяка предна.
+	Mirror	Огледало
+	Mirror the page	Огледай страницата
+	No scanner is connected.	Няма свързан скенер.
+	Optical resolution {x} × {y} dpi.	Оптична разделителна способност {x} × {y} dpi.
+	Orientation	Ориентация
+	Photometric	Фотометрия
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Прегледът е за стъклото. Задайте област в инчове по-долу или оставете празна за целия лист.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Прегледът ползва стъклото. Превключете източника на Стъкло или сканирайте без преглед.
+	Refresh	Опресни
+	Refresh lists scanners. It does not feed paper.	Опресни отново изброява скенерите. Не подава хартия.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Област в инчове. Оставете ширина или височина нула за цялата площ.
+	Reverse sides	Оборотни страни
+	Reverse sides interleaved.	Оборотните страни са вмъкнати последователно.
+	Scan reverse sides	Сканирай оборотните страни
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Сканирайте предната страна, обърнете листа върху стъклото и сканирайте обратната.
+	Scan the fronts before the reverse sides.	Сканирайте предните страни преди оборотните.
+	Scan interrupted	Сканирането е прекъснато
+	The scanner has a paper jam.	В скенера има заседнала хартия.
+	The feeder ran out of paper.	В подаващото устройство свърши хартията.
+	The feeder took more than one sheet.	Подаващото устройство взе повече от един лист.
+	The scanner is offline or needs attention.	Скенерът е офлайн или изисква внимание.
+	The scanner is busy.	Скенерът е зает.
+	The scan was interrupted.	Сканирането беше прекъснато.
+	The scan was cancelled at the scanner.	Сканирането беше отменено от скенера.
+	No pages were scanned.	Не са сканирани страници.
+	1 page was scanned.	Сканирана е 1 страница.
+	{n} pages were scanned.	Сканирани са {n} страници.
+	{n} of {m} pages were scanned.	Сканирани са {n} от {m} страници.
+	The pages already scanned were kept in the document.	Вече сканираните страници са запазени в документа.
+	The fronts already scanned are kept for the reverse-side pass.	Вече сканираните предни страни са запазени за преминаването на оборотните.
+	The reverse sides already scanned are kept.	Вече сканираните оборотни страни са запазени.
+	Close the feeder cover and check the paper, then choose Continue.	Затворете капака на подаващото устройство и проверете хартията, после изберете „Продължи сканирането“.
+	Close the feeder cover and check the paper, then choose Try again.	Затворете капака на подаващото устройство и проверете хартията, после изберете „Опитай отново“.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Отстранете заседналата хартия и заредете останалите листове подравнени, после изберете „Продължи сканирането“.
+	Clear the jam and load the sheets squarely, then choose Try again.	Отстранете заседналата хартия и заредете листовете подравнени, после изберете „Опитай отново“.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Заредете още листове и изберете „Продължи сканирането“ или изберете „Готово“, за да запазите сканираното.
+	Load sheets in the feeder, then choose Try again.	Заредете листове в подаващото устройство, после изберете „Опитай отново“.
+	Separate the sheets and load the remaining ones, then choose Continue.	Разделете листовете и заредете останалите, после изберете „Продължи сканирането“.
+	Separate the sheets and load them again, then choose Try again.	Разделете листовете и ги заредете отново, после изберете „Опитай отново“.
+	Check the scanner is on and connected, then choose Continue.	Проверете дали скенерът е включен и свързан, после изберете „Продължи сканирането“.
+	Check the scanner is on and connected, then choose Try again.	Проверете дали скенерът е включен и свързан, после изберете „Опитай отново“.
+	Scan the missing reverse sides, then choose Finish.	Сканирайте липсващите оборотни страни, после изберете „Готово“.
+	Try again	Опитай отново
+	Continue scanning	Продължи сканирането
+	Continue scanning fronts	Продължи сканирането на предните страни
+	Continue scanning reverse sides	Продължи сканирането на оборотните страни
+	Scan reverse side now (1 front)	Сканирай оборотната страна сега (1 предна)
+	Scan reverse sides now ({n} fronts)	Сканирай оборотните страни сега ({n} предни)
+	Finish	Готово
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Сканирани предни страни: {n}. Обърнете листа върху стъклото, после изберете „Сканирай оборотните страни“.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Сканирани предни страни: {n}. Обърнете купчината, така че последният лист да е отгоре, заредете я отново, после изберете „Сканирай оборотните страни“.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Сканирайте предните, обърнете купчината (последният отгоре), после оборотните. Страниците се редуват предна, обратна, …
+	Scanner settings	Настройки на скенера
+	Scanning front {n} of {t}…	Сканиране на предна {n} от {t}…
+	Scanning front {n}…	Сканиране на предна {n}…
+	Scanning reverse side {n} of {t}…	Сканиране на обратна {n} от {t}…
+	Scanning reverse side {n}…	Сканиране на обратна {n}…
+	Scanning…	Сканиране…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Настройки, които този източник предлага. Оставете контрола за стойността на драйвера.
+	Stop	Стоп
+	Straighten the page	Изправи страницата
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Стъклото сканира по една страница. Сканирайте предна, обърнете, после обратна.
+	The driver may accept a turn and leave the picture as it was.	Драйверът може да приеме завъртане и пак да остави изображението както е било.
+	The driver reports a paper jam.	Драйверът съобщава за заседнала хартия.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Драйверът съобщава за лист в очакване. Битът може да остане след празна тава.
+	The preview could not be shown.	Прегледът не можа да се покаже.
+	The scan could not be started.	Сканирането не можа да стартира.
+	The scan produced no pages.	Сканирането не създаде страници.
+	The scanner list could not be refreshed.	Списъкът със скенери не можа да се опресни.
+	Threshold	Праг
+	Transfer format: {format}.	Формат на пренос: {format}.
+	Turned left	Завъртяно наляво
+	Upside down	Наопаки
+	Vertical resolution	Вертикална разделителна способност
+	Will use the bed.	Ще се ползва стъклото.
+	Will use the feeder.	Ще се ползва подавачът.
+	front(s)	предни
+	reverse side(s)	оборотни
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} in, {pxw} × {pxh} пиксела, {size}
+	Created {n} scanned files	Създадени са {n} сканирани файла
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Скенерът съобщи за проблем с хартията (заседнала хартия или няколко едновременно подадени листа).
+	The scanner needs attention.	Скенерът изисква внимание.
+	The scanner reported a lamp or device error.	Скенерът съобщи за грешка на лампата или устройството.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Отворете капака, отстранете евентуално заседнала хартия или едновременно подадени листове и заредете останалите листове подравнени, после изберете „Продължи сканирането“.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Отворете капака, отстранете евентуално заседнала хартия или едновременно подадени листове и заредете листовете подравнени, после изберете „Опитай отново“.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Проверете скенера за съобщение или отворена врата или капак и отстранете причината, после изберете „Продължи сканирането“.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Проверете скенера за съобщение или отворена врата или капак и отстранете причината, после изберете „Опитай отново“.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Изчакайте скенерът да приключи или затворете всяка друга програма, която го използва, после изберете „Продължи сканирането“.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Изчакайте скенерът да приключи или затворете всяка друга програма, която го използва, после изберете „Опитай отново“.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Изключете скенера и го включете отново, като изчакате да е готов, после изберете „Продължи сканирането“.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Изключете скенера и го включете отново, като изчакате да е готов, после изберете „Опитай отново“.
+	Scanner	Скенер
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Проверка на скенера…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Скенерът е зает или във подаващото устройство няма хартия.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Проверете дали в подаващото устройство има хартия или изчакайте скенерът да приключи, после изберете „Продължи сканирането“.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Проверете дали в подаващото устройство има хартия или изчакайте скенерът да приключи, после изберете „Опитай отново“.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Мрежа
+	The same printer is also available over USB.	Същият принтер е достъпен и през USB.
+	The same printer is also available over the network.	Същият принтер е достъпен и през мрежата.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Сканирането изисква Windows (WIA) в тази версия.

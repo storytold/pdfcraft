@@ -4,6 +4,7 @@
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
+mod density;
 mod extract;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
@@ -222,12 +223,14 @@ fn jpx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc: None, px: (w, h), dpi })
 }
 
+/// A JPEG as a pass-through image: size, colour space, Adobe inversion and ICC profile from its segments. The resolution is
+/// left at 72 dpi; `with_density` is the one place that reads what the file carries.
 fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     let bad = |m: &str| CreateError::Image(name.into(), m.into());
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return Err(bad("not a JPEG file"));
     }
-    let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
+    let (mut i, mut size, mut comps, mut adobe) = (2usize, None, 0u8, false);
     let mut icc_chunks = Vec::new();
     while let Some(&byte) = bytes.get(i) {
         if byte != 0xFF {
@@ -255,17 +258,6 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         let end = i.checked_add(len).ok_or_else(|| bad("JPEG segment length overflow"))?;
         let seg = bytes.get(i + 2..end).ok_or_else(|| bad("truncated JPEG segment"))?;
         match marker {
-            // APP0 JFIF density.
-            0xE0 if seg.starts_with(b"JFIF\0") && seg.len() >= 12 => {
-                let (unit, x, y) = (seg[7], u16::from_be_bytes([seg[8], seg[9]]) as f64, u16::from_be_bytes([seg[10], seg[11]]) as f64);
-                if x > 0.0 && y > 0.0 {
-                    dpi = match unit {
-                        1 => (x, y),
-                        2 => (x * 2.54, y * 2.54),
-                        _ => dpi,
-                    };
-                }
-            }
             0xEE if seg.starts_with(b"Adobe") => adobe = true,
             // APP2 ICC profile, possibly split over several chunks.
             0xE2 => {
@@ -302,18 +294,16 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
     let icc = jpeg_icc(icc_chunks);
-    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc, px: (w, h), dpi })
+    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc, px: (w, h), dpi: (72.0, 72.0) })
 }
 
+/// A PNG decoded to an image XObject (alpha as a soft mask, 16-bit reduced to 8). The resolution is left at 72 dpi;
+/// `with_density` is the one place that reads what the file carries.
 fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     let bad = |m: String| CreateError::Image(name.into(), m);
     let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| bad(e.to_string()))?;
-    let dpi = match reader.info().pixel_dims {
-        Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => (xppu as f64 * 0.0254, yppu as f64 * 0.0254),
-        _ => (72.0, 72.0),
-    };
     let icc = reader.info().icc_profile.as_ref().map(|p| p.to_vec());
     // The decoded size comes from the header alone, so a file of a few bytes can claim any
     // size: keep the ceiling, and ask for the memory fallibly (a failed allocation would abort
@@ -361,7 +351,7 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         (m, alpha)
     });
-    Ok(Embedded { dict: d, data: colour, filtered: false, smask, icc, px: (w, h), dpi })
+    Ok(Embedded { dict: d, data: colour, filtered: false, smask, icc, px: (w, h), dpi: (72.0, 72.0) })
 }
 
 /// 8-bit RGBA pixels → an image (gray when every pixel is, with a soft mask when any pixel is
@@ -390,8 +380,72 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
     Embedded { dict: d, data: colour, filtered: false, smask, icc: None, px: (w, h), dpi }
 }
 
-/// BMP and GIF (the first frame), through the `image` decoders. Their resolution is not read:
-/// 72 dpi, as for images without one.
+/// How far from 0 / 255 a BMP palette channel may be and still count as black / white.
+const BMP_GRAY_TOLERANCE: u8 = 16;
+
+/// An uncompressed 1-bit BMP whose two palette entries are black and white (either order, small
+/// tolerance) stays a 1-bit DeviceGray image: 0 = black, rows top-down, packed MSB first and
+/// byte-aligned, like the bilevel TIFF path. Anything else (other palettes, compression, odd or
+/// truncated headers, short pixel arrays) returns `None` and takes the general decoder, which
+/// also produces the usual error for a broken file.
+fn bmp_one_bit(bytes: &[u8]) -> Option<Embedded> {
+    let u16_at = |at: usize| bytes.get(at..at.checked_add(2)?).and_then(|b| Some(u16::from_le_bytes(b.try_into().ok()?)));
+    let u32_at = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| Some(u32::from_le_bytes(b.try_into().ok()?)));
+    if bytes.get(..2)? != b"BM" {
+        return None;
+    }
+    let pixel_at = usize::try_from(u32_at(10)?).ok()?;
+    let header = usize::try_from(u32_at(14)?).ok()?;
+    // BITMAPINFOHEADER or one of its larger successors (the OS/2 12-byte header is left alone).
+    if !(40..=124).contains(&header) || u16_at(26)? != 1 || u16_at(28)? != 1 || u32_at(30)? != 0 {
+        return None;
+    }
+    let width = usize::try_from(u32_at(18)? as i32).ok().filter(|w| *w > 0)?;
+    let raw_height = u32_at(22)? as i32;
+    let top_down = raw_height < 0;
+    let rows = usize::try_from(raw_height.unsigned_abs()).ok().filter(|h| *h > 0)?;
+    let colours = u32_at(46)?;
+    if colours != 0 && colours != 2 {
+        return None;
+    }
+    let palette_at = 14usize.checked_add(header)?;
+    // `Some(true)` for (near) white, `Some(false)` for (near) black, `None` for any other colour.
+    let entry = |i: usize| -> Option<bool> {
+        let b = bytes.get(palette_at.checked_add(i * 4)?..)?.get(..3)?;
+        if b.iter().all(|c| *c <= BMP_GRAY_TOLERANCE) {
+            Some(false)
+        } else if b.iter().all(|c| *c >= 255 - BMP_GRAY_TOLERANCE) {
+            Some(true)
+        } else {
+            None
+        }
+    };
+    let (first, second) = (entry(0)?, entry(1)?);
+    if first == second || pixel_at < palette_at.checked_add(8)? {
+        return None;
+    }
+    // The pixel array must be there in full, so every buffer below is bounded by the file's size.
+    let stride = width.div_ceil(32).checked_mul(4)?;
+    let pixels = bytes.get(pixel_at..)?.get(..stride.checked_mul(rows)?)?;
+    let packed = width.div_ceil(8);
+    let mut data = Vec::new();
+    data.try_reserve_exact(packed.checked_mul(rows)?).ok()?;
+    // Palette [white, black]: index 1 is black, so flip the bits to get 0 = black.
+    let flip = if first { 0xFF } else { 0x00 };
+    for r in 0..rows {
+        let src = if top_down { r } else { rows - 1 - r };
+        let row = pixels.get(src * stride..)?.get(..packed)?;
+        data.extend(row.iter().map(|b| b ^ flip));
+    }
+    let mut d = Dict::new();
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    let px = (u32::try_from(width).ok()?, u32::try_from(rows).ok()?);
+    Some(Embedded { dict: d, data, filtered: false, smask: None, icc: None, px, dpi: (72.0, 72.0) })
+}
+
+/// BMP and GIF (the first frame), through the `image` decoders. A GIF has no resolution (72 dpi); a BMP's is read by
+/// [`embed`] (pels per metre) like every other format's.
 fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embedded, CreateError> {
     // A GIF's first frame is painted on a canvas the size of its logical screen, however small
     // the frame: a few bytes can ask for hundreds of MB.
@@ -400,6 +454,11 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
         && u64::from(u16::from_le_bytes([w0, w1])) * u64::from(u16::from_le_bytes([h0, h1])) > MAX_GIF_PIXELS
     {
         return Err(CreateError::Image(name.into(), "the GIF's screen is larger than 4096×4096 pixels".into()));
+    }
+    if format == image::ImageFormat::Bmp
+        && let Some(one_bit) = bmp_one_bit(bytes)
+    {
+        return Ok(one_bit);
     }
     let img = image::load_from_memory_with_format(bytes, format).map_err(|e| CreateError::Image(name.into(), e.to_string()))?;
     let rgba = img.into_rgba8();
@@ -441,17 +500,17 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
         let (w, h) = dec.dimensions().map_err(|e| bad(e.to_string()))?;
         let ct = dec.colortype().map_err(|e| bad(e.to_string()))?;
         let unit = dec.get_tag_u32(Tag::ResolutionUnit).unwrap_or(2);
-        let res = |t: Tag, dec: &mut Decoder<std::io::Cursor<&[u8]>>| -> f64 {
+        let res = |t: Tag, dec: &mut Decoder<std::io::Cursor<&[u8]>>| -> Option<f64> {
             // Resolutions are rationals.
-            let v = match dec.get_tag(t) {
-                Ok(tiff::decoder::ifd::Value::Rational(n, d)) if d != 0 => f64::from(n) / f64::from(d),
-                Ok(other) => other.into_f64().unwrap_or(72.0),
-                Err(_) => 72.0,
-            };
-            let v = if unit == 3 { v * 2.54 } else { v };
-            if v.is_finite() && v >= 1.0 { v } else { 72.0 }
+            match dec.get_tag(t) {
+                Ok(tiff::decoder::ifd::Value::Rational(n, d)) if d != 0 => Some(f64::from(n) / f64::from(d)),
+                Ok(other) => other.into_f64().ok(),
+                Err(_) => None,
+            }
         };
-        let dpi = (res(Tag::XResolution, &mut dec), res(Tag::YResolution, &mut dec));
+        let (x, y) = (res(Tag::XResolution, &mut dec), res(Tag::YResolution, &mut dec));
+        // No unit ("none"), a missing axis or an absurd value gives nothing: 72 dpi, as for any image without one.
+        let dpi = density::tiff_tag_density(unit, x, y).unwrap_or((72.0, 72.0));
         let data = match dec.read_image().map_err(|e| bad(e.to_string()))? {
             DecodingResult::U8(v) => v,
             // 16-bit samples: keep the high byte.
@@ -556,13 +615,14 @@ pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
 /// `wanted` are read.
 fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, CreateError> {
     if bytes.starts_with(&[0xFF, 0xD8]) {
-        Ok(vec![jpeg(name, &upright_image::upright(bytes))?])
+        let upright = upright_image::upright(bytes);
+        Ok(vec![with_density(jpeg(name, &upright)?, &upright)])
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Ok(vec![png_image(name, bytes)?])
+        Ok(vec![with_density(png_image(name, bytes)?, bytes)])
     } else if is_tiff(bytes) {
         tiff_pages(name, bytes, wanted)
     } else if bytes.starts_with(b"BM") {
-        Ok(vec![decoded(name, bytes, image::ImageFormat::Bmp)?])
+        Ok(vec![with_density(decoded(name, bytes, image::ImageFormat::Bmp)?, bytes)])
     } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
@@ -570,6 +630,13 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
     } else {
         Err(CreateError::Image(name.into(), "use a PNG, JPEG, JPEG 2000, TIFF, GIF or BMP image".into()))
     }
+}
+
+/// The resolution of a single-image file (JPEG, PNG, BMP) by the one rule for every format (see `density`): what the
+/// file carries when both axes are a real unit inside the sane range, else 72 dpi.
+fn with_density(mut img: Embedded, bytes: &[u8]) -> Embedded {
+    img.dpi = density::image_density(bytes).unwrap_or((72.0, 72.0));
+    img
 }
 
 /// Embed an image file (its first page, for TIFFs) as an image XObject in `doc`. Returns the

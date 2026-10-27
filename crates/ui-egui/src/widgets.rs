@@ -470,6 +470,16 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
 }
 
+/// The job that wrote the progress card, so a Cancel click reaches only that job.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProgressOwner {
+    /// A card nothing in the app cancels from here (printing).
+    #[default]
+    Other,
+    Optimize,
+    Scan,
+}
+
 /// A background job's progress, shown at the bottom centre until the job is done.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProgressNotice {
@@ -647,6 +657,21 @@ pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_job_that_ends_leaves_another_jobs_progress_card_alone() {
+        let notice = |label: &str| ProgressNotice { label: label.into(), fraction: 0.5, cancellable: true };
+        let mut app = PdfCraftApp::new();
+        app.show_job_progress(ProgressOwner::Scan, notice("Scanning…"));
+        app.show_job_progress(ProgressOwner::Optimize, notice("Optimizing…"));
+        // The scan ends while the optimize card is shown: the card stays, and it is still the optimize's.
+        app.clear_job_progress(ProgressOwner::Scan);
+        assert_eq!(app.progress_notice.as_ref().map(|p| p.label.as_str()), Some("Optimizing…"));
+        assert_eq!(app.progress_owner, ProgressOwner::Optimize);
+        app.clear_job_progress(ProgressOwner::Optimize);
+        assert!(app.progress_notice.is_none());
+        assert_eq!(app.progress_owner, ProgressOwner::Other);
+    }
     use egui::Pos2;
 
     #[test]

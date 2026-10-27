@@ -147,6 +147,50 @@ fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
 }
 
 #[test]
+fn scan_jobs_lists_and_shows_journals_inside_the_root_and_nothing_else() {
+    use crate::scan_jobs::{JOB_FILE, JobRecord, request_json, write_record};
+    use pdfcraft_platform::scan::{
+        ScanSettings,
+        job::{ScanJob, ScanJobConfig},
+    };
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-scanjobs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    for dir in [root.join("a"), root.join("b").join("deep"), outside.clone()] {
+        std::fs::create_dir_all(&dir).unwrap();
+    }
+    let settings = ScanSettings { pages: 2, ..ScanSettings::default() };
+    let record = || JobRecord {
+        id: "scan-9".into(),
+        started: 1_760_000_000_000,
+        updated: 1_760_000_001_000,
+        request: request_json(&settings),
+        journal: ScanJob::new(settings.clone(), ScanJobConfig::default().with_title("T")).snapshot().into_journal(),
+        view: Value::Null,
+        attempts: Vec::new(),
+        manual_duplex: None,
+    };
+    for dir in [root.join("a"), root.join("b").join("deep"), outside.clone()] {
+        write_record(&dir, &record()).unwrap();
+    }
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let listed = json(&mut a, "scan_jobs", json!({}));
+    assert_eq!(listed["count"], 1, "one level down only: {listed}");
+    assert_eq!(listed["jobs"][0]["id"], "scan-9");
+    assert_eq!(listed["jobs"][0]["state"], "preparing");
+    let shown = json(&mut a, "scan_jobs", json!({ "dir": "a", "show": true }));
+    assert_eq!(shown["job"]["exit_code"], 10);
+    assert!(shown["text"].as_str().unwrap().contains("next:"), "{shown}");
+    for dir in [outside.display().to_string(), "..".to_string()] {
+        let error = a.call("scan_jobs", &json!({ "dir": dir })).unwrap_err();
+        assert!(error.to_string().contains("outside"), "{error}");
+    }
+    assert!(base.join("outside").join(JOB_FILE).is_file());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-automation-find-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

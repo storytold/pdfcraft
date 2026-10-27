@@ -29,6 +29,8 @@ mod measure;
 mod printing;
 mod reading;
 mod redact;
+pub mod scan_jobs;
+mod scanning;
 mod signing;
 mod text_cache;
 mod tools;
@@ -43,6 +45,10 @@ use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, Reque
 use serde_json::{Value, json};
 
 pub use pdfcraft_render::Pixels;
+pub use scanning::{
+    CHECK_ACQUIRE_WARNING, ScanCheck, ScanCheckOptions, list_scan_devices, render_check_text, scan_check, scan_device_details, scan_error_info_json,
+    scan_length_json,
+};
 pub use tools::{ToolDef, tools};
 
 use file_access::foreign_share;
@@ -147,6 +153,11 @@ impl Automation {
 
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// The session's open documents, for the caller to change directly.
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
     }
 
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`

@@ -2789,3 +2789,142 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+	Scanning page {n}…	Acquisizione pagina {n}…
+	Scanning page {n} of {t}…	Acquisizione pagina {n} di {t}…
+	All pages asks the driver for the whole stack.	«Tutte le pagine» chiede al driver l’intero fascicolo.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Un numero di pagine ferma l’alimentatore dopo tanti fogli. Annulla interrompe il trasferimento prima; le pagine già ricevute restano nel documento.
+	Created Scan.pdf	Creato Scan.pdf
+	Inserted scanned pages	Pagine acquisite inserite
+	A cover on the scanner is open.	Un coperchio dello scanner è aperto.
+	Advanced…	Avanzate…
+	Auto-deskew	Raddrizzamento automatico
+	Bed	Vetro
+	Brightness	Luminosità
+	Cancel reverse sides	Annulla i retro
+	Clear region	Cancella area
+	Color document	Documento a colori
+	Connected by USB.	Collegato via USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Collegato in rete (Web Services). Le opzioni vengono da quel driver, non da quello USB.
+	Contrast	Contrasto
+	Create PDF	Crea PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Trascina sull’anteprima per scegliere un’area. Una selezione vuota acquisisce tutto.
+	Driver default	Predefinito del driver
+	Duplex	Fronte-retro
+	Duplex is not offered.	Il fronte-retro non è disponibile.
+	Feeder	Alimentatore
+	From scanner…	Da scanner…
+	Full area	Area intera
+	Insert scanned pages	Inserisci pagine acquisite
+	Intent	Intento
+	Invert tones	Inverti i toni
+	Lamp	Lampada
+	Lamp on	Lampada accesa
+	Large scan	Acquisizione grande
+	Listing scanners…	Elenco degli scanner…
+	Manual duplex needs one reverse side for each front.	Il fronte-retro manuale richiede un retro per ogni fronte.
+	Mirror	Specchio
+	Mirror the page	Specchia la pagina
+	No scanner is connected.	Nessuno scanner è collegato.
+	Optical resolution {x} × {y} dpi.	Risoluzione ottica {x} × {y} dpi.
+	Orientation	Orientamento
+	Photometric	Fotometrico
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	L’anteprima è per il vetro. Imposta sotto un’area in pollici, o lasciala vuota per tutto il foglio.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	L’anteprima usa il vetro. Imposta la sorgente su Vetro, oppure acquisisci senza anteprima.
+	Refresh	Aggiorna
+	Refresh lists scanners. It does not feed paper.	Aggiorna elenca di nuovo gli scanner. Non alimenta carta.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Area in pollici. Lascia larghezza o altezza a zero per acquisire tutta l’area.
+	Reverse sides	Retro
+	Reverse sides interleaved.	Retro intercalati.
+	Scan reverse sides	Acquisisci i retro
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Acquisisci il fronte, capovolgi il foglio sul vetro, poi acquisisci il retro.
+	Scan the fronts before the reverse sides.	Acquisisci i fronte prima dei retro.
+	Scan interrupted	Acquisizione interrotta
+	The scanner has a paper jam.	Lo scanner ha un inceppamento della carta.
+	The feeder ran out of paper.	L’alimentatore ha finito la carta.
+	The feeder took more than one sheet.	L’alimentatore ha prelevato più di un foglio.
+	The scanner is offline or needs attention.	Lo scanner è offline o richiede attenzione.
+	The scanner is busy.	Lo scanner è occupato.
+	The scan was interrupted.	L’acquisizione è stata interrotta.
+	The scan was cancelled at the scanner.	L’acquisizione è stata annullata sullo scanner.
+	No pages were scanned.	Nessuna pagina è stata acquisita.
+	1 page was scanned.	È stata acquisita 1 pagina.
+	{n} pages were scanned.	Sono state acquisite {n} pagine.
+	{n} of {m} pages were scanned.	Sono state acquisite {n} pagine su {m}.
+	The pages already scanned were kept in the document.	Le pagine già acquisite sono state mantenute nel documento.
+	The fronts already scanned are kept for the reverse-side pass.	I fronte già acquisiti sono conservati per il passaggio dei retro.
+	The reverse sides already scanned are kept.	I retro già acquisiti sono conservati.
+	Close the feeder cover and check the paper, then choose Continue.	Chiudi il coperchio dell’alimentatore e controlla la carta, poi scegli “Continua l’acquisizione”.
+	Close the feeder cover and check the paper, then choose Try again.	Chiudi il coperchio dell’alimentatore e controlla la carta, poi scegli “Riprova”.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Rimuovi la carta inceppata e carica i fogli rimanenti ben allineati, poi scegli “Continua l’acquisizione”.
+	Clear the jam and load the sheets squarely, then choose Try again.	Rimuovi la carta inceppata e carica i fogli ben allineati, poi scegli “Riprova”.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Carica altri fogli e scegli “Continua l’acquisizione”, oppure scegli “Fine” per mantenere quanto acquisito.
+	Load sheets in the feeder, then choose Try again.	Carica i fogli nell’alimentatore, poi scegli “Riprova”.
+	Separate the sheets and load the remaining ones, then choose Continue.	Separa i fogli e carica quelli rimanenti, poi scegli “Continua l’acquisizione”.
+	Separate the sheets and load them again, then choose Try again.	Separa i fogli e caricali di nuovo, poi scegli “Riprova”.
+	Check the scanner is on and connected, then choose Continue.	Controlla che lo scanner sia acceso e collegato, poi scegli “Continua l’acquisizione”.
+	Check the scanner is on and connected, then choose Try again.	Controlla che lo scanner sia acceso e collegato, poi scegli “Riprova”.
+	Scan the missing reverse sides, then choose Finish.	Acquisisci i retro mancanti, poi scegli “Fine”.
+	Try again	Riprova
+	Continue scanning	Continua l’acquisizione
+	Continue scanning fronts	Continua con i fronte
+	Continue scanning reverse sides	Continua con i retro
+	Scan reverse side now (1 front)	Acquisisci il retro ora (1 fronte)
+	Scan reverse sides now ({n} fronts)	Acquisisci i retro ora ({n} fronte)
+	Finish	Fine
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Fronte acquisiti: {n}. Gira il foglio sul piano, poi scegli “Acquisisci i retro”.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Fronte acquisiti: {n}. Capovolgi la pila in modo che l’ultimo foglio sia in alto, ricaricala, poi scegli “Acquisisci i retro”.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Acquisisci i fronte, capovolgi la pila (ultimo foglio in alto), poi i retro. Le pagine sono intercalate fronte, retro, …
+	Scanner settings	Impostazioni scanner
+	Scanning front {n} of {t}…	Fronte {n} di {t}…
+	Scanning front {n}…	Fronte {n}…
+	Scanning reverse side {n} of {t}…	Retro {n} di {t}…
+	Scanning reverse side {n}…	Retro {n}…
+	Scanning…	Acquisizione…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Impostazioni offerte da questa sorgente. Lascia un controllo per tenere il valore del driver.
+	Stop	Interrompi
+	Straighten the page	Raddrizza la pagina
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Il vetro acquisisce una pagina alla volta. Acquisisci un fronte, capovolgi, poi il retro.
+	The driver may accept a turn and leave the picture as it was.	Il driver può accettare una rotazione e lasciare comunque l’immagine com’era.
+	The driver reports a paper jam.	Il driver segnala un inceppamento.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Il driver segnala un foglio in attesa. Il bit può restare attivo a vassoio vuoto.
+	The preview could not be shown.	Impossibile mostrare l’anteprima.
+	The scan could not be started.	Impossibile avviare l’acquisizione.
+	The scan produced no pages.	L’acquisizione non ha prodotto pagine.
+	The scanner list could not be refreshed.	Impossibile aggiornare l’elenco degli scanner.
+	Threshold	Soglia
+	Transfer format: {format}.	Formato di trasferimento: {format}.
+	Turned left	Ruotato a sinistra
+	Upside down	Capovolto
+	Vertical resolution	Risoluzione verticale
+	Will use the bed.	Userà il vetro.
+	Will use the feeder.	Userà l’alimentatore.
+	front(s)	fronte
+	reverse side(s)	retro
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} in, {pxw} × {pxh} pixel, {size}
+	Created {n} scanned files	Creati {n} file acquisiti
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Lo scanner ha segnalato un problema con la carta (inceppamento o più fogli prelevati insieme).
+	The scanner needs attention.	Lo scanner richiede attenzione.
+	The scanner reported a lamp or device error.	Lo scanner ha segnalato un errore della lampada o del dispositivo.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Apri il coperchio, rimuovi l’eventuale carta inceppata o i fogli prelevati insieme e carica i fogli rimanenti ben allineati, poi scegli “Continua l’acquisizione”.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Apri il coperchio, rimuovi l’eventuale carta inceppata o i fogli prelevati insieme e carica i fogli ben allineati, poi scegli “Riprova”.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Controlla sullo scanner se c’è un messaggio o se uno sportello o un coperchio è aperto e risolvi il problema, poi scegli “Continua l’acquisizione”.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Controlla sullo scanner se c’è un messaggio o se uno sportello o un coperchio è aperto e risolvi il problema, poi scegli “Riprova”.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Attendi che lo scanner abbia finito oppure chiudi qualsiasi altro programma che lo sta usando, poi scegli “Continua l’acquisizione”.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Attendi che lo scanner abbia finito oppure chiudi qualsiasi altro programma che lo sta usando, poi scegli “Riprova”.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Spegni e riaccendi lo scanner e attendi che sia pronto, poi scegli “Continua l’acquisizione”.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Spegni e riaccendi lo scanner e attendi che sia pronto, poi scegli “Riprova”.
+	Scanner	Scanner
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Controllo dello scanner…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Lo scanner è occupato oppure nel caricatore non c’è carta.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Controlla che nel caricatore ci sia carta oppure attendi che lo scanner abbia finito, poi scegli “Continua l’acquisizione”.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Controlla che nel caricatore ci sia carta oppure attendi che lo scanner abbia finito, poi scegli “Riprova”.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Rete
+	The same printer is also available over USB.	La stessa stampante è disponibile anche via USB.
+	The same printer is also available over the network.	La stessa stampante è disponibile anche in rete.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	La scansione richiede Windows (WIA) in questa versione.

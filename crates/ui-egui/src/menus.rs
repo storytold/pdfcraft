@@ -413,12 +413,13 @@ impl PdfCraftApp {
     /// View ▸ Tools: the All tools groups, each a submenu of its ready tools that no other menu
     /// lists, sections apart.
     fn tools_menu(&self, used: &[&str]) -> Vec<Node> {
+        // A command several groups list (From scanner… is under Create, Organize pages and Scan & OCR) sits in the first.
+        let mut seen: Vec<&str> = Vec::new();
         TOOL_GROUPS
             .iter()
             .filter(|g| g.availability == Availability::Ready)
             .map(|group| {
                 let mut nodes = Vec::new();
-                let mut seen: Vec<&str> = Vec::new();
                 for section in group.sections {
                     nodes.push(Node::Separator);
                     for tool in section.items.iter().filter(|t| t.availability == Availability::Ready) {

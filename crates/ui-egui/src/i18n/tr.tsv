@@ -2553,3 +2553,143 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+	Scanning page {n}…	Sayfa {n} taranıyor…
+	Scanning page {n} of {t}…	Sayfa {n} / {t} taranıyor…
+	All pages asks the driver for the whole stack.	“Tüm sayfalar” sürücüden tüm yığını ister.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Sayfa sayısı, o kadar yapraktan sonra besleyiciyi durdurur. İptal aktarımı erken bitirir; alınan sayfalar belgede kalır.
+	Created Scan.pdf	Scan.pdf oluşturuldu
+	Inserted scanned pages	Taranan sayfalar eklendi
+	A cover on the scanner is open.	Tarayıcı kapağı açık.
+	Advanced…	Gelişmiş…
+	Auto-deskew	Otomatik düzeltme
+	Bed	Cam
+	Brightness	Parlaklık
+	Cancel reverse sides	Arka yüzleri iptal et
+	Clear region	Bölgeyi temizle
+	Color	Renk
+	Color document	Renkli belge
+	Connected by USB.	USB ile bağlı.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Ağ üzerinden (Web Services) bağlı. Seçenekler USB sürücüsünden değil, o sürücüden gelir.
+	Contrast	Kontrast
+	Create PDF	PDF oluştur
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Bölge seçmek için önizlemede sürükleyin. Boş seçim tüm alanı tarar.
+	Driver default	Sürücü varsayılanı
+	Duplex	Çift yüz
+	Duplex is not offered.	Çift yüz sunulmuyor.
+	Feeder	Besleyici
+	From scanner…	Tarayıcıdan…
+	Full area	Tüm alan
+	Insert scanned pages	Taranan sayfaları ekle
+	Intent	Amaç
+	Invert tones	Tonları ters çevir
+	Lamp	Lamba
+	Lamp on	Lamba açık
+	Large scan	Büyük tarama
+	Listing scanners…	Tarayıcılar listeleniyor…
+	Manual duplex needs one reverse side for each front.	Elle çift yüz, her ön yüz için bir arka yüz ister.
+	Mirror	Ayna
+	Mirror the page	Sayfayı aynala
+	No scanner is connected.	Bağlı tarayıcı yok.
+	Optical resolution {x} × {y} dpi.	Optik çözünürlük {x} × {y} dpi.
+	Orientation	Yön
+	Photometric	Fotometrik
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Önizleme cam içindir. Aşağıda inç cinsinden bölge ayarlayın veya tüm yaprak için boş bırakın.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Önizleme camı kullanır. Kaynağı Cam yapın veya önizlemesiz tarayın.
+	Refresh	Yenile
+	Refresh lists scanners. It does not feed paper.	Yenile tarayıcıları yeniden listeler. Kâğıt beslemez.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Bölge (inç). Genişlik veya yüksekliği sıfır bırakırsanız tüm alan taranır.
+	Reverse sides	Arka yüzler
+	Reverse sides interleaved.	Arka yüzler aralandı.
+	Scan reverse sides	Arka yüzleri tara
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Ön yüzü tarayın, camda çevirip arka yüzü tarayın.
+	Scan the fronts before the reverse sides.	Arka yüzlerden önce ön yüzleri tarayın.
+	Scan interrupted	Tarama kesildi
+	The scanner has a paper jam.	Tarayıcıda kağıt sıkışması var.
+	The feeder ran out of paper.	Besleyicideki kağıt bitti.
+	The feeder took more than one sheet.	Besleyici birden fazla sayfa çekti.
+	The scanner is offline or needs attention.	Tarayıcı çevrimdışı veya dikkat gerektiriyor.
+	The scanner is busy.	Tarayıcı meşgul.
+	The scan was interrupted.	Tarama yarıda kesildi.
+	The scan was cancelled at the scanner.	Tarama tarayıcıda iptal edildi.
+	No pages were scanned.	Hiç sayfa taranmadı.
+	1 page was scanned.	1 sayfa tarandı.
+	{n} pages were scanned.	{n} sayfa tarandı.
+	{n} of {m} pages were scanned.	{m} sayfadan {n} tanesi tarandı.
+	The pages already scanned were kept in the document.	Daha önce taranan sayfalar belgede tutuldu.
+	The fronts already scanned are kept for the reverse-side pass.	Daha önce taranan ön yüzler, arka yüz geçişi için saklandı.
+	The reverse sides already scanned are kept.	Daha önce taranan arka yüzler saklandı.
+	Close the feeder cover and check the paper, then choose Continue.	Besleyici kapağını kapatıp kağıdı kontrol edin, ardından “Taramaya devam et” seçeneğini seçin.
+	Close the feeder cover and check the paper, then choose Try again.	Besleyici kapağını kapatıp kağıdı kontrol edin, ardından “Yeniden dene” seçeneğini seçin.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Sıkışmayı giderin ve kalan sayfaları düzgünce yerleştirin, ardından “Taramaya devam et” seçeneğini seçin.
+	Clear the jam and load the sheets squarely, then choose Try again.	Sıkışmayı giderin ve sayfaları düzgünce yerleştirin, ardından “Yeniden dene” seçeneğini seçin.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Daha fazla sayfa yerleştirip “Taramaya devam et” seçeneğini seçin veya taranan sayfaları tutmak için “Bitir” seçeneğini seçin.
+	Load sheets in the feeder, then choose Try again.	Besleyiciye sayfa yerleştirin, ardından “Yeniden dene” seçeneğini seçin.
+	Separate the sheets and load the remaining ones, then choose Continue.	Sayfaları ayırın ve kalanları yerleştirin, ardından “Taramaya devam et” seçeneğini seçin.
+	Separate the sheets and load them again, then choose Try again.	Sayfaları ayırın ve yeniden yerleştirin, ardından “Yeniden dene” seçeneğini seçin.
+	Check the scanner is on and connected, then choose Continue.	Tarayıcının açık ve bağlı olduğunu kontrol edin, ardından “Taramaya devam et” seçeneğini seçin.
+	Check the scanner is on and connected, then choose Try again.	Tarayıcının açık ve bağlı olduğunu kontrol edin, ardından “Yeniden dene” seçeneğini seçin.
+	Scan the missing reverse sides, then choose Finish.	Eksik arka yüzleri tarayın, ardından “Bitir” seçeneğini seçin.
+	Try again	Yeniden dene
+	Continue scanning	Taramaya devam et
+	Continue scanning fronts	Ön yüzleri taramaya devam et
+	Continue scanning reverse sides	Arka yüzleri taramaya devam et
+	Scan reverse side now (1 front)	Arka yüzü şimdi tara (1 ön yüz)
+	Scan reverse sides now ({n} fronts)	Arka yüzleri şimdi tara ({n} ön yüz)
+	Finish	Bitir
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Taranan ön yüz: {n}. Camdaki sayfayı çevirin, ardından “Arka yüzleri tara” seçeneğini seçin.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Taranan ön yüz: {n}. Desteyi son sayfa üstte olacak şekilde çevirin ve yeniden yerleştirin, ardından “Arka yüzleri tara” seçeneğini seçin.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Ön yüzleri tarayın, desteyi çevirin (son yaprak üstte), sonra arka yüzleri. Sayfalar ön, arka, … olarak aralanır…
+	Scanner settings	Tarayıcı ayarları
+	Scanning front {n} of {t}…	Ön yüz {n} / {t} taranıyor…
+	Scanning front {n}…	Ön yüz {n} taranıyor…
+	Scanning reverse side {n} of {t}…	Arka yüz {n} / {t} taranıyor…
+	Scanning reverse side {n}…	Arka yüz {n} taranıyor…
+	Scanning…	Taranıyor…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Bu kaynağın sunduğu ayarlar. Sürücü değerini korumak için bir denetimi olduğu gibi bırakın.
+	Stop	Durdur
+	Straighten the page	Sayfayı düzelt
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Cam her seferinde bir sayfa tarar. Bir ön yüz tarayıp çevirin, sonra arka yüzü.
+	The driver may accept a turn and leave the picture as it was.	Sürücü bir döndürmeyi kabul edip görüntüyü olduğu gibi bırakabilir.
+	The driver reports a paper jam.	Sürücü kâğıt sıkışması bildiriyor.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Sürücü bekleyen bir yaprak bildiriyor. Tepsi boşken bit açık kalabilir.
+	The preview could not be shown.	Önizleme gösterilemedi.
+	The scan could not be started.	Tarama başlatılamadı.
+	The scan produced no pages.	Tarama sayfa üretmedi.
+	The scanner list could not be refreshed.	Tarayıcı listesi yenilenemedi.
+	Threshold	Eşik
+	Transfer format: {format}.	Aktarım biçimi: {format}.
+	Turned left	Sola döndürüldü
+	Upside down	Ters
+	Vertical resolution	Dikey çözünürlük
+	Will use the bed.	Cam kullanılacak.
+	Will use the feeder.	Besleyici kullanılacak.
+	front(s)	ön yüz
+	reverse side(s)	arka yüz
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} inç, {pxw} × {pxh} piksel, {size}
+	Created {n} scanned files	{n} taranmış dosya oluşturuldu
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Tarayıcı bir kağıt sorunu bildirdi (sıkışma veya birden fazla sayfanın birlikte çekilmesi).
+	The scanner needs attention.	Tarayıcı dikkat gerektiriyor.
+	The scanner reported a lamp or device error.	Tarayıcı bir lamba veya aygıt hatası bildirdi.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Kapağı açın, varsa sıkışan kağıdı veya birlikte çekilen sayfaları çıkarın ve kalan sayfaları düzgünce yerleştirin, ardından “Taramaya devam et” seçeneğini seçin.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Kapağı açın, varsa sıkışan kağıdı veya birlikte çekilen sayfaları çıkarın ve sayfaları düzgünce yerleştirin, ardından “Yeniden dene” seçeneğini seçin.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Tarayıcıda bir ileti olup olmadığına ya da bir kapak veya kapının açık olup olmadığına bakın ve sorunu giderin, ardından “Taramaya devam et” seçeneğini seçin.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Tarayıcıda bir ileti olup olmadığına ya da bir kapak veya kapının açık olup olmadığına bakın ve sorunu giderin, ardından “Yeniden dene” seçeneğini seçin.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Tarayıcının işi bitirmesini bekleyin veya onu kullanan diğer programları kapatın, ardından “Taramaya devam et” seçeneğini seçin.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Tarayıcının işi bitirmesini bekleyin veya onu kullanan diğer programları kapatın, ardından “Yeniden dene” seçeneğini seçin.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Tarayıcıyı kapatıp yeniden açın ve hazır olmasını bekleyin, ardından “Taramaya devam et” seçeneğini seçin.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Tarayıcıyı kapatıp yeniden açın ve hazır olmasını bekleyin, ardından “Yeniden dene” seçeneğini seçin.
+	Scanner	Tarayıcı
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Tarayıcı denetleniyor…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Tarayıcı meşgul veya besleyicide kağıt yok.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Besleyicide kağıt olup olmadığını denetleyin veya tarayıcının işi bitirmesini bekleyin, ardından “Taramaya devam et” seçeneğini seçin.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Besleyicide kağıt olup olmadığını denetleyin veya tarayıcının işi bitirmesini bekleyin, ardından “Yeniden dene” seçeneğini seçin.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB ile
+	Network	Ağ
+	The same printer is also available over USB.	Aynı yazıcı USB üzerinden de kullanılabilir.
+	The same printer is also available over the network.	Aynı yazıcı ağ üzerinden de kullanılabilir.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Bu sürümde tarama için Windows (WIA) gerekir.

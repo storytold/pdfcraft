@@ -2558,3 +2558,143 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+	Scanning page {n}…	Seite {n} wird gescannt…
+	Scanning page {n} of {t}…	Seite {n} von {t} wird gescannt…
+	All pages asks the driver for the whole stack.	„Alle Seiten“ fordert den gesamten Stapel vom Treiber an.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Eine Seitenzahl stoppt den Einzug nach so vielen Blättern. Abbrechen beendet die Übertragung früher; bereits empfangene Seiten bleiben im Dokument.
+	Created Scan.pdf	Scan.pdf erstellt
+	Inserted scanned pages	Gescannte Seiten eingefügt
+	A cover on the scanner is open.	Eine Abdeckung am Scanner ist geöffnet.
+	Advanced…	Erweitert…
+	Auto-deskew	Automatisch ausrichten
+	Bed	Vorlageglas
+	Brightness	Helligkeit
+	Cancel reverse sides	Rückseiten abbrechen
+	Clear region	Bereich löschen
+	Color	Farbe
+	Color document	Farbdokument
+	Connected by USB.	Per USB verbunden.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Über das Netzwerk (Web Services) verbunden. Optionen kommen von diesem Treiber, nicht vom USB-Treiber.
+	Contrast	Kontrast
+	Create PDF	PDF erstellen
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Ziehen Sie in der Vorschau einen Bereich. Eine leere Auswahl scannt die ganze Fläche.
+	Driver default	Treiberstandard
+	Duplex	Duplex
+	Duplex is not offered.	Duplex wird nicht angeboten.
+	Feeder	Einzug
+	From scanner…	Vom Scanner…
+	Full area	Gesamte Fläche
+	Insert scanned pages	Gescannte Seiten einfügen
+	Intent	Absicht
+	Invert tones	Töne umkehren
+	Lamp	Lampe
+	Lamp on	Lampe ein
+	Large scan	Großer Scan
+	Listing scanners…	Scanner werden aufgelistet…
+	Manual duplex needs one reverse side for each front.	Manuelles Duplex braucht für jede Vorderseite eine Rückseite.
+	Mirror	Spiegeln
+	Mirror the page	Seite spiegeln
+	No scanner is connected.	Kein Scanner ist verbunden.
+	Optical resolution {x} × {y} dpi.	Optische Auflösung {x} × {y} dpi.
+	Orientation	Ausrichtung
+	Photometric	Photometrisch
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Die Vorschau gilt für das Glas. Legen Sie unten einen Bereich in Zoll fest oder lassen Sie ihn leer für das ganze Blatt.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Die Vorschau nutzt das Glas. Stellen Sie die Quelle auf Vorlageglas oder scannen Sie ohne Vorschau.
+	Refresh	Aktualisieren
+	Refresh lists scanners. It does not feed paper.	Aktualisieren listet Scanner neu auf. Es zieht kein Papier ein.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Bereich in Zoll. Breite oder Höhe auf null lassen, um die ganze Fläche zu scannen.
+	Reverse sides	Rückseiten
+	Reverse sides interleaved.	Rückseiten eingefügt.
+	Scan reverse sides	Rückseiten scannen
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Scannen Sie die Vorderseite, drehen Sie das Blatt auf dem Glas um und scannen Sie die Rückseite.
+	Scan the fronts before the reverse sides.	Scannen Sie die Vorderseiten vor den Rückseiten.
+	Scan interrupted	Scan unterbrochen
+	The scanner has a paper jam.	Im Scanner steckt Papier fest.
+	The feeder ran out of paper.	Dem Einzug ist das Papier ausgegangen.
+	The feeder took more than one sheet.	Der Einzug hat mehr als ein Blatt eingezogen.
+	The scanner is offline or needs attention.	Der Scanner ist offline oder benötigt Aufmerksamkeit.
+	The scanner is busy.	Der Scanner ist beschäftigt.
+	The scan was interrupted.	Der Scanvorgang wurde unterbrochen.
+	The scan was cancelled at the scanner.	Der Scanvorgang wurde am Scanner abgebrochen.
+	No pages were scanned.	Es wurden keine Seiten gescannt.
+	1 page was scanned.	Es wurde 1 Seite gescannt.
+	{n} pages were scanned.	Es wurden {n} Seiten gescannt.
+	{n} of {m} pages were scanned.	Es wurden {n} von {m} Seiten gescannt.
+	The pages already scanned were kept in the document.	Die bereits gescannten Seiten wurden im Dokument behalten.
+	The fronts already scanned are kept for the reverse-side pass.	Die bereits gescannten Vorderseiten werden für den Rückseitendurchgang aufbewahrt.
+	The reverse sides already scanned are kept.	Die bereits gescannten Rückseiten werden aufbewahrt.
+	Close the feeder cover and check the paper, then choose Continue.	Schließen Sie die Abdeckung des Einzugs und prüfen Sie das Papier. Wählen Sie dann „Weiter scannen“.
+	Close the feeder cover and check the paper, then choose Try again.	Schließen Sie die Abdeckung des Einzugs und prüfen Sie das Papier. Wählen Sie dann „Erneut versuchen“.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Beseitigen Sie den Papierstau und legen Sie die restlichen Blätter gerade ein. Wählen Sie dann „Weiter scannen“.
+	Clear the jam and load the sheets squarely, then choose Try again.	Beseitigen Sie den Papierstau und legen Sie die Blätter gerade ein. Wählen Sie dann „Erneut versuchen“.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Legen Sie weitere Blätter ein und wählen Sie „Weiter scannen“, oder wählen Sie „Fertig“, um das Gescannte zu behalten.
+	Load sheets in the feeder, then choose Try again.	Legen Sie Blätter in den Einzug ein. Wählen Sie dann „Erneut versuchen“.
+	Separate the sheets and load the remaining ones, then choose Continue.	Trennen Sie die Blätter und legen Sie die restlichen ein. Wählen Sie dann „Weiter scannen“.
+	Separate the sheets and load them again, then choose Try again.	Trennen Sie die Blätter und legen Sie sie erneut ein. Wählen Sie dann „Erneut versuchen“.
+	Check the scanner is on and connected, then choose Continue.	Prüfen Sie, ob der Scanner eingeschaltet und verbunden ist. Wählen Sie dann „Weiter scannen“.
+	Check the scanner is on and connected, then choose Try again.	Prüfen Sie, ob der Scanner eingeschaltet und verbunden ist. Wählen Sie dann „Erneut versuchen“.
+	Scan the missing reverse sides, then choose Finish.	Scannen Sie die fehlenden Rückseiten. Wählen Sie dann „Fertig“.
+	Try again	Erneut versuchen
+	Continue scanning	Weiter scannen
+	Continue scanning fronts	Vorderseiten weiter scannen
+	Continue scanning reverse sides	Rückseiten weiter scannen
+	Scan reverse side now (1 front)	Rückseite jetzt scannen (1 Vorderseite)
+	Scan reverse sides now ({n} fronts)	Rückseiten jetzt scannen ({n} Vorderseiten)
+	Finish	Fertig
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Vorderseiten gescannt: {n}. Drehen Sie das Blatt auf dem Glas um. Wählen Sie dann „Rückseiten scannen“.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Vorderseiten gescannt: {n}. Drehen Sie den Stapel so um, dass das letzte Blatt oben liegt, und legen Sie ihn erneut ein. Wählen Sie dann „Rückseiten scannen“.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Scannen Sie die Vorderseiten, drehen Sie den Stapel um (letztes Blatt oben) und scannen Sie die Rückseiten. Seiten werden Vorder-, Rückseite, … verschachtelt…
+	Scanner settings	Scannereinstellungen
+	Scanning front {n} of {t}…	Vorderseite {n} von {t} wird gescannt…
+	Scanning front {n}…	Vorderseite {n} wird gescannt…
+	Scanning reverse side {n} of {t}…	Rückseite {n} von {t} wird gescannt…
+	Scanning reverse side {n}…	Rückseite {n} wird gescannt…
+	Scanning…	Scannen…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Einstellungen, die diese Quelle anbietet. Unberührt bleibt der Treiberwert.
+	Stop	Stopp
+	Straighten the page	Seite begradigen
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Das Glas scannt eine Seite nach der anderen. Scannen Sie eine Vorderseite, drehen Sie um und scannen Sie die Rückseite.
+	The driver may accept a turn and leave the picture as it was.	Der Treiber kann eine Drehung annehmen und das Bild trotzdem unverändert liefern.
+	The driver reports a paper jam.	Der Treiber meldet einen Papierstau.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Der Treiber meldet ein wartendes Blatt. Das Bit kann nach leerem Fach gesetzt bleiben.
+	The preview could not be shown.	Die Vorschau konnte nicht angezeigt werden.
+	The scan could not be started.	Der Scan konnte nicht gestartet werden.
+	The scan produced no pages.	Der Scan ergab keine Seiten.
+	The scanner list could not be refreshed.	Die Scannerliste konnte nicht aktualisiert werden.
+	Threshold	Schwellenwert
+	Transfer format: {format}.	Übertragungsformat: {format}.
+	Turned left	Nach links gedreht
+	Upside down	Auf dem Kopf
+	Vertical resolution	Vertikale Auflösung
+	Will use the bed.	Es wird das Glas verwendet.
+	Will use the feeder.	Es wird der Einzug verwendet.
+	front(s)	Vorderseite(n)
+	reverse side(s)	Rückseite(n)
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} Zoll, {pxw} × {pxh} Pixel, {size}
+	Created {n} scanned files	{n} gescannte Dateien erstellt
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Der Scanner meldet ein Papierproblem (Papierstau oder mehrere gemeinsam eingezogene Blätter).
+	The scanner needs attention.	Der Scanner benötigt Aufmerksamkeit.
+	The scanner reported a lamp or device error.	Der Scanner meldet einen Lampen- oder Gerätefehler.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Öffnen Sie die Abdeckung, beseitigen Sie einen eventuellen Papierstau oder gemeinsam eingezogene Blätter und legen Sie die restlichen Blätter gerade ein. Wählen Sie dann „Weiter scannen“.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Öffnen Sie die Abdeckung, beseitigen Sie einen eventuellen Papierstau oder gemeinsam eingezogene Blätter und legen Sie die Blätter gerade ein. Wählen Sie dann „Erneut versuchen“.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Prüfen Sie am Scanner, ob eine Meldung angezeigt wird oder eine Tür oder Abdeckung offen ist, und beheben Sie die Ursache. Wählen Sie dann „Weiter scannen“.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Prüfen Sie am Scanner, ob eine Meldung angezeigt wird oder eine Tür oder Abdeckung offen ist, und beheben Sie die Ursache. Wählen Sie dann „Erneut versuchen“.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Warten Sie, bis der Scanner fertig ist, oder schließen Sie andere Programme, die ihn verwenden. Wählen Sie dann „Weiter scannen“.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Warten Sie, bis der Scanner fertig ist, oder schließen Sie andere Programme, die ihn verwenden. Wählen Sie dann „Erneut versuchen“.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Schalten Sie den Scanner aus und wieder ein und warten Sie, bis er bereit ist. Wählen Sie dann „Weiter scannen“.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Schalten Sie den Scanner aus und wieder ein und warten Sie, bis er bereit ist. Wählen Sie dann „Erneut versuchen“.
+	Scanner	Scanner
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Scanner wird geprüft…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Der Scanner ist beschäftigt, oder im Einzug liegt kein Papier.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Prüfen Sie, ob im Einzug Papier liegt, oder warten Sie, bis der Scanner fertig ist. Wählen Sie dann „Weiter scannen“.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Prüfen Sie, ob im Einzug Papier liegt, oder warten Sie, bis der Scanner fertig ist. Wählen Sie dann „Erneut versuchen“.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Netzwerk
+	The same printer is also available over USB.	Derselbe Drucker ist auch per USB verfügbar.
+	The same printer is also available over the network.	Derselbe Drucker ist auch über das Netzwerk verfügbar.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Das Scannen erfordert in dieser Version Windows (WIA).

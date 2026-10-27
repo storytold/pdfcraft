@@ -643,12 +643,15 @@ impl PdfCraftApp {
         }
     }
 
+    /// Close the tab at `index` (ignored when out of range): ends any scan bound to its document, remembers its
+    /// path for reopening (at most ten) and closes the document.
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.views.len() {
             return;
         }
         self.remember_view(index);
         let id = self.views.remove(index).id;
+        self.scan_document_closed(id);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {

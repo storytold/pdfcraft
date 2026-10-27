@@ -9,6 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-scan = { workspace = true }
+# The Windows scan backend. Off Windows the crate holds only its COM-free rules.
+pdfcraft-wia = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.

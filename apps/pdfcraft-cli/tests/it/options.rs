@@ -19,6 +19,7 @@ fn non_edit_commands_reject_unknown_options_before_io() {
         vec!["audit", "missing.pdf", "--nonsense", "1"],
         vec!["run", "doc_open", "--roto", "/tmp"],
         vec!["ui", "--contro", "control.json", "state"],
+        vec!["scan", "--ot", "pages", "--yes"],
     ] {
         let unknown = args.iter().find(|arg| arg.starts_with("--")).expect("test option");
         let out = Command::new(BIN).args(&args).output().expect("run cli");

@@ -2833,3 +2833,141 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+	Scanning page {n}…	جارٍ المسح الضوئي للصفحة {n}…
+	Scanning page {n} of {t}…	جارٍ المسح الضوئي للصفحة {n} من {t}…
+	All pages asks the driver for the whole stack.	«كل الصفحات» يطلب من برنامج التشغيل المكدس بالكامل.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	عدد الصفحات يوقف المغذي بعد هذا العدد من الأوراق. الإلغاء ينهي النقل مبكراً؛ الصفحات المستلمة تبقى في المستند.
+	Created Scan.pdf	تم إنشاء Scan.pdf
+	Inserted scanned pages	أُدرجت الصفحات الممسوحة
+	A cover on the scanner is open.	غطاء الماسح مفتوح.
+	Advanced…	متقدم…
+	Auto-deskew	تصحيح الميل تلقائياً
+	Bed	اللوحة
+	Brightness	السطوع
+	Cancel reverse sides	إلغاء الوجه الخلفي
+	Clear region	مسح المنطقة
+	Color document	مستند ملون
+	Connected by USB.	متصل عبر USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	متصل عبر الشبكة (خدمات الويب). الخيارات من ذلك المشغّل لا من USB.
+	Contrast	التباين
+	Create PDF	إنشاء PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	اسحب على المعاينة لاختيار منطقة. التحديد الفارغ يمسح المساحة كلها.
+	Driver default	افتراضي المشغّل
+	Duplex	وجهان
+	Duplex is not offered.	الوجهان غير متاحين.
+	Feeder	المُغذي
+	From scanner…	من الماسح…
+	Full area	المساحة كاملة
+	Insert scanned pages	إدراج الصفحات الممسوحة
+	Intent	القصد
+	Invert tones	عكس الدرجات
+	Lamp	المصباح
+	Lamp on	المصباح شغّال
+	Large scan	مسح كبير
+	Listing scanners…	جاري سرد الماسحات…
+	Manual duplex needs one reverse side for each front.	الوجهان يدوياً يحتاجان وجهاً خلفياً لكل وجه أمامي.
+	Mirror	مرآة
+	Mirror the page	عكس الصفحة
+	No scanner is connected.	لا يوجد ماسح متصل.
+	Optical resolution {x} × {y} dpi.	الدقة البصرية {x} × {y} نقطة/بوصة.
+	Orientation	الاتجاه
+	Photometric	ضوئي
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	المعاينة للوحة. عيّن منطقة بالبوصة أدناه أو اتركها فارغة للورقة كلها.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	المعاينة تستخدم اللوحة. غيّر المصدر إلى اللوحة أو امسح بلا معاينة.
+	Refresh lists scanners. It does not feed paper.	التحديث يعيد سرد الماسحات. لا يُدخل ورقاً.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	المنطقة بالبوصة. اترك العرض أو الارتفاع صفراً لمسح المساحة كلها.
+	Reverse sides	الوجوه الخلفية
+	Reverse sides interleaved.	أُدرجت الوجوه الخلفية بالتناوب.
+	Scan reverse sides	مسح الوجوه الخلفية
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	امسح الوجه الأمامي، اقلب الورقة على اللوحة ثم امسح الخلفي.
+	Scan the fronts before the reverse sides.	امسح الوجوه الأمامية قبل الخلفية.
+	Scan interrupted	تمت مقاطعة المسح
+	The scanner has a paper jam.	هناك انحشار للورق في الماسح الضوئي.
+	The feeder ran out of paper.	نفد الورق من وحدة التغذية.
+	The feeder took more than one sheet.	سحبت وحدة التغذية أكثر من ورقة واحدة.
+	The scanner is offline or needs attention.	الماسح الضوئي غير متصل أو يحتاج إلى انتباه.
+	The scanner is busy.	الماسح الضوئي مشغول.
+	The scan was interrupted.	تمت مقاطعة المسح الضوئي.
+	The scan was cancelled at the scanner.	تم إلغاء المسح الضوئي على الماسح الضوئي.
+	No pages were scanned.	لم يتم مسح أي صفحة.
+	1 page was scanned.	تم مسح صفحة واحدة.
+	{n} pages were scanned.	عدد الصفحات الممسوحة: {n}.
+	{n} of {m} pages were scanned.	عدد الصفحات الممسوحة: {n} من {m}.
+	The pages already scanned were kept in the document.	تم الاحتفاظ بالصفحات الممسوحة سابقاً في المستند.
+	The fronts already scanned are kept for the reverse-side pass.	تم الاحتفاظ بالوجوه الأمامية الممسوحة سابقاً لمرحلة الوجوه الخلفية.
+	The reverse sides already scanned are kept.	تم الاحتفاظ بالوجوه الخلفية الممسوحة سابقاً.
+	Close the feeder cover and check the paper, then choose Continue.	أغلق غطاء وحدة التغذية وتحقق من الورق، ثم اختر «متابعة المسح».
+	Close the feeder cover and check the paper, then choose Try again.	أغلق غطاء وحدة التغذية وتحقق من الورق، ثم اختر «إعادة المحاولة».
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	أزل الورق المحشور وضع الأوراق المتبقية بشكل مستقيم، ثم اختر «متابعة المسح».
+	Clear the jam and load the sheets squarely, then choose Try again.	أزل الورق المحشور وضع الأوراق بشكل مستقيم، ثم اختر «إعادة المحاولة».
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	ضع المزيد من الأوراق ثم اختر «متابعة المسح»، أو اختر «إنهاء» للاحتفاظ بما تم مسحه.
+	Load sheets in the feeder, then choose Try again.	ضع أوراقاً في وحدة التغذية، ثم اختر «إعادة المحاولة».
+	Separate the sheets and load the remaining ones, then choose Continue.	افصل الأوراق وضع المتبقية منها، ثم اختر «متابعة المسح».
+	Separate the sheets and load them again, then choose Try again.	افصل الأوراق وضعها مرة أخرى، ثم اختر «إعادة المحاولة».
+	Check the scanner is on and connected, then choose Continue.	تحقق من أن الماسح الضوئي قيد التشغيل ومتصل، ثم اختر «متابعة المسح».
+	Check the scanner is on and connected, then choose Try again.	تحقق من أن الماسح الضوئي قيد التشغيل ومتصل، ثم اختر «إعادة المحاولة».
+	Scan the missing reverse sides, then choose Finish.	امسح الوجوه الخلفية الناقصة، ثم اختر «إنهاء».
+	Try again	إعادة المحاولة
+	Continue scanning	متابعة المسح
+	Continue scanning fronts	متابعة مسح الوجوه الأمامية
+	Continue scanning reverse sides	متابعة مسح الوجوه الخلفية
+	Scan reverse side now (1 front)	مسح الوجه الخلفي الآن (وجه أمامي واحد)
+	Scan reverse sides now ({n} fronts)	مسح الوجوه الخلفية الآن (عدد الوجوه الأمامية: {n})
+	Finish	إنهاء
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	عدد الوجوه الأمامية الممسوحة: {n}. اقلب الورقة على الزجاج، ثم اختر «مسح الوجوه الخلفية».
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	عدد الوجوه الأمامية الممسوحة: {n}. اقلب الرزمة بحيث تكون الورقة الأخيرة في الأعلى، وأعد وضعها، ثم اختر «مسح الوجوه الخلفية».
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	امسح الأوجه الأمامية، اقلب الرزمة (آخر ورق أعلاه)، ثم الخلفية. تُدرج الصفحات أمامي، خلفي، …
+	Scanner settings	إعدادات الماسح
+	Scanning front {n} of {t}…	مسح أمامي {n} من {t}…
+	Scanning front {n}…	مسح أمامي {n}…
+	Scanning reverse side {n} of {t}…	مسح خلفي {n} من {t}…
+	Scanning reverse side {n}…	مسح خلفي {n}…
+	Scanning…	جاري المسح…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	إعدادات يعرضها هذا المصدر. اترك عناصرًا دون تغيير للإبقاء على قيمة المشغّل.
+	Stop	إيقاف
+	Straighten the page	تسوية الصفحة
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	اللوحة تمسح صفحة واحدة كل مرة. امسح وجهاً أمامياً، اقلبه ثم الخلفي.
+	The driver may accept a turn and leave the picture as it was.	قد يقبل المشغّل دوراً ويترك الصورة كما كانت.
+	The driver reports a paper jam.	المشغّل يبلغ عن انحشار ورق.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	المشغّل يبلغ عن ورقة بانتظار. قد يبقى البت بعد فراغ الدرج.
+	The preview could not be shown.	تعذّر إظهار المعاينة.
+	The scan could not be started.	تعذّر بدء المسح.
+	The scan produced no pages.	المسح لم يُنتج صفحات.
+	The scanner list could not be refreshed.	تعذّر تحديث قائمة الماسحات.
+	Threshold	العتبة
+	Transfer format: {format}.	تنسيق النقل: {format}.
+	Turned left	مُدار يساراً
+	Upside down	مقلوب
+	Vertical resolution	الدقة الرأسية
+	Will use the bed.	سيُستخدم اللوحة.
+	Will use the feeder.	سيُستخدم المُغذي.
+	front(s)	أمامي
+	reverse side(s)	خلفي
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} بوصة، {pxw} × {pxh} بكسل، {size}
+	Created {n} scanned files	تم إنشاء {n} ملفات ممسوحة
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	أبلغ الماسح الضوئي عن مشكلة في الورق (انحشار أو سحب عدة أوراق معًا).
+	The scanner needs attention.	الماسح الضوئي يحتاج إلى انتباه.
+	The scanner reported a lamp or device error.	أبلغ الماسح الضوئي عن خطأ في المصباح أو الجهاز.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	افتح الغطاء، وأزل أي ورق محشور أو أوراق سُحبت معًا، وضع الأوراق المتبقية بشكل مستقيم، ثم اختر «متابعة المسح».
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	افتح الغطاء، وأزل أي ورق محشور أو أوراق سُحبت معًا، وضع الأوراق بشكل مستقيم، ثم اختر «إعادة المحاولة».
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	انظر إلى الماسح الضوئي بحثًا عن رسالة أو باب أو غطاء مفتوح، وعالج ما يظهره، ثم اختر «متابعة المسح».
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	انظر إلى الماسح الضوئي بحثًا عن رسالة أو باب أو غطاء مفتوح، وعالج ما يظهره، ثم اختر «إعادة المحاولة».
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	انتظر حتى ينتهي الماسح الضوئي، أو أغلق أي برنامج آخر يستخدمه، ثم اختر «متابعة المسح».
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	انتظر حتى ينتهي الماسح الضوئي، أو أغلق أي برنامج آخر يستخدمه، ثم اختر «إعادة المحاولة».
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	أوقف تشغيل الماسح الضوئي ثم شغّله من جديد، وانتظر حتى يصبح جاهزًا، ثم اختر «متابعة المسح».
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	أوقف تشغيل الماسح الضوئي ثم شغّله من جديد، وانتظر حتى يصبح جاهزًا، ثم اختر «إعادة المحاولة».
+	Scanner	الماسح الضوئي
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	جارٍ فحص الماسح…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	الماسح الضوئي مشغول، أو لا يوجد ورق في وحدة التغذية.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	تحقق من وجود ورق في وحدة التغذية، أو انتظر حتى ينتهي الماسح الضوئي، ثم اختر «متابعة المسح».
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	تحقق من وجود ورق في وحدة التغذية، أو انتظر حتى ينتهي الماسح الضوئي، ثم اختر «إعادة المحاولة».
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	الشبكة
+	The same printer is also available over USB.	الطابعة نفسها متاحة أيضاً عبر USB.
+	The same printer is also available over the network.	الطابعة نفسها متاحة أيضاً عبر الشبكة.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	يتطلب المسح الضوئي نظام Windows (WIA) في هذا الإصدار.

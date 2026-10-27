@@ -2562,3 +2562,143 @@ animation effects	Off	Izklopljeni
 	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
+	Scanning page {n}…	Optično branje strani {n}…
+	Scanning page {n} of {t}…	Optično branje strani {n} od {t}…
+	All pages asks the driver for the whole stack.	»Vse strani« od gonilnika zahteva celoten kup.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Število strani ustavi podajalnik po toliko listih. Preklic prej konča prenos; že prejete strani ostanejo v dokumentu.
+	Created Scan.pdf	Ustvarjeno Scan.pdf
+	Inserted scanned pages	Vstavljene optično prebrane strani
+	A cover on the scanner is open.	Pokrov optičnega bralnika je odprt.
+	Advanced…	Napredno…
+	Auto-deskew	Samodejna poravnava
+	Bed	Steklo
+	Brightness	Svetlost
+	Cancel reverse sides	Prekliči hrbtne strani
+	Clear region	Počisti območje
+	Color	Barva
+	Color document	Barvni dokument
+	Connected by USB.	Povezan prek USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Povezan prek omrežja (spletne storitve). Možnosti so iz tega gonilnika, ne USB.
+	Contrast	Kontrast
+	Create PDF	Ustvari PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Povlecite po predogledu za izbiro območja. Prazna izbira optično prebere celotno površino.
+	Driver default	Privzeto gonilnika
+	Duplex	Dvostransko
+	Duplex is not offered.	Dvostransko ni na voljo.
+	Feeder	Podajalnik
+	From scanner…	Iz optičnega bralnika…
+	Full area	Celotna površina
+	Insert scanned pages	Vstavi optično prebrane strani
+	Intent	Namen
+	Invert tones	Obrni tone
+	Lamp	Svetilka
+	Lamp on	Svetilka vklopljena
+	Large scan	Velik optični prepis
+	Listing scanners…	Seznam optičnih bralnikov…
+	Manual duplex needs one reverse side for each front.	Ročno dvostransko zahteva eno hrbtno stran za vsako sprednjo.
+	Mirror	Zrcalo
+	Mirror the page	Zrcali stran
+	No scanner is connected.	Noben optični bralnik ni povezan.
+	Optical resolution {x} × {y} dpi.	Optična ločljivost {x} × {y} dpi.
+	Orientation	Usmeritev
+	Photometric	Fotometrija
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Predogled je za steklo. Spodaj nastavite območje v palcih ali pustite prazno za cel list.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Predogled uporablja steklo. Preklopite vir na Steklo ali optično preberite brez predogleda.
+	Refresh	Osveži
+	Refresh lists scanners. It does not feed paper.	Osveži znova navede optične bralnike. Ne podaja papirja.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Območje v palcih. Širino ali višino pustite na nič za celotno površino.
+	Reverse sides	Hrbtne strani
+	Reverse sides interleaved.	Hrbtne strani so vstavljene izmenično.
+	Scan reverse sides	Optično preberi hrbtne strani
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Optično preberite sprednjo stran, obrnite list na steklu, nato hrbtno.
+	Scan the fronts before the reverse sides.	Pred hrbtnimi stranmi optično preberite sprednje.
+	Scan interrupted	Optično branje prekinjeno
+	The scanner has a paper jam.	V optičnem bralniku se je zagozdil papir.
+	The feeder ran out of paper.	V podajalniku je zmanjkalo papirja.
+	The feeder took more than one sheet.	Podajalnik je povlekel več kot en list.
+	The scanner is offline or needs attention.	Optični bralnik je brez povezave ali potrebuje pozornost.
+	The scanner is busy.	Optični bralnik je zaseden.
+	The scan was interrupted.	Optično branje je bilo prekinjeno.
+	The scan was cancelled at the scanner.	Optično branje je bilo preklicano na optičnem bralniku.
+	No pages were scanned.	Nobena stran ni bila optično prebrana.
+	1 page was scanned.	Prebrana je bila 1 stran.
+	{n} pages were scanned.	Prebranih strani: {n}.
+	{n} of {m} pages were scanned.	Prebranih strani: {n} od {m}.
+	The pages already scanned were kept in the document.	Že prebrane strani so ostale v dokumentu.
+	The fronts already scanned are kept for the reverse-side pass.	Že prebrane sprednje strani so shranjene za prehod s hrbtnimi stranmi.
+	The reverse sides already scanned are kept.	Že prebrane hrbtne strani so shranjene.
+	Close the feeder cover and check the paper, then choose Continue.	Zaprite pokrov podajalnika in preverite papir, nato izberite »Nadaljuj z branjem«.
+	Close the feeder cover and check the paper, then choose Try again.	Zaprite pokrov podajalnika in preverite papir, nato izberite »Poskusi znova«.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Odstranite zagozden papir in ravno naložite preostale liste, nato izberite »Nadaljuj z branjem«.
+	Clear the jam and load the sheets squarely, then choose Try again.	Odstranite zagozden papir in ravno naložite liste, nato izberite »Poskusi znova«.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Naložite več listov in izberite »Nadaljuj z branjem« ali izberite »Končaj«, da obdržite prebrano.
+	Load sheets in the feeder, then choose Try again.	Naložite liste v podajalnik, nato izberite »Poskusi znova«.
+	Separate the sheets and load the remaining ones, then choose Continue.	Ločite liste in naložite preostale, nato izberite »Nadaljuj z branjem«.
+	Separate the sheets and load them again, then choose Try again.	Ločite liste in jih naložite znova, nato izberite »Poskusi znova«.
+	Check the scanner is on and connected, then choose Continue.	Preverite, ali je optični bralnik vklopljen in povezan, nato izberite »Nadaljuj z branjem«.
+	Check the scanner is on and connected, then choose Try again.	Preverite, ali je optični bralnik vklopljen in povezan, nato izberite »Poskusi znova«.
+	Scan the missing reverse sides, then choose Finish.	Preberite manjkajoče hrbtne strani, nato izberite »Končaj«.
+	Try again	Poskusi znova
+	Continue scanning	Nadaljuj z branjem
+	Continue scanning fronts	Nadaljuj z branjem sprednjih strani
+	Continue scanning reverse sides	Nadaljuj z branjem hrbtnih strani
+	Scan reverse side now (1 front)	Zdaj preberi hrbtno stran (1 sprednja)
+	Scan reverse sides now ({n} fronts)	Zdaj preberi hrbtne strani (sprednjih: {n})
+	Finish	Končaj
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Prebrane sprednje strani: {n}. Obrnite list na steklu, nato izberite »Optično preberi hrbtne strani«.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Prebrane sprednje strani: {n}. Obrnite sveženj, tako da je zadnji list na vrhu, ga znova naložite, nato izberite »Optično preberi hrbtne strani«.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Optično preberite sprednje, obrnite kup (zadnji list na vrhu), nato hrbtne. Strani so izmenično sprednja, hrbtna, …
+	Scanner settings	Nastavitve optičnega bralnika
+	Scanning front {n} of {t}…	Optično branje sprednje {n} od {t}…
+	Scanning front {n}…	Optično branje sprednje {n}…
+	Scanning reverse side {n} of {t}…	Optično branje hrbtne {n} od {t}…
+	Scanning reverse side {n}…	Optično branje hrbtne {n}…
+	Scanning…	Optično branje…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Nastavitve, ki jih ponuja ta vir. Pustite kontrolnik, da ohranite vrednost gonilnika.
+	Stop	Ustavi
+	Straighten the page	Poravnaj stran
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Steklo optično prebere po eno stran. Preberite sprednjo, obrnite, nato hrbtno.
+	The driver may accept a turn and leave the picture as it was.	Gonilnik lahko sprejme zasuk in vseeno pusti sliko, kot je bila.
+	The driver reports a paper jam.	Gonilnik sporoča zagozden papir.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Gonilnik sporoča čakajoči list. Bit lahko ostane vklopljen po praznem pladnju.
+	The preview could not be shown.	Predogleda ni bilo mogoče prikazati.
+	The scan could not be started.	Optičnega branja ni bilo mogoče začeti.
+	The scan produced no pages.	Optično branje ni ustvarilo strani.
+	The scanner list could not be refreshed.	Seznama optičnih bralnikov ni bilo mogoče osvežiti.
+	Threshold	Prag
+	Transfer format: {format}.	Oblika prenosa: {format}.
+	Turned left	Zasukano levo
+	Upside down	Na glavo
+	Vertical resolution	Navpična ločljivost
+	Will use the bed.	Uporabilo bo steklo.
+	Will use the feeder.	Uporabilo bo podajalnik.
+	front(s)	sprednje
+	reverse side(s)	hrbtne
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} in, {pxw} × {pxh} sl. točk, {size}
+	Created {n} scanned files	Ustvarjenih {n} optično prebranih datotek
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Optični bralnik je sporočil težavo s papirjem (zagozden papir ali več hkrati povlečenih listov).
+	The scanner needs attention.	Optični bralnik potrebuje pozornost.
+	The scanner reported a lamp or device error.	Optični bralnik je sporočil napako svetilke ali naprave.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Odprite pokrov, odstranite morebitni zagozdeni papir ali hkrati povlečene liste in ravno naložite preostale liste, nato izberite »Nadaljuj z branjem«.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Odprite pokrov, odstranite morebitni zagozdeni papir ali hkrati povlečene liste in ravno naložite liste, nato izberite »Poskusi znova«.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Preverite, ali optični bralnik prikazuje sporočilo ali so vrata ali pokrov odprti, in odpravite težavo, nato izberite »Nadaljuj z branjem«.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Preverite, ali optični bralnik prikazuje sporočilo ali so vrata ali pokrov odprti, in odpravite težavo, nato izberite »Poskusi znova«.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Počakajte, da optični bralnik konča, ali zaprite vse druge programe, ki ga uporabljajo, nato izberite »Nadaljuj z branjem«.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Počakajte, da optični bralnik konča, ali zaprite vse druge programe, ki ga uporabljajo, nato izberite »Poskusi znova«.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Izklopite in znova vklopite optični bralnik ter počakajte, da je pripravljen, nato izberite »Nadaljuj z branjem«.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Izklopite in znova vklopite optični bralnik ter počakajte, da je pripravljen, nato izberite »Poskusi znova«.
+	Scanner	Optični bralnik
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Preverjanje optičnega bralnika…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Optični bralnik je zaseden ali v podajalniku ni papirja.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Preverite, ali je v podajalniku papir, ali počakajte, da optični bralnik konča, nato izberite »Nadaljuj z branjem«.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Preverite, ali je v podajalniku papir, ali počakajte, da optični bralnik konča, nato izberite »Poskusi znova«.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Omrežje
+	The same printer is also available over USB.	Isti tiskalnik je na voljo tudi prek USB.
+	The same printer is also available over the network.	Isti tiskalnik je na voljo tudi prek omrežja.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Skeniranje v tej različici zahteva Windows (WIA).

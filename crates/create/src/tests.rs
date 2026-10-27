@@ -509,7 +509,10 @@ fn jpeg_fill_bytes_and_metadata_after_frame_are_preserved() {
     assert!(image.contains(b"Decode"), "APP14 after SOF still inverts CMYK");
     assert_eq!(extract_images(&doc, &[0], 0).images[0].data, bytes);
 
-    let embedded = jpeg("density.jpg", &jpeg_frame_first(jpeg_bytes())).unwrap();
+    // The resolution is read in one place (`embed`, through `density`), not by the JPEG parser: `jpeg` alone says 72.
+    let frame_first = jpeg_frame_first(jpeg_bytes());
+    assert_eq!(jpeg("density.jpg", &frame_first).unwrap().dpi, (72.0, 72.0));
+    let embedded = embed("density.jpg", &frame_first, 1).unwrap().remove(0);
     assert_eq!(embedded.px, (3, 2));
     assert_eq!(embedded.dpi, (300.0, 300.0), "JFIF after SOF is read");
 
@@ -1259,6 +1262,212 @@ fn a_jpeg_with_an_exif_orientation_becomes_an_upright_page() {
     assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(60), Some(20)));
 }
 
+// ---- 1-bit BMP fast path ----
+
+/// A known pattern: pixel (x, y) is black when this is true.
+fn bmp1_black(x: usize, y: usize) -> bool {
+    (x * 3 + y * 5) % 7 < 3
+}
+
+/// A 1-bpp BMP of the pattern. `palette` holds the BGRA entries (index 0 first); a pixel's bit is
+/// set when it is black and `index_one_is_black`, or white and not. `colours_used` and `clip`
+/// (bytes cut from the end) let tests break the file.
+fn bmp1(w: usize, h: usize, top_down: bool, palette: &[[u8; 4]], index_one_is_black: bool, colours_used: u32, clip: usize) -> Vec<u8> {
+    let stride = w.div_ceil(32) * 4;
+    let rows: Vec<Vec<u8>> = (0..h)
+        .map(|y| {
+            let mut row = vec![0u8; stride];
+            for x in 0..w {
+                if bmp1_black(x, y) == index_one_is_black {
+                    row[x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            row
+        })
+        .collect();
+    let pixels: Vec<u8> = if top_down { rows.concat() } else { rows.iter().rev().flatten().copied().collect() };
+    let pixel_at = 14 + 40 + palette.len() * 4;
+    let mut out = b"BM".to_vec();
+    out.extend_from_slice(&((pixel_at + pixels.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&(pixel_at as u32).to_le_bytes());
+    out.extend_from_slice(&40u32.to_le_bytes());
+    out.extend_from_slice(&(w as i32).to_le_bytes());
+    out.extend_from_slice(&(if top_down { -(h as i32) } else { h as i32 }).to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+    out.extend_from_slice(&[0; 8]);
+    out.extend_from_slice(&colours_used.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&palette.concat());
+    out.extend_from_slice(&pixels);
+    out.truncate(out.len() - clip);
+    out
+}
+
+const BLACK_WHITE: [[u8; 4]; 2] = [[0, 0, 0, 0], [255, 255, 255, 0]];
+const WHITE_BLACK: [[u8; 4]; 2] = [[255, 255, 255, 0], [0, 0, 0, 0]];
+
+/// The `BitsPerComponent` entry of a dictionary as a number, if it has one.
+fn bpc_of(d: &Dict) -> Option<f64> {
+    d.get(b"BitsPerComponent").and_then(|o| o.as_f64())
+}
+
+/// Checks `img` is 1-bit DeviceGray holding the pattern, top-down, 0 = black.
+fn assert_bmp1_pattern(img: &Embedded, w: usize, h: usize, label: &str) {
+    assert_eq!(img.dict.name(b"ColorSpace"), Some(&b"DeviceGray"[..]), "{label}");
+    assert_eq!(bpc_of(&img.dict), Some(1.0), "{label}");
+    assert_eq!(img.px, (w as u32, h as u32), "{label}");
+    let stride = w.div_ceil(8);
+    assert_eq!(img.data.len(), stride * h, "{label}: packed size");
+    for y in 0..h {
+        for x in 0..w {
+            let bit = (img.data[y * stride + x / 8] >> (7 - x % 8)) & 1;
+            assert_eq!(bit == 0, bmp1_black(x, y), "{label}: pixel ({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn one_bit_bmp_stays_one_bit_for_both_palettes_row_orders_and_awkward_widths() {
+    for w in [1, 7, 8, 9, 31, 32, 33] {
+        for top_down in [true, false] {
+            for (palette, one_is_black) in [(BLACK_WHITE, false), (WHITE_BLACK, true)] {
+                for used in [0, 2] {
+                    let bytes = bmp1(w, 6, top_down, &palette, one_is_black, used, 0);
+                    let img = decoded("s.bmp", &bytes, image::ImageFormat::Bmp).unwrap();
+                    assert_bmp1_pattern(&img, w, 6, &format!("w={w} top_down={top_down} one_is_black={one_is_black} used={used}"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn near_black_and_near_white_palettes_count_as_bilevel() {
+    let palette = [[3, 2, 4, 0], [250, 252, 255, 0]];
+    let img = decoded("s.bmp", &bmp1(13, 4, false, &palette, false, 2, 0), image::ImageFormat::Bmp).unwrap();
+    assert_bmp1_pattern(&img, 13, 4, "near");
+}
+
+#[test]
+fn one_bit_bmp_with_a_colour_palette_takes_the_general_path() {
+    let red_blue = [[0, 0, 255, 0], [255, 0, 0, 0]];
+    let img = decoded("s.bmp", &bmp1(13, 4, false, &red_blue, true, 2, 0), image::ImageFormat::Bmp).unwrap();
+    assert_eq!(img.dict.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    assert_eq!(bpc_of(&img.dict), Some(8.0));
+    // Index 1 (blue) where the pattern is black, index 0 (red) elsewhere.
+    for y in 0..4 {
+        for x in 0..13 {
+            let at = (y * 13 + x) * 3;
+            let want = if bmp1_black(x, y) { [0, 0, 255] } else { [255, 0, 0] };
+            assert_eq!(img.data[at..at + 3], want, "pixel ({x},{y})");
+        }
+    }
+    // Two grays that are neither black nor white also stay 8-bit.
+    let grays = [[100, 100, 100, 0], [200, 200, 200, 0]];
+    let img = decoded("s.bmp", &bmp1(13, 4, false, &grays, true, 2, 0), image::ImageFormat::Bmp).unwrap();
+    assert_eq!(bpc_of(&img.dict), Some(8.0));
+    assert_eq!(img.data[0], if bmp1_black(0, 0) { 200 } else { 100 });
+}
+
+#[test]
+fn odd_one_bit_bmp_palettes_and_truncation_never_panic() {
+    let any = |bytes: Vec<u8>| {
+        let _ = decoded("s.bmp", &bytes, image::ImageFormat::Bmp);
+    };
+    // One and three palette entries, with biClrUsed matching and not.
+    for entries in [1usize, 3] {
+        for used in [0, entries as u32, 2, 1 << 30, u32::MAX] {
+            any(bmp1(13, 4, false, &[[0, 0, 0, 0], [255, 255, 255, 0], [9, 9, 9, 0]][..entries], false, used, 0));
+        }
+    }
+    // biClrUsed far beyond the file, with the normal two-entry palette.
+    for used in [3, 256, 1 << 30, u32::MAX] {
+        any(bmp1(13, 4, false, &BLACK_WHITE, false, used, 0));
+    }
+    // Truncated pixel arrays: the fast path declines and the general decoder gives the error.
+    for clip in [1, 4, 8, 20] {
+        let bytes = bmp1(13, 4, false, &BLACK_WHITE, false, 2, clip);
+        assert!(bmp_one_bit(&bytes).is_none(), "clip {clip}");
+        assert!(matches!(from_images(&[("s.bmp".into(), bytes)]), Err(CreateError::Image(..))), "clip {clip}");
+    }
+    let full = bmp1(13, 4, false, &BLACK_WHITE, false, 2, 0);
+    for cut in 0..70 {
+        any(full[..cut].to_vec());
+    }
+    // Headers claiming absurd heights over a tiny pixel array.
+    for height in [i32::MIN, i32::MAX, -i32::MAX] {
+        let mut huge = full.clone();
+        huge[22..26].copy_from_slice(&height.to_le_bytes());
+        assert!(bmp_one_bit(&huge).is_none());
+        any(huge);
+    }
+}
+
+#[test]
+fn one_bit_bmp_and_rgb_images_mix_in_one_document() {
+    let doc = from_images(&[
+        ("a.bmp".into(), bmp1(13, 4, false, &BLACK_WHITE, false, 2, 0)),
+        ("b.png".into(), png_bytes(false)),
+        ("c.bmp".into(), bmp1(9, 3, true, &WHITE_BLACK, true, 0, 0)),
+    ])
+    .unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(pages(&doc).len(), 3);
+    assert_eq!(bpc_of(&image_of(&doc, 0)), Some(1.0));
+    assert_eq!(bpc_of(&image_of(&doc, 1)), Some(8.0));
+    assert_eq!(bpc_of(&image_of(&doc, 2)), Some(1.0));
+    assert_eq!(image_of(&doc, 1).name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 13.0, 4.0]);
+    assert_eq!(media(&pages(&doc)[2]), [0.0, 0.0, 9.0, 3.0]);
+}
+
+/// The flate-compressed byte count of the first image stream, as `add_image` stores it.
+fn flate_len(img: Embedded) -> usize {
+    let mut doc = Document::new_empty();
+    let r = add_image(&mut doc, img, &mut Vec::new());
+    match &*doc.resolve(&Object::Ref(r)) {
+        Object::Stream(s) => s.raw.len(),
+        _ => 0,
+    }
+}
+
+/// Run with `--nocapture` to see the sizes: the 1-bit page against the old 8-bit expansion.
+#[test]
+fn one_bit_bmp_is_much_smaller_than_the_eight_bit_expansion() {
+    let sizes = |w: usize, h: usize, black: &dyn Fn(usize, usize) -> bool| {
+        let stride = w.div_ceil(32) * 4;
+        let mut pixels = vec![0u8; stride * h];
+        for y in 0..h {
+            for x in 0..w {
+                if !black(x, y) {
+                    pixels[(h - 1 - y) * stride + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+        }
+        let mut bytes = bmp1(1, 1, false, &BLACK_WHITE, false, 2, 0);
+        bytes.truncate(14 + 40 + 8);
+        bytes[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+        bytes[22..26].copy_from_slice(&(h as i32).to_le_bytes());
+        bytes.extend_from_slice(&pixels);
+        let after = flate_len(decoded("p.bmp", &bytes, image::ImageFormat::Bmp).unwrap());
+        let rgba = image::load_from_memory_with_format(&bytes, image::ImageFormat::Bmp).unwrap().to_rgba8();
+        let before = flate_len(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)));
+        println!("{w}x{h}: 8-bit gray flate {before} bytes, 1-bit flate {after} bytes");
+        (before, after)
+    };
+    sizes(13, 5, &|x, y| (3..=6).contains(&x) && y < 2);
+    // Text-like: lines of irregular glyph-sized blocks.
+    let (before, after) = sizes(2480, 3508, &|x, y| {
+        let (line, ly) = (y / 60, y % 60);
+        (80..2400).contains(&x) && (1..56).contains(&line) && (20..45).contains(&ly) && ((x / 7) * 31 + line * 17 + (x % 7) * (ly % 3)) % 5 < 3
+    });
+    assert!(after < before, "{after} vs {before}");
+}
+
 #[test]
 fn a_cyclic_indexed_colour_space_is_refused() {
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
@@ -1284,6 +1493,95 @@ fn gray_tiff(pages: usize, unreadable: bool) -> Vec<u8> {
     }
     if unreadable {
         enc.write_image::<tiff::encoder::colortype::RGB32Float>(1, 1, &[0.5; 3]).unwrap();
+    }
+    tif.into_inner()
+}
+
+// ---- the resolution of an image sizes its page the same way for every format -----------------------------------------
+
+/// Page size in points of a 100 x 50 px image made by `file`.
+fn page_pt(name: &str, file: Vec<u8>) -> (f64, f64) {
+    let doc = reopen(&from_images(&[(name.into(), file)]).unwrap());
+    let m = media(&pages(&doc)[0]);
+    (m[2], m[3])
+}
+
+/// A 100x50 bitmap whose header records `x` and `y` pixels per metre.
+fn bmp_with_pels(x: i32, y: i32) -> Vec<u8> {
+    use image::ImageEncoder;
+    let mut bmp = Vec::new();
+    image::codecs::bmp::BmpEncoder::new(&mut bmp).write_image(&[10, 20, 30].repeat(100 * 50), 100, 50, image::ExtendedColorType::Rgb8).unwrap();
+    bmp[38..42].copy_from_slice(&x.to_le_bytes());
+    bmp[42..46].copy_from_slice(&y.to_le_bytes());
+    bmp
+}
+
+/// A 100x50 PNG with a `pHYs` chunk of `unit`, `x` and `y` when `phys` is set.
+fn png_with(unit: png::Unit, x: u32, y: u32, phys: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, 100, 50);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        if phys {
+            enc.set_pixel_dims(Some(png::PixelDimensions { xppu: x, yppu: y, unit }));
+        }
+        enc.write_header().unwrap().write_image_data(&vec![200u8; 100 * 50 * 3]).unwrap();
+    }
+    out
+}
+
+/// A JPEG header only (the data is embedded as is) with JFIF unit/density (`unit` 255: no JFIF) and an optional
+/// EXIF block `(unit, x dpi, y dpi)`.
+fn jpeg_with(unit: u8, x: u16, y: u16, exif: Option<(u16, u32, u32)>) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8];
+    if let Some((exif_unit, xn, yn)) = exif {
+        // Little-endian TIFF block: XResolution, YResolution, ResolutionUnit.
+        let mut t = b"II*\0".to_vec();
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&3u16.to_le_bytes());
+        for (tag, at) in [(0x011au16, 50u32), (0x011b, 58)] {
+            t.extend_from_slice(&tag.to_le_bytes());
+            t.extend_from_slice(&5u16.to_le_bytes());
+            t.extend_from_slice(&1u32.to_le_bytes());
+            t.extend_from_slice(&at.to_le_bytes());
+        }
+        t.extend_from_slice(&0x0128u16.to_le_bytes());
+        t.extend_from_slice(&3u16.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&exif_unit.to_le_bytes());
+        t.extend_from_slice(&[0, 0]);
+        t.extend_from_slice(&0u32.to_le_bytes());
+        for n in [xn, 1, yn, 1] {
+            t.extend_from_slice(&n.to_le_bytes());
+        }
+        v.extend_from_slice(&[0xFF, 0xE1]);
+        v.extend_from_slice(&u16::try_from(t.len() + 8).unwrap().to_be_bytes());
+        v.extend_from_slice(b"Exif\0\0");
+        v.extend_from_slice(&t);
+    }
+    if unit != 255 {
+        v.extend_from_slice(&[0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, unit]);
+        v.extend_from_slice(&x.to_be_bytes());
+        v.extend_from_slice(&y.to_be_bytes());
+        v.extend_from_slice(&[0, 0]);
+    }
+    v.extend_from_slice(&[0xFF, 0xC0, 0, 17, 8, 0, 50, 0, 100, 3, 1, 0x11, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    v.extend_from_slice(&[0xFF, 0xD9]);
+    v
+}
+
+/// A 100x50 gray TIFF; with a `unit` it records `x` and `y` as the resolution in that unit.
+fn tiff_with(unit: Option<tiff::tags::ResolutionUnit>, x: u32, y: u32) -> Vec<u8> {
+    let mut tif = std::io::Cursor::new(Vec::new());
+    {
+        let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
+        let mut im = enc.new_image::<tiff::encoder::colortype::Gray8>(100, 50).unwrap();
+        if let Some(unit) = unit {
+            im.resolution(unit, tiff::encoder::Rational { n: x, d: 1 });
+            im.encoder().write_tag(tiff::tags::Tag::YResolution, tiff::encoder::Rational { n: y, d: 1 }).unwrap();
+        }
+        im.write_data(&[128; 100 * 50]).unwrap();
     }
     tif.into_inner()
 }
@@ -1317,4 +1615,78 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     assert!(matches!(from_images(&[("big.gif".into(), gif_on_screen(4200, 4100))]), Err(CreateError::Image(..))));
     let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
+}
+
+/// Assert that a page of `found` points is the 100x50 pixel image at `dpi`, within 0.2 percent.
+fn assert_page(found: (f64, f64), dpi: (f64, f64), what: &str) {
+    let (w, h) = (100.0 / dpi.0 * 72.0, 50.0 / dpi.1 * 72.0);
+    assert!((found.0 - w).abs() / w < 0.002 && (found.1 - h).abs() / h < 0.002, "{what}: {found:?}, wanted {w} x {h}");
+}
+
+const PELS_150: i32 = 5906;
+const PELS_100: i32 = 3937;
+
+#[test]
+fn a_bmp_is_sized_by_its_pels_per_metre() {
+    assert_page(page_pt("a.bmp", bmp_with_pels(PELS_150, PELS_150)), (150.0, 150.0), "150 dpi");
+    assert_page(page_pt("a.bmp", bmp_with_pels(PELS_100, PELS_100)), (100.0, 100.0), "100 dpi");
+    assert_page(page_pt("a.bmp", bmp_with_pels(PELS_100, PELS_150)), (100.0, 150.0), "mixed axes");
+    // Nothing usable: 72 dpi, one point per pixel.
+    for (x, y) in [(0, 0), (PELS_150, 0), (-1, -1), (1, 1), (i32::MAX, i32::MAX)] {
+        assert_page(page_pt("a.bmp", bmp_with_pels(x, y)), (72.0, 72.0), &format!("pels {x} x {y}"));
+    }
+}
+
+#[test]
+fn a_png_is_sized_by_phys_in_metres_only() {
+    assert_page(page_pt("a.png", png_with(png::Unit::Meter, 5906, 5906, true)), (150.0, 150.0), "150 dpi");
+    assert_page(page_pt("a.png", png_with(png::Unit::Meter, 11811, 3937, true)), (300.0, 100.0), "mixed axes");
+    assert_page(page_pt("a.png", png_with(png::Unit::Unspecified, 5906, 5906, true)), (72.0, 72.0), "unit none");
+    assert_page(page_pt("a.png", png_with(png::Unit::Meter, 0, 0, true)), (72.0, 72.0), "zero");
+    assert_page(page_pt("a.png", png_with(png::Unit::Meter, 1, 1, true)), (72.0, 72.0), "absurdly low");
+    assert_page(page_pt("a.png", png_with(png::Unit::Meter, u32::MAX, u32::MAX, true)), (72.0, 72.0), "absurdly high");
+    assert_page(page_pt("a.png", png_with(png::Unit::Meter, 0, 0, false)), (72.0, 72.0), "no pHYs");
+}
+
+#[test]
+fn a_jpeg_is_sized_by_jfif_then_exif() {
+    assert_page(page_pt("a.jpg", jpeg_with(1, 150, 150, None)), (150.0, 150.0), "JFIF dpi");
+    assert_page(page_pt("a.jpg", jpeg_with(2, 118, 118, None)), (299.72, 299.72), "JFIF dots per cm");
+    assert_page(page_pt("a.jpg", jpeg_with(1, 200, 100, None)), (200.0, 100.0), "mixed axes");
+    for (unit, x, y) in [(0, 150, 150), (1, 0, 0), (1, 150, 0), (1, 1, 1), (1, 60000, 60000), (255, 0, 0)] {
+        assert_page(page_pt("a.jpg", jpeg_with(unit, x, y, None)), (72.0, 72.0), &format!("JFIF {unit}/{x}/{y}"));
+    }
+    // EXIF stands in when JFIF is absent or says nothing; JFIF wins when both are there.
+    assert_page(page_pt("a.jpg", jpeg_with(255, 0, 0, Some((2, 300, 300)))), (300.0, 300.0), "EXIF inch");
+    assert_page(page_pt("a.jpg", jpeg_with(0, 1, 1, Some((3, 118, 59)))), (299.72, 149.86), "EXIF cm over aspect-only JFIF");
+    assert_page(page_pt("a.jpg", jpeg_with(255, 0, 0, Some((1, 300, 300)))), (72.0, 72.0), "EXIF unit none");
+    assert_page(page_pt("a.jpg", jpeg_with(1, 150, 150, Some((2, 300, 300)))), (150.0, 150.0), "JFIF beats EXIF");
+}
+
+#[test]
+fn a_tiff_is_sized_by_its_resolution_unit() {
+    use tiff::tags::ResolutionUnit as U;
+    assert_page(page_pt("a.tif", tiff_with(Some(U::Inch), 150, 150)), (150.0, 150.0), "inch");
+    assert_page(page_pt("a.tif", tiff_with(Some(U::Inch), 100, 200)), (100.0, 200.0), "mixed axes");
+    assert_page(page_pt("a.tif", tiff_with(Some(U::Centimeter), 118, 59)), (299.72, 149.86), "centimetre");
+    assert_page(page_pt("a.tif", tiff_with(Some(U::None), 150, 150)), (72.0, 72.0), "unit none");
+    assert_page(page_pt("a.tif", tiff_with(Some(U::Inch), 0, 0)), (72.0, 72.0), "zero");
+    assert_page(page_pt("a.tif", tiff_with(Some(U::Inch), 1, 1)), (72.0, 72.0), "absurdly low");
+    assert_page(page_pt("a.tif", tiff_with(Some(U::Inch), 1_000_000, 1_000_000)), (72.0, 72.0), "absurdly high");
+    assert_page(page_pt("a.tif", tiff_with(None, 0, 0)), (72.0, 72.0), "no tags");
+}
+
+#[test]
+fn an_explicit_dpi_still_wins_over_every_embedded_density() {
+    let files = [
+        bmp_with_pels(PELS_150, PELS_150),
+        png_with(png::Unit::Meter, 5906, 5906, true),
+        jpeg_with(1, 150, 150, None),
+        tiff_with(Some(tiff::tags::ResolutionUnit::Inch), 150, 150),
+    ];
+    for (i, file) in files.into_iter().enumerate() {
+        let doc = reopen(&from_images_with_resolution(&[(format!("f{i}"), file)], ImageResolution::Dpi(300.0)).unwrap());
+        let m = media(&pages(&doc)[0]);
+        assert!((m[2] - 24.0).abs() < 0.01 && (m[3] - 12.0).abs() < 0.01, "format {i}: {m:?}");
+    }
 }

@@ -2555,3 +2555,143 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+	Scanning page {n}…	{n}-бет сканерленуде…
+	Scanning page {n} of {t}…	{n} / {t} бет сканерленуде…
+	All pages asks the driver for the whole stack.	«Барлық беттер» драйверден бүкіл буманы сұрайды.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Бет саны сонша парақтан кейін бергішті тоқтатады. Бас тарту тасымалды ертерек аяқтайды; қабылданған беттер құжатта қалады.
+	Created Scan.pdf	Scan.pdf жасалды
+	Inserted scanned pages	Сканерленген беттер енгізілді
+	A cover on the scanner is open.	Сканер қақпағы ашық.
+	Advanced…	Қосымша…
+	Auto-deskew	Автоматты түзету
+	Bed	Әйнек
+	Brightness	Жарықтық
+	Cancel reverse sides	Артқы жақтарды болдырмау
+	Clear region	Аймақты тазалау
+	Color	Түс
+	Color document	Түсті құжат
+	Connected by USB.	USB арқылы қосылған.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Желі арқылы (Web Services) қосылған. Параметрлер USB емес, сол драйверден.
+	Contrast	Контраст
+	Create PDF	PDF жасау
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Аймақ таңдау үшін алдын ала көріністе сүйреңіз. Бос таңдау бүкіл аумақты сканерлейді.
+	Driver default	Драйвер әдепкісі
+	Duplex	Екіжақты
+	Duplex is not offered.	Екіжақты сканерлеу ұсынылмайды.
+	Feeder	Беруші
+	From scanner…	Сканерден…
+	Full area	Толық аумақ
+	Insert scanned pages	Сканерленген беттерді енгізу
+	Intent	Мақсат
+	Invert tones	Тондарды терістеу
+	Lamp	Шам
+	Lamp on	Шам қосулы
+	Large scan	Үлкен сканерлеу
+	Listing scanners…	Сканерлер тізімделуде…
+	Manual duplex needs one reverse side for each front.	Қолмен екіжақты сканерлеу әр алдыңғы жаққа бір артқы жақ қажет етеді.
+	Mirror	Айна
+	Mirror the page	Бетті айналау
+	No scanner is connected.	Сканер қосылмаған.
+	Optical resolution {x} × {y} dpi.	Оптикалық ажыратымдылық {x} × {y} dpi.
+	Orientation	Бағдар
+	Photometric	Фотометрия
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Алдын ала көрініс әйнекке арналған. Төменде дюйммен аймақ қойыңыз немесе бүкіл парақ үшін бос қалдырыңыз.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Алдын ала көрініс әйнекті пайдаланады. Дереккөзді Әйнек етіңіз немесе көрініссіз сканерлеңіз.
+	Refresh	Жаңарту
+	Refresh lists scanners. It does not feed paper.	Жаңарту сканерлерді қайта тізімдейді. Қағаз бермейді.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Аймақ дюйммен. Толық аумақ үшін ені немесе биіктігін нөл қалдырыңыз.
+	Reverse sides	Артқы жақтар
+	Reverse sides interleaved.	Артқы жақтар араластырылып енгізілді.
+	Scan reverse sides	Артқы жақтарды сканерлеу
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Алдыңғы жағын сканерлеп, әйнекте аударып, артқы жағын сканерлеңіз.
+	Scan the fronts before the reverse sides.	Артқы жақтардан бұрын алдыңғыларын сканерлеңіз.
+	Scan interrupted	Сканерлеу үзілді
+	The scanner has a paper jam.	Сканерде қағаз қысылып қалды.
+	The feeder ran out of paper.	Беру құрылғысында қағаз таусылды.
+	The feeder took more than one sheet.	Беру құрылғысы бір парақтан артық алды.
+	The scanner is offline or needs attention.	Сканер желіден тыс немесе назар аударуды қажет етеді.
+	The scanner is busy.	Сканер бос емес.
+	The scan was interrupted.	Сканерлеу тоқтатылды.
+	The scan was cancelled at the scanner.	Сканерлеу сканерде тоқтатылды.
+	No pages were scanned.	Бірде-бір бет сканерленген жоқ.
+	1 page was scanned.	1 бет сканерленді.
+	{n} pages were scanned.	{n} бет сканерленді.
+	{n} of {m} pages were scanned.	{m} беттің {n} беті сканерленді.
+	The pages already scanned were kept in the document.	Сканерленген беттер құжатта сақталды.
+	The fronts already scanned are kept for the reverse-side pass.	Сканерленген алдыңғы жақтар артқы жақтарды сканерлеу үшін сақталды.
+	The reverse sides already scanned are kept.	Сканерленген артқы жақтар сақталды.
+	Close the feeder cover and check the paper, then choose Continue.	Беру құрылғысының қақпағын жауып, қағазды тексеріңіз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Close the feeder cover and check the paper, then choose Try again.	Беру құрылғысының қақпағын жауып, қағазды тексеріңіз, содан кейін «Қайта көру» таңдаңыз.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Қысылған қағазды алып, қалған парақтарды тегіс салыңыз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Clear the jam and load the sheets squarely, then choose Try again.	Қысылған қағазды алып, парақтарды тегіс салыңыз, содан кейін «Қайта көру» таңдаңыз.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Қосымша парақтар салып, «Сканерлеуді жалғастыру» таңдаңыз немесе сканерленгенді сақтау үшін «Аяқтау» таңдаңыз.
+	Load sheets in the feeder, then choose Try again.	Парақтарды беру құрылғысына салыңыз, содан кейін «Қайта көру» таңдаңыз.
+	Separate the sheets and load the remaining ones, then choose Continue.	Парақтарды ажыратып, қалғандарын салыңыз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Separate the sheets and load them again, then choose Try again.	Парақтарды ажыратып, қайта салыңыз, содан кейін «Қайта көру» таңдаңыз.
+	Check the scanner is on and connected, then choose Continue.	Сканердің қосулы және қосылғанын тексеріңіз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Check the scanner is on and connected, then choose Try again.	Сканердің қосулы және қосылғанын тексеріңіз, содан кейін «Қайта көру» таңдаңыз.
+	Scan the missing reverse sides, then choose Finish.	Жетіспейтін артқы жақтарды сканерлеңіз, содан кейін «Аяқтау» таңдаңыз.
+	Try again	Қайта көру
+	Continue scanning	Сканерлеуді жалғастыру
+	Continue scanning fronts	Алдыңғы жақтарды сканерлеуді жалғастыру
+	Continue scanning reverse sides	Артқы жақтарды сканерлеуді жалғастыру
+	Scan reverse side now (1 front)	Артқы жақты қазір сканерлеу (1 алдыңғы)
+	Scan reverse sides now ({n} fronts)	Артқы жақтарды қазір сканерлеу ({n} алдыңғы)
+	Finish	Аяқтау
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Сканерленген алдыңғы жақтар: {n}. Әйнектегі парақты аударыңыз, содан кейін «Артқы жақтарды сканерлеу» таңдаңыз.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Сканерленген алдыңғы жақтар: {n}. Дестені соңғы парақ үстінде болатындай аударып, қайта салыңыз, содан кейін «Артқы жақтарды сканерлеу» таңдаңыз.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Алдыңғыларын сканерлеп, буманы аударыңыз (соңғысы үстінде), содан артқыларын. Беттер алдыңғы, артқы, … ретімен араласады…
+	Scanner settings	Сканер параметрлері
+	Scanning front {n} of {t}…	Алдыңғы {n} / {t} сканерленуде…
+	Scanning front {n}…	Алдыңғы {n} сканерленуде…
+	Scanning reverse side {n} of {t}…	Артқы {n} / {t} сканерленуде…
+	Scanning reverse side {n}…	Артқы {n} сканерленуде…
+	Scanning…	Сканерлеу…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Осы дереккөз ұсынатын параметрлер. Драйвер мәнін сақтау үшін басқаруды қозғамаңыз.
+	Stop	Тоқтату
+	Straighten the page	Бетті түзету
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Әйнек бір уақытта бір бет сканерлейді. Алдыңғысын сканерлеп, аударып, артқысын сканерлеңіз.
+	The driver may accept a turn and leave the picture as it was.	Драйвер бұрылысты қабылдап, суретті бұрынғыдай қалдыруы мүмкін.
+	The driver reports a paper jam.	Драйвер қағаз кептелуін хабарлайды.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Драйвер күтіп тұрған парақты хабарлайды. Науа бос болғаннан кейін бит қалуы мүмкін.
+	The preview could not be shown.	Алдын ала көріністі көрсету мүмкін болмады.
+	The scan could not be started.	Сканерлеуді бастау мүмкін болмады.
+	The scan produced no pages.	Сканерлеу бет шығармады.
+	The scanner list could not be refreshed.	Сканерлер тізімін жаңарту мүмкін болмады.
+	Threshold	Шек
+	Transfer format: {format}.	Тасымал пішімі: {format}.
+	Turned left	Солға бұрылған
+	Upside down	Төңкерілген
+	Vertical resolution	Тік ажыратымдылық
+	Will use the bed.	Әйнек пайдаланылады.
+	Will use the feeder.	Беруші пайдаланылады.
+	front(s)	алдыңғы
+	reverse side(s)	артқы
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} дюйм, {pxw} × {pxh} пиксель, {size}
+	Created {n} scanned files	{n} сканерленген файл жасалды
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Сканер қағазға байланысты ақау туралы хабарлады (қағаз қысылды немесе бірнеше парақ бірге алынды).
+	The scanner needs attention.	Сканер назар аударуды қажет етеді.
+	The scanner reported a lamp or device error.	Сканер шам немесе құрылғы қатесі туралы хабарлады.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Қақпақты ашып, қысылған қағазды немесе бірге алынған парақтарды алып, қалған парақтарды тегіс салыңыз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Қақпақты ашып, қысылған қағазды немесе бірге алынған парақтарды алып, парақтарды тегіс салыңыз, содан кейін «Қайта көру» таңдаңыз.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Сканерде хабарлама бар-жоғын немесе есік не қақпақ ашық-жабықтығын тексеріп, ақауды түзетіңіз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Сканерде хабарлама бар-жоғын немесе есік не қақпақ ашық-жабықтығын тексеріп, ақауды түзетіңіз, содан кейін «Қайта көру» таңдаңыз.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Сканердің жұмысы аяқталғанша күтіңіз немесе оны пайдаланатын басқа бағдарламаны жабыңыз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Сканердің жұмысы аяқталғанша күтіңіз немесе оны пайдаланатын басқа бағдарламаны жабыңыз, содан кейін «Қайта көру» таңдаңыз.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Сканерді өшіріп, қайта қосыңыз да, оның дайын болуын күтіңіз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Сканерді өшіріп, қайта қосыңыз да, оның дайын болуын күтіңіз, содан кейін «Қайта көру» таңдаңыз.
+	Scanner	Сканер
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Сканер тексерілуде…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Сканер бос емес немесе беру құрылғысында қағаз жоқ.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Беру құрылғысында қағаз бар-жоғын тексеріңіз немесе сканердің жұмысы аяқталғанша күтіңіз, содан кейін «Сканерлеуді жалғастыру» таңдаңыз.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Беру құрылғысында қағаз бар-жоғын тексеріңіз немесе сканердің жұмысы аяқталғанша күтіңіз, содан кейін «Қайта көру» таңдаңыз.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB арқылы
+	Network	Желі
+	The same printer is also available over USB.	Дәл осы принтер USB арқылы да қолжетімді.
+	The same printer is also available over the network.	Дәл осы принтер желі арқылы да қолжетімді.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Бұл нұсқада сканерлеу үшін Windows (WIA) қажет.

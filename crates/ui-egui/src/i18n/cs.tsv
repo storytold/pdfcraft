@@ -2864,3 +2864,141 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+	Scanning page {n}…	Skenování stránky {n}…
+	Scanning page {n} of {t}…	Skenování stránky {n} z {t}…
+	All pages asks the driver for the whole stack.	„Všechny stránky“ požádá ovladač o celý zásobník.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Počet stránek zastaví podavač po tolika listech. Storno ukončí přenos dříve; už přijaté stránky zůstanou v dokumentu.
+	Created Scan.pdf	Vytvořeno Scan.pdf
+	Inserted scanned pages	Naskenované stránky vloženy
+	A cover on the scanner is open.	Kryt skeneru je otevřený.
+	Advanced…	Pokročilé…
+	Auto-deskew	Automatické narovnání
+	Bed	Sklo
+	Brightness	Jas
+	Cancel reverse sides	Zrušit rubové strany
+	Clear region	Vymazat oblast
+	Color document	Barevný dokument
+	Connected by USB.	Připojeno přes USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Připojeno po síti (webové služby). Možnosti pocházejí z tohoto ovladače, ne z USB.
+	Contrast	Kontrast
+	Create PDF	Vytvořit PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Tažením v náhledu vyberte oblast. Prázdný výběr naskenuje celou plochu.
+	Driver default	Výchozí ovladače
+	Duplex	Oboustranně
+	Duplex is not offered.	Oboustranné snímání není nabízeno.
+	Feeder	Podavač
+	From scanner…	Ze skeneru…
+	Full area	Celá plocha
+	Insert scanned pages	Vložit naskenované stránky
+	Intent	Záměr
+	Invert tones	Invertovat tóny
+	Lamp	Lampa
+	Lamp on	Lampa zapnutá
+	Large scan	Velký sken
+	Listing scanners…	Načítání skenerů…
+	Manual duplex needs one reverse side for each front.	Ruční oboustranné snímání potřebuje jednu rubovou stranu pro každou lícovou.
+	Mirror	Zrcadlit
+	Mirror the page	Zrcadlit stránku
+	No scanner is connected.	Není připojen žádný skener.
+	Optical resolution {x} × {y} dpi.	Optické rozlišení {x} × {y} dpi.
+	Orientation	Orientace
+	Photometric	Fotometrie
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Náhled je pro sklo. Níže nastavte oblast v palcích, nebo nechte prázdnou pro celý list.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Náhled používá sklo. Přepněte zdroj na Sklo, nebo skenujte bez náhledu.
+	Refresh lists scanners. It does not feed paper.	Obnovit znovu načte skenery. Nepodává papír.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Oblast v palcích. Nechte šířku nebo výšku na nule pro celou plochu.
+	Reverse sides	Rubové strany
+	Reverse sides interleaved.	Rubové strany proloženy.
+	Scan reverse sides	Skenovat rubové strany
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Naskenujte líc, otočte list na skle a naskenujte rub.
+	Scan the fronts before the reverse sides.	Než rubové strany naskenujte lícové.
+	Scan interrupted	Skenování přerušeno
+	The scanner has a paper jam.	Ve skeneru uvízl papír.
+	The feeder ran out of paper.	Podavači došel papír.
+	The feeder took more than one sheet.	Podavač vtáhl více než jeden list.
+	The scanner is offline or needs attention.	Skener je offline nebo vyžaduje pozornost.
+	The scanner is busy.	Skener je zaneprázdněn.
+	The scan was interrupted.	Skenování bylo přerušeno.
+	The scan was cancelled at the scanner.	Skenování bylo zrušeno na skeneru.
+	No pages were scanned.	Nebyly naskenovány žádné stránky.
+	1 page was scanned.	Byla naskenována 1 stránka.
+	{n} pages were scanned.	Počet naskenovaných stránek: {n}.
+	{n} of {m} pages were scanned.	Naskenováno stránek: {n} z {m}.
+	The pages already scanned were kept in the document.	Již naskenované stránky zůstaly v dokumentu.
+	The fronts already scanned are kept for the reverse-side pass.	Již naskenované lícové strany jsou uchovány pro průchod rubových stran.
+	The reverse sides already scanned are kept.	Již naskenované rubové strany jsou uchovány.
+	Close the feeder cover and check the paper, then choose Continue.	Zavřete kryt podavače a zkontrolujte papír, potom zvolte „Pokračovat ve skenování“.
+	Close the feeder cover and check the paper, then choose Try again.	Zavřete kryt podavače a zkontrolujte papír, potom zvolte „Zkusit znovu“.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Odstraňte uvíznutý papír a rovně vložte zbývající listy, potom zvolte „Pokračovat ve skenování“.
+	Clear the jam and load the sheets squarely, then choose Try again.	Odstraňte uvíznutý papír a rovně vložte listy, potom zvolte „Zkusit znovu“.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Vložte další listy a zvolte „Pokračovat ve skenování“, nebo zvolte „Dokončit“ pro zachování naskenovaného.
+	Load sheets in the feeder, then choose Try again.	Vložte listy do podavače, potom zvolte „Zkusit znovu“.
+	Separate the sheets and load the remaining ones, then choose Continue.	Oddělte listy a vložte zbývající, potom zvolte „Pokračovat ve skenování“.
+	Separate the sheets and load them again, then choose Try again.	Oddělte listy a vložte je znovu, potom zvolte „Zkusit znovu“.
+	Check the scanner is on and connected, then choose Continue.	Zkontrolujte, zda je skener zapnutý a připojený, potom zvolte „Pokračovat ve skenování“.
+	Check the scanner is on and connected, then choose Try again.	Zkontrolujte, zda je skener zapnutý a připojený, potom zvolte „Zkusit znovu“.
+	Scan the missing reverse sides, then choose Finish.	Naskenujte chybějící rubové strany, potom zvolte „Dokončit“.
+	Try again	Zkusit znovu
+	Continue scanning	Pokračovat ve skenování
+	Continue scanning fronts	Pokračovat ve skenování lícových stran
+	Continue scanning reverse sides	Pokračovat ve skenování rubových stran
+	Scan reverse side now (1 front)	Skenovat rubovou stranu nyní (1 líc)
+	Scan reverse sides now ({n} fronts)	Skenovat rubové strany nyní (lícových stran: {n})
+	Finish	Dokončit
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Naskenované lícové strany: {n}. Otočte list na skleněné ploše, potom zvolte „Skenovat rubové strany“.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Naskenované lícové strany: {n}. Otočte stoh tak, aby poslední list byl nahoře, vložte jej znovu, potom zvolte „Skenovat rubové strany“.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Naskenujte líce, otočte stoh (poslední list nahoře) a pak rubové strany. Stránky se proloží líc, rub, …
+	Scanner settings	Nastavení skeneru
+	Scanning front {n} of {t}…	Skenování líce {n} z {t}…
+	Scanning front {n}…	Skenování líce {n}…
+	Scanning reverse side {n} of {t}…	Skenování rubu {n} z {t}…
+	Scanning reverse side {n}…	Skenování rubu {n}…
+	Scanning…	Skenování…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Nastavení, která tento zdroj nabízí. Nechejte ovládací prvek, aby zůstal hodnotou ovladače.
+	Stop	Zastavit
+	Straighten the page	Narovnat stránku
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Sklo skenuje po jedné stránce. Naskenujte líc, otočte a pak rub.
+	The driver may accept a turn and leave the picture as it was.	Ovladač může přijmout otočení a přesto nechat obrázek, jak byl.
+	The driver reports a paper jam.	Ovladač hlásí zaseknutý papír.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Ovladač hlásí čekající list. Bit může zůstat i po prázdném zásobníku.
+	The preview could not be shown.	Náhled se nepodařilo zobrazit.
+	The scan could not be started.	Skenování se nepodařilo spustit.
+	The scan produced no pages.	Skenování nevytvořilo žádné stránky.
+	The scanner list could not be refreshed.	Seznam skenerů se nepodařilo obnovit.
+	Threshold	Práh
+	Transfer format: {format}.	Formát přenosu: {format}.
+	Turned left	Otočeno doleva
+	Upside down	Vzhůru nohama
+	Vertical resolution	Svislé rozlišení
+	Will use the bed.	Použije se sklo.
+	Will use the feeder.	Použije se podavač.
+	front(s)	líc(e)
+	reverse side(s)	rub(y)
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} in, {pxw} × {pxh} px, {size}
+	Created {n} scanned files	Vytvořeno {n} naskenovaných souborů
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Skener ohlásil potíže s papírem (uvíznutí nebo současné podání více listů).
+	The scanner needs attention.	Skener vyžaduje pozornost.
+	The scanner reported a lamp or device error.	Skener ohlásil chybu lampy nebo zařízení.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Otevřete kryt, odstraňte případný uvíznutý papír nebo současně podané listy a rovně vložte zbývající listy, potom zvolte „Pokračovat ve skenování“.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Otevřete kryt, odstraňte případný uvíznutý papír nebo současně podané listy a rovně vložte listy, potom zvolte „Zkusit znovu“.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Podívejte se na skeneru, zda nehlásí zprávu nebo zda nejsou otevřená dvířka či kryt, a odstraňte příčinu, potom zvolte „Pokračovat ve skenování“.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Podívejte se na skeneru, zda nehlásí zprávu nebo zda nejsou otevřená dvířka či kryt, a odstraňte příčinu, potom zvolte „Zkusit znovu“.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Počkejte, až skener dokončí práci, nebo zavřete jiný program, který jej používá, potom zvolte „Pokračovat ve skenování“.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Počkejte, až skener dokončí práci, nebo zavřete jiný program, který jej používá, potom zvolte „Zkusit znovu“.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Skener vypněte a znovu zapněte a počkejte, až bude připraven, potom zvolte „Pokračovat ve skenování“.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Skener vypněte a znovu zapněte a počkejte, až bude připraven, potom zvolte „Zkusit znovu“.
+	Scanner	Skener
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Kontrola skeneru…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Skener je zaneprázdněn, nebo v podavači není papír.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Zkontrolujte, zda je v podavači papír, nebo počkejte, až skener dokončí práci, potom zvolte „Pokračovat ve skenování“.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Zkontrolujte, zda je v podavači papír, nebo počkejte, až skener dokončí práci, potom zvolte „Zkusit znovu“.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	Přes USB
+	Network	Síť
+	The same printer is also available over USB.	Stejná tiskárna je dostupná také přes USB.
+	The same printer is also available over the network.	Stejná tiskárna je dostupná také přes síť.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Skenování v této verzi vyžaduje Windows (WIA).

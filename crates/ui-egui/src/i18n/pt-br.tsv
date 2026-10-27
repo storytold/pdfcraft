@@ -2842,3 +2842,144 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+	Scanning page {n}…	Digitalizando página {n}…
+	Scanning page {n} of {t}…	Digitalizando página {n} de {t}…
+	All pages asks the driver for the whole stack.	“Todas as páginas” pede ao driver a pilha inteira.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Uma contagem de páginas para o alimentador após essas folhas. Cancelar encerra a transferência mais cedo; as páginas já recebidas permanecem no documento.
+	Created Scan.pdf	Scan.pdf criado
+	Inserted scanned pages	Páginas digitalizadas inseridas
+	A cover on the scanner is open.	Uma tampa do scanner está aberta.
+	Advanced…	Avançado…
+	Auto-deskew	Alinhamento automático
+	Bed	Vidro
+	Brightness	Brilho
+	Cancel reverse sides	Cancelar os versos
+	Clear region	Limpar região
+	Color document	Documento colorido
+	Connected by USB.	Conectado por USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Conectado pela rede (Web Services). As opções vêm desse driver, não do USB.
+	Contrast	Contraste
+	Create PDF	Criar PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Arraste na prévia para escolher uma região. Seleção vazia digitaliza a área inteira.
+	Driver default	Padrão do driver
+	Duplex	Frente e verso
+	Duplex is not offered.	Frente e verso não é oferecido.
+	Feeder	Alimentador
+	From scanner…	Do scanner…
+	Full area	Área inteira
+	Insert scanned pages	Inserir páginas digitalizadas
+	Intent	Intento
+	Invert tones	Inverter tons
+	Lamp	Lâmpada
+	Lamp on	Lâmpada ligada
+	Large scan	Digitalização grande
+	Listing scanners…	Listando scanners…
+	Manual duplex needs one reverse side for each front.	Frente e verso manual precisa de um verso para cada frente.
+	Mirror	Espelhar
+	Mirror the page	Espelhar a página
+	No scanner is connected.	Nenhum scanner está conectado.
+	Optical resolution {x} × {y} dpi.	Resolução óptica {x} × {y} dpi.
+	Orientation	Orientação
+	Photometric	Fotometria
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	A prévia é para o vidro. Defina abaixo uma região em polegadas, ou deixe vazia para a folha inteira.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	A prévia usa o vidro. Mude a origem para Vidro ou digitalize sem prévia.
+	Refresh lists scanners. It does not feed paper.	Atualizar relista os scanners. Não alimenta papel.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Região em polegadas. Deixe largura ou altura em zero para digitalizar a área inteira.
+	Reverse sides	Versos
+	Reverse sides interleaved.	Versos intercalados.
+	Scan reverse sides	Digitalizar os versos
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Digitalize a frente, vire a folha no vidro e digitalize o verso.
+	Scan the fronts before the reverse sides.	Digitalize as frentes antes dos versos.
+	Scan interrupted	Digitalização interrompida
+	The scanner has a paper jam.	O scanner está com papel atolado.
+	The feeder ran out of paper.	O alimentador ficou sem papel.
+	The feeder took more than one sheet.	O alimentador puxou mais de uma folha.
+	The scanner is offline or needs attention.	O scanner está offline ou precisa de atenção.
+	The scanner is busy.	O scanner está ocupado.
+	The scan was interrupted.	A digitalização foi interrompida.
+	The scan was cancelled at the scanner.	A digitalização foi cancelada no scanner.
+	No pages were scanned.	Nenhuma página foi digitalizada.
+	1 page was scanned.	1 página foi digitalizada.
+	{n} pages were scanned.	{n} páginas foram digitalizadas.
+	{n} of {m} pages were scanned.	{n} de {m} páginas foram digitalizadas.
+	The pages already scanned were kept in the document.	As páginas já digitalizadas foram mantidas no documento.
+	The fronts already scanned are kept for the reverse-side pass.	As frentes já digitalizadas foram mantidas para a passagem dos versos.
+	The reverse sides already scanned are kept.	Os versos já digitalizados foram mantidos.
+	Close the feeder cover and check the paper, then choose Continue.	Feche a tampa do alimentador e verifique o papel; depois escolha “Continuar digitalização”.
+	Close the feeder cover and check the paper, then choose Try again.	Feche a tampa do alimentador e verifique o papel; depois escolha “Tentar novamente”.
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Remova o papel atolado e coloque as folhas restantes bem alinhadas; depois escolha “Continuar digitalização”.
+	Clear the jam and load the sheets squarely, then choose Try again.	Remova o papel atolado e coloque as folhas bem alinhadas; depois escolha “Tentar novamente”.
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Coloque mais folhas e escolha “Continuar digitalização”, ou escolha “Concluir” para manter o que foi digitalizado.
+	Load sheets in the feeder, then choose Try again.	Coloque folhas no alimentador; depois escolha “Tentar novamente”.
+	Separate the sheets and load the remaining ones, then choose Continue.	Separe as folhas e coloque as restantes; depois escolha “Continuar digitalização”.
+	Separate the sheets and load them again, then choose Try again.	Separe as folhas e coloque-as novamente; depois escolha “Tentar novamente”.
+	Check the scanner is on and connected, then choose Continue.	Verifique se o scanner está ligado e conectado; depois escolha “Continuar digitalização”.
+	Check the scanner is on and connected, then choose Try again.	Verifique se o scanner está ligado e conectado; depois escolha “Tentar novamente”.
+	Scan the missing reverse sides, then choose Finish.	Digitalize os versos que faltam e depois escolha “Concluir”.
+	Try again	Tentar novamente
+	Continue scanning	Continuar digitalização
+	Continue scanning fronts	Continuar digitalizando as frentes
+	Continue scanning reverse sides	Continuar digitalizando os versos
+	Scan reverse side now (1 front)	Digitalizar o verso agora (1 frente)
+	Scan reverse sides now ({n} fronts)	Digitalizar os versos agora ({n} frentes)
+	Finish	Concluir
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Frentes digitalizadas: {n}. Vire a folha no vidro e escolha “Digitalizar os versos”.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Frentes digitalizadas: {n}. Vire a pilha de modo que a última folha fique por cima, recoloque-a e escolha “Digitalizar os versos”.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Digitalize as frentes, vire a pilha (última folha no topo) e os versos. As páginas são intercaladas frente, verso, …
+	Scanner settings	Configurações do scanner
+	Scanning front {n} of {t}…	Frente {n} de {t}…
+	Scanning front {n}…	Frente {n}…
+	Scanning reverse side {n} of {t}…	Verso {n} de {t}…
+	Scanning reverse side {n}…	Verso {n}…
+	Scanning…	Digitalizando…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Configurações que esta origem oferece. Deixe um controle para manter o valor do driver.
+	Stop	Parar
+	Straighten the page	Endireitar a página
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	O vidro digitaliza uma página por vez. Digitalize uma frente, vire e o verso.
+	The driver may accept a turn and leave the picture as it was.	O driver pode aceitar um giro e mesmo assim deixar a imagem como estava.
+	The driver reports a paper jam.	O driver informa atolamento de papel.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	O driver informa uma folha à espera. O bit pode ficar ligado com a bandeja vazia.
+	The preview could not be shown.	Não foi possível mostrar a prévia.
+	The scan could not be started.	Não foi possível iniciar a digitalização.
+	The scan produced no pages.	A digitalização não produziu páginas.
+	The scanner list could not be refreshed.	Não foi possível atualizar a lista de scanners.
+	Threshold	Limiar
+	Transfer format: {format}.	Formato de transferência: {format}.
+	Turned left	Girado à esquerda
+	Upside down	De cabeça para baixo
+	Vertical resolution	Resolução vertical
+	Will use the bed.	Usará o vidro.
+	Will use the feeder.	Usará o alimentador.
+	front(s)	frente(s)
+	reverse side(s)	verso(s)
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} pol, {pxw} × {pxh} pixels, {size}
+	Created {n} scanned files	{n} arquivos digitalizados criados
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	O scanner informou um problema de papel (atolamento ou várias folhas puxadas juntas).
+	The scanner needs attention.	O scanner precisa de atenção.
+	The scanner reported a lamp or device error.	O scanner informou um erro de lâmpada ou do dispositivo.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Abra a tampa, remova qualquer atolamento ou folhas puxadas juntas e coloque as folhas restantes bem alinhadas; depois escolha “Continuar digitalização”.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Abra a tampa, remova qualquer atolamento ou folhas puxadas juntas e coloque as folhas bem alinhadas; depois escolha “Tentar novamente”.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Veja se o scanner mostra alguma mensagem ou se há porta ou tampa aberta e corrija o problema; depois escolha “Continuar digitalização”.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Veja se o scanner mostra alguma mensagem ou se há porta ou tampa aberta e corrija o problema; depois escolha “Tentar novamente”.
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Aguarde o scanner terminar ou feche qualquer outro programa que o esteja usando; depois escolha “Continuar digitalização”.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Aguarde o scanner terminar ou feche qualquer outro programa que o esteja usando; depois escolha “Tentar novamente”.
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Desligue e ligue o scanner novamente e aguarde até que esteja pronto; depois escolha “Continuar digitalização”.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Desligue e ligue o scanner novamente e aguarde até que esteja pronto; depois escolha “Tentar novamente”.
+	Scanner	Scanner
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Verificando o scanner…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	O scanner está ocupado ou o alimentador está sem papel.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Verifique se há papel no alimentador ou aguarde o scanner terminar; depois escolha “Continuar digitalização”.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Verifique se há papel no alimentador ou aguarde o scanner terminar; depois escolha “Tentar novamente”.
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Rede
+	The same printer is also available over USB.	A mesma impressora também está disponível por USB.
+	The same printer is also available over the network.	A mesma impressora também está disponível pela rede.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	A digitalização requer o Windows (WIA) nesta versão.
+	The reverse sides were cancelled: their document was closed.	Os versos foram cancelados: o documento foi fechado.
+# Untranslated: English text until a translator fills this in.
+	The scan was stopped: its document was closed.	The scan was stopped: its document was closed.

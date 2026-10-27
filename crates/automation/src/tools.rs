@@ -5,7 +5,14 @@
 
 use serde_json::{Value, json};
 
+use pdfcraft_platform::scan;
+
 use crate::ToolError;
+
+/// Wire names as a JSON array, for a schema `enum` that must follow the scan contract.
+fn names<'a>(values: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+    values.collect()
+}
 
 #[derive(Clone, Debug)]
 pub struct ToolDef {
@@ -1241,6 +1248,54 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
+        t(
+            "scan_devices",
+            "List scanners",
+            "List connected scanners. By default only the device list is read (id, name, port, connection; details is skipped) and no device is opened. Pass device (a name, id or uuid substring) to open only the matching devices and get what each source publishes (resolutions, colors, formats, intents, page sizes, handling status; details is loaded), or details=true to open every device. Every opened row carries all nine handling_status flags (feeder_ready, flat_ready, duplex_ready, cover_open, path_cover_open, jam, multiple_feed, attention, lamp_error) and conditions, the names of the blocking ones that are set. A device that fails to open stays listed with details=error and the error text. Nothing here feeds paper. To pull a page, use scan_acquire or pdfcraft-cli scan --out DIR --yes.",
+        )
+        .ro()
+        .with(schema(
+            json!({
+                "device": { "type": "string", "minLength": 1, "description": "Open only devices whose id, name or port contains this text (case-insensitive)." },
+                "details": { "type": "boolean", "description": "Open every device for its capabilities (default false: list only)." },
+            }),
+            &[],
+        )),
+        t(
+            "scan_acquire",
+            "Acquire scanner pages",
+            "Pull pages from a connected scanner into a folder (Windows WIA). Takes only the options in this schema (out, device, source, pages, dpi, dpi_y, color, format, duplex, page_size, page_length), a subset of what pdfcraft-cli scan accepts. On a partial stack (jam/offline), saved pages stay on disk and the result includes partial=true, error, and error_info (kind, phase, hresult, code_name, retryable, resumable, message). A failure with no pages is a tool error whose structuredContent is that same error_info.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "out": { "type": "string", "description": "Output folder for page-NNN.bmp/jpeg/… files." },
+                "device": { "type": "string", "description": "Device id or unique name substring (default: first scanner)." },
+                "source": { "type": "string", "enum": names(scan::Source::ALL.iter().map(|v| v.as_str())), "description": "default auto" },
+                "pages": { "description": "Sheet count, or the string all for whole feeder (default 1)." },
+                "dpi": { "type": "integer", "minimum": 1, "description": "default 200" },
+                "dpi_y": { "type": "integer", "minimum": 1 },
+                "color": { "type": "string", "enum": names(scan::Color::ALL.iter().map(|v| v.as_str())), "description": "default gray" },
+                "format": { "type": "string", "description": "bmp, jpeg, … (driver-dependent)" },
+                "duplex": { "type": "boolean", "description": "default false" },
+                "page_size": { "type": "string", "enum": names(scan::PageSize::ALL.iter().map(|v| v.as_str())), "description": "Page-size preset (driver-dependent). With page_length auto or infer its length is applied as extents." },
+                "page_length": { "type": "string", "enum": names(scan::PageLength::ALL.iter().map(|v| v.as_str())), "description": "How the page length is decided. driver (default): the scanner's own. size: the length of page_size as extents. auto: the scanner's length detection when it publishes one, else the length of page_size. infer: auto, then a guess of the sheet end from the image (approximate; each page reports length.source and length.approximate)." },
+            }),
+            &["out"],
+        )),
+        t(
+            "scan_jobs",
+            "List or show scan jobs",
+            "Read-only: the journals (scan-job.json) that pdfcraft-cli scan leaves in a scan output folder. By default lists the jobs found in dir (default: the root) and its immediate subfolders: id, state, pages kept and wanted, attempts, last error kind, updated, folder, and a note when the page files on disk do not match the journal. With show=true, returns the one job in dir in full (request, journal, job view, attempt timeline, exit class). Never opens a scanner and never moves paper. To continue a job use pdfcraft-cli scan --continue DIR.",
+        )
+        .ro()
+        .with(schema(
+            json!({
+                "dir": { "type": "string", "description": "Folder to look in (default: the root). With show=true, the job folder itself." },
+                "show": { "type": "boolean", "description": "Return the one job in dir in detail (default false: list)." },
+            }),
+            &[],
+        )),
         t("doc_export_all_images", "Export all images", "Write the images that pages use into a folder (`<name>_Page_<n>_Image_<k>.jpg|png`, n zero-padded to the page count's digits), each once: JPEG images unchanged, others as PNG with their soft mask as alpha. min_size skips images with fewer pixels on their shorter side. Images that can't be decoded yet (JPEG 2000, JBIG2, CCITT, separations) are listed under skipped. Includes unsaved edits.")
             .cmd("export.all_images")
             .with(schema(

@@ -2880,3 +2880,143 @@ theme	Appearance	Aspecto
 	Rotate the selected pages clockwise	Girar las páginas seleccionadas en sentido horario
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
+	Scanning page {n}…	Escaneando página {n}…
+	Scanning page {n} of {t}…	Escaneando página {n} de {t}…
+	All pages asks the driver for the whole stack.	«Todas las páginas» pide al controlador toda la pila.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Un recuento de páginas detiene el alimentador tras esas hojas. Cancelar termina la transferencia antes; las páginas ya recibidas permanecen en el documento.
+	Created Scan.pdf	Se creó Scan.pdf
+	Inserted scanned pages	Se insertaron las páginas escaneadas
+	Created {n} scanned files	Se crearon {n} archivos escaneados
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	Scanner	Escáner
+	From scanner…	Desde el escáner…
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Comprobando el escáner…
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Red
+	The same printer is also available over USB.	La misma impresora también está disponible por USB.
+	The same printer is also available over the network.	La misma impresora también está disponible por la red.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	El escaneo requiere Windows (WIA) en esta versión.
+# Machine-drafted rows for native-speaker review (scanner dialog, 2026-10-15).
+	1 page was scanned.	Se escaneó 1 página.
+	A cover on the scanner is open.	Hay una tapa del escáner abierta.
+	Advanced…	Avanzado…
+	Auto-deskew	Enderezar automáticamente
+	Bed	Cristal
+	Brightness	Brillo
+	Cancel reverse sides	Cancelar los reversos
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Compruebe que el alimentador tiene papel, o espere a que el escáner termine, y elija Continuar.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Compruebe que el alimentador tiene papel, o espere a que el escáner termine, y elija Reintentar.
+	Check the scanner is on and connected, then choose Continue.	Compruebe que el escáner está encendido y conectado, y elija Continuar.
+	Check the scanner is on and connected, then choose Try again.	Compruebe que el escáner está encendido y conectado, y elija Reintentar.
+	Clear region	Borrar la región
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Retire el atasco, cargue las hojas restantes bien alineadas y elija Continuar.
+	Clear the jam and load the sheets squarely, then choose Try again.	Retire el atasco, cargue las hojas bien alineadas y elija Reintentar.
+	Close the feeder cover and check the paper, then choose Continue.	Cierre la tapa del alimentador, compruebe el papel y elija Continuar.
+	Close the feeder cover and check the paper, then choose Try again.	Cierre la tapa del alimentador, compruebe el papel y elija Reintentar.
+	Color document	Documento en color
+	Connected by USB.	Conectado por USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Conectado por la red (Servicios web). Las opciones proceden de ese controlador, no del de USB.
+	Continue scanning	Continuar el escaneo
+	Continue scanning fronts	Continuar con los anversos
+	Continue scanning reverse sides	Continuar con los reversos
+	Contrast	Contraste
+	Create PDF	Crear PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Arrastre sobre la vista previa para elegir una región. Sin selección se escanea toda el área.
+	Driver default	Valor predeterminado del controlador
+	Duplex	Doble cara
+	Duplex is not offered.	No se ofrece doble cara.
+	Feeder	Alimentador
+	Finish	Terminar
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Anversos escaneados: {n}. Dé la vuelta a la hoja en el cristal y elija Escanear reversos.
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Anversos escaneados: {n}. Dé la vuelta a la pila para que la última hoja quede arriba, vuelva a cargarla y elija Escanear reversos.
+	Full area	Área completa
+	Insert scanned pages	Insertar las páginas escaneadas
+	Intent	Finalidad
+	Invert tones	Invertir tonos
+	Lamp	Lámpara
+	Lamp on	Lámpara encendida
+	Large scan	Escaneo grande
+	Listing scanners…	Buscando escáneres…
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Cargue más hojas y elija Continuar; o elija Terminar para conservar lo escaneado.
+	Load sheets in the feeder, then choose Try again.	Cargue hojas en el alimentador y elija Reintentar.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Mire si el escáner muestra un mensaje o tiene una puerta o tapa abierta, corríjalo y elija Continuar.
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Mire si el escáner muestra un mensaje o tiene una puerta o tapa abierta, corríjalo y elija Reintentar.
+	Manual duplex needs one reverse side for each front.	El doble cara manual necesita un reverso por cada anverso.
+	Mirror	Espejo
+	Mirror the page	Reflejar la página
+	No pages were scanned.	No se escaneó ninguna página.
+	No scanner is connected.	No hay ningún escáner conectado.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Abra la tapa, retire cualquier atasco u hojas que hayan entrado juntas, cargue las hojas restantes bien alineadas y elija Continuar.
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Abra la tapa, retire cualquier atasco u hojas que hayan entrado juntas, cargue las hojas bien alineadas y elija Reintentar.
+	Optical resolution {x} × {y} dpi.	Resolución óptica {x} × {y} ppp.
+	Orientation	Orientación
+	Photometric	Fotométrico
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	La vista previa es para el cristal. Indique abajo una región en pulgadas, o déjela vacía para toda la hoja.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	La vista previa usa el cristal. Cambie el origen a Cristal, o escanee sin vista previa.
+	Refresh lists scanners. It does not feed paper.	Actualizar vuelve a buscar escáneres. No avanza papel.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Región en pulgadas. Deje el ancho o el alto en cero para escanear toda el área.
+	Reverse sides	Reversos
+	Reverse sides interleaved.	Reversos intercalados.
+	Scan interrupted	Escaneo interrumpido
+	Scan reverse side now (1 front)	Escanear el reverso ahora (1 anverso)
+	Scan reverse sides	Escanear reversos
+	Scan reverse sides now ({n} fronts)	Escanear los reversos ahora ({n} anversos)
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Escanee el anverso, dé la vuelta a la hoja en el cristal y escanee el reverso.
+	Scan the fronts before the reverse sides.	Escanee los anversos antes que los reversos.
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Escanee los anversos, dé la vuelta a la pila (la última hoja arriba) y escanee los reversos. Las páginas se intercalan: anverso, reverso, …
+	Scan the missing reverse sides, then choose Finish.	Escanee los reversos que faltan y elija Terminar.
+	Scanner settings	Ajustes del escáner
+	Scanning front {n} of {t}…	Escaneando el anverso {n} de {t}…
+	Scanning front {n}…	Escaneando el anverso {n}…
+	Scanning reverse side {n} of {t}…	Escaneando el reverso {n} de {t}…
+	Scanning reverse side {n}…	Escaneando el reverso {n}…
+	Scanning…	Escaneando…
+	Separate the sheets and load the remaining ones, then choose Continue.	Separe las hojas, cargue las restantes y elija Continuar.
+	Separate the sheets and load them again, then choose Try again.	Separe las hojas, vuelva a cargarlas y elija Reintentar.
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Ajustes que ofrece este origen. No toque un control para conservar el valor del controlador.
+	Stop	Detener
+	Straighten the page	Enderezar la página
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Apague y vuelva a encender el escáner, espere a que esté listo y elija Continuar.
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Apague y vuelva a encender el escáner, espere a que esté listo y elija Reintentar.
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	El cristal escanea una página cada vez. Escanee un anverso, désele la vuelta y escanee su reverso.
+	The driver may accept a turn and leave the picture as it was.	El controlador puede aceptar un giro y dejar la imagen como estaba.
+	The driver reports a paper jam.	El controlador indica un atasco de papel.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	El controlador indica que hay una hoja esperando. Ese indicador puede seguir activo con la bandeja vacía.
+	The feeder ran out of paper.	Se acabó el papel del alimentador.
+	The feeder took more than one sheet.	El alimentador tomó más de una hoja.
+	The fronts already scanned are kept for the reverse-side pass.	Los anversos ya escaneados se conservan para la pasada de los reversos.
+	The pages already scanned were kept in the document.	Las páginas ya escaneadas se conservaron en el documento.
+	The preview could not be shown.	No se pudo mostrar la vista previa.
+	The reverse sides already scanned are kept.	Los reversos ya escaneados se conservan.
+	The scan could not be started.	No se pudo iniciar el escaneo.
+	The scan produced no pages.	El escaneo no produjo ninguna página.
+	The scan was cancelled at the scanner.	El escaneo se canceló en el escáner.
+	The scan was interrupted.	Se interrumpió el escaneo.
+	The scanner has a paper jam.	El escáner tiene un atasco de papel.
+	The scanner is busy, or the feeder has no paper.	El escáner está ocupado, o el alimentador no tiene papel.
+	The scanner is busy.	El escáner está ocupado.
+	The scanner is offline or needs attention.	El escáner está sin conexión o necesita atención.
+	The scanner list could not be refreshed.	No se pudo actualizar la lista de escáneres.
+	The scanner needs attention.	El escáner necesita atención.
+	The scanner reported a lamp or device error.	El escáner indicó un error de lámpara o del dispositivo.
+	The scanner reported a paper problem (a jam or several sheets fed together).	El escáner indicó un problema de papel (un atasco o varias hojas juntas).
+	Threshold	Umbral
+	Transfer format: {format}.	Formato de transferencia: {format}.
+	Try again	Reintentar
+	Turned left	Girado a la izquierda
+	Upside down	Boca abajo
+	Vertical resolution	Resolución vertical
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Espere a que el escáner termine, o cierre cualquier otro programa que lo use, y elija Continuar.
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Espere a que el escáner termine, o cierre cualquier otro programa que lo use, y elija Reintentar.
+	Will use the bed.	Se usará el cristal.
+	Will use the feeder.	Se usará el alimentador.
+	front(s)	anverso(s)
+	reverse side(s)	reverso(s)
+	{n} of {m} pages were scanned.	Se escanearon {n} de {m} páginas.
+	{n} pages were scanned.	Se escanearon {n} páginas.
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} pulg., {pxw} × {pxh} píxeles, {size}
+	The reverse sides were cancelled: their document was closed.	Se cancelaron los reversos: se cerró su documento.
+	The scan was stopped: its document was closed.	Se detuvo el escaneo: se cerró su documento.

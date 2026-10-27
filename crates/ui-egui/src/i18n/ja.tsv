@@ -2557,3 +2557,143 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+	Scanning page {n}…	ページ {n} をスキャン中…
+	Scanning page {n} of {t}…	ページ {n} / {t} をスキャン中…
+	All pages asks the driver for the whole stack.	「すべてのページ」はドライバにトレイ全体を要求します。
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	ページ数を指定すると、その枚数でフィーダーが止まります。キャンセルすると転送は途中で終わり、すでに受け取ったページは文書に残ります。
+	Created Scan.pdf	Scan.pdf を作成しました
+	Inserted scanned pages	スキャンしたページを挿入しました
+	A cover on the scanner is open.	スキャナーのカバーが開いています。
+	Advanced…	詳細…
+	Auto-deskew	自動傾き補正
+	Bed	原稿台
+	Brightness	明るさ
+	Cancel reverse sides	裏面のスキャンをやめる
+	Clear region	範囲をクリア
+	Color	カラー
+	Color document	カラー文書
+	Connected by USB.	USB で接続しています。
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	ネットワーク（Web サービス）経由で接続しています。設定はそのドライバから来ます（USB ではありません）。
+	Contrast	コントラスト
+	Create PDF	PDF を作成
+	Drag on the preview to choose a region. An empty selection scans the whole area.	プレビューをドラッグして範囲を選びます。空の選択では全体をスキャンします。
+	Driver default	ドライバの既定
+	Duplex	両面
+	Duplex is not offered.	両面は使えません。
+	Feeder	フィーダー
+	From scanner…	スキャナーから…
+	Full area	全体
+	Insert scanned pages	スキャンしたページを挿入
+	Intent	インテント
+	Invert tones	階調を反転
+	Lamp	ランプ
+	Lamp on	ランプオン
+	Large scan	大きなスキャン
+	Listing scanners…	スキャナーを列挙しています…
+	Manual duplex needs one reverse side for each front.	手動両面では、おもて面と同じ枚数の裏面が必要です。
+	Mirror	左右反転
+	Mirror the page	ページを左右反転
+	No scanner is connected.	スキャナーが接続されていません。
+	Optical resolution {x} × {y} dpi.	光学解像度 {x} × {y} dpi。
+	Orientation	向き
+	Photometric	光度
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	プレビューは原稿台用です。下でインチ単位の範囲を指定するか、空のまま全体をスキャンします。
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	プレビューは原稿台を使います。入力を原稿台にするか、プレビューなしでスキャンしてください。
+	Refresh	更新
+	Refresh lists scanners. It does not feed paper.	更新はスキャナー一覧を取り直します。用紙は送りません。
+	Region in inches. Leave the width or the height at zero to scan the whole area.	範囲（インチ）。幅か高さを 0 のままにすると全体をスキャンします。
+	Reverse sides	裏面
+	Reverse sides interleaved.	裏面を差し込みました。
+	Scan reverse sides	裏面をスキャン
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	おもて面をスキャンし、原稿台上で裏返してから裏面をスキャンします。
+	Scan the fronts before the reverse sides.	裏面の前に、おもて面をスキャンしてください。
+	Scan interrupted	スキャンの中断
+	The scanner has a paper jam.	スキャナーで紙詰まりが発生しています。
+	The feeder ran out of paper.	フィーダーの用紙がなくなりました。
+	The feeder took more than one sheet.	フィーダーが複数枚を同時に給紙しました。
+	The scanner is offline or needs attention.	スキャナーがオフラインか、確認が必要です。
+	The scanner is busy.	スキャナーは使用中です。
+	The scan was interrupted.	スキャンが中断されました。
+	The scan was cancelled at the scanner.	スキャナー側でスキャンがキャンセルされました。
+	No pages were scanned.	スキャンされたページはありません。
+	1 page was scanned.	1 ページをスキャンしました。
+	{n} pages were scanned.	{n} ページをスキャンしました。
+	{n} of {m} pages were scanned.	{m} ページ中 {n} ページをスキャンしました。
+	The pages already scanned were kept in the document.	スキャン済みのページは文書に保持されています。
+	The fronts already scanned are kept for the reverse-side pass.	スキャン済みのおもて面は、裏面のスキャン用に保持されています。
+	The reverse sides already scanned are kept.	スキャン済みの裏面は保持されています。
+	Close the feeder cover and check the paper, then choose Continue.	フィーダーのカバーを閉じて用紙を確認し、「スキャンを続行」を選んでください。
+	Close the feeder cover and check the paper, then choose Try again.	フィーダーのカバーを閉じて用紙を確認し、「再試行」を選んでください。
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	紙詰まりを取り除き、残りの用紙をまっすぐにセットして、「スキャンを続行」を選んでください。
+	Clear the jam and load the sheets squarely, then choose Try again.	紙詰まりを取り除き、用紙をまっすぐにセットして、「再試行」を選んでください。
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	用紙を追加して「スキャンを続行」を選ぶか、スキャン済みの分を残すには「完了」を選んでください。
+	Load sheets in the feeder, then choose Try again.	フィーダーに用紙をセットして、「再試行」を選んでください。
+	Separate the sheets and load the remaining ones, then choose Continue.	用紙をさばいて残りをセットし、「スキャンを続行」を選んでください。
+	Separate the sheets and load them again, then choose Try again.	用紙をさばいてもう一度セットし、「再試行」を選んでください。
+	Check the scanner is on and connected, then choose Continue.	スキャナーの電源が入っていて接続されていることを確認し、「スキャンを続行」を選んでください。
+	Check the scanner is on and connected, then choose Try again.	スキャナーの電源が入っていて接続されていることを確認し、「再試行」を選んでください。
+	Scan the missing reverse sides, then choose Finish.	足りない裏面をスキャンしてから、「完了」を選んでください。
+	Try again	再試行
+	Continue scanning	スキャンを続行
+	Continue scanning fronts	おもて面のスキャンを続行
+	Continue scanning reverse sides	裏面のスキャンを続行
+	Scan reverse side now (1 front)	裏面を今すぐスキャン (おもて面 1 枚)
+	Scan reverse sides now ({n} fronts)	裏面を今すぐスキャン (おもて面 {n} 枚)
+	Finish	完了
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	スキャン済みのおもて面: {n} 枚。原稿台の用紙を裏返して、「裏面をスキャン」を選んでください。
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	スキャン済みのおもて面: {n} 枚。最後の1枚が一番上になるように束を裏返してセットし直し、「裏面をスキャン」を選んでください。
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	おもて面をスキャンし、束を裏返して（最後の用紙を上に）、裏面をスキャンします。ページは表・裏・…の順に差し込まれます…
+	Scanner settings	スキャナーの設定
+	Scanning front {n} of {t}…	おもて面 {n} / {t} をスキャン中…
+	Scanning front {n}…	おもて面 {n} をスキャン中…
+	Scanning reverse side {n} of {t}…	裏面 {n} / {t} をスキャン中…
+	Scanning reverse side {n}…	裏面 {n} をスキャン中…
+	Scanning…	スキャン中…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	この入力が提供する設定です。触らないとドライバの値が使われます。
+	Stop	停止
+	Straighten the page	ページをまっすぐにする
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	原稿台は一度に 1 ページです。おもて面をスキャンし、裏返して裏面をスキャンします。
+	The driver may accept a turn and leave the picture as it was.	ドライバは回転指定を受け付けても、画像をそのまま返すことがあります。
+	The driver reports a paper jam.	ドライバが紙詰まりを報告しています。
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	ドライバが用紙待ちを報告しています。トレイが空でもビットが残ることがあります。
+	The preview could not be shown.	プレビューを表示できませんでした。
+	The scan could not be started.	スキャンを開始できませんでした。
+	The scan produced no pages.	スキャンでページが得られませんでした。
+	The scanner list could not be refreshed.	スキャナー一覧を更新できませんでした。
+	Threshold	しきい値
+	Transfer format: {format}.	転送形式: {format}。
+	Turned left	左に回転
+	Upside down	上下逆
+	Vertical resolution	垂直解像度
+	Will use the bed.	原稿台を使います。
+	Will use the feeder.	フィーダーを使います。
+	front(s)	おもて面
+	reverse side(s)	裏面
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} in、{pxw} × {pxh} ピクセル、{size}
+	Created {n} scanned files	スキャンしたファイルを {n} 件作成しました
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	スキャナーで用紙の問題が報告されました（紙詰まり、または複数枚の同時給紙）。
+	The scanner needs attention.	スキャナーの確認が必要です。
+	The scanner reported a lamp or device error.	スキャナーでランプまたは装置のエラーが報告されました。
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	カバーを開け、紙詰まりや重なって給紙された用紙があれば取り除き、残りの用紙をまっすぐにセットして、「スキャンを続行」を選んでください。
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	カバーを開け、紙詰まりや重なって給紙された用紙があれば取り除き、用紙をまっすぐにセットして、「再試行」を選んでください。
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	スキャナーにメッセージが表示されていないか、ドアやカバーが開いていないかを確認し、原因を解消して、「スキャンを続行」を選んでください。
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	スキャナーにメッセージが表示されていないか、ドアやカバーが開いていないかを確認し、原因を解消して、「再試行」を選んでください。
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	スキャナーの処理が終わるまで待つか、スキャナーを使用している他のプログラムを閉じて、「スキャンを続行」を選んでください。
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	スキャナーの処理が終わるまで待つか、スキャナーを使用している他のプログラムを閉じて、「再試行」を選んでください。
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	スキャナーの電源を切って入れ直し、準備ができるまで待って、「スキャンを続行」を選んでください。
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	スキャナーの電源を切って入れ直し、準備ができるまで待って、「再試行」を選んでください。
+	Scanner	スキャナー
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	スキャナーを確認しています…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	スキャナーが使用中か、フィーダーに用紙がありません。
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	フィーダーに用紙があるか確認するか、スキャナーの処理が終わるまで待って、「スキャンを続行」を選んでください。
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	フィーダーに用紙があるか確認するか、スキャナーの処理が終わるまで待って、「再試行」を選んでください。
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	ネットワーク
+	The same printer is also available over USB.	同じプリンターは USB でも利用できます。
+	The same printer is also available over the network.	同じプリンターはネットワーク経由でも利用できます。
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	このバージョンでスキャンするには Windows (WIA) が必要です。

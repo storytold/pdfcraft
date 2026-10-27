@@ -2579,3 +2579,143 @@ animation effects	Off	Вимкнено
 	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
+	Scanning page {n}…	Сканування сторінки {n}…
+	Scanning page {n} of {t}…	Сканування сторінки {n} з {t}…
+	All pages asks the driver for the whole stack.	«Усі сторінки» просить у драйвера весь стіс.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Кількість сторінок зупиняє подавач після стількох аркушів. Скасування раніше завершує передачу; уже отримані сторінки лишаються в документі.
+	Created Scan.pdf	Створено Scan.pdf
+	Inserted scanned pages	Вставлено відскановані сторінки
+	A cover on the scanner is open.	Кришка сканера відкрита.
+	Advanced…	Додатково…
+	Auto-deskew	Автовирівнювання
+	Bed	Скло
+	Brightness	Яскравість
+	Cancel reverse sides	Скасувати зворотні боки
+	Clear region	Очистити область
+	Color	Колір
+	Color document	Кольоровий документ
+	Connected by USB.	Підключено через USB.
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	Підключено мережею (вебслужби). Параметри з цього драйвера, не з USB.
+	Contrast	Контраст
+	Create PDF	Створити PDF
+	Drag on the preview to choose a region. An empty selection scans the whole area.	Перетягніть на попередньому перегляді, щоб обрати область. Порожній вибір сканує все.
+	Driver default	Типове драйвера
+	Duplex	Двосторонньо
+	Duplex is not offered.	Двостороннє сканування не пропонується.
+	Feeder	Подавач
+	From scanner…	Зі сканера…
+	Full area	Уся область
+	Insert scanned pages	Вставити відскановані сторінки
+	Intent	Призначення
+	Invert tones	Інвертувати тони
+	Lamp	Лампа
+	Lamp on	Лампа увімкнена
+	Large scan	Велике сканування
+	Listing scanners…	Список сканерів…
+	Manual duplex needs one reverse side for each front.	Ручний дуплекс потребує зворотного боку для кожного лицьового.
+	Mirror	Дзеркало
+	Mirror the page	Віддзеркалити сторінку
+	No scanner is connected.	Сканер не підключено.
+	Optical resolution {x} × {y} dpi.	Оптична роздільність {x} × {y} dpi.
+	Orientation	Орієнтація
+	Photometric	Фотометрія
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	Попередній перегляд для скла. Нижче задайте область у дюймах або залиште порожньою для всього аркуша.
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	Попередній перегляд використовує скло. Установіть джерело «Скло» або скануйте без перегляду.
+	Refresh	Оновити
+	Refresh lists scanners. It does not feed paper.	Оновити знову перелічує сканери. Папір не подає.
+	Region in inches. Leave the width or the height at zero to scan the whole area.	Область у дюймах. Залиште ширину або висоту нулем, щоб сканувати все.
+	Reverse sides	Зворотні боки
+	Reverse sides interleaved.	Зворотні боки вставлено почергово.
+	Scan reverse sides	Сканувати зворотні боки
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	Відскануйте лицьовий бік, переверніть аркуш на склі, потім зворотний.
+	Scan the fronts before the reverse sides.	Спочатку скануйте лицьові боки, потім зворотні.
+	Scan interrupted	Сканування перервано
+	The scanner has a paper jam.	У сканері застрягнув папір.
+	The feeder ran out of paper.	У пристрої подачі закінчився папір.
+	The feeder took more than one sheet.	Пристрій подачі захопив більше одного аркуша.
+	The scanner is offline or needs attention.	Сканер не в мережі або потребує уваги.
+	The scanner is busy.	Сканер зайнятий.
+	The scan was interrupted.	Сканування було перервано.
+	The scan was cancelled at the scanner.	Сканування було скасовано на сканері.
+	No pages were scanned.	Жодної сторінки не відскановано.
+	1 page was scanned.	Відскановано 1 сторінку.
+	{n} pages were scanned.	Відскановано сторінок: {n}.
+	{n} of {m} pages were scanned.	Відскановано сторінок: {n} з {m}.
+	The pages already scanned were kept in the document.	Уже відскановані сторінки збережено в документі.
+	The fronts already scanned are kept for the reverse-side pass.	Уже відскановані лицьові боки збережено для проходу зворотних боків.
+	The reverse sides already scanned are kept.	Уже відскановані зворотні боки збережено.
+	Close the feeder cover and check the paper, then choose Continue.	Закрийте кришку пристрою подачі та перевірте папір, потім виберіть «Продовжити сканування».
+	Close the feeder cover and check the paper, then choose Try again.	Закрийте кришку пристрою подачі та перевірте папір, потім виберіть «Повторити».
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	Усуньте зминання та рівно завантажте решту аркушів, потім виберіть «Продовжити сканування».
+	Clear the jam and load the sheets squarely, then choose Try again.	Усуньте зминання та рівно завантажте аркуші, потім виберіть «Повторити».
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	Завантажте ще аркуші й виберіть «Продовжити сканування» або виберіть «Готово», щоб зберегти відскановане.
+	Load sheets in the feeder, then choose Try again.	Завантажте аркуші в пристрій подачі, потім виберіть «Повторити».
+	Separate the sheets and load the remaining ones, then choose Continue.	Розділіть аркуші та завантажте решту, потім виберіть «Продовжити сканування».
+	Separate the sheets and load them again, then choose Try again.	Розділіть аркуші та завантажте їх знову, потім виберіть «Повторити».
+	Check the scanner is on and connected, then choose Continue.	Переконайтеся, що сканер увімкнено й підключено, потім виберіть «Продовжити сканування».
+	Check the scanner is on and connected, then choose Try again.	Переконайтеся, що сканер увімкнено й підключено, потім виберіть «Повторити».
+	Scan the missing reverse sides, then choose Finish.	Відскануйте відсутні зворотні боки, потім виберіть «Готово».
+	Try again	Повторити
+	Continue scanning	Продовжити сканування
+	Continue scanning fronts	Продовжити сканування лицьових боків
+	Continue scanning reverse sides	Продовжити сканування зворотних боків
+	Scan reverse side now (1 front)	Сканувати зворотний бік зараз (1 лицьовий)
+	Scan reverse sides now ({n} fronts)	Сканувати зворотні боки зараз (лицьових: {n})
+	Finish	Готово
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	Лицьових боків відскановано: {n}. Переверніть аркуш на склі, потім виберіть «Сканувати зворотні боки».
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	Лицьових боків відскановано: {n}. Переверніть стопку так, щоб останній аркуш був зверху, завантажте її знову, потім виберіть «Сканувати зворотні боки».
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	Відскануйте лицьові, переверніть стос (останній зверху), потім зворотні. Сторінки чергуються: лицьова, зворотна, …
+	Scanner settings	Параметри сканера
+	Scanning front {n} of {t}…	Лицьова {n} з {t}…
+	Scanning front {n}…	Лицьова {n}…
+	Scanning reverse side {n} of {t}…	Зворотний {n} з {t}…
+	Scanning reverse side {n}…	Зворотний {n}…
+	Scanning…	Сканування…
+	Settings this source offers. Leave a control alone to keep the driver’s value.	Параметри цього джерела. Не чіпайте елемент, щоб лишити значення драйвера.
+	Stop	Стоп
+	Straighten the page	Вирівняти сторінку
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	Скло сканує по одній сторінці. Відскануйте лицьову, переверніть, потім зворотну.
+	The driver may accept a turn and leave the picture as it was.	Драйвер може прийняти оберт і все одно лишити зображення як було.
+	The driver reports a paper jam.	Драйвер повідомляє про застрягання паперу.
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	Драйвер повідомляє про аркуш у очікуванні. Біт може лишатися після порожнього лотка.
+	The preview could not be shown.	Не вдалося показати попередній перегляд.
+	The scan could not be started.	Не вдалося почати сканування.
+	The scan produced no pages.	Сканування не дало сторінок.
+	The scanner list could not be refreshed.	Не вдалося оновити список сканерів.
+	Threshold	Поріг
+	Transfer format: {format}.	Формат передавання: {format}.
+	Turned left	Повернуто ліворуч
+	Upside down	Догори дном
+	Vertical resolution	Вертикальна роздільність
+	Will use the bed.	Буде використано скло.
+	Will use the feeder.	Буде використано подавач.
+	front(s)	лицьов.
+	reverse side(s)	зворотн.
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} дюйм, {pxw} × {pxh} пікс., {size}
+	Created {n} scanned files	Створено {n} відсканованих файлів
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	The scanner reported a paper problem (a jam or several sheets fed together).	Сканер повідомив про проблему з папером (зминання або одночасна подача кількох аркушів).
+	The scanner needs attention.	Сканер потребує уваги.
+	The scanner reported a lamp or device error.	Сканер повідомив про помилку лампи або пристрою.
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	Відкрийте кришку, усуньте можливе зминання або аркуші, подані разом, і рівно завантажте решту аркушів, потім виберіть «Продовжити сканування».
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	Відкрийте кришку, усуньте можливе зминання або аркуші, подані разом, і рівно завантажте аркуші, потім виберіть «Повторити».
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	Перевірте, чи сканер показує повідомлення та чи не відчинені дверцята або кришка, і усуньте причину, потім виберіть «Продовжити сканування».
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	Перевірте, чи сканер показує повідомлення та чи не відчинені дверцята або кришка, і усуньте причину, потім виберіть «Повторити».
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	Зачекайте, поки сканер завершить роботу, або закрийте інші програми, які його використовують, потім виберіть «Продовжити сканування».
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	Зачекайте, поки сканер завершить роботу, або закрийте інші програми, які його використовують, потім виберіть «Повторити».
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	Вимкніть і знову ввімкніть сканер та зачекайте, доки він буде готовий, потім виберіть «Продовжити сканування».
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	Вимкніть і знову ввімкніть сканер та зачекайте, доки він буде готовий, потім виберіть «Повторити».
+	Scanner	Сканер
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	Перевірка сканера…
+# Machine-drafted rows for native-speaker review (busy-or-empty-feeder interruption, 2026-10-12).
+	The scanner is busy, or the feeder has no paper.	Сканер зайнятий, або в подавачі немає паперу.
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	Перевірте, чи є папір у подавачі, або зачекайте, поки сканер завершить роботу, потім виберіть «Продовжити сканування».
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	Перевірте, чи є папір у подавачі, або зачекайте, поки сканер завершить роботу, потім виберіть «Повторити».
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	Через USB
+	Network	Мережа
+	The same printer is also available over USB.	Той самий принтер доступний також через USB.
+	The same printer is also available over the network.	Той самий принтер доступний також через мережу.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Для сканування в цій версії потрібен Windows (WIA).
