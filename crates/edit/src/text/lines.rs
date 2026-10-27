@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::fallback::{same_font, same_paint};
 use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+use pdfcraft_content::overlaps;
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -449,8 +450,8 @@ impl FormBudget {
     }
 }
 
-/// A form XObject a page draws: its object, content, resources and its matrix composed with the
-/// CTM at the `Do`.
+/// A form XObject a page draws: its object, content, resources, its matrix composed with the
+/// CTM at the `Do`, and its `/BBox` (page space, under that same matrix) if it has a valid one.
 pub(crate) struct FormCall {
     pub(crate) obj: Option<pdfcraft_cos::ObjRef>,
     pub(crate) data: Vec<u8>,
@@ -459,6 +460,7 @@ pub(crate) struct FormCall {
     form: Arc<Object>,
     own: Option<Arc<Object>>,
     pub(crate) ctm: Matrix,
+    pub(crate) bbox: Option<[f64; 4]>,
 }
 
 impl FormCall {
@@ -528,6 +530,11 @@ pub(crate) fn form_call(
         <[f64; 6]>::try_from(v).ok().filter(|v| v.iter().all(|x| x.is_finite()))
     });
     let own = s.dict.get(b"Resources").filter(|r| matches!(r, Object::Ref(_))).map(|r| doc.resolve(r));
+    let bbox = s.dict.get(b"BBox").map(|b| doc.resolve(b)).and_then(|b| {
+        let a = b.as_array()?;
+        let v: Vec<f64> = a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+        <[f64; 4]>::try_from(v).ok().filter(|v| v.iter().all(|x| x.is_finite()))
+    });
     let data = match budget.decode.decode(s) {
         Ok(data) => data,
         Err(_) if budget.decode.remaining() == 0 => {
@@ -537,7 +544,8 @@ pub(crate) fn form_call(
         Err(_) => Vec::new(),
     };
     budget.visits = budget.visits.saturating_add(1);
-    Some(FormCall { obj, data, form, own, ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
+    let ctm = m.map_or(ctm, |m| Matrix(m).then(&ctm));
+    Some(FormCall { obj, data, form, own, ctm, bbox: bbox.map(|b| ctm.bbox(b)) })
 }
 
 /// The lines a page shows as it reads, including text drawn by form XObjects (which
@@ -551,6 +559,10 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         next_stream: usize,
         path: Vec<pdfcraft_cos::ObjRef>,
         budget: FormBudget,
+        /// Active forms' `/BBox`, page space: a run drawn outside any of these is not shown
+        /// (#3503). Each is checked on its own, not intersected, which is equivalent for
+        /// deciding whether a run is outside at least one of them.
+        clip: Vec<[f64; 4]>,
     }
     /// `stream` gives the stream number of the operator at an index of `ops`.
     fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: &dyn Fn(usize) -> usize) -> Result<(), EditError> {
@@ -567,6 +579,11 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
                 enter(w, resources, &name, ts, &mut carry.text_left)?;
                 // Text after a form starts a new line.
                 last = None;
+            }
+            // A run a form's `/BBox` clips away is not drawn, so it is not read either (#3503).
+            if w.clip.iter().any(|c| !overlaps(s.rect, *c, 0.0)) {
+                last = None;
+                continue;
             }
             let si = stream(s.op);
             // Text from another stream starts a new line, as when each stream was read alone.
@@ -591,7 +608,14 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         if let Some(r) = form.obj {
             w.path.push(r);
         }
-        walk(w, &ops, form.resources(resources), &mut carry, &|_| stream)?;
+        if let Some(b) = form.bbox {
+            w.clip.push(b);
+        }
+        let result = walk(w, &ops, form.resources(resources), &mut carry, &|_| stream);
+        if form.bbox.is_some() {
+            w.clip.pop();
+        }
+        result?;
         *text_left = carry.text_left;
         if form.obj.is_some() {
             w.path.pop();
@@ -602,7 +626,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut decode = DecodeBudget::page();
     let streams = content_streams_within(doc, &p.dict, &mut decode)?;
-    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::new(decode) };
+    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::new(decode), clip: Vec::new() };
     let mut carry = Carry::new();
     // Read the page's streams as the one stream they are, in one pass, as rendering and editing
     // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
