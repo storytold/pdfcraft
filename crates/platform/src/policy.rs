@@ -160,14 +160,22 @@ fn unreadable(source_of: impl Fn(&str) -> String, reason: &str) -> Policy {
     Policy { disable_javascript: Managed::Unreadable { source: source_of(DISABLE_JAVASCRIPT), reason: reason.to_string() } }
 }
 
-/// The policies in the file at `path`; no file means no policies.
+/// The policies in the file at `path`; nothing at `path` (not even a link) means no policies.
 pub fn from_file(path: &std::path::Path) -> Policy {
     use std::io::Read;
     let source = path.display().to_string();
     let source_of = |key: &str| format!("{source} ({key})");
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Policy::default(),
+        // Only a path with nothing there is "no policy". A link whose target is missing is
+        // something an administrator put there, so it counts as a policy that can't be read.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return match std::fs::symlink_metadata(path) {
+                Err(m) if m.kind() == std::io::ErrorKind::NotFound => Policy::default(),
+                Ok(_) => unreadable(source_of, &format!("it couldn't be opened ({e})")),
+                Err(m) => unreadable(source_of, &format!("it couldn't be checked ({m})")),
+            };
+        }
         Err(e) => return unreadable(source_of, &format!("it couldn't be opened ({e})")),
     };
     let mut text = Vec::new();
@@ -349,6 +357,24 @@ mod tests {
         let folder = dir.join("folder.json");
         std::fs::create_dir_all(&folder).unwrap();
         assert!(from_file(&folder).javascript_lock().unwrap().1.is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A link at the policy path whose target is missing is a policy someone put there, not
+    /// "no policy" (opening it reports NotFound, like a path with nothing there).
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_policy_link_keeps_javascript_off() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-policy-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("policy.json");
+        std::os::unix::fs::symlink(dir.join("missing-target.json"), &link).unwrap();
+        let (source, why) = from_file(&link).javascript_lock().expect("a broken link keeps JavaScript off");
+        assert!(source.ends_with("policy.json (DisableJavaScript)"), "{source}");
+        assert!(why.is_some_and(|w| w.contains("couldn't be opened")));
+        // Nothing at the path, or no folder for it: no policy.
+        assert_eq!(from_file(&dir.join("absent.json")), Policy::default());
+        assert_eq!(from_file(&dir.join("no-folder/policy.json")), Policy::default());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
