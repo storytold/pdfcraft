@@ -259,7 +259,9 @@ impl PdfCraftApp {
             tags_state: Default::default(),
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
-            os_key_store_ids: false,
+            // The OS key store listing is rolled out per platform; on Linux the PKCS #11
+            // tokens (Rutoken, JaCarta, …) are the desktop signing story.
+            os_key_store_ids: cfg!(target_os = "linux"),
             cert_viewer: None,
             space_audit: Vec::new(),
             space_audit_of: None,
