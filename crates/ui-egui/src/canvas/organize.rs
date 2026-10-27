@@ -61,6 +61,42 @@ impl DocView {
         }
     }
 
+    /// The arrow keys in the organize grid: ← / → go to the previous / next page and ↑ / ↓ a
+    /// row up or down, selecting only that page; with ⇧ the selection runs from the anchor to
+    /// it instead (#3436). ⌘/Ctrl with an arrow is left to the other page keys.
+    pub(crate) fn grid_arrow_keys(&mut self, ctx: &egui::Context) {
+        use egui::{Key, Modifiers};
+        let Some(last) = self.page_count.checked_sub(1) else { return };
+        let cols = self.grid_cols.max(1);
+        let current = self.current.min(last);
+        let shift = ctx.input(|i| i.modifiers.shift);
+        for (key, forward, step) in
+            [(Key::ArrowLeft, false, 1), (Key::ArrowRight, true, 1), (Key::ArrowUp, false, cols), (Key::ArrowDown, true, cols)]
+        {
+            // Without Shift in the pattern, a held Shift still matches (egui ignores it).
+            if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, key)) {
+                continue;
+            }
+            let target = if forward {
+                // ↓ on the row above a short last row goes to the last page.
+                current.checked_add(step).map(|t| t.min(last)).filter(|t| *t != current && (step == 1 || t / cols > current / cols))
+            } else {
+                current.checked_sub(step)
+            };
+            let Some(target) = target else { continue };
+            if shift {
+                let anchor = self.select_anchor.filter(|a| *a <= last).unwrap_or(current);
+                self.selected = (anchor.min(target)..=anchor.max(target)).collect();
+                self.select_anchor = Some(anchor);
+            } else {
+                self.clear_page_selection(Some(target));
+            }
+            self.go_to_page(target);
+            self.grid_follow = Some(target);
+            return;
+        }
+    }
+
     /// Drop the page selection; a later ⇧-click ranges from `anchor`.
     pub fn clear_page_selection(&mut self, anchor: Option<usize>) {
         self.selected.clear();
@@ -216,6 +252,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 88.0);
     let anchor = view.grid_anchor.take();
     let reveal = view.grid_reveal.take();
+    let follow = view.grid_follow.take();
     let mut open_page = None;
     organize_toolbar(view, info, editable, dirty, unobstructed, ui, t);
     let viewport = ui.available_rect_before_wrap();
@@ -244,16 +281,24 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
         }
         ui.add_space(20.0);
         let cols = ((ui.available_width() - 40.0) / cell.x).floor().max(1.0) as usize;
+        view.grid_cols = cols;
         let rows = info.pages.len().div_ceil(cols);
         let left = (ui.available_width() - cols as f32 * cell.x) / 2.0;
-        let (grid, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows as f32 * cell.y), Sense::hover());
-        // The page Organize opened on may lie in a row the virtualized grid has not laid out,
-        // so its cell is computed rather than found.
+        // Clicked where there is no page: the selection goes (the pages are on top of it).
+        let (grid, background) = ui.allocate_exact_size(vec2(ui.available_width(), rows as f32 * cell.y), Sense::click());
+        if background.clicked() {
+            view.clear_page_selection(Some(view.current));
+        }
+        // The page Organize opened on, or an arrow key moved to, may lie in a row the
+        // virtualized grid has not laid out, so its cell is computed rather than found.
+        let cell_of = |page: usize| {
+            let (row, col) = (page / cols, page % cols);
+            Rect::from_min_size(pos2(grid.left() + left + col as f32 * cell.x, grid.top() + row as f32 * cell.y), cell)
+        };
         if let Some(page) = reveal.filter(|p| *p < info.pages.len()) {
-            let row = page / cols;
-            let col = page % cols;
-            let c = Rect::from_min_size(pos2(grid.left() + left + col as f32 * cell.x, grid.top() + row as f32 * cell.y), cell);
-            ui.scroll_to_rect_animation(c, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+            ui.scroll_to_rect_animation(cell_of(page), Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+        } else if let Some(page) = follow.filter(|p| *p < info.pages.len()) {
+            ui.scroll_to_rect_animation(cell_of(page), None, egui::style::ScrollAnimation::none());
         }
         for row in thumbnail_rows(clip.top() - 20.0, clip.bottom() - 20.0, cell.y, rows) {
             let row_rect = Rect::from_min_size(grid.min + vec2(0.0, row as f32 * cell.y), vec2(grid.width(), cell.y));

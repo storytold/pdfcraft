@@ -334,6 +334,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
     let (zoom_in, zoom_out, zoom_reset) = (pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)), pressed(cmd(Key::Minus)), pressed(cmd(Key::Num0)));
     if view.organize {
+        if arrows {
+            view.grid_arrow_keys(ctx);
+        }
         if zoom_in {
             view.grid_zoom_request = Some(view.grid_zoom * GRID_ZOOM_STEP);
         }

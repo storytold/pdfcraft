@@ -498,6 +498,11 @@ pub struct DocView {
     grid_anchor: Option<(usize, f32)>,
     /// The page the grid scrolls into view on its next frame (Organize just opened on it).
     grid_reveal: Option<usize>,
+    /// The page the grid scrolls into view on its next frame only if it is out of view (an
+    /// arrow key moved to it).
+    grid_follow: Option<usize>,
+    /// Columns of the grid as last drawn, for ↑ / ↓.
+    grid_cols: usize,
     /// Sharp renders of the pages the grid shows larger than a thumbnail: only those in view,
     /// at the size drawn (device pixels wide).
     grid_pages: HashMap<usize, (u32, TextureHandle)>,
@@ -694,6 +699,8 @@ impl DocView {
             grid_zoom_request: None,
             grid_anchor: None,
             grid_reveal: None,
+            grid_follow: None,
+            grid_cols: 1,
             grid_pages: HashMap::new(),
             last_scale: 0.0,
             sharp_hold_until: 0.0,
