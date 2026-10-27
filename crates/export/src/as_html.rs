@@ -1,5 +1,5 @@
 use super::as_docx::{hex, rgb8};
-use super::layout::{Item, Page, items};
+use super::layout::{Item, Page, is_rtl, items, paragraph_rtl};
 
 /// Whether a character may appear in the output. XML 1.0 forbids the C0 controls other than tab,
 /// line feed and carriage return, and U+FFFE/U+FFFF. Text extracted from PDFs often holds them
@@ -66,9 +66,11 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                     t.push_str(&run);
                 }
                 let style = hex(first.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                // A paragraph that reads right to left is marked, so it aligns and orders so (#4653).
+                let dir = if paragraph_rtl(&runs) { " dir=\"rtl\"" } else { "" };
                 match lvl {
-                    0 => s.push_str(&format!("<p{style}>{t}</p>\n")),
-                    l => s.push_str(&format!("<h{l}{style}>{t}</h{l}>\n")),
+                    0 => s.push_str(&format!("<p{dir}{style}>{t}</p>\n")),
+                    l => s.push_str(&format!("<h{l}{dir}{style}>{t}</h{l}>\n")),
                 }
             }
             Item::Table(t) => {
@@ -84,8 +86,9 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
+                        let dir = if is_rtl(&c.text) { " dir=\"rtl\"" } else { "" };
                         let style = hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
-                        s.push_str(&format!("<td{span}{style}>{body}</td>"));
+                        s.push_str(&format!("<td{span}{dir}{style}>{body}</td>"));
                     }
                     s.push_str("</tr>\n");
                 }

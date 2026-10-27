@@ -1,6 +1,6 @@
 use super::as_docx::rgb8;
 use super::as_html::allowed;
-use super::layout::{Block, Item, Page, count_lookup_steps, items};
+use super::layout::{Block, Item, Page, count_lookup_steps, is_rtl, items, paragraph_rtl};
 use std::collections::HashMap;
 
 fn rtf_text(s: &str) -> String {
@@ -81,9 +81,12 @@ pub fn rtf(pages: &[Page]) -> String {
                     fmt.push_str(if colour.is_empty() && later { "\\cf0" } else { &colour });
                     fmt
                 };
-                let mut runs = runs.iter();
+                let runs_list = runs;
+                let mut runs = runs_list.iter();
                 let Some(first) = runs.next() else { continue };
-                s.push_str(&format!("{{\\pard{} {}", fmt(first.block, false), rtf_text(&first.text)));
+                // A paragraph that reads right to left is a right-to-left paragraph (#4653).
+                let direction = if paragraph_rtl(&runs_list) { "\\rtlpar" } else { "" };
+                s.push_str(&format!("{{\\pard{direction}{} {}", fmt(first.block, false), rtf_text(&first.text)));
                 for r in runs {
                     s.push_str(&format!("{{{} {}}}", fmt(r.block, true), rtf_text(&r.text)));
                 }
@@ -105,7 +108,7 @@ pub fn rtf(pages: &[Page]) -> String {
                         }
                     }
                     for c in row {
-                        let mut fmt = format!("\\intbl\\fs{}", (c.size * 2.0).round() as i64);
+                        let mut fmt = format!("\\intbl{}\\fs{}", if is_rtl(&c.text) { "\\rtlpar" } else { "" }, (c.size * 2.0).round() as i64);
                         if c.bold {
                             fmt.push_str("\\b");
                         }

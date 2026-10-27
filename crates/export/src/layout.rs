@@ -1,5 +1,26 @@
 use std::collections::HashMap;
 
+/// Whether `c` is a strong right-to-left character: a letter of Hebrew, Arabic, Syriac, Thaana,
+/// N'Ko, Samaritan, Mandaic and the other right-to-left scripts, or an explicit RLM or ALM mark.
+fn strong_rtl(c: char) -> bool {
+    matches!(c, '\u{200F}' | '\u{061C}')
+        || (c.is_alphabetic() && matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF))
+}
+
+/// Whether `text` reads right to left: its first strong character is a right-to-left one, as the
+/// HTML `dir="auto"` rule has it (#4653). Digits, punctuation and spaces are not strong.
+pub(crate) fn is_rtl(text: &str) -> bool {
+    for c in text.chars() {
+        if strong_rtl(c) {
+            return true;
+        }
+        if c.is_alphabetic() {
+            return false;
+        }
+    }
+    false
+}
+
 /// A paragraph of a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
@@ -179,6 +200,11 @@ const WORD_GAP: f64 = 0.12;
 pub(crate) struct Run<'a> {
     pub(crate) block: &'a Block,
     pub(crate) text: String,
+}
+
+/// Whether a paragraph's runs read right to left: its first strong character, across the runs.
+pub(crate) fn paragraph_rtl(runs: &[Run]) -> bool {
+    runs.iter().find_map(|r| r.text.chars().find(|c| strong_rtl(*c) || c.is_alphabetic())).is_some_and(strong_rtl)
 }
 
 /// A page's paragraphs, each a list of runs from left to right along its line. A block that

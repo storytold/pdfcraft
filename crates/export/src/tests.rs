@@ -841,3 +841,128 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
     assert!(rows.contains(&"| A1 | kWh | 37414.00 |"), "{md}");
     assert!(rows.iter().all(|r| r.matches(" | ").count() == 2), "every row has the header's three cells: {md}");
 }
+
+/// An Arabic body paragraph, an English one, a mixed one that starts in English, and an Arabic
+/// heading, as separate paragraphs of one page (body 11 pt).
+fn bidi_page() -> Page {
+    let b = |t: &str, y: f64, size: f64, bold: bool| Block {
+        text: t.into(),
+        rect: [72.0, y, 500.0, y + size],
+        size,
+        bold,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+    };
+    Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![
+            b(
+                "\u{0645}\u{0646}\u{0630} \u{0627}\u{0644}\u{0642}\u{0631}\u{0646} \u{0627}\u{0644}\u{062a}\u{0627}\u{0633}\u{0639} \u{0639}\u{0634}\u{0631} \u{0643}\u{0627}\u{0646} \u{0647}\u{0630}\u{0627} \u{0627}\u{0644}\u{0646}\u{0635} \u{0645}\u{0643}\u{062a}\u{0648}\u{0628}\u{0627}",
+                600.0,
+                11.0,
+                false,
+            ),
+            b("This paragraph is written in English and is long enough to be the body text size here.", 560.0, 11.0, false),
+            b(
+                "Chapter 2 \u{0627}\u{0644}\u{0641}\u{0635}\u{0644} \u{0627}\u{0644}\u{062b}\u{0627}\u{0646}\u{064a} is a mixed paragraph that begins in English and is long enough.",
+                520.0,
+                11.0,
+                false,
+            ),
+            b("\u{0627}\u{0644}\u{0639}\u{0646}\u{0648}\u{0627}\u{0646}", 700.0, 24.0, true),
+        ],
+        images: Vec::new(),
+        background: None,
+    }
+}
+
+/// #4653: which text reads right to left: the first strong character decides, as the HTML
+/// `dir="auto"` rule has it; digits, punctuation and spaces are not strong.
+#[test]
+fn text_reads_right_to_left_by_its_first_strong_character() {
+    for rtl in [
+        "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{05e9}\u{05dc}\u{05d5}\u{05dd}",
+        "123 \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "(\u{05e9})",
+        "\u{200f}1",
+        "\u{0710}\u{0712}",
+        "\u{0780}\u{0781}",
+    ] {
+        assert!(is_rtl(rtl), "{rtl:?}");
+    }
+    for ltr in [
+        "",
+        "   ",
+        "123 456",
+        "Hello \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{0661}\u{0662}\u{0663}",
+        "()",
+        "\u{0e01}\u{0e02}",
+        "\u{4e2d}\u{6587}",
+    ] {
+        assert!(!is_rtl(ltr), "{ltr:?}");
+    }
+}
+
+#[test]
+fn word_marks_right_to_left_paragraphs_and_runs() {
+    let xml = part(&docx(&[bidi_page()], "Arabic"), "word/document.xml");
+    let paragraphs: Vec<&str> = xml.split("<w:p>").skip(1).collect();
+    let find = |needle: &str| *paragraphs.iter().find(|p| p.contains(needle)).unwrap_or_else(|| panic!("no paragraph with {needle}"));
+    // The Arabic paragraph: right-to-left, its run a complex-script one.
+    let arabic = find("\u{0645}\u{0646}\u{0630}");
+    assert!(arabic.starts_with("<w:pPr><w:bidi/></w:pPr>"), "{arabic}");
+    assert!(arabic.contains("<w:szCs w:val=\"22\"/><w:rtl/>"), "{arabic}");
+    // English: neither.
+    let english = find("written in English");
+    assert!(!english.contains("<w:bidi/>") && !english.contains("<w:rtl/>"), "{english}");
+    // Mixed, starting in English: a left-to-right paragraph.
+    let mixed = find("mixed paragraph");
+    assert!(!mixed.contains("<w:bidi/>"), "{mixed}");
+    // A bold Arabic heading: the style first, then the direction (the order Word requires), and
+    // the bold is the complex-script bold too.
+    let heading = find("\u{0627}\u{0644}\u{0639}\u{0646}\u{0648}\u{0627}\u{0646}");
+    assert!(heading.starts_with("<w:pPr><w:pStyle w:val=\"Heading1\"/><w:bidi/></w:pPr>"), "{heading}");
+}
+
+#[test]
+fn html_and_rtf_mark_right_to_left_paragraphs() {
+    let html = html(&[bidi_page()], "Arabic");
+    assert!(html.contains("<p dir=\"rtl\">\u{0645}\u{0646}\u{0630}"), "{html}");
+    assert!(html.contains("<h1 dir=\"rtl\">\u{0627}\u{0644}\u{0639}"), "{html}");
+    assert!(html.contains("<p>This paragraph is written in English"), "no direction on the English one");
+    assert!(html.contains("<p>Chapter 2"), "nor on the mixed one that starts in English");
+    let rtf = rtf(&[bidi_page()]);
+    // RTF writes the Arabic as \u escapes: the right-to-left paragraph is the one with \rtlpar.
+    assert_eq!(rtf.matches("\\rtlpar").count(), 2, "the Arabic paragraph and the Arabic heading: {rtf}");
+    assert!(rtf.contains("{\\pard\\rtlpar\\fs22 \\u1605?"), "{rtf}");
+    assert!(!rtf.contains("\\rtlpar\\fs22 This"), "{rtf}");
+}
+
+/// #4653: table cells and positioned text boxes carry their direction too.
+#[test]
+fn right_to_left_table_cells_and_text_boxes_are_marked() {
+    let mut p = table_page();
+    for b in &mut p.blocks {
+        if b.text == "Unit" {
+            b.text = "\u{0627}\u{0644}\u{0648}\u{062d}\u{062f}\u{0629}".into();
+        }
+    }
+    let xml = part(&docx(&[p.clone()], "Table"), "word/document.xml");
+    assert_eq!(xml.matches("<w:p><w:pPr><w:bidi/></w:pPr>").count(), 1, "one Arabic cell: {xml}");
+    let html = html(&[p.clone()], "Table");
+    assert!(html.contains("<td dir=\"rtl\">\u{0627}\u{0644}\u{0648}"), "{html}");
+    assert_eq!(html.matches(" dir=\"rtl\"").count(), 1);
+    let rtf = rtf(&[p]);
+    assert_eq!(rtf.matches("\\rtlpar").count(), 1, "{rtf}");
+    // A page that stays in positioned text boxes (rotated text): the box's paragraph.
+    let mut q = bidi_page();
+    q.blocks[1].rotation = 30.0;
+    let xml = part(&docx(&[q], "Boxes"), "word/document.xml");
+    assert!(xml.contains("<w:txbxContent><w:p><w:pPr><w:bidi/><w:spacing"), "{xml}");
+    assert!(xml.contains("<w:txbxContent><w:p><w:pPr><w:spacing"), "the English box has no direction");
+}
