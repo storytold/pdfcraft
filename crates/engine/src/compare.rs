@@ -220,7 +220,10 @@ impl crate::Document {
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
                         let f = b.base_font.to_ascii_lowercase();
+                        // `text` is trimmed; the editor text keeps the source's own spaces.
+                        let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                         pdfcraft_export::Block {
+                            space_around,
                             text: b.text,
                             rect: visible_rect(b.rect),
                             size: b.size * unit,

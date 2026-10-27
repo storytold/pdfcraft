@@ -1783,6 +1783,15 @@
 	Tool	工具
 	Command	指令
 	Search tools and commands…	搜尋工具與指令…
+
+# Accessible names for inputs that have no visible label.
+	Added text	已新增的文字
+	Link URL	連結 URL
+	Search tools and commands	搜尋工具與指令
+	Text editing line	文字編輯行
+	Text to place	要放置的文字
+	Tooltip	提示
+	Words or phrases to redact	要遮蔽的字詞或片語
 	No matching tools	找不到相符的工具
 	All tools	所有工具
 	Read	閱讀
@@ -2490,3 +2499,11 @@ animation effects	Off	關
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
 @plural	{n} reply|{n} replies	{n} 則回覆
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	頁面工具
+	Insert pages from a file after the selection…	在所選內容後插入檔案中的頁面…
+	Rotate the selected pages counterclockwise	逆時針旋轉所選頁面
+	Rotate the selected pages clockwise	順時針旋轉所選頁面
+	Extract the selected pages…	擷取所選頁面…
+	Delete the selected pages	刪除所選頁面

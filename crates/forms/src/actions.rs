@@ -260,6 +260,47 @@ fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) ->
     Ok(Some(Object::Ref(doc.add(Object::Dict(d)))))
 }
 
+/// Rewrite one trigger of a widget to `new` (`None` clears it), given the `old` value read from
+/// the widget. `aa` and `a_entry` are the widget's `/AA` dict and `/A` entry, updated in place.
+#[allow(clippy::too_many_arguments)]
+fn replace_trigger(
+    doc: &mut Document,
+    pages: &[pdfcraft_cos::ObjRef],
+    scripts: &mut pdfcraft_cos::DecodeBudget,
+    t: Trigger,
+    new: Option<&FieldAction>,
+    old: Option<Object>,
+    aa: &mut Dict,
+    a_entry: &mut Option<Object>,
+) -> Result<(), FormError> {
+    let old_action = old.as_ref().and_then(|o| read(doc, o, pages, scripts));
+    if new.is_some() && new == old_action.as_ref() {
+        return Ok(());
+    }
+    // The list shows a trigger's first action: replacing it keeps the ones chained after it.
+    let next = new.and(old).and_then(|o| doc.resolve(&o).as_dict().and_then(|d| d.get(b"Next").cloned()));
+    let obj = match new {
+        Some(a) => write(doc, a, pages)?,
+        None => None,
+    };
+    if let (Some(Object::Ref(r)), Some(next)) = (&obj, next) {
+        doc.update_dict(*r, |d| d.set(b"Next".to_vec(), next))?;
+    }
+    match t.key() {
+        None => {
+            *a_entry = obj;
+            aa.remove(b"U");
+        }
+        Some(k) => match obj {
+            Some(o) => aa.set(k.to_vec(), o),
+            None => {
+                aa.remove(k);
+            }
+        },
+    }
+    Ok(())
+}
+
 /// Replace field `name`'s actions (on every widget) with `actions`; triggers not listed lose
 /// theirs. `Other` actions, and actions that read the same as before, are left as they are (with
 /// their chain and the keys this module doesn't read); a replaced action keeps its chain.
@@ -281,31 +322,7 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
                 None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
                 Some(k) => aa.get(k).cloned(),
             };
-            let old_action = old.as_ref().and_then(|o| read(doc, o, &pages, &mut scripts));
-            if new.is_some() && new == old_action.as_ref() {
-                continue;
-            }
-            // The list shows a trigger's first action: replacing it keeps the ones chained after it.
-            let next = new.and(old).and_then(|o| doc.resolve(&o).as_dict().and_then(|d| d.get(b"Next").cloned()));
-            let obj = match new {
-                Some(a) => write(doc, a, &pages)?,
-                None => None,
-            };
-            if let (Some(Object::Ref(r)), Some(next)) = (&obj, next) {
-                doc.update_dict(*r, |d| d.set(b"Next".to_vec(), next))?;
-            }
-            match t.key() {
-                None => {
-                    a_entry = obj;
-                    aa.remove(b"U");
-                }
-                Some(k) => match obj {
-                    Some(o) => aa.set(k.to_vec(), o),
-                    None => {
-                        aa.remove(k);
-                    }
-                },
-            }
+            replace_trigger(doc, &pages, &mut scripts, t, new, old, &mut aa, &mut a_entry)?;
         }
         doc.update_dict(w.obj, |d| {
             match &a_entry {

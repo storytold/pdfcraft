@@ -27,6 +27,8 @@ pub mod sanitize;
 mod tags;
 #[cfg(test)]
 mod tests;
+pub(crate) mod type3;
+pub(crate) mod type3_tables;
 pub mod user_regex;
 
 use interp::{Mode, Scope, process};
@@ -494,6 +496,7 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
                 pi,
             )?;
             retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
+            type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
