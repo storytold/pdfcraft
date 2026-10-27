@@ -4,7 +4,7 @@ use super::create::{
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own_popup, popup_info, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, change_annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
 use super::types::{
     BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
@@ -117,7 +117,10 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 /// go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let index = deleted_index(doc, page, index)?;
-    lift_annotation(doc, page, index)
+    lift_annotation(doc, page, index)?;
+    // Not in lift_annotation: a drag preview lifts on a throwaway copy and must not log a repair.
+    let p = page_ref(doc, page)?;
+    change_annots(doc, p, annots(doc, p))
 }
 
 /// Whether [`delete_annotation`] deletes the annotation at `(page, index)`, or why not, without
@@ -429,7 +432,7 @@ fn reply(
     let mut list = annots(doc, p);
     list.push(Object::Ref(r));
     let i = list.len() - 1;
-    set_annots(doc, p, list)?;
+    change_annots(doc, p, list)?;
     Ok(i)
 }
 
@@ -549,7 +552,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let mut list = annots(doc, p);
     list.push(Object::Ref(r));
     let i = list.len() - 1;
-    set_annots(doc, p, list)?;
+    change_annots(doc, p, list)?;
     Ok(i)
 }
 
