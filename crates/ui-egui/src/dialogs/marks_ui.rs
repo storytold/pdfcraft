@@ -344,17 +344,20 @@ pub(crate) struct UnmarkedPage {
     /// Pages (at a scale) that came back from rendering ahead with an error, not asked ahead
     /// again: the error needn't be the page's, so drawing it when shown still decides.
     not_ahead: HashSet<(usize, u64)>,
+    /// The display colours the textures are drawn in, as the page beside them is.
+    colors: crate::page_colors::PageColors,
 }
 
 impl UnmarkedPage {
     /// The picture to preview `page` on in place of its thumbnail, or `None` for the thumbnail:
     /// not Update, no marks of `kind` in the document, the pages can't be prepared, or `page`
     /// fails to render and was never drawn (a picture of it at another scale is shown rather than
-    /// the old marks). `near` are the pages a step goes to from it, rendered ahead.
+    /// the old marks). `near` are the pages a step goes to from it, rendered ahead. It is drawn in
+    /// `colors`, the page's display colours.
     fn picture(
         &mut self,
         ctx: &egui::Context,
-        (doc, id): (&pdfcraft_engine::Document, pdfcraft_engine::DocId),
+        (doc, id, colors): (&pdfcraft_engine::Document, pdfcraft_engine::DocId, crate::page_colors::PageColors),
         page: usize,
         near: &[usize],
         kind: MarkKind,
@@ -362,13 +365,18 @@ impl UnmarkedPage {
     ) -> Option<egui::TextureId> {
         let key = replace.then(|| (id, doc.edit_generation(), kind));
         if self.key != key {
-            *self = Self { key, ..Default::default() };
+            *self = Self { key, colors, ..Default::default() };
             if replace {
                 self.pages = doc.without_marks(kind).ok().flatten();
                 self.renderer = self.pages.as_ref().filter(|_| !cfg!(target_arch = "wasm32")).map(|p| p.renderer());
             }
         }
         self.pages.as_ref()?;
+        if self.colors != colors {
+            // Other display colours: the pages are drawn again (the prepared pages and renderer stay).
+            self.colors = colors;
+            self.textures.clear();
+        }
         let near = if self.renderer.is_some() { near } else { &[][..] };
         // At the preview's size in pixels.
         let scale = |page: usize| {
@@ -377,7 +385,7 @@ impl UnmarkedPage {
             Some((s, (s * 1000.0) as u64))
         };
         let load = |ctx: &egui::Context, out: pdfcraft_render::RenderedPage| {
-            let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+            let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba, colors);
             ctx.load_texture("marks-preview-unmarked", image, egui::TextureOptions::LINEAR)
         };
         while let Some(out) = self.renderer.as_ref().and_then(|r| r.try_recv()) {
@@ -635,7 +643,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let target = shown_preview(&d.range, &mut d.preview, current, count);
     let page = doc.info.pages.get(target).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
     let near: Vec<usize> = [false, true].into_iter().filter_map(|forward| step_preview(&d.range, target, count, forward)).collect();
-    let unmarked = app.unmarked_page.picture(ui.ctx(), (doc, id), target, &near, kind, d.replace);
+    // In the page's display colours, as the thumbnail it stands in for.
+    let dark = app.views.get(i).and_then(|view| view.dark());
+    let colors = crate::page_colors::PageColors::for_reading(dark, doc.renderer.reading_colors());
+    let unmarked = app.unmarked_page.picture(ui.ctx(), (doc, id, colors), target, &near, kind, d.replace);
     let picture = unmarked.or_else(|| {
         app.views.get_mut(i).and_then(|view| {
             view.need_thumbnail(target, true);

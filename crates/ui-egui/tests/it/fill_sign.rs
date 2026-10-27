@@ -1812,3 +1812,172 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
 }
+
+#[test]
+fn dark_pages_signature_placement_resize_and_move_keep_the_page_dark() {
+    let _gpu = gpu();
+    let path = signature_file("dark-pages");
+    let signature = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut h = harness();
+    // The filtering mode, which recolours every image (by default only images with
+    // transparency are).
+    h.state_mut().set_dark_style(pdfcraft_render::DarkPages { images: pdfcraft_render::DarkImages::Recolour, ..Default::default() });
+    h.state_mut().signature = Some(SavedSig::Image(signature));
+    h.state_mut().execute("sign.fill.signature");
+    let source = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    for dark in [true, false, true] {
+        assert!(h.state_mut().execute("view.dark_pages"));
+        h.hover_at(at(&h, 40.0, 250.0));
+        let pixels = signature_display(&mut h, (90.0, 250.0), (200.0, 350.0), dark);
+        assert!(items(&h).is_empty());
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, source);
+        if dark && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+            pixels.save(format!("{dir}/dark-signature-placement.png")).unwrap();
+        }
+    }
+    click(&mut h, 40.0, 250.0);
+    signature_display(&mut h, (90.0, 250.0), (200.0, 350.0), true);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let generation = doc.edit_generation();
+    let bytes = doc.bytes.clone();
+    h.drag_at(at(&h, 136.0, 234.0));
+    h.run_steps(1);
+    let end = at(&h, 184.0, 218.0);
+    h.hover_at(end);
+    for _ in 0..2 {
+        h.state_mut().execute("view.dark_pages");
+        h.run_steps(1);
+        assert!(h.state().views[0].comments.gesture.is_some(), "mode changes preserve the resize");
+    }
+    let pixels = signature_display(&mut h, (112.0, 242.0), (200.0, 350.0), true);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, bytes, "resize preview is read-only");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        pixels.save(format!("{dir}/dark-signature-resize.png")).unwrap();
+    }
+    h.drop_at(end);
+    h.run_steps(3);
+    h.drag_at(at(&h, 112.0, 242.0));
+    h.run_steps(1);
+    let end = at(&h, 132.0, 142.0);
+    h.hover_at(end);
+    let pixels = signature_display(&mut h, (152.0, 142.0), (200.0, 350.0), true);
+    assert!(pixel_at(&h, &pixels, 112.0, 242.0)[..3].iter().all(|v| *v < 60), "old ink is removed on dark paper");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        pixels.save(format!("{dir}/dark-signature-move.png")).unwrap();
+    }
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().edit_generation(), generation + 2);
+    std::fs::remove_file(path).unwrap();
+}
+
+fn signature_display(h: &mut Harness<'static, PdfCraftApp>, ink: (f32, f32), paper: (f32, f32), dark: bool) -> image::RgbaImage {
+    for _ in 0..100 {
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        let ink = pixel_at(h, &pixels, ink.0, ink.1);
+        let paper = pixel_at(h, &pixels, paper.0, paper.1);
+        if ink[..3].iter().all(|v| if dark { *v > 180 } else { *v < 60 }) && paper[..3].iter().all(|v| if dark { *v < 60 } else { *v > 240 }) {
+            return pixels;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("signature or page did not follow dark_pages={dark}");
+}
+
+#[test]
+fn dark_pages_signature_toggles_during_move_preserve_alpha_commit_and_cancel() {
+    let _gpu = gpu();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(120, 40, image::Rgba([10, 40, 80, 128])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let image = pdfcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap();
+    let original_pixels = image.rgba().to_vec();
+    let mut h = harness();
+    // The filtering mode, which recolours every image (by default only images with
+    // transparency are).
+    h.state_mut().set_dark_style(pdfcraft_render::DarkPages { images: pdfcraft_render::DarkImages::Recolour, ..Default::default() });
+    h.state_mut().signature = Some(SavedSig::Image(image.clone()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 250.0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation {
+        page: 0,
+        index: 0,
+        color: None,
+        opacity: Some(0.6),
+        width: None,
+        endings: None,
+    });
+    settle_signature(&mut h);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let source = doc.bytes.clone();
+    let generation = doc.edit_generation();
+    h.drag_at(at(&h, 90.0, 250.0));
+    h.run_steps(1);
+    let target = at(&h, 150.0, 180.0);
+    h.hover_at(target);
+    h.run_steps(1);
+    for _ in 0..3 {
+        h.state_mut().execute("view.dark_pages");
+        h.run_steps(1);
+        assert!(h.state().views[0].comments.gesture.is_some(), "toggling never finishes the gesture");
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, source);
+    }
+    settle_signature(&mut h);
+    let live = h.render().unwrap();
+    let live_ink = pixel_at(&h, &live, 170.0, 180.0);
+    assert!(pixel_at(&h, &live, 90.0, 250.0)[..3].iter().all(|v| *v < 60), "the old position is dark paper");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        live.save(format!("{dir}/transparent-signature-live.png")).unwrap();
+    }
+    h.drop_at(target);
+    h.run_steps(3);
+    settle_signature(&mut h);
+    let baked = h.render().unwrap();
+    let baked_ink = pixel_at(&h, &baked, 170.0, 180.0);
+    assert!(
+        live_ink.iter().zip(baked_ink).all(|(live, baked)| live.abs_diff(baked) <= 3),
+        "transparent preview matches committed raster: {live_ink:?} vs {baked_ink:?}"
+    );
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.edit_generation(), generation + 1, "release commits exactly one move");
+    assert_eq!(doc.can_undo(), Some("Move comment"));
+    let committed = doc.bytes.clone();
+    h.drag_at(at(&h, 150.0, 180.0));
+    h.run_steps(1);
+    let cancelled = at(&h, 180.0, 120.0);
+    h.hover_at(cancelled);
+    h.run_steps(1);
+    for reading in [
+        pdfcraft_render::ReadingColors::YELLOW_ON_BLACK,
+        pdfcraft_render::ReadingColors::parse("white-on-black", None, None, Some(true), Some(false)).unwrap(),
+        Default::default(),
+    ] {
+        h.state_mut().set_reading_colors(reading);
+        h.run_steps(1);
+        assert!(h.state().views[0].comments.gesture.is_some());
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, committed);
+    }
+    settle_signature(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.drop_at(cancelled);
+    h.run_steps(2);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.bytes, committed, "Escape adds no edit");
+    assert_eq!(doc.can_undo(), Some("Move comment"));
+    assert!(h.state().views[0].comments.gesture.is_none());
+    assert_eq!(image.rgba(), original_pixels);
+}
+
+fn settle_signature(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..200 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            h.run_steps(2);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("signature display did not settle");
+}

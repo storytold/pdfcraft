@@ -7,6 +7,7 @@ use pdfcraft_render::{LayerOp, OpenError, ReadingColors, RenderConfig, RenderPoo
 
 #[cfg(test)]
 use crate::check_refresh_panic;
+use crate::doc_state::apply_dark_reading;
 use crate::edit::{EditCtx, check_permission, run_edit};
 use crate::history::{Keys, MAX_UNDO, Scope, keys_after, scope_of, uses_scripts};
 use crate::{

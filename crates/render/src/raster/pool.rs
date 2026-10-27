@@ -318,6 +318,11 @@ impl RenderPool {
         Self::with_mode(bytes, 0, config, true)
     }
 
+    /// The preset used by this pool, so display overlays can match its rendered pages.
+    pub fn reading_colors(&self) -> crate::ReadingColors {
+        self.config.reading_colors
+    }
+
     /// `true` when rendering happens on the caller's thread (no worker threads available).
     pub fn is_inline(&self) -> bool {
         self.inline.is_some()

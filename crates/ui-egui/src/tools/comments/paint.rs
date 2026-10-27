@@ -6,7 +6,7 @@ use super::{
 };
 
 /// Paint comment selection, hover and gesture previews on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, colors: crate::page_colors::PageColors) {
     let cv = &view.comments;
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
@@ -38,15 +38,15 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
             }
-            return paint_gesture(painter, cx, view);
+            return paint_gesture(painter, cx, view, colors);
         }
         if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
         {
-            return paint_gesture(painter, cx, view);
+            return paint_gesture(painter, cx, view, colors);
         }
         let shift = ui.input(|i| i.modifiers.shift);
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
-            return paint_points(painter, cx, view, a, pointer, shift);
+            return paint_points(painter, cx, view, a, pointer, shift, colors);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
@@ -57,7 +57,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
-    paint_gesture(painter, cx, view);
+    paint_gesture(painter, cx, view, colors);
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
@@ -89,7 +89,15 @@ pub(super) fn changing_points(
     }
 }
 
-fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
+fn paint_points(
+    painter: &egui::Painter,
+    cx: &PageCx<'_>,
+    view: &DocView,
+    a: &Annotation,
+    pointer: Option<Pos2>,
+    shift: bool,
+    colors: crate::page_colors::PageColors,
+) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
     let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
@@ -107,27 +115,27 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
-    paint_gesture(painter, cx, view);
+    paint_gesture(painter, cx, view, colors);
 }
 
-fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+pub(super) fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, colors: crate::page_colors::PageColors) {
     let now = painter.ctx().input(|i| i.time);
     for s in view.comments.settling.iter().filter(|s| s.page == cx.page && now - s.since < SETTLE_SECS) {
-        paint_draw(painter, cx, &s.tool, &s.points);
+        paint_draw(painter, cx, &s.tool, &s.points, colors);
     }
     if let Some(Gesture::Draw { page, tool, points }) = &view.comments.gesture
         && *page == cx.page
     {
-        paint_draw(painter, cx, tool, points);
+        paint_draw(painter, cx, tool, points, colors);
     }
 }
 
 /// A drawing tool's shape from its points (a live drag, or a released one still settling).
-fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]]) {
+fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]], colors: crate::page_colors::PageColors) {
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.zoom();
-        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color));
+        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), colors.line_art(color32(style.color)));
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
             CommentTool::Ink => {

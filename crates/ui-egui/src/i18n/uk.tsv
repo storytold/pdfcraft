@@ -18,6 +18,14 @@
 # Integer plurals (CLDR uk): one (1, 21) | few (2–4, 22–24) | many (0, 5–19); 11–14 take many.
 # Commands use infinitives. Fixed-count templates use count-neutral wording.
 
+	Dark PDF pages	Темні сторінки PDF
+	Soft dark	М’який темний
+	Sepia	Сепія
+	Keep opaque images	Зберігати непрозорі зображення
+	Keep all images	Зберігати всі зображення
+	Recolour images	Перефарбовувати зображення
+	Dark page colours	Кольори темних сторінок
+	Images on dark pages	Зображення на темних сторінках
 	Menu	Меню
 	File	Файл
 	Edit	Редагування

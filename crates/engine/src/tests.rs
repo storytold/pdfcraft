@@ -4201,6 +4201,67 @@ fn reload_reads_the_new_file_into_the_same_document() {
     assert_eq!(s.docs().len(), 2);
 }
 
+/// Dark pages that keep their images are drawn by the renderer in the palette's colours (the
+/// paper first); the filtering mode leaves the renderer and the edit generation alone; an
+/// explicit reading preset wins; a reload keeps the style.
+#[test]
+fn dark_pages_that_keep_images_are_drawn_by_the_renderer() {
+    use pdfcraft_render::{DarkImages, DarkPages, DarkPalette};
+    let corner = |s: &Session, id: DocId| {
+        let doc = s.get(id).unwrap();
+        doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest {
+            page: 0,
+            kind: pdfcraft_render::RequestKind::Pixels,
+            scale: 1.0,
+            ..Default::default()
+        }]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let page = loop {
+            if let Some(page) = doc.renderer.try_recv() {
+                break page;
+            }
+            assert!(std::time::Instant::now() < deadline, "page render did not finish");
+            std::thread::yield_now();
+        };
+        let (px, _) = page.rgba.as_chunks::<4>();
+        px.first().copied().unwrap()
+    };
+    let (mut s, id) = session_with(1);
+    let white = corner(&s, id);
+    assert_eq!(white, [255, 255, 255, 255]);
+    let generation = s.get(id).unwrap().edit_generation();
+    let filtering = DarkPages { palette: DarkPalette::Black, images: DarkImages::Recolour };
+    assert!(s.set_dark_style(id, filtering));
+    assert!(s.set_dark_pages(id, true));
+    assert_eq!(s.get(id).unwrap().edit_generation(), generation, "filtering dark pages don't touch the renderer");
+    assert_eq!(corner(&s, id), white, "the GUI and tools filter the finished pixels");
+    let keeping = DarkPages { palette: DarkPalette::Sepia, images: DarkImages::KeepOpaque };
+    assert!(s.set_dark_style(id, keeping));
+    assert!(s.get(id).unwrap().edit_generation() > generation, "cached rasters are dropped");
+    let [r, g, b] = DarkPalette::Sepia.paper();
+    assert_eq!(corner(&s, id), [r, g, b, 255], "the renderer draws the palette's paper");
+    s.reload(id, Arc::new(fixture(2))).unwrap();
+    assert_eq!((s.dark_pages(id), s.dark_style(id)), (Some(true), Some(keeping)));
+    assert_eq!(corner(&s, id), [r, g, b, 255], "and still does after a reload");
+    assert!(s.set_reading_colors(id, ReadingColors::WHITE_ON_BLACK));
+    assert_eq!(corner(&s, id), [0, 0, 0, 255], "an explicit preset wins");
+    assert!(s.set_reading_colors(id, ReadingColors::default()));
+    assert!(s.set_dark_pages(id, false));
+    assert_eq!(corner(&s, id), white, "off draws the page as the file does");
+    assert!(!s.set_dark_style(DocId(u64::MAX), keeping));
+}
+
+/// Reloading the file keeps the dark-page choice, on or off, as it keeps reading colours (#3443).
+#[test]
+fn reload_keeps_the_dark_page_choice() {
+    let (mut s, id) = session_with(1);
+    for dark in [true, false] {
+        assert!(s.set_dark_pages(id, dark) || !dark);
+        s.reload(id, Arc::new(fixture(2))).unwrap();
+        assert_eq!(s.dark_pages(id), Some(dark));
+    }
+}
+
 /// #3443: reloading the file (it changed on disk) keeps how the reader shows it. Reading colours
 /// reached the new renderer, not just the setting; hidden comments stay hidden. Each setting is
 /// checked alone, so neither one rides on the other being changed.
@@ -9408,4 +9469,43 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+#[test]
+fn dark_pages_are_independent_of_document_history_and_render_pools() {
+    let (mut session, id) = session_with(1);
+    // Dark pages that filter every pixel; keeping images (the default) draws them in the
+    // renderer, checked below.
+    let filtering = pdfcraft_render::DarkPages { images: pdfcraft_render::DarkImages::Recolour, ..Default::default() };
+    assert!(session.set_dark_style(id, filtering));
+    // Prepare real work in an inline pool: replacing the pool would reset these counters.
+    let doc = session.docs.iter_mut().find(|doc| doc.id == id).unwrap();
+    doc.renderer = pdfcraft_render::RenderPool::new_inline(doc.display.clone(), doc.config.clone());
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest { scale: 1.0, ..Default::default() }]);
+    assert!(doc.renderer.try_recv().unwrap().error.is_none());
+    assert_eq!(doc.renderer.stats().rasterizations, 1);
+    let doc = session.get(id).unwrap();
+    let bytes = doc.bytes.clone();
+    let generation = doc.generation;
+    let stats = doc.renderer.stats();
+    assert_eq!(session.dark_pages(id), Some(false));
+    assert!(session.set_dark_pages(id, true));
+    assert!(!session.set_dark_pages(id, true));
+    assert_eq!(session.dark_pages(id), Some(true));
+    let doc = session.get(id).unwrap();
+    assert!(Arc::ptr_eq(&bytes, &doc.bytes));
+    assert_eq!(doc.generation, generation);
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(!doc.dirty);
+    assert!(session.set_dark_pages(id, false));
+    // Keeping images: the renderer draws the dark page, so cached rasters are dropped (a new
+    // edit generation), while the document, its history and its saved state stay as they are.
+    assert!(session.set_dark_style(id, Default::default()));
+    assert!(session.set_dark_pages(id, true));
+    let doc = session.get(id).unwrap();
+    assert!(Arc::ptr_eq(&bytes, &doc.bytes));
+    assert!(doc.generation > generation);
+    assert!(!doc.dirty && doc.can_undo().is_none());
+    assert_eq!(session.dark_pages(DocId(u64::MAX)), None);
+    assert!(!session.set_dark_pages(DocId(u64::MAX), true));
 }

@@ -807,6 +807,7 @@ impl Automation {
             "comment_lock" => self.comment_lock(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
             "layer_set" => self.layer_set(&a)?,
+            "view_dark_pages" => self.view_dark_pages(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,

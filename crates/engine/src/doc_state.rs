@@ -41,6 +41,19 @@ pub struct DocId(pub u64);
 /// clear) is printed at.
 pub(crate) const LOW_RESOLUTION_PRINT_DPI: f64 = 150.0;
 
+/// Dark pages that keep their images are drawn by the renderer: give it the palette's colour
+/// remapping, or take it away, rebuilding the renderer (and dropping cached rasters through the
+/// edit generation) only when that changes.
+pub(crate) fn apply_dark_reading(doc: &mut crate::Document) {
+    let wanted =
+        if doc.dark_pages && doc.dark_style.renderer_draws() { doc.dark_style.reading_colors() } else { pdfcraft_render::ReadingColors::default() };
+    if doc.config.dark_reading != wanted {
+        doc.config.dark_reading = wanted;
+        doc.renderer = pdfcraft_render::RenderPool::new(doc.display.clone(), render_threads(), crate::display_config(&doc.config));
+        doc.generation += 1;
+    }
+}
+
 pub(crate) fn render_threads() -> usize {
     std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(4).clamp(2, 8) - 1
 }

@@ -2710,6 +2710,14 @@ key	Space	Space
 	No tools match your search.	Không có công cụ nào khớp với tìm kiếm.
 	Expand all tools	Mở rộng tất cả công cụ
 	Collapse all tools	Thu gọn tất cả công cụ
+	Dark PDF pages	Trang PDF tối
+	Soft dark	Tối dịu
+	Sepia	Màu nâu đỏ
+	Keep opaque images	Giữ nguyên ảnh không trong suốt
+	Keep all images	Giữ nguyên mọi ảnh
+	Recolour images	Đổi màu ảnh
+	Dark page colours	Màu trang tối
+	Images on dark pages	Ảnh trên trang tối
 
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.

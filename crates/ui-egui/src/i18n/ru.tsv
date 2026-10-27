@@ -8,6 +8,14 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+	Dark PDF pages	Тёмные страницы PDF
+	Soft dark	Мягкий тёмный
+	Sepia	Сепия
+	Keep opaque images	Сохранять непрозрачные изображения
+	Keep all images	Сохранять все изображения
+	Recolour images	Перекрашивать изображения
+	Dark page colours	Цвета тёмных страниц
+	Images on dark pages	Изображения на тёмных страницах
 	Menu	Меню
 	File	Файл
 	Edit	Редактирование
