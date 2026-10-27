@@ -824,6 +824,39 @@ fn date_data_pictures_preserve_impossible_dates() {
     }
 }
 
+/// An unrelated field edit must not normalize an impossible stored date. Exercise the actual
+/// PDF fields, datasets writer and incremental save/reopen, with a valid leap-day control.
+#[test]
+fn date_data_pictures_preserve_calendar_values_through_save() {
+    for (stored, shown) in [("19000229", "19000229"), ("20260431", "20260431"), ("20000229", "02/29/2000")] {
+        let xml = bound_date_template(&format!(
+            "<form><page><due>{stored}</due><when>2026-10-18</when><unbound keep=\"yes\">untouched</unbound></page></form>"
+        ));
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        assert!(fields.iter().any(|f| f.name == "due" && f.data == FieldData::Text(shown.into())), "{stored}: {fields:?}");
+        let before = read_packets(&doc).unwrap().unwrap().xdp;
+        assert_eq!(write_datasets(&mut doc, &fields).unwrap(), DatasetsWrite::default());
+        assert_eq!(read_packets(&doc).unwrap().unwrap().xdp, before, "no-op synchronization preserves the packet");
+        let when = fields.iter_mut().find(|f| f.name == "when").unwrap();
+        when.data = FieldData::Text("10/20/2026".into());
+        let written = write_datasets(&mut doc, &fields).unwrap();
+        assert!(written.written && written.warnings.is_empty(), "{written:?}");
+        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(saved)).unwrap();
+        let packet = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packet.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some(stored));
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].when[0]")), Some("2026-10-20"));
+        assert!(packet.xdp.contains("<unbound keep=\"yes\">untouched</unbound>"));
+        // A fresh layout uses the saved data, rather than trusting cached PDF field values.
+        let form = layout_xml(&packet.xdp).unwrap();
+        let due = form.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+        assert_eq!(due.value.as_deref(), Some(shown));
+    }
+}
+
 /// What scripts read as `formattedValue`: a date display picture shows the ISO value in its
 /// pattern (the first of several alternatives); other kinds of picture, and values that aren't
 /// ISO dates, leave the raw value.
