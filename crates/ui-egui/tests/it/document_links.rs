@@ -213,14 +213,14 @@ fn a_gotor_link_to_a_named_destination_opens_at_its_page() {
     for (destination, page) in [("/there", 2), ("(here)", 1)] {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", destination);
         click_remote_link(&mut h);
-        support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
-        assert_eq!(h.state().views[1].current, page, "{destination}");
+        // The name is looked up off the UI thread, so the tab may open before it moves there.
+        support::wait_until(&mut h, "remote document at its destination", |app| app.views.len() == 2 && app.views[1].current == page);
         assert_eq!(h.state().toast, None, "{destination}: applied, so nothing to warn about");
     }
     // A name the target doesn't define opens it at its first page, with the warning.
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "/elsewhere");
     click_remote_link(&mut h);
-    support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
+    support::wait_until(&mut h, "remote document and the warning", |app| app.views.len() == 2 && app.toast.is_some());
     assert_eq!(h.state().views[1].current, 0);
     assert!(h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("named destination was not applied")), "{:?}", h.state().toast);
 }
