@@ -13,7 +13,7 @@ const MAX_CANDIDATES: usize = 32;
 /// The file `path` names and the destination its open parameters ask for, when `path` is not a
 /// file itself but what comes before one of its `#` is. The first such `#` counts, so a folder or
 /// file name may contain `#` too. `None`: open `path` as it is.
-pub(crate) fn split(path: &str, is_file: impl Fn(&str) -> bool) -> Option<(String, RemoteDestination)> {
+pub fn split(path: &str, is_file: impl Fn(&str) -> bool) -> Option<(String, RemoteDestination)> {
     if is_file(path) {
         return None;
     }

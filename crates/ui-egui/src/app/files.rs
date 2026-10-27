@@ -569,7 +569,7 @@ impl PdfCraftApp {
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
         // shown at that destination once open. A path that names a file is never split.
-        let parameters = open_parameters::split(path, |p| std::path::Path::new(p).is_file());
+        let parameters = pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file());
         let (path, after_open) = match &parameters {
             Some((file, destination)) => (file.as_str(), Some(destination.clone())),
             None => (path, None),

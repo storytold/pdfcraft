@@ -100,12 +100,27 @@ impl Automation {
     }
 
     pub(crate) fn doc_open(&mut self, a: &Args) -> Result<Value> {
-        let path = self.resolve(a.str("path")?, false)?;
+        let requested = a.str("path")?;
+        // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file under
+        // --root, and where it opens. A path that names a file is never split.
+        let parameters = pdfcraft_engine::open_parameters::split(requested, |p| self.resolve(p, false).is_ok_and(|p| p.is_file()));
+        let (requested, destination) = match &parameters {
+            Some((file, destination)) => (file.as_str(), Some(destination.clone())),
+            None => (requested, None),
+        };
+        let path = self.resolve(requested, false)?;
         let bytes = read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
-        Ok(summary(doc))
+        let mut value = summary(doc);
+        if let Some(destination) = destination {
+            let (applied, destination, warning) = crate::links::destination_report(doc, destination);
+            value["destination_applied"] = json!(applied);
+            value["destination"] = destination;
+            value["warning"] = json!(warning);
+        }
+        Ok(value)
     }
 
     pub(crate) fn doc_close(&mut self, a: &Args) -> Result<Value> {

@@ -9,7 +9,16 @@ use serde_json::{Value, json};
 
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
-    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    fixture_with(n, "")
+}
+
+/// Named destinations for [`fixture_with`]: `chapter` (page 2) in the catalog's /Dests and
+/// `Load Flow` (page 3) in the /Names /Dests tree.
+const NAMED_DESTS: &str = "/Dests << /chapter [6 0 R /Fit] >> /Names << /Dests << /Names [(Load Flow) [8 0 R /XYZ 0 300 0]] >> >>";
+
+/// [`fixture`] with `catalog` added to the catalog dictionary. Page `i` (0-based) is object `4 + 2i`.
+fn fixture_with(n: usize, catalog: &str) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
     objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
@@ -5626,12 +5635,43 @@ fn local_gotor_link_open_refuses_directories_devices_and_non_pdf_targets() {
 }
 
 #[test]
+fn doc_open_reads_open_parameters_after_the_file_name() {
+    // #3425: help systems start a PDF reader with `manual.pdf#nameddest=…` or `#page=…`.
+    let (_base, root) = sandbox("open-parameters");
+    std::fs::write(root.join("manual.pdf"), fixture_with(3, NAMED_DESTS)).unwrap();
+    std::fs::write(root.join("odd#page=2.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&root);
+    for (path, kind, page) in [("manual.pdf#page=3", "page", 3), ("manual.pdf#nameddest=Load Flow", "named", 3), ("manual.pdf#chapter", "named", 2)] {
+        let opened = ok(&mut a, "doc_open", json!({ "path": path }));
+        assert_eq!((opened["name"].as_str(), opened["pages"].as_u64()), (Some("manual.pdf"), Some(3)), "{path}");
+        assert_eq!(opened["destination_applied"], true, "{path}: {opened}");
+        assert_eq!((opened["destination"]["kind"].as_str(), opened["destination"]["page"].as_u64()), (Some(kind), Some(page)), "{path}");
+    }
+    for (path, warning) in [("manual.pdf#nameddest=Nowhere", "named destination"), ("manual.pdf#page=9", "out of range")] {
+        let opened = ok(&mut a, "doc_open", json!({ "path": path }));
+        assert_eq!(opened["destination_applied"], false, "{path}");
+        assert!(opened["warning"].as_str().is_some_and(|w| w.contains(warning)), "{path}: {opened}");
+    }
+    // A file whose own name has a `#` opens as itself, and a plain path reports no destination.
+    let opened = ok(&mut a, "doc_open", json!({ "path": "odd#page=2.pdf" }));
+    assert_eq!((opened["name"].as_str(), opened["pages"].as_u64()), (Some("odd#page=2.pdf"), Some(1)));
+    assert!(opened.get("destination").is_none(), "{opened}");
+    // The file before the `#` must exist, inside --root.
+    let before = a.session().docs().len();
+    for path in ["missing.pdf#page=2", "../outside/secret.pdf#page=1"] {
+        err(&mut a, "doc_open", json!({ "path": path }));
+        assert_eq!(a.session().docs().len(), before, "{path}");
+    }
+}
+
+#[test]
 fn local_gotor_link_open_applies_destinations_and_honors_root() {
     let root = local_gotor_fixtures();
     let mut a = auto(&root);
     assert_relative_gotor_destination(&mut a);
     assert_absolute_gotor_policy(&mut a);
     assert_unapplied_gotor_destinations(&mut a);
+    assert_named_gotor_destination(&mut a);
     assert_encrypted_gotor_passwords(&mut a);
     assert_unsupported_gotor_targets(&mut a);
     assert_gotor_root_boundaries(&mut a);
@@ -5646,6 +5686,8 @@ fn local_gotor_fixtures() -> PathBuf {
     std::fs::write(root.join("sub/source.pdf"), remote_link_pdf("../target.pdf", Some("[2 /FitH 180]"))).unwrap();
     std::fs::write(root.join("sub/escape.pdf"), remote_link_pdf("../../outside/secret.pdf", Some("[0 /Fit]"))).unwrap();
     std::fs::write(root.join("named.pdf"), remote_link_pdf("target.pdf", Some("(chapter)"))).unwrap();
+    std::fs::write(root.join("named-target.pdf"), fixture_with(3, NAMED_DESTS)).unwrap();
+    std::fs::write(root.join("named-found.pdf"), remote_link_pdf("named-target.pdf", Some("(chapter)"))).unwrap();
     std::fs::write(root.join("range.pdf"), remote_link_pdf("target.pdf", Some("[99 /Fit]"))).unwrap();
     std::fs::write(root.join("url.pdf"), remote_link_pdf("https://example.org/target.pdf", Some("[0 /Fit]"))).unwrap();
     std::fs::write(root.join("missing-source.pdf"), remote_link_pdf("does-not-exist.pdf", Some("[0 /Fit]"))).unwrap();
@@ -5692,6 +5734,14 @@ fn assert_unapplied_gotor_destinations(a: &mut Automation) {
         assert_eq!(opened["destination_applied"], false);
         assert!(opened["warning"].as_str().unwrap().contains(warning), "{opened}");
     }
+}
+
+fn assert_named_gotor_destination(a: &mut Automation) {
+    // A name the target defines is looked up there, as the app does.
+    let source = ok(a, "doc_open", json!({ "path": "named-found.pdf" }))["doc"].as_u64().unwrap();
+    let opened = ok(a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
+    assert_eq!(opened["destination_applied"], true, "{opened}");
+    assert_eq!(opened["destination"], json!({ "kind": "named", "name": "chapter", "page": 2, "view": { "kind": "fit" } }));
 }
 
 fn assert_encrypted_gotor_passwords(a: &mut Automation) {
