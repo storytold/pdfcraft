@@ -75,7 +75,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                         Display::VisibleNoPrint => tl!("Visible but doesn't print"),
                         Display::HiddenPrintable => tl!("Hidden but printable"),
                     };
-                    egui::ComboBox::from_id_salt("field-display")
+                    craft_ui::ComboBox::from_id_salt("field-display")
                         .selected_text(shown(d.display))
                         .width(340.0)
                         .show_ui(ui, |ui| {
