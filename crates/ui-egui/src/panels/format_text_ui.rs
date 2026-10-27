@@ -117,6 +117,7 @@ fn number(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Renders the format text panel controls for styling selected or added text.
 pub(crate) fn panel(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -141,14 +142,14 @@ pub(crate) fn panel(
                     out.font = Some(FontChoice::KeepSource);
                 }
                 for (resource, face) in sources.iter().filter(|(r, _)| !r.starts_with("PCApproved")) {
-                    if ui.selectable_label(false, face).clicked() {
+                    if ui.selectable_label(look.font_resource.as_deref() == Some(resource), face).clicked() {
                         out.font = Some(FontChoice::Resource(resource.clone()));
                     }
                 }
                 ui.separator();
             }
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
+                if ui.selectable_label(look.font_resource.is_none() && look.family == f, f.label()).clicked() {
                     out.font = Some(FontChoice::Family(f));
                 }
             }

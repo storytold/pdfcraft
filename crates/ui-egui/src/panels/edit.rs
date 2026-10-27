@@ -321,7 +321,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         let mut style = draft.style.clone();
         let paragraphs = crate::format_text_ui::Paragraphs { text: &draft.text, selection: draft.selection.clone(), tidy: true };
-        let out = added_text_format(ui, t, &mut style, Some(paragraphs));
+        let out = added_text_format(app, ui, t, draft.page, &mut style, Some(paragraphs));
         if let Some(script) = out.script {
             let mut toggled = draft.clone();
             if crate::edit_text_ui::toggle_script(&mut toggled.text, &mut toggled.selection, script) {
@@ -365,8 +365,9 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     match selected {
         Some((page, index, text)) => {
             let mut style = text.clone();
-            added_text_format(ui, t, &mut style, None);
-            if style != text {
+            let prev_style = style.clone();
+            added_text_format(app, ui, t, page, &mut style, None);
+            if style != prev_style {
                 // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
                 if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
                     app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
@@ -376,25 +377,71 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         None if app.quick_tool == crate::QuickTool::AddText => {
             crate::content_ui::hint(ui, t);
             let mut style = app.text_style.clone();
-            added_text_format(ui, t, &mut style, None);
+            let page = app.active_ids().map(|(i, _)| app.views[i].current).unwrap_or(0);
+            added_text_format(app, ui, t, page, &mut style, None);
             app.text_style = style;
         }
         None => {}
     }
 }
 
-/// Format text for added text: the standard families, size, colour, style and alignment
+/// Format text for added text: the standard families or loaded document fonts, size, colour, style and alignment
 /// (of the lines `paragraphs` selects, while the text is being typed).
 fn added_text_format(
+    app: &mut PdfCraftApp,
     ui: &mut egui::Ui,
     t: &Tokens,
+    page: usize,
     style: &mut pdfcraft_engine::AddedText,
     paragraphs: Option<crate::format_text_ui::Paragraphs>,
 ) -> crate::format_text_ui::Outcome {
-    let shown = style.family.label().to_string();
-    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown, mixed_size: false }, paragraphs);
-    if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
-        style.family = family;
+    let sources: Vec<(String, String)> = app
+        .active_ids()
+        .and_then(|(_, id)| app.session.get(id))
+        .map(|d| d.text_editor_fonts(page))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| (f.resource, f.face))
+        .collect();
+
+    let shown = style
+        .font_resource
+        .as_ref()
+        .and_then(|r| sources.iter().find(|(res, _)| res == r).map(|(_, face)| face.clone()))
+        .unwrap_or_else(|| style.family.label().to_string());
+
+    let out = crate::format_text_ui::panel(
+        ui,
+        t,
+        style,
+        None,
+        crate::format_text_ui::Fonts { sources: Some(&sources), shown, mixed_size: false },
+        paragraphs,
+    );
+    match out.font {
+        Some(crate::format_text_ui::FontChoice::KeepSource) => {
+            style.font_resource = None;
+        }
+        Some(crate::format_text_ui::FontChoice::Resource(resource)) => {
+            style.font_resource = Some(resource);
+        }
+        Some(crate::format_text_ui::FontChoice::Family(family)) => {
+            style.family = family;
+            style.font_resource = None;
+        }
+        Some(crate::format_text_ui::FontChoice::Load) => {
+            app.pick_files(crate::files::FilePurpose::TextFont { page }, false);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(crate::format_text_ui::FontChoice::Installed(path)) => {
+            app.use_paths(crate::files::FilePurpose::TextFont { page }, &[path]);
+            if let Some(r) = &app.text_style.font_resource {
+                style.font_resource = Some(r.clone());
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        Some(crate::format_text_ui::FontChoice::Installed(_)) => {}
+        None => {}
     }
     out
 }
