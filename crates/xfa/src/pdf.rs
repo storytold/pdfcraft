@@ -990,6 +990,9 @@ mod tests {
         let mut measured = plain("Helvetica");
         measured.set(b"Widths".to_vec(), Object::Array(Vec::new()));
         assert!(!super::is_plain_standard_font(&measured, "Helvetica"));
+        let mut mapped = plain("Helvetica");
+        mapped.set(b"ToUnicode".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(99, 0)));
+        assert!(!super::is_plain_standard_font(&mapped, "Helvetica"), "its /ToUnicode would be lost");
         let ours = super::standard_font("Helvetica");
         assert!(!super::is_plain_standard_font(ours.as_dict().unwrap(), "Helvetica"), "already carries the extra letters");
     }
