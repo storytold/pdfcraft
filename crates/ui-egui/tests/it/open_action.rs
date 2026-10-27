@@ -243,10 +243,23 @@ fn open_parameters_handed_to_the_running_app_show_their_destination() {
         app
     });
     h.run_steps(4);
+    // Asked twice before it has opened, it opens at the place asked for last.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#page=5")), OpenOutcome::Pending);
     assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=Load Flow")), OpenOutcome::Pending);
-    crate::support::wait_until(&mut h, "the manual", |app| app.views.len() == 1);
-    assert_eq!(h.state().views[0].current, 3);
+    crate::support::wait_until(&mut h, "the manual at Load Flow", |app| app.views.len() == 1 && app.views[0].current == 3);
     // Asked again for a place in the open file, its tab goes there instead of opening it again.
     assert_eq!(h.state_mut().open_path(&format!("{path}#page=2")), OpenOutcome::Focused);
     assert_eq!((h.state().views.len(), h.state().views[0].current), (1, 1));
+    // A name is looked up off the UI thread: the tab moves once the lookup is in.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=Load Flow")), OpenOutcome::Focused);
+    assert_eq!(h.state().views[0].current, 1, "not yet");
+    crate::support::wait_until(&mut h, "Load Flow", |app| app.views[0].current == 3);
+    // A page asked for while a name is still being looked up wins: the lookup's answer is dropped.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=intro")), OpenOutcome::Focused);
+    assert_eq!(h.state_mut().open_path(&format!("{path}#page=5")), OpenOutcome::Focused);
+    for _ in 0..25 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(h.state().views[0].current, 4);
 }

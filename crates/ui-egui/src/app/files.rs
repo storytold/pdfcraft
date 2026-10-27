@@ -597,6 +597,10 @@ impl PdfCraftApp {
             if display_override.is_some() {
                 pending.display_override = display_override;
             }
+            // Asked for another place before it finished opening: it opens at the latest one.
+            if after_open.is_some() {
+                pending.after_open = after_open;
+            }
             return OpenOutcome::Pending;
         }
         if display_override.is_some()
