@@ -10303,3 +10303,100 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+/// A one-page document whose page content is `streams` (each its own stream, in order), with
+/// `/Properties` `props` in its resources.
+fn page_of_streams(streams: &[&str], props: &str) -> Document {
+    let mut objs: Vec<String> =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".into(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()];
+    let refs: Vec<String> = (0..streams.len()).map(|i| format!("{} 0 R", 4 + i)).collect();
+    objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents [{}] /Resources << /Properties << {props} >> >> >>", refs.join(" ")));
+    for body in streams {
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// #4957: a watermark another editor marked as an artifact (inline or through `/Properties`) is
+/// cut out of the content byte for byte, and the rest of the page is left exactly as it was.
+#[test]
+fn foreign_watermark_artifacts_are_cut_out_and_nothing_else_changes() {
+    let wm = "/Artifact <</Subtype /Watermark /Type /Pagination>> BDC q 0.5 g /Fm0 Do Q EMC";
+    let content = format!("BT (Before) Tj ET\n{wm}\nBT (After) Tj ET");
+    let mut doc = page_of_streams(&[&content], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 1);
+    assert_eq!(streams(&doc, 0), ["BT (Before) Tj ET\n\nBT (After) Tj ET"], "only the artifact's bytes are gone");
+    let doc = reopen(&doc);
+    assert_eq!(streams(&doc, 0), ["BT (Before) Tj ET\n\nBT (After) Tj ET"], "and it is saved that way");
+
+    // Named properties, as Acrobat writes them.
+    let named = "BT (A) Tj ET /Artifact /MC0 BDC q /Fm0 Do Q EMC BT (B) Tj ET";
+    let mut doc = page_of_streams(&[named], "/MC0 << /Subtype /Watermark /Type /Pagination >>");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 1);
+    assert_eq!(streams(&doc, 0), ["BT (A) Tj ET  BT (B) Tj ET"]);
+
+    // Several, and one with marked content of its own inside.
+    let many = format!("{wm} BT (x) Tj ET /Artifact <</Subtype /Watermark>> BDC /Span BMC q Q EMC EMC");
+    let mut doc = page_of_streams(&[&many], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 2);
+    assert_eq!(streams(&doc, 0), [" BT (x) Tj ET "]);
+}
+
+/// #4957: only what is marked as a watermark goes, and only when cutting it out can't change what
+/// follows it.
+#[test]
+fn foreign_watermark_removal_leaves_everything_it_should() {
+    // Other artifacts and other marked content stay; a watermark inside other marked content goes
+    // alone, and the content around it stays.
+    let kept = "/Artifact <</Type /Pagination /Subtype /Header>> BDC (h) Tj EMC /Artifact BMC (b) Tj EMC /OC /MC0 BDC (o) Tj EMC /Artifact /MC1 BDC (n) Tj EMC";
+    let mut doc = page_of_streams(&[kept], "/MC0 << /Subtype /Watermark >> /MC1 << /Subtype /Footer >>");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 0);
+    assert_eq!(streams(&doc, 0), [kept], "no watermark: the content is untouched");
+    let inside = "/Span BMC /Artifact <</Subtype /Watermark>> BDC (w) Tj EMC (keep) Tj EMC";
+    let mut doc = page_of_streams(&[inside], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 1);
+    assert_eq!(streams(&doc, 0), ["/Span BMC  (keep) Tj EMC"]);
+
+    // A watermark whose q and Q don't balance inside it stays: cutting it would change the state.
+    for unbalanced in ["/Artifact <</Subtype /Watermark>> BDC q 1 0 0 1 5 5 cm EMC (x) Tj Q", "q /Artifact <</Subtype /Watermark>> BDC Q q EMC Q"] {
+        let mut doc = page_of_streams(&[unbalanced], "");
+        assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 0, "{unbalanced}");
+        assert_eq!(streams(&doc, 0), [unbalanced]);
+    }
+
+    // Content that can't be read with certainty is left alone: an unclosed scope, a stray EMC.
+    for bad in [
+        "/Artifact <</Subtype /Watermark>> BDC q Q (x) Tj",
+        "(x) Tj EMC /Artifact <</Subtype /Watermark>> BDC EMC",
+        // A whole watermark, then a scope that is never closed: not read with certainty, so left.
+        "/Artifact <</Subtype /Watermark>> BDC q Q EMC /Span BMC (x) Tj",
+    ] {
+        let mut doc = page_of_streams(&[bad], "");
+        assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 0, "{bad}");
+        assert_eq!(streams(&doc, 0), [bad]);
+    }
+    // A page that isn't there is refused.
+    let mut doc = page_of_streams(&["(x) Tj"], "");
+    assert!(remove_foreign_watermarks(&mut doc, &[1]).is_err());
+    assert!(remove_foreign_watermarks(&mut doc, &[usize::MAX]).is_err());
+}
+
+/// #4957: a watermark whose operators are split across content streams is cut out of both.
+#[test]
+fn a_foreign_watermark_across_content_streams_is_cut_out_of_each() {
+    let mut doc = page_of_streams(&["(a) Tj /Artifact <</Subtype /Watermark>> BDC q 0.5 g", "/Fm0 Do Q EMC (b) Tj"], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), 1);
+    assert_eq!(streams(&doc, 0), ["(a) Tj ", " (b) Tj"]);
+}

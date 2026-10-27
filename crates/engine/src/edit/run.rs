@@ -724,7 +724,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::RemoveMarks { kind } => {
             let n = pdfcraft_model::pages(doc).len();
-            if pdfcraft_edit::remove_marks(doc, &(0..n).collect::<Vec<_>>(), *kind)? == 0 {
+            let pages: Vec<usize> = (0..n).collect();
+            let mut removed = pdfcraft_edit::remove_marks(doc, &pages, *kind)?;
+            // Watermarks another editor marked as artifacts go with PdfCraft's own (#4957).
+            if *kind == MarkKind::Watermark {
+                removed += pdfcraft_edit::remove_foreign_watermarks(doc, &pages)?;
+            }
+            if removed == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("there is nothing to remove".into())));
             }
         }
