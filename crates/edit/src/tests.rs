@@ -10514,3 +10514,64 @@ fn pages_a_foreign_watermark_could_not_be_removed_from_are_reported() {
     let named = page_of_streams(&["/Artifact /MC0 BDC EMC"], "/MC0 << /Subtype /Watermark >>");
     assert_eq!(foreign_watermarks_present(&named), Some(true));
 }
+
+/// #4957: a watermark inside a text object or a path that the surrounding content owns would move
+/// that object's matrix or change that path when cut out, and `q … Q` restores neither: it is
+/// reported, whether or not the object is still open where the watermark ends.
+#[test]
+fn a_foreign_watermark_inside_an_open_text_object_or_path_is_not_cut_out() {
+    use crate::{Blocked, ForeignWatermarks};
+    for content in [
+        // The text matrix: the deleted Tj advanced it, so "Body" would shift left.
+        "BT /F1 12 Tf 20 200 Td /Artifact <</Subtype /Watermark>> BDC (WM) Tj EMC (Body) Tj ET",
+        "BT /F1 12 Tf /Artifact <</Subtype /Watermark>> BDC 30 0 Td EMC (Body) Tj ET",
+        // The current path: cutting the segment changes the shape that is stroked.
+        "0 0 m /Artifact <</Subtype /Watermark>> BDC 10 0 l EMC 10 10 l S",
+        "0 0 m /Artifact <</Subtype /Watermark>> BDC q Q EMC 10 10 l S",
+    ] {
+        let mut doc = page_of_streams(&[content], "");
+        let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+        assert_eq!(result, ForeignWatermarks { removed: 0, blocked: vec![(0, Blocked::Unsafe)] }, "{content}");
+        assert_eq!(streams(&doc, 0), [content], "{content}");
+    }
+}
+
+/// #4957: a name may be spelled with `#` escapes, so a document whose only watermark is spelled
+/// that way is still found, offered and cleaned.
+#[test]
+fn a_foreign_watermark_with_an_escaped_name_is_found() {
+    use crate::foreign_watermarks_present;
+    for content in [
+        "(x) Tj /Artifact <</Subtype /Water#6Dark /Type /Pagination>> BDC q Q EMC (y) Tj",
+        "(x) Tj /Arti#66act <</Subtype /Watermark>> BDC q Q EMC (y) Tj",
+        "(x) Tj /Artifact <</Sub#74ype /Watermark>> BDC q Q EMC (y) Tj",
+    ] {
+        let mut doc = page_of_streams(&[content], "");
+        assert_eq!(foreign_watermarks_present(&doc), Some(true), "{content}");
+        assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1, "{content}");
+        assert_eq!(streams(&doc, 0), ["(x) Tj  (y) Tj"], "{content}");
+    }
+    // A `#` that is not a watermark: read in full, and nothing is found.
+    let hash = "(a #1 b) Tj /Artifact <</Subtype /Header>> BDC q Q EMC";
+    let doc = page_of_streams(&[hash], "");
+    assert_eq!(foreign_watermarks_present(&doc), Some(false));
+}
+
+/// #4957: the scan costs the same however deeply marked content is nested: a watermark scope with
+/// a thousand marked-content scopes inside it and a million state changes (some 4 MB) is read in
+/// moments, not in a billion steps.
+#[test]
+fn reading_deeply_nested_marked_content_with_many_state_changes_is_quick() {
+    use crate::{Blocked, ForeignWatermarks};
+    let depth = 1000;
+    let content =
+        format!("/Artifact <</Subtype /Watermark>> BDC {}{}{}EMC", "/Span BMC ".repeat(depth), "0 g ".repeat(1_000_000), "EMC ".repeat(depth));
+    let mut doc = page_of_streams(&[&content], "");
+    let started = std::time::Instant::now();
+    let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+    let took = started.elapsed();
+    // The state changes outlast the scope: reported, not cut.
+    assert_eq!(result, ForeignWatermarks { removed: 0, blocked: vec![(0, Blocked::Unsafe)] });
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+    eprintln!("deep nesting scan took {took:?}");
+}

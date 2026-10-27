@@ -22,6 +22,8 @@ const MAX_CONTENT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_OPERATORS: usize = 5_000_000;
 /// Pages looked at to tell whether a document has a watermark of this kind at all.
 const MAX_DETECT_PAGES: usize = 5_000;
+/// The deepest `q` nesting read (a page nested deeper than any real one is not read).
+const MAX_DEPTH: usize = 100_000;
 
 /// Why a page's watermark was not removed, or the page not checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,8 +63,8 @@ struct Scope {
     depth: usize,
     floor: usize,
     start: usize,
-    /// Something inside it, outside any `q … Q` of its own, changes state that outlasts it.
-    effects: bool,
+    /// Which operator opened it (counted from 1), to tell whether a state change came after.
+    opened: usize,
     /// A text object or a path was open where it started.
     text: bool,
     path: bool,
@@ -150,9 +152,12 @@ enum Scan {
 fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Scan {
     let properties = page_properties(doc, page);
     // Most pages have none: a watermark names itself in the content, or through a property whose
-    // subtype says so. Neither: no need to read the content operator by operator.
+    // subtype says so. Neither: no need to read the content operator by operator. A name may be
+    // spelled with `#` escapes (`/Water#6Dark` is `/Watermark`), so content with a `#` in it is
+    // read in full: the absence of the plain spelling proves nothing there.
     let named = properties.as_ref().is_some_and(|p| p.iter().any(|(_, v)| doc.resolve(v).as_dict().is_some_and(|d| subtype_is_watermark(doc, d))));
-    if !named && !pieces.data().windows(9).any(|w| w == b"Watermark") {
+    let data = pieces.data();
+    if !named && !data.contains(&b'#') && !data.windows(9).any(|w| w == b"Watermark") {
         return Scan::Clean;
     }
     let parsed = pieces.parse();
@@ -161,10 +166,23 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
     }
     let (mut depth, mut stack, mut spans, mut unsafe_left) = (0usize, Vec::<Scope>::new(), Vec::<Range<usize>>::new(), 0usize);
     let (mut text, mut path) = (false, false);
-    for op in &parsed.ops {
+    // For each `q` depth, the count of the operator that last changed state there. A scope is
+    // affected when it was opened before the last change at its own depth: one lookup, however
+    // many scopes are open.
+    let mut last_change: Vec<usize> = vec![0];
+    for (index, op) in parsed.ops.iter().enumerate() {
+        let count = index.saturating_add(1);
         let name = op.op.as_slice();
         match name {
-            b"q" => depth = depth.saturating_add(1),
+            b"q" => {
+                depth = depth.saturating_add(1);
+                if depth > MAX_DEPTH {
+                    return Scan::Uncertain;
+                }
+                if depth >= last_change.len() {
+                    last_change.resize(depth + 1, 0);
+                }
+            }
             b"Q" => {
                 depth = depth.saturating_sub(1);
                 if let Some(top) = stack.last_mut() {
@@ -180,7 +198,7 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
                     return Scan::Uncertain;
                 }
                 let watermark = name == b"BDC" && opens_watermark(doc, properties.as_ref(), op);
-                stack.push(Scope { watermark, depth, floor: depth, start: op.span.start, effects: false, text, path });
+                stack.push(Scope { watermark, depth, floor: depth, start: op.span.start, opened: count, text, path });
             }
             b"EMC" => {
                 let Some(scope) = stack.pop() else { return Scan::Uncertain };
@@ -188,7 +206,11 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
                     parent.floor = parent.floor.min(scope.floor);
                 }
                 if scope.watermark && !stack.iter().any(|s| s.watermark) {
-                    let clean = depth == scope.depth && scope.floor >= scope.depth && !scope.effects && text == scope.text && path == scope.path;
+                    // Where a text object or a path was open around it, it would change that
+                    // object's matrix or that path (`q … Q` restores neither), so such a scope is
+                    // never cut: nor one that closes or opens one, or changes state after it.
+                    let effects = last_change.get(scope.depth).is_some_and(|last| *last > scope.opened);
+                    let clean = depth == scope.depth && scope.floor >= scope.depth && !effects && !scope.text && !scope.path && !text && !path;
                     if clean {
                         spans.push(scope.start..op.span.end);
                     } else {
@@ -198,11 +220,11 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
             }
             _ => {}
         }
-        // A state change outside every `q` of its own inside a scope reaches what follows the scope.
-        if changes_state(name) {
-            for scope in stack.iter_mut().filter(|s| s.depth == depth) {
-                scope.effects = true;
-            }
+        // A state change at a `q` depth reaches every scope open at that depth.
+        if changes_state(name)
+            && let Some(slot) = last_change.get_mut(depth)
+        {
+            *slot = count;
         }
     }
     if !stack.is_empty() {
