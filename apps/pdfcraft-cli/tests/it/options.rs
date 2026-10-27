@@ -113,3 +113,63 @@ fn an_argument_that_is_not_utf8_is_an_error_not_a_panic() {
         assert!(!stderr.contains("panicked"), "{stderr}");
     }
 }
+
+fn assert_missing_value(args: &[&str], command: &str, option: &str) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "pdfcraft-cli-missing-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let out = Command::new(BIN).current_dir(&dir).args(args).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{args:?}: {stderr}");
+    assert!(stderr.contains(&format!("{command}: {option} needs a value")), "{args:?}: {stderr}");
+    assert!(!stderr.contains("missing.pdf"), "{args:?}: {stderr}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "{args:?}: wrote files");
+    std::fs::remove_dir(&dir).unwrap();
+}
+
+macro_rules! missing_value_test {
+    ($name:ident, $command:literal, $option:literal, [$($arg:literal),+ $(,)?]) => {
+        #[test]
+        fn $name() {
+            assert_missing_value(&[$($arg),+], $command, $option);
+        }
+    };
+}
+
+missing_value_test!(missing_render_dpi, "render", "--dpi", ["render", "missing.pdf", "--out", "unused.png", "--dpi"]);
+missing_value_test!(missing_render_page, "render", "--page", ["render", "missing.pdf", "--out", "unused.png", "--page"]);
+missing_value_test!(missing_info_password, "info", "--password", ["info", "missing.pdf", "--password"]);
+missing_value_test!(missing_check_timeout, "check", "--timeout", ["check", "missing.pdf", "--timeout"]);
+missing_value_test!(missing_split_out_dir, "split", "--out-dir", ["split", "missing.pdf", "--every", "1", "--out-dir"]);
+missing_value_test!(missing_split_every, "split", "--every", ["split", "missing.pdf", "--every"]);
+missing_value_test!(missing_split_before, "split", "--before", ["split", "missing.pdf", "--before"]);
+missing_value_test!(missing_extract_pages, "extract", "--pages", ["extract", "missing.pdf", "--pages"]);
+missing_value_test!(missing_repeated_render_dpi, "render", "--dpi", ["render", "missing.pdf", "--out", "unused.png", "--dpi", "36", "--dpi"]);
+missing_value_test!(missing_audit_password, "audit", "--password", ["audit", "missing.pdf", "--password"]);
+missing_value_test!(missing_text_page, "text", "--page", ["text", "missing.pdf", "--page"]);
+missing_value_test!(missing_text_password, "text", "--password", ["text", "missing.pdf", "--password"]);
+missing_value_test!(missing_combine_out, "combine", "--out", ["combine", "missing.pdf", "--out"]);
+missing_value_test!(missing_extract_out, "extract", "--out", ["extract", "missing.pdf", "--out"]);
+missing_value_test!(missing_extract_password, "extract", "--password", ["extract", "missing.pdf", "--password"]);
+missing_value_test!(missing_split_password, "split", "--password", ["split", "missing.pdf", "--every", "1", "--password"]);
+missing_value_test!(missing_render_out, "render", "--out", ["render", "missing.pdf", "--out"]);
+missing_value_test!(missing_render_password, "render", "--password", ["render", "missing.pdf", "--out", "unused.png", "--password"]);
+missing_value_test!(missing_check_one_dpi, "check-one", "--dpi", ["check-one", "missing.pdf", "--dpi"]);
+missing_value_test!(missing_check_dpi, "check", "--dpi", ["check", "missing.pdf", "--dpi"]);
+missing_value_test!(missing_check_json, "check", "--json", ["check", "missing.pdf", "--json"]);
+missing_value_test!(missing_run_script, "run", "--script", ["run", "--script"]);
+missing_value_test!(missing_run_out, "run", "--out", ["run", "--out"]);
+missing_value_test!(missing_ui_control, "ui", "--control", ["ui", "--control"]);
+missing_value_test!(missing_ui_out, "ui", "--out", ["ui", "--out"]);
+missing_value_test!(missing_batch_out_dir, "batch", "--out-dir", ["batch", "--out-dir"]);
+missing_value_test!(missing_batch_steps, "batch", "--steps", ["batch", "--steps"]);
+missing_value_test!(missing_batch_ppi, "batch", "--ppi", ["batch", "--ppi"]);
+missing_value_test!(missing_batch_quality, "batch", "--quality", ["batch", "--quality"]);
+missing_value_test!(missing_batch_dpi, "batch", "--dpi", ["batch", "--dpi"]);
+missing_value_test!(missing_batch_language, "batch", "--language", ["batch", "--language"]);
