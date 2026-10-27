@@ -100,3 +100,6 @@ Custom code sets aren't supported yet.
 
 Not yet: pattern locales, struct-tree/alt-text cleanup, metadata and hidden-information
 sanitising (M8.4), re-encoding of DCT images (they are removed instead).
+
+Subscriber digit groups retain the existing phone separators after the area-code slash.
+For example, both `Tel. 0426/123-456` and `Tel. +39 0426/123-456` match the complete number.
