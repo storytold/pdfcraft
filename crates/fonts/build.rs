@@ -5,6 +5,9 @@
 //! limits (Cloudflare Pages: 25 MiB per file). Native builds also read the optional
 //! `fonts/simplified-chinese-manifest.txt` (LXGW WenKai Lite); it is never embedded on wasm.
 //! `CRAFT_FONTS_REQUIRED` makes both the checkout and that native manifest required.
+//! Native builds also read the opt-in Thai document manifest `fonts/thai-manifest.txt` (Sarabun)
+//! into a separate `CRAFT_DOCUMENT_FONTS`: content faces, never interface fallbacks. It stays
+//! optional even when required, since craft-fonts revisions before it have none.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -18,16 +21,27 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let mut documents = String::new();
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from) {
         match craft_fonts(&dir, required) {
-            Ok(entries) => src.push_str(&entries),
+            Ok(entries) => {
+                src.push_str(&entries);
+                let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+                match document_fonts(&dir, required, wasm) {
+                    Ok(entries) => documents = entries,
+                    Err(e) => println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display()),
+                }
+            }
             Err(e) if required => println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display()),
             Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
         }
     } else if required {
         println!("cargo::error=CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing");
     }
+    src.push_str("];\n/// Faces of craft-fonts' opt-in document manifests, for text written into PDFs only.\n");
+    src.push_str("pub static CRAFT_DOCUMENT_FONTS: &[CraftFont] = &[\n");
+    src.push_str(&documents);
     src.push_str("];\n");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("craft_fonts.rs");
     if let Err(e) = std::fs::write(&out, src) {
@@ -60,6 +74,35 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
         }
     }
     Ok(out)
+}
+
+/// The faces of the opt-in Thai document manifest (`fonts/thai-manifest.txt`, Sarabun): for text
+/// written into PDFs only, never interface fallbacks, so they go into `CRAFT_DOCUMENT_FONTS`, not
+/// `CRAFT_FONTS`. Native only (the web build stays within its size limits). A missing manifest is
+/// normal even when `required` (craft-fonts revisions before it have none); a broken one fails a
+/// required build and is skipped with a warning otherwise.
+fn document_fonts(dir: &std::path::Path, required: bool, wasm: bool) -> Result<String, String> {
+    if wasm {
+        return Ok(String::new());
+    }
+    let thai = dir.join("fonts/thai-manifest.txt");
+    println!("cargo::rerun-if-changed={}", thai.display());
+    match thai.try_exists() {
+        Ok(false) => Ok(String::new()),
+        Ok(true) => match manifest(dir, &thai, false, false) {
+            Ok(entries) => Ok(entries),
+            Err(e) if required => Err(e),
+            Err(e) => {
+                println!("cargo::warning=skipping optional Thai document fonts: {e}");
+                Ok(String::new())
+            }
+        },
+        Err(e) if required => Err(format!("{}: {e}", thai.display())),
+        Err(e) => {
+            println!("cargo::warning=skipping optional Thai document fonts: {}: {e}", thai.display());
+            Ok(String::new())
+        }
+    }
 }
 
 /// One `CraftFont { .. }` initialiser per manifest line.
@@ -154,6 +197,29 @@ mod manifest_tests {
         assert!(manifest(&root, &path, false, true).unwrap().contains("CraftFont {"));
         std::fs::remove_file(root.join("face.ttf")).unwrap();
         assert!(manifest(&root, &path, false, true).is_err(), "a missing Hans asset cannot satisfy required input");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The Thai document manifest is optional even for a required build (the pinned craft-fonts
+    /// predates it), native-only, and never breaks the build unless it is present and broken
+    /// while `CRAFT_FONTS_REQUIRED` is set.
+    #[test]
+    fn document_manifest_is_optional_and_native_only() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-document-fonts-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("fonts")).unwrap();
+        for required in [false, true] {
+            assert_eq!(document_fonts(&root, required, false), Ok(String::new()), "missing manifest, required={required}");
+        }
+        std::fs::write(root.join("face.ttf"), b"synthetic manifest fixture").unwrap();
+        let path = root.join("fonts/thai-manifest.txt");
+        std::fs::write(&path, "# comment\nFixture | Regular | face.ttf | Thai,Latn\n").unwrap();
+        for required in [false, true] {
+            assert!(document_fonts(&root, required, false).unwrap().contains("family: \"Fixture\""), "required={required}");
+            assert_eq!(document_fonts(&root, required, true), Ok(String::new()), "never on wasm, required={required}");
+        }
+        std::fs::write(&path, "not a manifest line\n").unwrap();
+        assert_eq!(document_fonts(&root, false, false), Ok(String::new()), "a broken optional manifest is skipped");
+        assert!(document_fonts(&root, true, false).is_err(), "a broken manifest fails a required build");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -399,9 +399,17 @@ fn typing_thai_text_keeps_marks_and_commits_to_page() {
     if pdfcraft_fonts::document_thai_font().is_none() {
         return;
     }
+    // The box being typed in draws with the interface Thai face; a document-only face (Sarabun,
+    // from craft-fonts' Thai document manifest) is never an interface font.
     let fonts = pdfcraft_ui_egui::theme::font_definitions();
-    let face = pdfcraft_fonts::document_thai_font().unwrap();
-    assert!(fonts.families[&egui::FontFamily::Proportional].contains(&face.name()));
+    let proportional = &fonts.families[&egui::FontFamily::Proportional];
+    if let Some(ui) = pdfcraft_fonts::ui_thai_fonts().first() {
+        assert!(proportional.contains(&ui.name()));
+    }
+    let document = pdfcraft_fonts::document_thai_font().unwrap();
+    if !pdfcraft_fonts::ui_thai_fonts().iter().any(|f| std::ptr::eq(*f, document)) {
+        assert!(!proportional.contains(&document.name()), "{} is a document-only face", document.name());
+    }
     let mut h = harness();
     assert!(h.state_mut().execute("edit.text"));
     h.run_steps(2);
