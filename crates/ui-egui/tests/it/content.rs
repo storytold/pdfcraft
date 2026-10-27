@@ -841,6 +841,59 @@ fn the_text_editor_aligns_a_narrow_box_whose_lines_share_an_alignment() {
     );
 }
 
+/// #3798: Ctrl+Up and Ctrl+Down move the selected added item over or under its neighbour, with
+/// Shift to the very front or back, as one undo step each; the item stays selected, and at either
+/// end the key does nothing.
+#[test]
+fn arrange_keys_move_the_selected_item_in_the_drawing_order() {
+    let mut h = harness();
+    for (i, word) in ["ONE", "TWO", "THREE"].into_iter().enumerate() {
+        let text = pdfcraft_engine::AddedText {
+            rect: [20.0, 300.0 - 40.0 * i as f64, 180.0, 314.0 - 40.0 * i as f64],
+            text: word.into(),
+            ..Default::default()
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    }
+    assert!(h.state_mut().execute("edit.text"));
+    crate::support::settle(&mut h);
+    let order = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        added(h)
+            .iter()
+            .map(|a| match &a.content {
+                pdfcraft_engine::AddedContent::Text(t) => t.text.clone(),
+                pdfcraft_engine::AddedContent::Image(_) => "image".into(),
+            })
+            .collect()
+    };
+    let press = |h: &mut Harness<'static, PdfCraftApp>, shift: bool, key: egui::Key| {
+        let modifiers = if shift { egui::Modifiers::COMMAND | egui::Modifiers::SHIFT } else { egui::Modifiers::COMMAND };
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(3);
+    };
+    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.run_steps(2);
+    press(&mut h, false, egui::Key::ArrowUp);
+    assert_eq!(order(&h), ["TWO", "ONE", "THREE"], "one step forward");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 1)), "ONE is still the selected one");
+    press(&mut h, true, egui::Key::ArrowUp);
+    assert_eq!(order(&h), ["TWO", "THREE", "ONE"], "to the front");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 2)));
+    let steps = h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_string);
+    press(&mut h, false, egui::Key::ArrowUp);
+    assert_eq!(order(&h), ["TWO", "THREE", "ONE"], "already in front: nothing happens");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_string), steps, "and no undo step is made");
+    press(&mut h, false, egui::Key::ArrowDown);
+    assert_eq!(order(&h), ["TWO", "ONE", "THREE"], "one step backward");
+    press(&mut h, true, egui::Key::ArrowDown);
+    assert_eq!(order(&h), ["ONE", "TWO", "THREE"], "to the back");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    // One undo step puts the last move back.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(order(&h), ["TWO", "ONE", "THREE"]);
+}
+
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")

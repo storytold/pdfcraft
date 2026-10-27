@@ -3760,7 +3760,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         crate::content_ui::release_image_selection(view, &added);
     }
     if editing_content {
-        crate::content_ui::keys(ui.ctx(), view, tool == QuickTool::EditText);
+        crate::content_ui::keys(ui.ctx(), view, &added, tool == QuickTool::EditText);
     }
     if tool == QuickTool::Link {
         crate::link_ui::keys(ui.ctx(), view);

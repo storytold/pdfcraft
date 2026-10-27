@@ -887,6 +887,7 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::AddImage { page, .. }
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
+        | Edit::ArrangeContent { page, .. }
         | Edit::ReplaceImage { page, .. } => Some(*page),
         _ => None,
     }
