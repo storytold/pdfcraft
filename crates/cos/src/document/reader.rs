@@ -23,8 +23,7 @@ impl Document {
 
     fn read_compact_xref_chain(&self, log: &mut Vec<String>) -> Result<Option<(XrefIndex, Dict, Vec<Revision>)>, CosError> {
         let data = &self.data;
-        let tail_start = data.len().saturating_sub(4096);
-        let sx = rfind(data, b"startxref", tail_start).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
+        let sx = find_startxref(data)?;
         let mut lx = Lexer::new(data, sx + 9);
         let first = match lx.object() {
             Ok(Object::Int(n)) if n >= 0 => n as u64,
@@ -325,8 +324,7 @@ impl Document {
         log: &mut Vec<String>,
     ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>), CosError> {
         let data = &self.data;
-        let tail_start = data.len().saturating_sub(4096);
-        let sx = rfind(data, b"startxref", tail_start).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
+        let sx = find_startxref(data)?;
         let mut lx = Lexer::new(data, sx + 9);
         let first = match lx.object() {
             Ok(Object::Int(n)) if n >= 0 => n as u64,
@@ -809,6 +807,39 @@ pub(crate) fn find(hay: &[u8], needle: &[u8], from: usize, to: usize) -> Option<
         return None;
     }
     hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+}
+
+/// How far from the end of the file `startxref` is looked for first. ISO 32000-2 §7.5.5 puts it
+/// on the last lines of the file.
+const STARTXREF_TAIL: usize = 4096;
+
+/// Where the last `startxref` in the file is. The tail is searched first. A file with data
+/// after its final `%%EOF` (a web server that glued its HTML page to the PDF it served, a block
+/// of padding) has the keyword earlier than that, and the whole file is then searched backwards,
+/// so its own cross-reference data is read rather than rebuilt from object headers. The last
+/// keyword wins wherever it is: an earlier one could belong to a superseded revision. The
+/// trailing bytes stay in the file (an incremental save appends after them).
+///
+/// Objects after that `startxref` are different: an update that never got its cross-reference
+/// section (a save cut short, a second file glued on), whose objects the last complete table
+/// cannot reach. The error then says so, and the caller rebuilds the table from object headers
+/// as it does for a file with no `startxref` at all.
+pub(super) fn find_startxref(data: &[u8]) -> Result<usize, CosError> {
+    let tail_start = data.len().saturating_sub(STARTXREF_TAIL);
+    if let Some(sx) = rfind(data, b"startxref", tail_start) {
+        return Ok(sx);
+    }
+    let sx = rfind(data, b"startxref", 0).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
+    // The trailing data starts after the `%%EOF` of that startxref (or after the keyword when
+    // the marker is missing; the offset digits that follow are no object header).
+    let after = find(data, b"%%EOF", sx, sx.saturating_add(64)).map_or(sx.saturating_add(9), |p| p.saturating_add(5));
+    if !object_headers(data.get(after..).unwrap_or(&[])).is_empty() {
+        return Err(CosError::Syntax {
+            offset: sx,
+            detail: format!("startxref is {} bytes before the end of the file and objects follow it", data.len().saturating_sub(sx)),
+        });
+    }
+    Ok(sx)
 }
 
 pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {

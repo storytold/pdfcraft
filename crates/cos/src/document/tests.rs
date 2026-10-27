@@ -1285,3 +1285,64 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
 }
+
+/// Data after the final `%%EOF` (a web server that answered with its HTML print-preview page
+/// glued to the PDF, as Telerik Reporting does) pushes `startxref` out of the tail the reader
+/// looks at first. The last `startxref` in the file is read instead, so the file's own
+/// cross-reference table is used: nothing is rebuilt from object headers and nothing is logged.
+/// The trailing bytes stay in the file, and an incremental save goes after them.
+#[test]
+fn a_startxref_pushed_past_the_tail_by_trailing_data_is_still_read() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let mut bytes = base.clone();
+    bytes.extend_from_slice(b"\r\n\r\n<!DOCTYPE html>\r\n<html>\r\n");
+    for i in 0..400 {
+        bytes.extend_from_slice(format!("<p>preview line {i}: no cross-reference keyword here</p>\r\n").as_bytes());
+    }
+    bytes.extend_from_slice(b"</html>\r\n");
+    assert!(bytes.len() - base.len() > 2 * 4096, "the trailing data must reach past the tail window");
+    let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    assert_eq!(doc.revisions().len(), 1);
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
+    assert_compact_matches_materialized(&doc);
+
+    let mut edited = doc.clone();
+    edited.update_dict(ObjRef::new(1, 0), |dict| dict.set(b"Lang".to_vec(), Object::String(crate::PdfString::literal("en")))).unwrap();
+    let saved = crate::write_incremental(&edited, &crate::SaveOptions::default()).unwrap();
+    assert!(saved.starts_with(&bytes), "an incremental save keeps the original bytes, trailing data included");
+    let reopened = Document::open(Arc::new(saved)).unwrap();
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+    assert_eq!(reopened.revisions().len(), 2);
+    assert!(matches!(reopened.get(ObjRef::new(1, 0)).as_dict().and_then(|d| d.get(b"Lang")), Some(Object::String(_))));
+}
+
+/// The last `startxref` in the file still wins, wherever it is. One inside the trailing data
+/// that no offset follows is a bad startxref, and the file is rebuilt from object headers as
+/// before: an earlier keyword is never taken instead, since it could belong to a superseded
+/// revision.
+#[test]
+fn a_startxref_keyword_inside_trailing_data_does_not_pick_an_earlier_one() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let mut bytes = base.clone();
+    bytes.extend_from_slice(b"\n<html><pre>");
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    bytes.extend_from_slice(b"startxref is a PDF keyword</pre></html>\n");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{:?}", doc.repair_log());
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(_)));
+}
+
+/// Objects after the final `startxref` are an update that never got its cross-reference section
+/// (a save cut short). The last complete table cannot reach them, so the file is rebuilt from
+/// object headers as before, and the note says why.
+#[test]
+fn objects_after_the_last_startxref_still_rebuild_the_table() {
+    let mut bytes = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    bytes.extend(std::iter::repeat_n(b'\n', 5000));
+    bytes.extend_from_slice(b"3 0 obj\n(newer)\nendobj\n");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.revisions().is_empty(), "rebuilt: {:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("objects follow it")), "{:?}", doc.repair_log());
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(s) if s.bytes == b"newer"));
+}
