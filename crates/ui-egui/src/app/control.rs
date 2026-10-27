@@ -328,6 +328,14 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--full-screen-prompt false`: a document's request for Full Screen mode is dropped.
+            ("full-screen-prompt", _) => {
+                self.ask_before_full_screen = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("full-screen-prompt must be true or false".into()),
+                };
+            }
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,
