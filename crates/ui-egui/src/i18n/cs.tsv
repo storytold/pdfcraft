@@ -305,6 +305,15 @@ key	Space	Mezerník
 	Available	Dostupné
 	Ready	Připraveno
 	Search tools and commands…	Hledat nástroje a příkazy…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Přidaný text
+	Link URL	Adresa URL odkazu
+	Search tools and commands	Hledat nástroje a příkazy
+	Text editing line	Řádek pro úpravu textu
+	Text to place	Text k umístění
+	Tooltip	Popisek
+	Words or phrases to redact	Slova nebo fráze k začernění
 	No matching tools	Žádné odpovídající nástroje
 	Tool	Nástroj
 	Command	Příkaz
@@ -2563,6 +2572,14 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Create & Edit	Vytváření a úpravy
+	Review & Compare	Revize a porovnání
+	Forms & Signatures	Formuláře a podpisy
+	Protect & Standardize	Ochrana a standardizace
+	Customize & Automate	Přizpůsobení a automatizace
+	No tools match your search.	Hledání neodpovídá žádný nástroj.
+	Expand all tools	Rozbalit všechny nástroje
+	Collapse all tools	Sbalit všechny nástroje
 	Attach a file…	Připojit soubor…
 	Delete attachment	Odstranit přílohu
 	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici
@@ -2838,3 +2855,12 @@ certificate	Version	Verze
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes
+@plural	{n} reply|{n} replies	{n} odpověď|{n} odpovědi|{n} odpovědí
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Nástroje stránek
+	Insert pages from a file after the selection…	Vložit stránky ze souboru za výběr…
+	Rotate the selected pages counterclockwise	Otočit vybrané stránky proti směru hodinových ručiček
+	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
+	Extract the selected pages…	Extrahovat vybrané stránky…
+	Delete the selected pages	Odstranit vybrané stránky

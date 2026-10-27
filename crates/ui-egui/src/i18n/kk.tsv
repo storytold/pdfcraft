@@ -145,6 +145,15 @@
 	Available	Қолжетімді
 	Ready	Дайын
 	Search tools and commands…	Құралдар мен командаларды іздеу…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Қосылған мәтін
+	Link URL	Сілтеменің URL мекенжайы
+	Search tools and commands	Құралдар мен командаларды іздеу
+	Text editing line	Мәтінді өңдеу жолы
+	Text to place	Орналастырылатын мәтін
+	Tooltip	Қалтқы
+	Words or phrases to redact	Жасырылатын сөздер немесе сөз тіркестері
 	No matching tools	Сәйкес құралдар жоқ
 	Tool	Құрал
 	Command	Команда
@@ -2487,6 +2496,14 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Create & Edit	Жасау және өңдеу
+	Review & Compare	Шолу және салыстыру
+	Forms & Signatures	Пішіндер және қолтаңбалар
+	Protect & Standardize	Қорғау және стандарттау
+	Customize & Automate	Баптау және автоматтандыру
+	No tools match your search.	Іздеуге сәйкес құралдар жоқ.
+	Expand all tools	Барлық құралдарды жаю
+	Collapse all tools	Барлық құралдарды жию
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз
@@ -2529,3 +2546,12 @@ animation effects	Off	Өшірулі
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
+@plural	{n} reply|{n} replies	{n} жауап|{n} жауап
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Бет құралдары
+	Insert pages from a file after the selection…	Таңдаудан кейін файлдан беттер кірістіру…
+	Rotate the selected pages counterclockwise	Таңдалған беттерді сағат тіліне қарсы бұру
+	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
+	Extract the selected pages…	Таңдалған беттерді шығарып алу…
+	Delete the selected pages	Таңдалған беттерді жою

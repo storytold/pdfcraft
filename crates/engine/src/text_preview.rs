@@ -89,4 +89,17 @@ impl Document {
             Ok(TextEditPreview { page, bytes, config: self.config.clone() })
         })?
     }
+
+    /// An added item alone, on a transparent page: what follows the pointer while it is dragged,
+    /// so the page under its first place doesn't come along. Read-only, like
+    /// [`Self::added_content_preview`].
+    pub fn added_content_alone(&self, page: usize, index: usize) -> Result<TextEditPreview, String> {
+        guard(|| {
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            let mut cos = editor.cos.clone();
+            pdfcraft_edit::isolate_content(&mut cos, page, index).map_err(|e| e.to_string())?;
+            let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
+            Ok(TextEditPreview { page, bytes, config: RenderConfig { transparent: true, ..self.config.clone() } })
+        })?
+    }
 }

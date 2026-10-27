@@ -142,6 +142,15 @@
 	Available	Kullanılabilir
 	Ready	Hazır
 	Search tools and commands…	Araçları ve komutları ara…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Eklenen metin
+	Link URL	Bağlantı URL'si
+	Search tools and commands	Araçları ve komutları ara
+	Text editing line	Metin düzenleme satırı
+	Text to place	Yerleştirilecek metin
+	Tooltip	İpucu
+	Words or phrases to redact	Karartılacak sözcükler veya ifadeler
 	No matching tools	Eşleşen araç yok
 	Tool	Araç
 	Command	Komut
@@ -2485,6 +2494,14 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Create & Edit	Oluştur ve Düzenle
+	Review & Compare	İncele ve Karşılaştır
+	Forms & Signatures	Formlar ve İmzalar
+	Protect & Standardize	Koru ve Standartlaştır
+	Customize & Automate	Özelleştir ve Otomatikleştir
+	No tools match your search.	Aramanızla eşleşen araç yok.
+	Expand all tools	Tüm araçları genişlet
+	Collapse all tools	Tüm araçları daralt
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor
@@ -2527,3 +2544,12 @@ animation effects	Off	Kapalı
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
+@plural	{n} reply|{n} replies	{n} yanıt
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sayfa araçları
+	Insert pages from a file after the selection…	Seçimin ardından dosyadan sayfa ekle…
+	Rotate the selected pages counterclockwise	Seçili sayfaları saat yönünün tersine döndür
+	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
+	Extract the selected pages…	Seçili sayfaları ayıkla…
+	Delete the selected pages	Seçili sayfaları sil

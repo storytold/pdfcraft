@@ -4088,6 +4088,65 @@ fn a_password_field_missing_from_the_field_list_is_still_cleared() {
     }
 }
 
+/// A password field nested beyond depth 32 (e.g. depth 35) is recognized by `has_password_flag`
+/// and `has_password_values`, matching the field tree walk limit of 64.
+#[test]
+fn a_password_field_nested_beyond_depth_32_is_recognized() {
+    let target_depth = 35;
+    let leaf_obj_num = 5 + target_depth;
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+    ];
+    for d in 0..target_depth {
+        let obj_num = 5 + d;
+        let next_obj_num = obj_num + 1;
+        let parent_entry = if d == 0 { String::new() } else { format!(" /Parent {} 0 R", obj_num - 1) };
+        objs.push(format!("<< /T (node{d}) /Kids [{next_obj_num} 0 R]{parent_entry} >>"));
+    }
+    objs.push(format!(
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pass) /Ff 8192 /V (secret35) /Parent {} 0 R /Rect [50 600 150 620] /P 3 0 R >>",
+        leaf_obj_num - 1
+    ));
+    let mut doc = document(&objs);
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// A password field whose widget is reachable through a page's Annots and whose inherited Password
+/// flag is deeper than 32 levels is recognized by `has_password_flag`.
+#[test]
+fn a_page_widget_inheriting_password_flag_beyond_depth_32_is_recognized() {
+    let target_depth = 35;
+    let leaf_obj_num = 5 + target_depth;
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{leaf_obj_num} 0 R] >>"),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+    ];
+    for d in 0..target_depth {
+        let obj_num = 5 + d;
+        let next_obj_num = obj_num + 1;
+        let parent_entry = if d == 0 { String::new() } else { format!(" /Parent {} 0 R", obj_num - 1) };
+        let ff_entry = if d == 0 { " /Ff 8192" } else { "" };
+        objs.push(format!("<< /T (node{d}){ff_entry} /Kids [{next_obj_num} 0 R]{parent_entry} >>"));
+    }
+    objs.push(format!(
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pass) /V (secret_chain) /Parent {} 0 R /Rect [50 600 150 620] /P 3 0 R >>",
+        leaf_obj_num - 1
+    ));
+    let mut doc = document(&objs);
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
 /// at the box). An auto-sized field shrinks to fit, and a short or empty value fits.
 #[test]
@@ -4299,4 +4358,222 @@ fn comb_fields_show_their_cells() {
     .unwrap();
     let plain = saved_look(&doc, "d");
     assert!(!plain.contains(" m ") && plain.contains("(A) Tj"), "{plain}");
+}
+
+/// Check boxes and radio buttons with an `/MK` look and appearances of their own, in a form that
+/// sets `/NeedAppearances` (`need`) or not.
+fn mk_buttons(need: bool) -> Document {
+    let flag = if need { "/NeedAppearances true " } else { "" };
+    let widget = |n: &str, rest: &str| format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({n}) /F 4 /P 3 0 R {rest} >>");
+    let states = |on: &str| format!("/AP << /N << /{on} 15 0 R /Off 16 0 R >> >>");
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] >>".into(),
+        format!(
+            "<< /Fields [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R] {flag}/DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>"
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        widget("check", &format!("/V /Yes /AS /Yes /DA (/Helv 0 Tf 0 g) /MK << /BC [0 0 0] /CA (4) >> /Rect [50 700 74 724] {}", states("Yes"))), // 6
+        widget("cross", &format!("/V /Yes /AS /Yes /DA (/ZaDb 0 Tf 1 0 0 rg) /MK << /CA (8) >> /Rect [100 700 124 724] {}", states("Yes"))),
+        widget("diamond", &format!("/V /Yes /AS /Yes /MK << /CA (u) /BG [1 1 0] >> /Rect [150 700 174 724] {}", states("Yes"))),
+        widget("square", &format!("/V /Yes /AS /Yes /MK << /CA (n) >> /Rect [200 700 224 724] {}", states("Yes"))),
+        widget("star", &format!("/V /Yes /AS /Yes /MK << /CA (H) >> /Rect [250 700 274 724] {}", states("Yes"))), // 10
+        widget("off", &format!("/V /Off /AS /Off /MK << /BC [0 0 0] /CA (4) >> /Rect [300 700 324 724] {}", states("Yes"))),
+        widget("radio", &format!("/Ff 32768 /V /B /MK << /BC [0 0 1] /CA (l) >> /Rect [350 700 374 724] {}", states("B"))),
+        widget("plain", &format!("/V /Yes /AS /Yes /Rect [400 700 424 724] {}", states("Yes"))),
+        widget(
+            "odd",
+            &format!(
+                "/V /Yes /AS /Yes /DA (/ZaDb nan Tf 1 x rg) /MK << /CA 42 /BC [(no) /Name] /BG 7 >> /BS << /W -3 >> /Rect [450 700 474 724] {}",
+                states("Yes")
+            ),
+        ),
+        "<< /Length 24 >>\nstream\n0 g 4 4 16 16 re f\nendstream".into(), // 15: a filled square
+        "<< /Length 4 >>\nstream\nq\nQ\nendstream".into(),
+    ])
+}
+
+/// ISO 32000-2 Table 224 (`/NeedAppearances`) and Table 192 (`/MK /CA`): a form that leaves its
+/// appearances to the viewer shows each check box and radio button with an `/MK` drawn from it,
+/// over the appearance the file carries: the caption's ZapfDingbats symbol in the `/DA` colour
+/// when on, only the border when off. A widget with no `/MK` keeps its own; the file is untouched.
+#[test]
+fn need_appearances_draws_check_boxes_and_radio_buttons_from_their_captions() {
+    let doc = mk_buttons(true);
+    let copy = with_field_appearances(&doc).expect("buttons to draw");
+    let all = fields(&copy);
+    for (name, state, symbol, colour) in [
+        ("check", "Yes", "(4) Tj", "0 g"),
+        ("cross", "Yes", "(8) Tj", "1 0 0 rg"),
+        ("diamond", "Yes", "(u) Tj", "0 g"),
+        ("square", "Yes", "(n) Tj", "0 g"),
+        ("star", "Yes", "(H) Tj", "0 g"),
+        ("radio", "B", "(l) Tj", "0 g"),
+    ] {
+        let shown = state_ap(&copy, &field(&all, name).widgets[0], state);
+        assert!(shown.contains(symbol) && shown.contains(&format!("{colour}\n")), "{name}: {shown}");
+        assert!(!shown.contains("4 4 16 16 re f"), "{name} is not the file's filled square: {shown}");
+    }
+    let check = state_ap(&copy, &field(&all, "check").widgets[0], "Yes");
+    assert!(check.contains("0 0 0 RG\n1 w\n0.5 0.5 23 23 re S"), "the /BC border: {check}");
+    assert!(state_ap(&copy, &field(&all, "diamond").widgets[0], "Yes").contains("1 1 0 rg\n0 0 24 24 re f"), "the /BG background");
+    assert!(state_ap(&copy, &field(&all, "radio").widgets[0], "B").contains("0 0 1 RG"), "the radio's own border");
+    let off = state_ap(&copy, &field(&all, "off").widgets[0], "Off");
+    assert!(off.contains("re S") && !off.contains("Tj"), "off: only the border: {off}");
+    // Nonsense in /MK, /DA and /BS: the default check, no border, and no panic.
+    let odd = state_ap(&copy, &field(&all, "odd").widgets[0], "Yes");
+    assert!(odd.contains("(4) Tj") && !odd.contains("re S"), "{odd}");
+    let own = |d: &Document, name: &str| d.get(field(&fields(d), name).widgets[0].obj).as_dict().and_then(|w| w.get(b"AP").cloned());
+    assert_eq!(own(&copy, "plain"), own(&doc, "plain"), "a box without /MK keeps its own look");
+    assert_eq!(state_ap(&doc, &field(&fields(&doc), "check").widgets[0], "Yes").trim_end(), "0 g 4 4 16 16 re f", "the file is untouched");
+}
+
+/// Without `/NeedAppearances` the file's own check box and radio button appearances are shown
+/// as they are, `/MK` or not: no copy is needed.
+#[test]
+fn without_need_appearances_buttons_keep_their_own_appearances() {
+    assert!(with_field_appearances(&mk_buttons(false)).is_none());
+}
+
+/// A form for filling many values at once: two summed fields and their calculated total, a
+/// name two field dictionaries share, a check box, a radio group, a list and a read-only field.
+fn batch_form() -> Document {
+    let tx = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 12 0 R 13 0 R 14 0 R 17 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 14 0 R 17 0 R] /CO [7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 15 0 R >> >> >>"
+            .into(),
+        tx("a", 700, "/V (1)"),
+        tx("b", 660, ""),
+        tx("total", 620, r#"/AA << /C << /S /JavaScript /JS (AFSimple_Calculate\("SUM", new Array\("a", "b"\)\);) >> >>"#),
+        tx("dup", 580, ""),
+        tx("dup", 540, ""),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [300 700 315 715] /P 3 0 R >>".into(),
+        "<< /FT /Btn /T (size) /Ff 49152 /Kids [12 0 R 13 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 11 0 R /AS /Off /Rect [300 650 315 665] /P 3 0 R /AP << /N << /S 16 0 R /Off 16 0 R >> >> >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 11 0 R /AS /Off /Rect [330 650 345 665] /P 3 0 R /AP << /N << /L 16 0 R /Off 16 0 R >> >> >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (country) /Ff 131072 /Opt [[(ca) (Canada)] [(fr) (France)]] /Rect [300 600 450 620] /P 3 0 R >>"
+            .into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        tx("locked", 500, "/Ff 1 /V (kept)"),
+    ];
+    document(&objs)
+}
+
+/// What a filled form shows: every field as read, and each widget's drawn appearance.
+fn filled(doc: &Document) -> (Vec<Field>, Vec<String>) {
+    let all = fields(doc);
+    let looks = all
+        .iter()
+        .flat_map(|f| &f.widgets)
+        .map(|w| {
+            let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
+            let n = wd.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.get(b"N").cloned()));
+            match n.map(|n| doc.resolve(&n)) {
+                Some(n) => match &*n {
+                    Object::Stream(s) => String::from_utf8_lossy(&s.decoded().unwrap_or_default()).into_owned(),
+                    other => format!("{other:?}").chars().filter(|c| !c.is_ascii_digit()).collect(),
+                },
+                None => String::new(),
+            }
+        })
+        .collect();
+    (all, looks)
+}
+
+/// Filling values in one batch leaves the form as filling them one by one does: the values,
+/// the twin of a shared name, the calculated total and every widget's appearance; a name given
+/// twice ends with its last value, and is checked against the value it took earlier in the batch;
+/// and each value fails as it would on its own.
+#[test]
+fn set_values_fills_as_set_value_does_one_by_one() {
+    let values: Vec<(String, FieldValue)> = vec![
+        ("a".into(), FieldValue::Text("2".into())),
+        ("b".into(), FieldValue::Text("3".into())),
+        ("dup".into(), FieldValue::Text("shared".into())),
+        ("agree".into(), FieldValue::Check(true)),
+        ("size".into(), FieldValue::Radio(Some("L".into()))),
+        ("country".into(), FieldValue::Choice(vec!["fr".into()])),
+        ("nowhere".into(), FieldValue::Text("x".into())),
+        ("locked".into(), FieldValue::Text("changed".into())),
+        ("size".into(), FieldValue::Radio(Some("XL".into()))),
+        ("dup".into(), FieldValue::Text("again".into())),
+        ("a".into(), FieldValue::Text("10".into())),
+        // Refused only because the batch already selected L: the group keeps one selected.
+        ("size".into(), FieldValue::Radio(None)),
+    ];
+    let mut one_by_one = batch_form();
+    let expected: Vec<Result<(), FormError>> = values.iter().map(|(n, v)| set_value(&mut one_by_one, n, v)).collect();
+    let mut batch = batch_form();
+    let results = set_values(&mut batch, &values).expect("recalculates");
+    assert_eq!(results, expected);
+    assert_eq!(
+        results.iter().filter(|r| r.is_err()).count(),
+        4,
+        "the unknown name, the read-only field, the unknown option and clearing the group fail: {results:?}"
+    );
+    let (all, looks) = filled(&batch);
+    assert_eq!((all.clone(), looks), filled(&one_by_one));
+    assert_eq!(field(&all, "total").value, ["13"], "recalculated once, after the last value");
+    assert!(all.iter().filter(|f| f.name == "dup").all(|f| f.value == ["again"]), "both dup fields take the last value");
+    // And as saved.
+    assert_eq!(filled(&reopen(&batch)), filled(&reopen(&one_by_one)));
+}
+
+/// A form without fields refuses each value, and an empty batch changes nothing.
+#[test]
+fn set_values_without_a_form_or_values() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ]);
+    let r = set_values(&mut doc, &[("a".into(), FieldValue::Text("1".into()))]).unwrap();
+    assert_eq!(r, vec![Err(FormError::NoForm)]);
+    let mut form = batch_form();
+    assert_eq!(set_values(&mut form, &[]).unwrap(), Vec::new());
+    assert!(!form.is_modified());
+    // Nothing filled, nothing recalculated: the total stays as the file has it.
+    let r = set_values(&mut form, &[("nowhere".into(), FieldValue::Text("1".into()))]).unwrap();
+    assert_eq!(r, vec![Err(FormError::NoSuchField("nowhere".into()))]);
+    assert!(field(&fields(&form), "total").value.is_empty() && !form.is_modified());
+}
+
+/// Filling many fields reads the form a fixed number of times, not once or twice per field
+/// (which took minutes to open a form with thousands of fields whose XFA data was filled in
+/// elsewhere).
+#[test]
+fn set_values_reads_the_form_once_not_per_value() {
+    let n: u32 = 60;
+    let mut objs: Vec<String> =
+        vec!["<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 5)).collect();
+    objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", kids.join(" ")));
+    objs.push(format!("<< /Fields [{}] /DA (/Helv 10 Tf 0 g) >>", kids.join(" ")));
+    for i in 0..n {
+        objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /Rect [50 {y} 250 {top}] /P 3 0 R >>", y = 10 * i, top = 10 * i + 10));
+    }
+    let mut doc = document(&objs);
+    let values: Vec<(String, FieldValue)> = (0..n).map(|i| (format!("f{i}"), FieldValue::Text(format!("v{i}")))).collect();
+    let before = form_reads();
+    let results = set_values(&mut doc, &values).unwrap();
+    let reads = form_reads() - before;
+    assert!(results.iter().all(Result::is_ok));
+    // One reading to fill, one to recalculate.
+    assert!(reads <= 2, "{reads} readings of the form for {n} values");
+    assert!(fields(&doc).iter().all(|f| f.value == [format!("v{}", &f.name[1..])]));
+    // A name filled again is read again, once: f0 and f1 again cost one more reading.
+    let again: Vec<(String, FieldValue)> = ["f0", "f1", "f0", "f1"].iter().map(|n| (n.to_string(), FieldValue::Text("w".into()))).collect();
+    let before = form_reads();
+    assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
+    let reads = form_reads() - before;
+    assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }

@@ -180,6 +180,15 @@
 	Available	Dostępne
 	Ready	Gotowe
 	Search tools and commands…	Szukaj narzędzi i poleceń…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Dodany tekst
+	Link URL	Adres URL łącza
+	Search tools and commands	Szukaj narzędzi i poleceń
+	Text editing line	Wiersz edycji tekstu
+	Text to place	Tekst do umieszczenia
+	Tooltip	Podpowiedź
+	Words or phrases to redact	Słowa lub frazy do utajenia
 	No matching tools	Brak pasujących narzędzi
 	Tool	Narzędzie
 	Command	Polecenie
@@ -2465,6 +2474,14 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Create & Edit	Tworzenie i edycja
+	Review & Compare	Recenzja i porównanie
+	Forms & Signatures	Formularze i podpisy
+	Protect & Standardize	Ochrona i standaryzacja
+	Customize & Automate	Dostosowanie i automatyzacja
+	No tools match your search.	Żadne narzędzie nie pasuje do wyszukiwania.
+	Expand all tools	Rozwiń wszystkie narzędzia
+	Collapse all tools	Zwiń wszystkie narzędzia
 	Attach a file…	Dołącz plik…
 	Delete attachment	Usuń załącznik
 	Attaching files is not available on the web yet	Dołączanie plików nie jest jeszcze dostępne w wersji webowej
@@ -2627,3 +2644,12 @@ animation effects	Off	Wyłączone
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj
+@plural	{n} reply|{n} replies	{n} odpowiedź|{n} odpowiedzi|{n} odpowiedzi
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Narzędzia stron
+	Insert pages from a file after the selection…	Wstaw strony z pliku po zaznaczeniu…
+	Rotate the selected pages counterclockwise	Obróć zaznaczone strony w lewo
+	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
+	Extract the selected pages…	Wyodrębnij zaznaczone strony…
+	Delete the selected pages	Usuń zaznaczone strony

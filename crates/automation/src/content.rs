@@ -188,8 +188,10 @@ impl Automation {
                     i.flip_v = !i.flip_v;
                 }
                 if let Some(c) = rect_arg(a, "crop")? {
-                    if !c.iter().all(|v| (0.0..0.5).contains(v)) {
-                        return Err(bad("crop takes fractions from 0 to under 0.5 (left, bottom, right, top)"));
+                    if !pdfcraft_engine::AddedImage::crop_valid(c) {
+                        return Err(bad(
+                            "crop takes fractions from 0 to under 1 (left, bottom, right, top); left and right together, and bottom and top together, trim at most 0.95",
+                        ));
                     }
                     i.crop = c;
                 }

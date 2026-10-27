@@ -178,6 +178,15 @@
 	Available	Disponible
 	Ready	Llest
 	Search tools and commands…	Cerca eines i ordres…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text afegit
+	Link URL	URL de l'enllaç
+	Search tools and commands	Cerca eines i ordres
+	Text editing line	Línia d'edició de text
+	Text to place	Text que cal col·locar
+	Tooltip	Suggeriment
+	Words or phrases to redact	Paraules o frases per censurar
 	No matching tools	Cap eina coincident
 	Tool	Eina
 	Command	Ordre
@@ -2654,6 +2663,14 @@ certificate	SHA-256 digest	Resum SHA-256
 	Optimizing… merging image fragments	S'està optimitzant… fusionant fragments d'imatge
 	Outline colour:	Color del contorn:
 	Page properties	Propietats de la pàgina
+	Create & Edit	Crea i edita
+	Review & Compare	Revisa i compara
+	Forms & Signatures	Formularis i signatures
+	Protect & Standardize	Protegeix i estandarditza
+	Customize & Automate	Personalitza i automatitza
+	No tools match your search.	Cap eina coincideix amb la cerca.
+	Expand all tools	Desplega totes les eines
+	Collapse all tools	Replega totes les eines
 	Pages counted	Pàgines comptades
 	Pages selected	Pàgines seleccionades
 	Print as image	Imprimeix com a imatge
@@ -2792,3 +2809,12 @@ theme	Appearance	Aspecte
 	Attaching files is not available on the web yet	Encara no es poden adjuntar fitxers al web
 	Delete attachment	Elimina l'adjunt
 	Delete attachment {key}	Elimina l'adjunt {key}
+@plural	{n} reply|{n} replies	{n} resposta|{n} respostes
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Eines de pàgina
+	Insert pages from a file after the selection…	Insereix pàgines d'un fitxer després de la selecció…
+	Rotate the selected pages counterclockwise	Gira les pàgines seleccionades en sentit antihorari
+	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
+	Extract the selected pages…	Extreu les pàgines seleccionades…
+	Delete the selected pages	Suprimeix les pàgines seleccionades

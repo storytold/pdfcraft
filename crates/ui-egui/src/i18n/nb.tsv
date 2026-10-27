@@ -1020,6 +1020,15 @@
 	Scroll tabs right	Rull faner til høyre
 	Search comments	Søk i kommentarer
 	Search tools and commands…	Søk etter verktøy og kommandoer…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Lagt til tekst
+	Link URL	URL for lenken
+	Search tools and commands	Søk etter verktøy og kommandoer
+	Text editing line	Tekstredigeringslinje
+	Text to place	Tekst som skal plasseres
+	Tooltip	Verktøytips
+	Words or phrases to redact	Ord eller fraser som skal sladdes
 	Searchable Image (Exact)	Søkbart bilde (eksakt)
 	Searching… {s} of {p} pages	Søker… {s} av {p} sider
 	Searching… {s}/{p}	Søker… {s}/{p}
@@ -2614,6 +2623,14 @@
 	Make properties default	Bruk egenskapene som standard
 	Pages selected	Valgte sider
 	Page properties	Sideegenskaper
+	Create & Edit	Opprett og rediger
+	Review & Compare	Gjennomgå og sammenlign
+	Forms & Signatures	Skjemaer og signaturer
+	Protect & Standardize	Beskytt og standardiser
+	Customize & Automate	Tilpass og automatiser
+	No tools match your search.	Ingen verktøy samsvarer med søket.
+	Expand all tools	Utvid alle verktøy
+	Collapse all tools	Fold sammen alle verktøy
 	Cut Image	Klipp ut bilde
 	Redact Image	Sladd bilde
 	Create Link…	Opprett lenke…
@@ -2707,3 +2724,12 @@ key	Space	Mellomrom
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
+@plural	{n} reply|{n} replies	{n} svar|{n} svar
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sideverktøy
+	Insert pages from a file after the selection…	Sett inn sider fra en fil etter utvalget…
+	Rotate the selected pages counterclockwise	Roter de valgte sidene mot klokken
+	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
+	Extract the selected pages…	Trekk ut de valgte sidene…
+	Delete the selected pages	Slett de valgte sidene

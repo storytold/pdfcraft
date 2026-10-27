@@ -155,6 +155,15 @@
 	Available	Elérhető
 	Ready	Kész
 	Search tools and commands…	Eszközök és parancsok keresése…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Hozzáadott szöveg
+	Link URL	Hivatkozás URL-je
+	Search tools and commands	Eszközök és parancsok keresése
+	Text editing line	Szövegszerkesztő sor
+	Text to place	Elhelyezendő szöveg
+	Tooltip	Elemleírás
+	Words or phrases to redact	Kitakarni kívánt szavak vagy kifejezések
 	No matching tools	Nincs illeszkedő eszköz
 	Tool	Eszköz
 	Command	Parancs
@@ -2488,6 +2497,14 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Create & Edit	Létrehozás és szerkesztés
+	Review & Compare	Áttekintés és összehasonlítás
+	Forms & Signatures	Űrlapok és aláírások
+	Protect & Standardize	Védelem és szabványosítás
+	Customize & Automate	Testreszabás és automatizálás
+	No tools match your search.	Egy eszköz sem felel meg a keresésnek.
+	Expand all tools	Az összes eszköz kibontása
+	Collapse all tools	Az összes eszköz összecsukása
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el
@@ -2530,3 +2547,12 @@ animation effects	Off	Ki
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
+@plural	{n} reply|{n} replies	{n} válasz|{n} válasz
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Oldaleszközök
+	Insert pages from a file after the selection…	Oldalak beszúrása fájlból a kijelölés után…
+	Rotate the selected pages counterclockwise	A kijelölt oldalak forgatása az óramutató járásával ellentétesen
+	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
+	Extract the selected pages…	A kijelölt oldalak kibontása…
+	Delete the selected pages	A kijelölt oldalak törlése

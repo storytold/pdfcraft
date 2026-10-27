@@ -157,6 +157,15 @@
 	Available	Verfügbar
 	Ready	Bereit
 	Search tools and commands…	Tools und Befehle suchen…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Hinzugefügter Text
+	Link URL	URL des Links
+	Search tools and commands	Tools und Befehle suchen
+	Text editing line	Textbearbeitungszeile
+	Text to place	Einzufügender Text
+	Tooltip	Tooltip
+	Words or phrases to redact	Zu schwärzende Wörter oder Ausdrücke
 	No matching tools	Keine passenden Werkzeuge
 	Tool	Werkzeug
 	Command	Befehl
@@ -2490,6 +2499,14 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Create & Edit	Erstellen & Bearbeiten
+	Review & Compare	Prüfen & Vergleichen
+	Forms & Signatures	Formulare & Signaturen
+	Protect & Standardize	Schützen & Standardisieren
+	Customize & Automate	Anpassen & Automatisieren
+	No tools match your search.	Keine Werkzeuge entsprechen Ihrer Suche.
+	Expand all tools	Alle Werkzeuge ausklappen
+	Collapse all tools	Alle Werkzeuge einklappen
 	Attach a file…	Datei anhängen…
 	Delete attachment	Anhang löschen
 	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar
@@ -2532,3 +2549,12 @@ animation effects	Off	Aus
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
+@plural	{n} reply|{n} replies	{n} Antwort|{n} Antworten
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Seitenwerkzeuge
+	Insert pages from a file after the selection…	Seiten aus einer Datei nach der Auswahl einfügen…
+	Rotate the selected pages counterclockwise	Ausgewählte Seiten gegen den Uhrzeigersinn drehen
+	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
+	Extract the selected pages…	Ausgewählte Seiten extrahieren…
+	Delete the selected pages	Ausgewählte Seiten löschen

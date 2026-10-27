@@ -813,16 +813,16 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     };
     open(&mut h);
     h.get_by_label("Run a JavaScript, then 1 more action");
-    // The first Edit is the menu bar's; the rows' follow (Mouse Up, On Blur).
-    assert_eq!(h.get_all_by_label("Edit").count(), 3);
-    h.get_all_by_label("Edit").nth(1).unwrap().click();
+    // The menu bar's Edit menu and the Edit tab come first; the rows' follow (Mouse Up, On Blur).
+    assert_eq!(h.get_all_by_label("Edit").count(), 4);
+    h.get_all_by_label("Edit").nth(2).unwrap().click();
     h.run_steps(2);
     assert_eq!(h.state().field_props.as_ref().unwrap().editing, Some(FieldTrigger::MouseUp));
     // While one script is open, no other Edit can overwrite it.
-    assert!(h.get_all_by_label("Edit").skip(1).all(|n| n.accesskit_node().is_disabled()));
+    assert!(h.get_all_by_label("Edit").skip(2).all(|n| n.accesskit_node().is_disabled()));
     h.get_by_label("Discard").click();
     h.run_steps(2);
-    assert!(h.get_all_by_label("Edit").skip(1).all(|n| !n.accesskit_node().is_disabled()));
+    assert!(h.get_all_by_label("Edit").skip(2).all(|n| !n.accesskit_node().is_disabled()));
     // Replace the Mouse Up script with a link: the chained link stays after it.
     {
         let d = h.state_mut().field_props.as_mut().unwrap();
@@ -1028,9 +1028,7 @@ fn escape_in_a_name_field_leaves_the_field_not_the_table() {
     let mut h = harness();
     draw_table(&mut h);
     // The app's own text boxes (zoom, page number) are inputs too: take the one in the window.
-    let window = h.get_by_label("Text Field Table").rect();
-    let field =
-        h.query_all(by().role(Role::TextInput)).map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the first column's name field");
+    let field = h.get_by_role_and_label(Role::TextInput, "Column 1").rect();
     h.hover_at(field.center());
     h.drag_at(field.center());
     h.run_steps(1);

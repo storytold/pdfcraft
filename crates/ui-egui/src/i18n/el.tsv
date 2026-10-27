@@ -2167,6 +2167,15 @@
 	View more	Περισσότερα
 	Available	Διαθέσιμο
 	Search tools and commands…	Αναζήτηση εργαλείων και εντολών…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Προστιθέμενο κείμενο
+	Link URL	Διεύθυνση URL συνδέσμου
+	Search tools and commands	Αναζήτηση εργαλείων και εντολών
+	Text editing line	Γραμμή επεξεργασίας κειμένου
+	Text to place	Κείμενο προς τοποθέτηση
+	Tooltip	Συμβουλή εργαλείου
+	Words or phrases to redact	Λέξεις ή φράσεις για απόκρυψη
 	No matching tools	Δεν βρέθηκαν εργαλεία
 	Tool	Εργαλείο
 	Command	Εντολή
@@ -2495,6 +2504,14 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Create & Edit	Δημιουργία και επεξεργασία
+	Review & Compare	Αναθεώρηση και σύγκριση
+	Forms & Signatures	Φόρμες και υπογραφές
+	Protect & Standardize	Προστασία και τυποποίηση
+	Customize & Automate	Προσαρμογή και αυτοματοποίηση
+	No tools match your search.	Κανένα εργαλείο δεν ταιριάζει με την αναζήτησή σας.
+	Expand all tools	Ανάπτυξη όλων των εργαλείων
+	Collapse all tools	Σύμπτυξη όλων των εργαλείων
 	Attach a file…	Επισύναψη αρχείου…
 	Delete attachment	Διαγραφή συνημμένου
 	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό
@@ -2537,3 +2554,12 @@ animation effects	Off	Ανενεργά
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
+@plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Εργαλεία σελίδων
+	Insert pages from a file after the selection…	Εισαγωγή σελίδων από αρχείο μετά την επιλογή…
+	Rotate the selected pages counterclockwise	Περιστροφή των επιλεγμένων σελίδων αριστερόστροφα
+	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
+	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
+	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων

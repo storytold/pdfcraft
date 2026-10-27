@@ -161,6 +161,15 @@ comment menu	Edit	సవరించు
 	Available	అందుబాటులో ఉంది
 	Ready	సిద్ధం
 	Search tools and commands…	సాధనాలు, కమాండ్‌లలో వెతుకు…
+
+# Accessible names for inputs that have no visible label.
+	Added text	జోడించిన టెక్స్ట్
+	Link URL	లింక్ URL
+	Search tools and commands	సాధనాలు, కమాండ్‌లలో వెతుకు
+	Text editing line	టెక్స్ట్ సవరణ పంక్తి
+	Text to place	ఉంచాల్సిన టెక్స్ట్
+	Tooltip	టూల్‌టిప్
+	Words or phrases to redact	రెడాక్ట్ చేయాల్సిన పదాలు లేదా పదబంధాలు
 	No matching tools	సరిపోలే సాధనాలు లేవు
 	Tool	సాధనం
 	Command	కమాండ్
@@ -2398,6 +2407,14 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Create & Edit	సృష్టించు & సవరించు
+	Review & Compare	సమీక్షించు & పోల్చు
+	Forms & Signatures	ఫారమ్‌లు & సంతకాలు
+	Protect & Standardize	రక్షించు & ప్రామాణీకరించు
+	Customize & Automate	అనుకూలీకరించు & ఆటోమేట్ చేయి
+	No tools match your search.	మీ శోధనకు సరిపోలే సాధనాలు లేవు.
+	Expand all tools	అన్ని సాధనాలను విస్తరించు
+	Collapse all tools	అన్ని సాధనాలను కుదించు
 	Attach a file…	ఫైల్‌ను జోడించు…
 	Delete attachment	జోడింపును తొలగించు
 	Attaching files is not available on the web yet	వెబ్‌లో ఫైల్‌లను జోడించడం ఇంకా అందుబాటులో లేదు
@@ -2440,3 +2457,12 @@ animation effects	Off	ఆఫ్
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
+@plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	పేజీ సాధనాలు
+	Insert pages from a file after the selection…	ఎంపిక తర్వాత ఫైల్ నుండి పేజీలను చొప్పించు…
+	Rotate the selected pages counterclockwise	ఎంచుకున్న పేజీలను అపసవ్య దిశలో తిప్పు
+	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
+	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
+	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు

@@ -1011,6 +1011,15 @@
 	Scroll tabs right	Gulir tab ke kanan
 	Search comments	Cari komentar
 	Search tools and commands…	Cari alat dan perintah…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Teks yang ditambahkan
+	Link URL	URL tautan
+	Search tools and commands	Cari alat dan perintah
+	Text editing line	Baris penyuntingan teks
+	Text to place	Teks yang akan ditempatkan
+	Tooltip	Tooltip
+	Words or phrases to redact	Kata atau frasa untuk disensor
 	Searchable Image (Exact)	Gambar yang Dapat Dicari (Tepat)
 	Searching… {s} of {p} pages	Mencari… {s} dari {p} halaman
 	Searching… {s}/{p}	Mencari… {s}/{p}
@@ -2683,6 +2692,14 @@ key	Space	Space
 	Make properties default	Jadikan properti default
 	Pages selected	Halaman yang dipilih
 	Page properties	Properti halaman
+	Create & Edit	Buat & Edit
+	Review & Compare	Tinjau & Bandingkan
+	Forms & Signatures	Formulir & Tanda Tangan
+	Protect & Standardize	Lindungi & Standarkan
+	Customize & Automate	Sesuaikan & Otomatiskan
+	No tools match your search.	Tidak ada alat yang cocok dengan pencarian Anda.
+	Expand all tools	Perluas semua alat
+	Collapse all tools	Ciutkan semua alat
 	The password must have at least 8 characters.	Kata sandi harus memiliki minimal 8 karakter.
 theme	Appearance	Tampilan
 	Zoom — type a percentage and press Enter	Zoom — ketik persentase dan tekan Enter
@@ -2769,3 +2786,12 @@ theme	Appearance	Tampilan
 	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
+@plural	{n} reply|{n} replies	{n} balasan
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Alat halaman
+	Insert pages from a file after the selection…	Sisipkan halaman dari file setelah pilihan…
+	Rotate the selected pages counterclockwise	Putar halaman yang dipilih berlawanan arah jarum jam
+	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
+	Extract the selected pages…	Ekstrak halaman yang dipilih…
+	Delete the selected pages	Hapus halaman yang dipilih

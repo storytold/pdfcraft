@@ -1585,6 +1585,15 @@
 	Search	Kërko
 	Search comments	Kërko te komentet
 	Search tools and commands…	Kërko mjete dhe komanda…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Tekst i shtuar
+	Link URL	URL e lidhjes
+	Search tools and commands	Kërko mjete dhe komanda
+	Text editing line	Rreshti i redaktimit të tekstit
+	Text to place	Teksti për t'u vendosur
+	Tooltip	Këshilla e mjetit
+	Words or phrases to redact	Fjalë ose fraza për redaktim
 	Searchable Image (Exact)	Imazh i kërkueshëm (i saktë)
 	Searching… {s} of {p} pages	Po kërkohet… {s} nga {p} faqe
 	Searching… {s}/{p}	Po kërkohet… {s}/{p}
@@ -2420,6 +2429,14 @@ animation effects	Off	Joaktiv
 	Other options	Other options
 	Outline colour:	Outline colour:
 	Page properties	Page properties
+	Create & Edit	Krijo dhe redakto
+	Review & Compare	Rishiko dhe krahaso
+	Forms & Signatures	Formularë dhe nënshkrime
+	Protect & Standardize	Mbro dhe standardizo
+	Customize & Automate	Personalizo dhe automatizo
+	No tools match your search.	Asnjë mjet nuk përputhet me kërkimin tuaj.
+	Expand all tools	Zgjero të gjitha mjetet
+	Collapse all tools	Palos të gjitha mjetet
 	Pages counted	Pages counted
 	Pages selected	Pages selected
 	Paragraph spacing	Paragraph spacing
@@ -2518,3 +2535,12 @@ animation effects	Off	Joaktiv
 	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
+@plural	{n} reply|{n} replies	{n} përgjigje|{n} përgjigje
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Mjetet e faqes
+	Insert pages from a file after the selection…	Fut faqe nga një skedar pas përzgjedhjes…
+	Rotate the selected pages counterclockwise	Rrotullo faqet e përzgjedhura në drejtim të kundërt me orën
+	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
+	Extract the selected pages…	Nxirr faqet e përzgjedhura…
+	Delete the selected pages	Fshi faqet e përzgjedhura

@@ -1,6 +1,7 @@
 //! Commenting in the real shell (egui_kittest): tools, gestures, selection, the composer and
 //! the Comments panel.
 
+use egui::accesskit::Role;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -542,7 +543,7 @@ fn selected_text_replace_action_opens_replacement_composer() {
     h.run_steps(3);
     h.get_by_label("Replace text").click();
     h.run_steps(2);
-    h.get_by_label("Replacement text");
+    h.get_by_role_and_label(Role::MultilineTextInput, "Replacement text");
     assert!(h.state().views[0].selected_text().is_none());
 }
 
@@ -1052,7 +1053,7 @@ fn the_panel_posts_comments_and_replies() {
 
 /// The side panel's width as egui keeps it from one frame to the next.
 fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
-    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
+    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
 }
 
 #[test]
@@ -1228,8 +1229,9 @@ fn the_panel_filters_and_sorts() {
     assert_eq!(h.query_all_by_label("Oval").count(), ovals + 1, "a group header was added");
 }
 
-// Contributor-original PDF. Two roots deliberately share /NM. Their replies are on
-// another page, with dates opposite to source order. An unnamed root has no thread.
+// Contributor-original PDF. Two roots deliberately share /NM; the replies (on another page,
+// with dates opposite to source order) point at the first by reference. Nothing replies to the
+// unnamed root.
 const REVIEW_FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
@@ -1250,7 +1252,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 #[test]
-fn the_panel_preserves_global_threads_source_order_and_unfiltered_page_counts() {
+fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     let mut h = harness_with_bytes(REVIEW_FIXTURE.to_vec(), |app| {
         app.set_option("panel", "comments").unwrap();
         app.views[0].comments.search = Some("needle".into());
@@ -1272,14 +1274,16 @@ fn the_panel_preserves_global_threads_source_order_and_unfiltered_page_counts() 
 
     h.state_mut().views[0].comments.hidden_authors.clear();
     h.run_steps(2);
-    h.get_by_label("Duplicate root");
-    assert_eq!(h.query_all_by_label("Needle first reply").count(), 2, "duplicate names share the same global thread");
+    // The replies point at the first root: sharing its /NM doesn't give the other its thread
+    // (or a search match on that thread).
+    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
+    assert_eq!(h.query_all_by_label("Needle first reply").count(), 1);
     h.state_mut().views[0].comments.search = Some("status-only token".into());
     h.state_mut().views[0].comments.hidden_statuses.push("Rejected".into());
     h.state_mut().views[0].comments.hidden_checks.push("Checked".into());
     h.run_steps(2);
     h.get_by_label("First root");
-    h.get_by_label("Duplicate root");
+    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
 
     h.state_mut().views[0].comments.hidden_statuses.push("Accepted".into());
     h.run_steps(2);
@@ -1293,7 +1297,167 @@ fn the_panel_preserves_global_threads_source_order_and_unfiltered_page_counts() 
     h.state_mut().views[0].comments.hidden_checks.clear();
     h.run_steps(2);
     h.get_by_label("Unnamed root");
-    assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "an unnamed root has no replies");
+    assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
+}
+
+// Contributor-original PDF, shaped like PyMuPDF output: every page's first comment is named
+// `fitz-A0`, so only the `/IRT` reference tells which comment a reply belongs to.
+const PER_PAGE_NAMES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Alpha) /Contents (Cover note) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Beta) /Contents (Second page note) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (Reply on page two) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A2) /IRT 6 0 R /T (Beta) /Contents (Answer on page two) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn replies_follow_irt_references_when_names_repeat_on_every_page() {
+    let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    let reply = h.get_by_label("Reply on page two");
+    assert!(reply.rect().top() > h.get_by_label("Second page note").rect().top(), "the reply sits under page 2's comment");
+    assert!(h.get_by_label("Page 2").rect().top() < reply.rect().top(), "not under page 1's comment, which shares the /NM");
+    h.get_by_label("Answer on page two");
+    // The header counts the two comments, not their replies (Acrobat says 2, not 4), and gives
+    // the replies in small text under it.
+    assert_eq!(h.query_all_by_label("4").count(), 0);
+    h.get_by_label("2 replies");
+}
+
+#[test]
+fn the_header_names_no_replies_when_there_are_none() {
+    let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.search = Some("cover".into());
+    });
+    h.get_by_label("Cover note");
+    h.get_by_label("2 replies"); // The header counts the document, not the search.
+    let h = harness_with_bytes(SINGLE_COMMENT.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    h.get_by_label("Only note");
+    assert_eq!(h.query_all_by_label_contains("repl").count(), 0, "no \"0 replies\" line");
+}
+
+// Contributor-original PDF: one comment, no replies.
+const SINGLE_COMMENT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (only) /T (Alpha) /Contents (Only note) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+// Contributor-original PDF. Page 1: an unnamed comment with a reply and a reply to that reply,
+// a Replace Text strikeout with its grouped caret, and a hidden status whose comment no page
+// lists. Page 2: an `/IRT` to the annotation itself, to an annotation no page lists (object 11),
+// to a pop-up, to a link and to a form field, and two annotations whose `/IRT`s point at each other.
+const THREAD_EDGES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 19 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [10 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 20 0 R 21 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Alpha) /Contents (Unnamed parent) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /IRT 5 0 R /T (Beta) /Contents (Direct reply) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /IRT 6 0 R /T (Gamma) /Contents (Reply to the reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [60 100 160 112] /IT /StrikeOutTextEdit /T (Alpha) /Contents (Struck words) >> endobj
+9 0 obj << /Type /Annot /Subtype /Caret /Rect [158 96 166 104] /IRT 8 0 R /RT /Group /T (Alpha) /Contents (Replacement words) >> endobj
+10 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /IRT 10 0 R /T (Delta) /Contents (Points at itself) >> endobj
+11 0 obj << /Type /Annot /Subtype /Text /Rect [20 120 40 140] /T (Nobody) /Contents (Listed on no page) >> endobj
+12 0 obj << /Type /Annot /Subtype /Text /Rect [20 120 40 140] /IRT 11 0 R /T (Delta) /Contents (Points at an unlisted note) >> endobj
+13 0 obj << /Type /Annot /Subtype /Popup /Rect [120 100 280 180] >> endobj
+14 0 obj << /Type /Annot /Subtype /Text /Rect [20 80 40 100] /IRT 13 0 R /T (Delta) /Contents (Points at a pop-up) >> endobj
+15 0 obj << /Type /Annot /Subtype /Link /Rect [200 20 260 40] /Border [0 0 0] /Dest [3 0 R /Fit] >> endobj
+16 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (field) /Rect [200 60 260 80] >> endobj
+17 0 obj << /Type /Annot /Subtype /Text /Rect [20 50 40 70] /IRT 15 0 R /T (Delta) /Contents (Points at a link) >> endobj
+18 0 obj << /Type /Annot /Subtype /Text /Rect [20 20 40 40] /IRT 16 0 R /T (Delta) /Contents (Points at a form field) >> endobj
+19 0 obj << /Type /Annot /Subtype /Text /Rect [240 20 260 40] /F 30 /IRT 11 0 R /T (Delta) /StateModel /Review /State /Accepted /Contents (Stray status) >> endobj
+20 0 obj << /Type /Annot /Subtype /Text /Rect [60 20 80 40] /IRT 21 0 R /T (Delta) /Contents (Loop one) >> endobj
+21 0 obj << /Type /Annot /Subtype /Text /Rect [90 20 110 40] /IRT 20 0 R /T (Delta) /Contents (Loop two) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread() {
+    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    // An `/IRT` that reaches no listed comment leaves its annotation a comment of its own,
+    // rather than a reply shown nowhere.
+    // Links, form widgets and pop-ups are never parents: neither reader lists them as comments.
+    for orphan in
+        ["Points at itself", "Points at an unlisted note", "Points at a pop-up", "Points at a link", "Points at a form field", "Loop one", "Loop two"]
+    {
+        assert!(h.get_by_label(orphan).rect().top() > h.get_by_label("Page 2").rect().top(), "{orphan}");
+    }
+    // A reply to a reply joins the thread of the comment it starts from, also when that comment
+    // has no /NM.
+    let (parent, direct, deeper) = (h.get_by_label("Unnamed parent"), h.get_by_label("Direct reply"), h.get_by_label("Reply to the reply"));
+    assert!(parent.rect().top() < direct.rect().top() && direct.rect().top() < deeper.rect().top());
+    assert!(deeper.rect().top() < h.get_by_label("Struck words").rect().top(), "under its own thread");
+    // Comments: the unnamed parent, the strikeout and the seven on page 2. Replies: the two
+    // replies, not the Replace Text caret grouped with its strikeout.
+    h.get_by_label("9");
+    h.get_by_label("2 replies");
+    // A status whose comment no page lists is not a comment: no card, and nothing to pick on the
+    // page where it sits.
+    assert_eq!(h.query_all_by_label("Stray status").count(), 0);
+    click_pt(&mut h, (250.0, 30.0));
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+/// The arrow keys move a comment, not a reply: also not a reply to a comment with no `/NM`.
+#[test]
+fn arrow_keys_leave_a_reply_to_an_unnamed_comment_where_it_is() {
+    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| app.set_option("quick", "select").unwrap());
+    let rect = |h: &Harness<'static, PdfCraftApp>, text: &str| comments(h).into_iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().rect;
+    let (reply, parent) = (rect(&h, "Direct reply"), rect(&h, "Unnamed parent"));
+    h.state_mut().views[0].comments.selected = Some((0, 1));
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(rect(&h, "Direct reply"), reply, "the reply stays");
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_ne!(rect(&h, "Unnamed parent"), parent, "its comment moves");
+}
+
+// Contributor-original PDF: a comment, a reply, and a checkmark and a status set on the reply.
+const CHECKED_REPLY: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [100 100 120 120] /T (Alpha) /Contents (Unchecked comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 4 0 R /T (Beta) /Contents (Checked reply) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Marked /State /Marked >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Review /State /Accepted >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A checkmark or status belongs to the annotation its `/IRT` names (ISO 32000-2 §12.5.6.2): one
+/// set on a reply doesn't mark the comment, on its card or in the page's menu.
+#[test]
+fn a_checkmark_on_a_reply_does_not_mark_its_comment() {
+    let mut h = harness_with_bytes(CHECKED_REPLY.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    click_pt(&mut h, (110.0, 110.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    h.get_by_label("Checked reply");
+    h.get_by_label("Mark with checkmark"); // The card's checkmark.
+    assert_eq!(h.query_all_by_label("Accepted").count(), 0, "no status badge");
+    let p = at(&h, 110.0, 110.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Copy text"); // The page's menu is open.
+    assert_eq!(h.query_all_by_label("Remove checkmark").count(), 0);
+    assert_eq!(h.query_all_by_label("Mark with checkmark").count(), 2, "the card and the page's menu");
 }
 
 #[test]
@@ -2172,6 +2336,9 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
         app.open_bytes("markup.pdf", None, pdf).expect("opens synthetic markup");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
+        // Small enough to show the whole page in every rotation: a point hovered below the window
+        // is not over the page.
+        app.set_option("zoom", "100").unwrap();
         app.views[0].rotation = view_rotation;
         app
     });
@@ -2193,7 +2360,9 @@ fn hover_markup_at(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
             pw: page.width,
             ph: page.height,
         };
-        xf.user_rect(info, 0, [x, y, x, y]).center()
+        let p = xf.user_rect(info, 0, [x, y, x, y]).center();
+        assert!(v.viewport_rect().contains(p), "user point ({x}, {y}) is on screen, at {p:?}");
+        p
     };
     h.hover_at(p);
     h.run_steps(3);

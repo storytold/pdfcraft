@@ -1832,6 +1832,15 @@
 	Tool	Инструмент
 	Command	Команда
 	Search tools and commands…	Търсене на инструменти и команди…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Добавен текст
+	Link URL	URL на връзката
+	Search tools and commands	Търсене на инструменти и команди
+	Text editing line	Ред за редактиране на текст
+	Text to place	Текст за поставяне
+	Tooltip	Подсказка
+	Words or phrases to redact	Думи или фрази за заличаване
 	No matching tools	Няма съответстващи инструменти
 	All tools	Всички инструменти
 	Read	Четене
@@ -2452,6 +2461,14 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Create & Edit	Създаване и редактиране
+	Review & Compare	Преглед и сравнение
+	Forms & Signatures	Формуляри и подписи
+	Protect & Standardize	Защита и стандартизация
+	Customize & Automate	Персонализиране и автоматизация
+	No tools match your search.	Няма инструменти, отговарящи на търсенето.
+	Expand all tools	Разгъване на всички инструменти
+	Collapse all tools	Свиване на всички инструменти
 	Attach a file…	Прикачване на файл…
 	Delete attachment	Изтриване на прикачения файл
 	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията
@@ -2494,3 +2511,12 @@ animation effects	Off	Изключени
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Днес
+@plural	{n} reply|{n} replies	{n} отговор|{n} отговора
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Инструменти за страници
+	Insert pages from a file after the selection…	Вмъкване на страници от файл след избраното…
+	Rotate the selected pages counterclockwise	Завъртане на избраните страници обратно на часовниковата стрелка
+	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
+	Extract the selected pages…	Извличане на избраните страници…
+	Delete the selected pages	Изтриване на избраните страници

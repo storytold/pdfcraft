@@ -265,6 +265,15 @@ fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8
     }
 }
 
+/// The explicit destination array `dest` stands for: itself, a dictionary whose `/D` is one, or a
+/// named destination (a name or string, ISO 32000-2 §12.3.2.4) looked up in the `/Names /Dests`
+/// tree, then the catalog `/Dests`. `None` when a name names nothing.
+pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>> {
+    // Names only: the page map is not needed to look one up.
+    let mut targets = Targets { pages: HashMap::new(), names: None };
+    explicit_dest(doc, &mut targets, dest, 0)
+}
+
 /// The page index an explicit destination array names.
 fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {

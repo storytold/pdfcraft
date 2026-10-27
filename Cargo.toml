@@ -5,7 +5,7 @@ exclude = ["vendor"]
 default-members = ["crates/*", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -13,47 +13,51 @@ repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
 # Shared frontend components; engines remain independent of egui.
-craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["serde"] }
 # Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
-craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f58bc1a3df490992d633393d0898af0588ce882c" }
+craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+# One menu definition for the native macOS menu bar and the in-window bar elsewhere.
+craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", default-features = false }
 # Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "666c358065261a2816b376fa3bb10538dbf53040" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # Whether a path stored in a document may be opened (GoToR link targets).
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
 # internal
-pdfcraft-geom = { path = "crates/geom", version = "0.13.0" }
-pdfcraft-filters = { path = "crates/filters", version = "0.13.0" }
-pdfcraft-cos = { path = "crates/cos", version = "0.13.0" }
-pdfcraft-crypt = { path = "crates/crypt", version = "0.13.0" }
-pdfcraft-organize = { path = "crates/organize", version = "0.13.0" }
-pdfcraft-measure = { path = "crates/measure", version = "0.13.0" }
-pdfcraft-annot = { path = "crates/annot", version = "0.13.0" }
-pdfcraft-audit = { path = "crates/audit", version = "0.13.0" }
-pdfcraft-fonts = { path = "crates/fonts", version = "0.13.0" }
-pdfcraft-model = { path = "crates/model", version = "0.13.0" }
-pdfcraft-content = { path = "crates/content", version = "0.13.0" }
-pdfcraft-redact = { path = "crates/redact", version = "0.13.0" }
-pdfcraft-print = { path = "crates/print", version = "0.13.0" }
-pdfcraft-xfdf = { path = "crates/xfdf", version = "0.13.0" }
-pdfcraft-sign = { path = "crates/sign", version = "0.13.0" }
-pdfcraft-optimize = { path = "crates/optimize", version = "0.13.0" }
-pdfcraft-a11y = { path = "crates/a11y", version = "0.13.0" }
-pdfcraft-oracle = { path = "crates/oracle", version = "0.13.0" }
-pdfcraft-testkit = { path = "crates/testkit", version = "0.13.0" }
-pdfcraft-ocr = { path = "crates/ocr", version = "0.13.0" }
-pdfcraft-js = { path = "crates/js", version = "0.13.0" }
-pdfcraft-compare = { path = "crates/compare", version = "0.13.0" }
-pdfcraft-preflight = { path = "crates/preflight", version = "0.13.0" }
-pdfcraft-export = { path = "crates/export", version = "0.13.0" }
-pdfcraft-edit = { path = "crates/edit", version = "0.13.0" }
-pdfcraft-create = { path = "crates/create", version = "0.13.0" }
-pdfcraft-forms = { path = "crates/forms", version = "0.13.0" }
-pdfcraft-xfa = { path = "crates/xfa", version = "0.13.0" }
-pdfcraft-render = { path = "crates/render", version = "0.13.0" }
-pdfcraft-engine = { path = "crates/engine", version = "0.13.0" }
-pdfcraft-platform = { path = "crates/platform", version = "0.13.0" }
-pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.13.0" }
-pdfcraft-automation = { path = "crates/automation", version = "0.13.0", default-features = false }
+pdfcraft-geom = { path = "crates/geom", version = "0.14.0" }
+pdfcraft-filters = { path = "crates/filters", version = "0.14.0" }
+pdfcraft-cos = { path = "crates/cos", version = "0.14.0" }
+pdfcraft-crypt = { path = "crates/crypt", version = "0.14.0" }
+pdfcraft-organize = { path = "crates/organize", version = "0.14.0" }
+pdfcraft-measure = { path = "crates/measure", version = "0.14.0" }
+pdfcraft-annot = { path = "crates/annot", version = "0.14.0" }
+pdfcraft-audit = { path = "crates/audit", version = "0.14.0" }
+pdfcraft-fonts = { path = "crates/fonts", version = "0.14.0" }
+pdfcraft-model = { path = "crates/model", version = "0.14.0" }
+pdfcraft-content = { path = "crates/content", version = "0.14.0" }
+pdfcraft-redact = { path = "crates/redact", version = "0.14.0" }
+pdfcraft-print = { path = "crates/print", version = "0.14.0" }
+pdfcraft-xfdf = { path = "crates/xfdf", version = "0.14.0" }
+pdfcraft-sign = { path = "crates/sign", version = "0.14.0" }
+pdfcraft-optimize = { path = "crates/optimize", version = "0.14.0" }
+pdfcraft-a11y = { path = "crates/a11y", version = "0.14.0" }
+pdfcraft-oracle = { path = "crates/oracle", version = "0.14.0" }
+pdfcraft-testkit = { path = "crates/testkit", version = "0.14.0" }
+pdfcraft-ocr = { path = "crates/ocr", version = "0.14.0" }
+pdfcraft-js = { path = "crates/js", version = "0.14.0" }
+pdfcraft-compare = { path = "crates/compare", version = "0.14.0" }
+pdfcraft-preflight = { path = "crates/preflight", version = "0.14.0" }
+pdfcraft-export = { path = "crates/export", version = "0.14.0" }
+pdfcraft-edit = { path = "crates/edit", version = "0.14.0" }
+pdfcraft-create = { path = "crates/create", version = "0.14.0" }
+pdfcraft-forms = { path = "crates/forms", version = "0.14.0" }
+pdfcraft-xfa = { path = "crates/xfa", version = "0.14.0" }
+pdfcraft-render = { path = "crates/render", version = "0.14.0" }
+pdfcraft-engine = { path = "crates/engine", version = "0.14.0" }
+pdfcraft-platform = { path = "crates/platform", version = "0.14.0" }
+pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.14.0" }
+pdfcraft-automation = { path = "crates/automation", version = "0.14.0", default-features = false }
 
 # pdf
 hayro = "0.7.1"
@@ -75,11 +79,13 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
 
 # ui
-egui = "0.36"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-eframe = { version = "0.36", default-features = false }
-egui_kittest = "0.36"
+egui = "0.37"
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+eframe = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
 rfd = "0.17"
+# Monotonic time for logic-only work on native and web (`App::logic` runs without a UI pass).
+web-time = "1.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -118,6 +124,24 @@ hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
-winit = { path = "vendor/winit" }
-egui-wgpu = { path = "vendor/egui-wgpu" }
 vello_common = { path = "vendor/vello_common" }
+# The egui and winit crates below are pinned to immutable storytold git revisions (egui
+# 6d518fc799681571963842f95b55a6b68431b15a, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
+# Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
+# earlier patches and their source guards, not path patches; the other `vendor/` entries above
+# remain real path patches. See vendor/README.md and the migration plan.
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

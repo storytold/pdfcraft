@@ -1783,6 +1783,15 @@
 	Tool	工具
 	Command	指令
 	Search tools and commands…	搜尋工具與指令…
+
+# Accessible names for inputs that have no visible label.
+	Added text	已新增的文字
+	Link URL	連結 URL
+	Search tools and commands	搜尋工具與指令
+	Text editing line	文字編輯行
+	Text to place	要放置的文字
+	Tooltip	提示
+	Words or phrases to redact	要遮蔽的字詞或片語
 	No matching tools	找不到相符的工具
 	All tools	所有工具
 	Read	閱讀
@@ -2439,6 +2448,14 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Create & Edit	建立與編輯
+	Review & Compare	審閱與比較
+	Forms & Signatures	表單與簽名
+	Protect & Standardize	保護與標準化
+	Customize & Automate	自訂與自動化
+	No tools match your search.	沒有符合搜尋的工具。
+	Expand all tools	展開所有工具
+	Collapse all tools	摺疊所有工具
 	Attach a file…	附加檔案…
 	Delete attachment	刪除附件
 	Attaching files is not available on the web yet	網頁版尚不支援附加檔案
@@ -2481,3 +2498,12 @@ animation effects	Off	關
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
+@plural	{n} reply|{n} replies	{n} 則回覆
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	頁面工具
+	Insert pages from a file after the selection…	在所選內容後插入檔案中的頁面…
+	Rotate the selected pages counterclockwise	逆時針旋轉所選頁面
+	Rotate the selected pages clockwise	順時針旋轉所選頁面
+	Extract the selected pages…	擷取所選頁面…
+	Delete the selected pages	刪除所選頁面

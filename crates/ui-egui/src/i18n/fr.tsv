@@ -157,6 +157,15 @@
 	Available	Disponible
 	Ready	Prêt
 	Search tools and commands…	Rechercher des outils et des commandes…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texte ajouté
+	Link URL	URL du lien
+	Search tools and commands	Rechercher des outils et des commandes
+	Text editing line	Ligne de modification du texte
+	Text to place	Texte à placer
+	Tooltip	Info-bulle
+	Words or phrases to redact	Mots ou expressions à biffer
 	No matching tools	Aucun outil correspondant
 	Tool	Outil
 	Command	Commande
@@ -2489,6 +2498,14 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Create & Edit	Créer et modifier
+	Review & Compare	Réviser et comparer
+	Forms & Signatures	Formulaires et signatures
+	Protect & Standardize	Protéger et normaliser
+	Customize & Automate	Personnaliser et automatiser
+	No tools match your search.	Aucun outil ne correspond à votre recherche.
+	Expand all tools	Développer tous les outils
+	Collapse all tools	Réduire tous les outils
 	Attach a file…	Joindre un fichier…
 	Delete attachment	Supprimer la pièce jointe
 	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web
@@ -2797,3 +2814,12 @@ certificate	Version	Version
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui
+@plural	{n} reply|{n} replies	{n} réponse|{n} réponses
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Outils de page
+	Insert pages from a file after the selection…	Insérer des pages d'un fichier après la sélection…
+	Rotate the selected pages counterclockwise	Faire pivoter les pages sélectionnées dans le sens antihoraire
+	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
+	Extract the selected pages…	Extraire les pages sélectionnées…
+	Delete the selected pages	Supprimer les pages sélectionnées
