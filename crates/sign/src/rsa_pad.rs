@@ -48,7 +48,7 @@ fn trim_zeros(b: &[u8]) -> &[u8] {
 }
 
 /// `DigestInfo ::= SEQUENCE { AlgorithmIdentifier, OCTET STRING }`.
-fn digest_info(alg: DigestAlg, digest: &[u8], null_params: bool) -> Vec<u8> {
+pub(crate) fn digest_info(alg: DigestAlg, digest: &[u8], null_params: bool) -> Vec<u8> {
     let id = der::algorithm(alg.oid(), null_params.then(der::null).as_deref());
     der::seq(&[&id, &der::octets(digest)])
 }
