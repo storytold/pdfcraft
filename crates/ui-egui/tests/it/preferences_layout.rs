@@ -102,3 +102,25 @@ fn a_very_tall_window_does_not_leave_a_blank_gap_above_ok() {
     assert!(on_screen(ok, 2600.0) && on_screen(last, 2600.0), "{last:?} {ok:?}");
     assert!(ok.min.y - last.max.y < 120.0, "a gap of {} pt between the last setting and OK", ok.min.y - last.max.y);
 }
+
+/// #4908: the "Always show the page size" checkbox is in Preferences and turns the setting on and off.
+#[test]
+fn the_always_show_page_size_checkbox_sets_the_preference() {
+    // Wide enough that the menu bar shows every menu: its overflow "⋯" has no glyph in a bare test font set.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert!(!h.state().always_show_page_size);
+    h.get_by_label("Always show the page size").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Always show the page size").click();
+    h.run_steps(3);
+    assert!(h.state().always_show_page_size, "ticked");
+    h.get_by_label("Always show the page size").click();
+    h.run_steps(3);
+    assert!(!h.state().always_show_page_size, "unticked");
+}
