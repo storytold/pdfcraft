@@ -8,7 +8,7 @@
 //! (apps/pdfcraft-web/Trunk.toml, `TRUNK_STAGING_DIR`): it renames the three files to
 //! `pdfcraft-ocr-worker-<hash>…`, updates the names inside them, and adds
 //! `<meta name="pdfcraft-ocr-worker" content="./pdfcraft-ocr-worker-<hash>_loader.js">`, which
-//! crates/ui-egui/src/ocr_web.rs reads.
+//! crates/ui-egui/src/workflows/ocr_web.rs reads.
 
 use std::path::{Path, PathBuf};
 

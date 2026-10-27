@@ -171,13 +171,13 @@ use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
-use workflows::ocr_ui;
-use workflows::optimize_ui;
-use workflows::print_ui;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 use workflows::ocr_route;
+use workflows::ocr_ui;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
+use workflows::optimize_ui;
+use workflows::print_ui;
 use workflows::web_print;
 
 /// Files dropped on a document's page grid or its Pages panel.
