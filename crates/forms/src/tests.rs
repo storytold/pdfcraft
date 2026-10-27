@@ -5535,6 +5535,32 @@ fn a_fields_display_is_written_to_every_widget_and_read_back() {
     assert!(set_props(&mut doc, "nope", &FieldProps { display: Some(FieldDisplay::Hidden), ..Default::default() }).is_err());
 }
 
+/// #5041: a script's `display.*` change resolves an indirect `/F`, keeps its unrelated bits, and
+/// reads an absent `/F` as 0, as the properties API does.
+#[test]
+fn script_display_changes_resolve_indirect_flags_and_keep_other_bits() {
+    let mut doc = fixture();
+    let widget = |doc: &Document, name: &str| fields(doc).iter().find(|f| f.name == name).unwrap().widgets[0].obj;
+    let flags = |doc: &Document, obj| doc.get(obj).as_dict().and_then(|d| d.get(b"F")).and_then(|f| doc.resolve(f).as_int());
+    let change = |name: &str, display: i32| FieldChange { name: name.into(), display: Some(display), ..Default::default() };
+    // Print | NoRotate | Locked, behind a reference: only the display bits change.
+    let w = widget(&doc, "name");
+    let r = doc.add(Object::Int(4 | 16 | 128));
+    doc.update_dict(w, |d| d.set(b"F".to_vec(), Object::Ref(r))).unwrap();
+    assert_eq!(fields(&doc).iter().find(|f| f.name == "name").unwrap().widgets[0].display, FieldDisplay::Visible);
+    apply_script_changes(&mut doc, &[change("name", 2)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(16 | 128), "display.noPrint keeps NoRotate and Locked");
+    apply_script_changes(&mut doc, &[change("name", 3)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(4 | 16 | 32 | 128), "display.noView");
+    apply_script_changes(&mut doc, &[change("name", 0)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(4 | 16 | 128), "display.visible");
+    // No /F at all is 0: the script setter builds on that, not on 4.
+    let w = widget(&doc, "size");
+    assert_eq!(flags(&doc, w), None);
+    apply_script_changes(&mut doc, &[change("size", 1)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(2 | 4));
+}
+
 /// #5041: the flag arithmetic, and that scripts' `display.*` codes and a field's `/F` agree.
 #[test]
 fn field_display_flags_round_trip_through_every_other_flag() {
