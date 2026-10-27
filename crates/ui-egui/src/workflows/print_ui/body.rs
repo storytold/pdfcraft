@@ -95,7 +95,10 @@ pub(crate) fn body(
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
-    let max_h = (ui.ctx().content_rect().height() - 120.0).max(180.0);
+    // Reserve space for dialog margins, title label, and action buttons row (~130pt),
+    // allowing the scroll area to shrink cleanly even on very short viewports (<300pt)
+    // without enforcing an arbitrary minimum floor.
+    let max_h = (ui.ctx().content_rect().height() - 130.0).max(40.0);
     egui::ScrollArea::vertical()
         .id_salt("print-body-scroll")
         .auto_shrink([false, true])
