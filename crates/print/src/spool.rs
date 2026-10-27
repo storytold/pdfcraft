@@ -24,8 +24,9 @@ thread_local! {
     /// Tests: the folder the print DLLs are looked for in, instead of the system's, so the
     /// public entry points can be checked against a Windows that lacks them.
     pub(crate) static SYSTEM32_FOR_TEST: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
-    /// Tests: how many times [`printers`] asked the system's printer backend, so a test can tell
-    /// the guard answered without relying on the machine having no printers.
+    /// Tests: how many times [`printers`], [`printer_queues`] or [`two_sided`] asked the system's
+    /// printer backend, so a test can tell the guard answered without relying on the machine
+    /// having no printers.
     pub(crate) static PRINTER_BACKEND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -57,6 +58,29 @@ pub fn printers() -> Vec<Printer> {
     #[cfg(all(windows, test))]
     PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     craft_print::printers()
+}
+
+/// The system's print queues without asking any driver, so a Print dialog's list never waits on
+/// a printer (#2192); none on a Windows installation without the print DLLs, as [`printers`].
+pub fn printer_queues() -> Vec<Printer> {
+    if missing_print_dll().is_some() {
+        return Vec::new();
+    }
+    #[cfg(all(windows, test))]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    craft_print::printer_queues()
+}
+
+/// Whether `printer`'s driver takes two-sided settings, read for that one printer; it can wait
+/// on the device, so call it off the UI thread. Unknown on a Windows installation without the
+/// print DLLs: reading it goes through them.
+pub fn two_sided(printer: &str) -> Option<bool> {
+    if missing_print_dll().is_some() {
+        return None;
+    }
+    #[cfg(all(windows, test))]
+    PRINTER_BACKEND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    craft_print::two_sided(printer)
 }
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
