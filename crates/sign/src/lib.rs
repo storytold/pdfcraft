@@ -17,6 +17,8 @@ pub mod graphic;
 pub mod keychain;
 pub mod keys;
 pub mod pdf;
+#[cfg(target_os = "linux")]
+pub mod pkcs11;
 pub mod pkcs12;
 pub mod revocation;
 pub mod status_layers;
