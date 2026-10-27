@@ -6778,6 +6778,30 @@ fn exporting_to_word_html_and_rtf() {
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
 
+/// Original ActualText with mixed hard endings must remain separate lines in an RTF reader.
+#[test]
+fn exporting_rtf_preserves_hard_line_breaks_from_actual_text() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+
+    let dir = workdir("rtf-hard-line-breaks");
+    let text = "First line\nSecond line\r\nThird line\rFourth line";
+    let hex: String = text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let content = format!("/Span <</ActualText <FEFF{hex}>>> BDC BT /F1 24 Tf 20 150 Td (abcd) Tj ET EMC");
+    let mut document = Document::open(Arc::new(fixture(1))).unwrap();
+    document.set(ObjRef::new(5, 0), Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    std::fs::write(dir.join("breaks.pdf"), write_full(&document, &SaveOptions::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"breaks.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({"doc":doc,"path":"breaks.rtf"}));
+    let output = std::fs::read_to_string(dir.join("breaks.rtf")).unwrap();
+    assert!(output.contains("First line\\line Second line\\line Third line\\line Fourth line"), "{output}");
+    assert_eq!(output.matches("\\line ").count(), 3, "CRLF must be one hard break");
+    assert!(!output.contains("abcd"), "the exported text must come from ActualText");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose
 /// innermost writes "TAIL".
 fn nested_forms_pdf(depths: &[usize]) -> Vec<u8> {

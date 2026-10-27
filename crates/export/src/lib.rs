@@ -32,6 +32,8 @@ pub use as_html::html;
 #[cfg(test)]
 use as_html::{allowed, base64};
 pub use as_rtf::rtf;
+#[cfg(test)]
+use as_rtf::rtf_text;
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};

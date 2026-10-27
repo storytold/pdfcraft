@@ -6544,8 +6544,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -7064,8 +7064,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.rtf"]
 tools = ["doc_export_office"]
-evidence = ["crates/export/src/tests.rs::table_spans_do_not_consume_text_they_do_not_emit", "crates/export/src/tests.rs::rtf_escapes_and_sizes", "crates/export/src/tests.rs::text_colour_survives_every_format", "crates/export/src/tests.rs::word_opens_text_with_control_characters_and_long_pages", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf"]
-notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. Paragraphs with sizes, bold, italic, text colour (colortbl), Unicode; a block that continues another on its line is a formatted group inside that paragraph (#4158), though a style change that wraps onto the next line still splits it; page breaks. Images are left out."
+evidence = ["crates/export/src/tests.rs::rtf_hard_line_breaks_normalize_cr_lf_and_crlf", "crates/export/src/tests.rs::rtf_hard_line_breaks_reach_paragraphs_and_table_cells", "crates/automation/tests/it/automation.rs::exporting_rtf_preserves_hard_line_breaks_from_actual_text", "crates/export/src/tests.rs::table_spans_do_not_consume_text_they_do_not_emit", "crates/export/src/tests.rs::rtf_escapes_and_sizes", "crates/export/src/tests.rs::text_colour_survives_every_format", "crates/export/src/tests.rs::word_opens_text_with_control_characters_and_long_pages", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_word_html_and_rtf"]
+notes = "Text in slots covered by a preceding table-cell span remains in paragraph flow instead of being discarded. Paragraphs with sizes, bold, italic, text colour (colortbl), Unicode; a block that continues another on its line is a formatted group inside that paragraph (#4158), though a style change that wraps onto the next line still splits it; page breaks. Hard CR/LF endings that reach the text encoder use explicit line controls, with each CRLF pair counted once; direct encoder inputs retain repeated and boundary endings. PDF paragraph inference already trims boundary CR/LF before Office export, which remains an extraction limitation. The automation regression covers internal PDF endings that survive inference. Paragraph grouping and other output formats retain their existing behavior. Images are left out."
 
 [[feature]]
 id = "create.export-xlsx"

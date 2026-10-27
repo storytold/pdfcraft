@@ -303,6 +303,35 @@ fn rtf_escapes_and_sizes() {
     assert!(r.contains("\\fs20\\i Caf\\u233? \\{x\\}"), "{r}");
 }
 
+/// RTF readers ignore literal CR/LF whitespace, so text line endings need explicit controls.
+#[test]
+fn rtf_hard_line_breaks_normalize_cr_lf_and_crlf() {
+    assert_eq!(rtf_text("First\nSecond\r\nThird\rFourth"), "First\\line Second\\line Third\\line Fourth");
+    assert_eq!(rtf_text("\nFirst\r\n\rSecond\n\n"), "\\line First\\line \\line Second\\line \\line ");
+    assert_eq!(rtf_text("{Café}\\\nNext"), "\\{Caf\\u233?\\}\\\\\\line Next");
+}
+
+/// Hard breaks are inside their formatted paragraph or table cell, not new rows/paragraphs.
+#[test]
+fn rtf_hard_line_breaks_reach_paragraphs_and_table_cells() {
+    let mut paragraph = page();
+    paragraph.blocks.truncate(1);
+    paragraph.blocks[0].text = "First\nSecond\r\nThird\rFourth".into();
+    paragraph.blocks[0].italic = true;
+    paragraph.images.clear();
+    let output = rtf(&[paragraph]);
+    assert!(output.contains("\\i First\\line Second\\line Third\\line Fourth\\par}"), "{output}");
+    assert_eq!(output.matches("\\pard").count(), 1);
+
+    let mut table = table_page();
+    table.blocks[0].text = "Meter\nnumber".into();
+    table.blocks[4].text = "kWh\r\nunit".into();
+    let output = rtf(&[table]);
+    assert!(output.contains("\\intbl"), "the fixture must be exported as a table");
+    assert!(output.contains("Meter\\line number"), "{output}");
+    assert!(output.contains("kWh\\line unit"), "{output}");
+}
+
 /// A 3-column table with a spanning header row and a hole in the last row.
 fn table_page() -> Page {
     let cell = |t: &str, x: f64, y: f64, w: f64| Block {

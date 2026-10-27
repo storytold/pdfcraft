@@ -3,10 +3,21 @@ use super::as_html::allowed;
 use super::layout::{Block, Item, Page, count_lookup_steps, items};
 use super::*;
 
-fn rtf_text(s: &str) -> String {
+/// Escape a formatted RTF run, preserving hard line endings with explicit line controls.
+pub(crate) fn rtf_text(s: &str) -> String {
     let mut o = String::new();
-    for c in s.chars().filter(|c| allowed(*c)) {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !allowed(c) {
+            continue;
+        }
         match c {
+            '\r' | '\n' => {
+                if c == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                o.push_str("\\line ");
+            }
             '\\' | '{' | '}' => {
                 o.push('\\');
                 o.push(c);
