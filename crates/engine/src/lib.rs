@@ -37,6 +37,7 @@ mod layers;
 pub mod links;
 pub mod ocr;
 mod open;
+pub mod open_parameters;
 pub mod optimizer;
 mod page_filter;
 mod pictures;
