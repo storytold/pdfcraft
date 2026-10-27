@@ -270,6 +270,73 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     .into_bytes();
     match c {
         Content::Text(t) => {
+            if let Some(resource) = &t.font_resource {
+                let font_obj = taken
+                    .get(resource.as_bytes())
+                    .cloned()
+                    .or_else(|| {
+                        for page in page_list(doc) {
+                            if let Some(f) = page
+                                .dict
+                                .get(b"Resources")
+                                .and_then(|r| doc.resolve(r).as_dict().cloned())
+                                .and_then(|r| r.get(b"Font").cloned())
+                                .and_then(|f| doc.resolve(&f).as_dict().cloned())
+                                .and_then(|f| f.get(resource.as_bytes()).cloned())
+                            {
+                                return Some(f);
+                            }
+                        }
+                        None
+                    })
+                    .ok_or_else(|| EditError::Invalid(format!("font resource /{resource} not found on page")))?;
+                let font_dict = doc
+                    .resolve(&font_obj)
+                    .as_dict()
+                    .cloned()
+                    .ok_or_else(|| EditError::Invalid(format!("font resource /{resource} is not a dictionary")))?;
+                let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict);
+                let mut fonts = Dict::new();
+                fonts.set(resource.as_bytes().to_vec(), font_obj);
+                res.set(b"Font".to_vec(), Object::Dict(fonts));
+                let r = text_rect(t);
+                let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
+                out.extend(format!("BT /{resource} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
+                if t.char_spacing != 0.0 {
+                    out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
+                }
+                let all = lines(t);
+                const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+                for (i, line) in all.iter().enumerate() {
+                    let encoded = metrics.encode(line).ok_or_else(|| {
+                        let unencodable = line.chars().find(|c| metrics.encode(&c.to_string()).is_none()).unwrap_or('?');
+                        EditError::Invalid(format!(
+                            "the selected font resource {resource} cannot show '{unencodable}' (U+{:04X})",
+                            u32::from(unencodable)
+                        ))
+                    })?;
+                    let glyph_w: f64 = metrics.codes(&encoded).iter().map(|(c, _)| metrics.width(*c) * t.size).sum();
+                    let w = glyph_w + t.char_spacing * line.chars().count() as f64;
+                    let x = match t.align {
+                        Align::Left | Align::Justify => r[0],
+                        Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
+                        Align::Right => r[2] - w,
+                    };
+                    let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
+                    let spaces = line.matches(' ').count();
+                    let tw =
+                        if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+                    out.extend(format!("1 0 0 1 {} {} Tm {} Tw <", n(x), n(y), n(tw)).bytes());
+                    for &b in &encoded {
+                        out.push(HEX_DIGITS[(b >> 4) as usize]);
+                        out.push(HEX_DIGITS[(b & 0x0F) as usize]);
+                    }
+                    out.extend_from_slice(b"> Tj\n");
+                }
+                out.extend_from_slice(b"ET\n");
+                out.extend_from_slice(b"Q\n");
+                return Ok((out, res));
+            }
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
             let mut font = Dict::new();
@@ -345,6 +412,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     Ok((out, res))
 }
 
+/// Extracts the parameters of an added item into a `/PCAdded` dictionary.
 pub(super) fn params(c: &Content) -> Dict {
     let mut d = Dict::new();
     let arr = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
@@ -353,6 +421,9 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Kind".to_vec(), Object::name("Text"));
             d.set(b"Text".to_vec(), PdfString::text(&t.text));
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
+            if let Some(font_resource) = &t.font_resource {
+                d.set(b"FontResource".to_vec(), Object::name(font_resource));
+            }
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
             d.set(b"Align".to_vec(), Object::Int(align_code(t.align)));
