@@ -126,17 +126,32 @@ impl Recipe {
     }
 }
 
-/// Whether `metadata` is a link (or, on Windows, a junction): never followed.
+/// Whether `metadata` (from `symlink_metadata`) is a link, never followed. On Windows that is a
+/// name-surrogate reparse point (a symbolic link or a junction); other reparse points, such as
+/// the placeholders of files kept in the cloud (OneDrive), are ordinary files.
 pub fn linked(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
+    metadata.file_type().is_symlink()
+}
+
+/// Check a found file again just before it is read: still a file, not a link, and still at the
+/// path discovery found, so no folder on the way has been swapped for a link since.
+pub fn unchanged(path: &Path) -> Result<(), String> {
+    let metadata = path.symlink_metadata().map_err(|e| e.to_string())?;
+    if linked(&metadata) || !metadata.is_file() || absolute(path)? != path {
+        return Err("the file changed after it was found".into());
     }
-    #[cfg(not(windows))]
-    {
-        metadata.file_type().is_symlink()
+    Ok(())
+}
+
+/// [`output_path`] resolved through the links that exist under `out` (as [`absolute`] gives it),
+/// refused if that leaves `out`: a subfolder of the output folder that is a link must not carry
+/// a result somewhere else.
+pub fn confined_output(out: &Path, relative: &Path) -> Result<PathBuf, String> {
+    let target = absolute(&output_path(out, relative))?;
+    if !target.starts_with(out) {
+        return Err("the output path leaves the output folder".into());
     }
+    Ok(target)
 }
 
 /// `path` with `.` and `..` resolved by name. `None` if a `..` would climb above its start.
@@ -339,5 +354,46 @@ mod tests {
         let written = publish(&target, b"new").unwrap();
         assert_eq!(written, dir.path().join("scan (2).pdf"));
         assert_eq!(std::fs::read(&target).unwrap(), b"original");
+    }
+
+    /// A subfolder of the output folder that links elsewhere must not carry a result out of it.
+    #[cfg(unix)]
+    #[test]
+    fn an_output_subfolder_that_links_elsewhere_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (out, elsewhere) = (base.join("out"), base.join("elsewhere"));
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, out.join("sub")).unwrap();
+        assert!(confined_output(&out, Path::new("sub/a.pdf")).is_err());
+        assert_eq!(confined_output(&out, Path::new("new/a.pdf")).unwrap(), out.join("new/a.pdf"));
+        assert_eq!(confined_output(&out, Path::new("a.pdf")).unwrap(), out.join("a.pdf"));
+    }
+
+    /// A found file, or a folder on its way, swapped for a link before it is read is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_swapped_for_a_link_after_discovery_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (scans, secret) = (base.join("scans"), base.join("secret"));
+        std::fs::create_dir_all(scans.join("sub")).unwrap();
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(scans.join("sub/a.pdf"), b"%PDF").unwrap();
+        std::fs::write(scans.join("b.pdf"), b"%PDF").unwrap();
+        std::fs::write(secret.join("a.pdf"), b"%PDF secret").unwrap();
+        let found = Discovery::find(std::slice::from_ref(&scans), &base.join("out"), true).unwrap();
+        let (a, b) = (scans.join("sub/a.pdf"), scans.join("b.pdf"));
+        assert!(found.files.contains_key(&a) && found.files.contains_key(&b));
+        assert!(unchanged(&a).is_ok() && unchanged(&b).is_ok());
+        // The folder on the way becomes a link to another folder with the same file name.
+        std::fs::remove_dir_all(scans.join("sub")).unwrap();
+        std::os::unix::fs::symlink(&secret, scans.join("sub")).unwrap();
+        assert!(unchanged(&a).is_err());
+        // The file itself becomes a link.
+        std::fs::remove_file(&b).unwrap();
+        std::os::unix::fs::symlink(secret.join("a.pdf"), &b).unwrap();
+        assert!(unchanged(&b).is_err());
     }
 }

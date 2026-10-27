@@ -240,7 +240,7 @@ impl PdfCraftApp {
         let lang = crate::i18n::current();
         let work = move || {
             crate::i18n::set_current(lang);
-            // A panic in the recognizer still ends the batch with a summary (#3919).
+            // Each file is guarded in `run`; this catches a panic outside them (#3919).
             let summary = pdfcraft_engine::guard(|| run(&draft.inputs, &out, draft.recursive, settings, &p)).unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
@@ -257,8 +257,27 @@ impl PdfCraftApp {
     }
 }
 
+/// What reading one file gives: the result to write and what was done to it.
+type Processed = Result<(Arc<Vec<u8>>, Vec<StepLog>), String>;
+
 /// Find the files, recognize text in each and publish it under `out`; returns the summary.
 fn run(inputs: &[PathBuf], out: &Path, recursive: bool, settings: OcrSettings, p: &Mutex<BatchProgress>) -> String {
+    let recipe = Recipe::ocr(settings);
+    run_with(inputs, out, recursive, &recipe, pdfcraft_engine::ocr::engine().map(|_| ()), p, |path| {
+        recipe.process(path, |page, pages| BatchProgress::page(p, page, pages))
+    })
+}
+
+/// [`run`] with the models' state and the reading of one file passed in (tests).
+fn run_with(
+    inputs: &[PathBuf],
+    out: &Path,
+    recursive: bool,
+    recipe: &Recipe,
+    models: Result<(), String>,
+    p: &Mutex<BatchProgress>,
+    mut process: impl FnMut(&Path) -> Processed,
+) -> String {
     let found = (|| {
         let out = batch::absolute(out)?;
         let roots = inputs.iter().map(|path| batch::absolute(path)).collect::<Result<Vec<_>, _>>()?;
@@ -268,7 +287,6 @@ fn run(inputs: &[PathBuf], out: &Path, recursive: bool, settings: OcrSettings, p
         Ok(found) => found,
         Err(e) => return failed(&e),
     };
-    let recipe = Recipe::ocr(settings);
     let mut skipped = found.skipped.len();
     let files: Vec<(PathBuf, PathBuf)> = found
         .files
@@ -285,8 +303,8 @@ fn run(inputs: &[PathBuf], out: &Path, recursive: bool, settings: OcrSettings, p
     if let Ok(mut s) = p.lock() {
         s.total = files.len();
     }
-    // Load the models once, and say so once if they're missing, rather than per file.
-    if let Err(e) = pdfcraft_engine::ocr::engine() {
+    // The models load once; missing ones are said once, rather than per file.
+    if let Err(e) = models {
         return failed(&e);
     }
     let (mut ok, mut words, mut errors, mut cancelled) = (0usize, 0usize, Vec::new(), false);
@@ -299,10 +317,14 @@ fn run(inputs: &[PathBuf], out: &Path, recursive: bool, settings: OcrSettings, p
             Ok(mut s) => s.done = i,
             Err(_) => {}
         }
-        let result = recipe.process(&path, |page, pages| BatchProgress::page(p, page, pages)).and_then(|(bytes, log)| {
-            batch::publish(&batch::output_path(&out, &relative), &bytes)?;
+        // A file that panics fails alone; the others are still read and counted.
+        let result = pdfcraft_engine::guard(|| {
+            batch::unchanged(&path)?;
+            let (bytes, log) = process(&path)?;
+            batch::publish(&batch::confined_output(&out, &relative)?, &bytes)?;
             Ok(log.iter().map(|l| if let StepLog::Ocr { words, .. } = l { *words } else { 0 }).sum::<usize>())
-        });
+        })
+        .unwrap_or_else(Err);
         match result {
             // Stopped partway: nothing of this file was written.
             Err(e) if e == batch::CANCELLED => {
@@ -412,5 +434,65 @@ mod tests {
         let summary = run(&[scans], &out, false, OcrSettings::default(), &p);
         assert!(summary.starts_with("Text recognition cancelled. Recognized 0 words in 0 files"), "{summary}");
         assert!(!out.join("a.pdf").exists());
+    }
+
+    /// A file that panics fails alone: the files after it are still read, and the summary
+    /// counts them and names the one that failed.
+    #[test]
+    fn a_file_that_panics_fails_alone() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        let scans = dir.path().join("scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            std::fs::write(scans.join(name), b"%PDF").unwrap();
+        }
+        let out = dir.path().join("out");
+        let p = Mutex::new(BatchProgress::default());
+        let recipe = Recipe::ocr(OcrSettings::default());
+        let summary = run_with(&[scans], &out, false, &recipe, Ok(()), &p, |path| {
+            if path.ends_with("b.pdf") {
+                panic!("broken scan");
+            }
+            Ok((Arc::new(b"%PDF result".to_vec()), vec![StepLog::Ocr { words: 2, skipped_pages: 0 }]))
+        });
+        assert_eq!(summary, "Recognized 4 words in 2 files; failed: b.pdf: broken scan");
+        assert!(out.join("a.pdf").exists() && out.join("c.pdf").exists() && !out.join("b.pdf").exists());
+    }
+
+    /// Links that turn up while the batch runs are not followed: an output subfolder that links
+    /// elsewhere gets no result, and a file swapped for a link after it was found is not read.
+    #[cfg(unix)]
+    #[test]
+    fn links_made_during_the_batch_are_not_followed() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (scans, out, elsewhere) = (base.join("scans"), base.join("out"), base.join("elsewhere"));
+        std::fs::create_dir_all(scans.join("sub")).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(scans.join("a.pdf"), b"%PDF").unwrap();
+        std::fs::write(scans.join("b.pdf"), b"%PDF").unwrap();
+        std::fs::write(scans.join("sub/c.pdf"), b"%PDF").unwrap();
+        std::fs::write(elsewhere.join("secret.pdf"), b"%PDF secret").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, out.join("sub")).unwrap();
+        let p = Mutex::new(BatchProgress::default());
+        let recipe = Recipe::ocr(OcrSettings::default());
+        let mut read = Vec::new();
+        let summary = run_with(std::slice::from_ref(&scans), &out, true, &recipe, Ok(()), &p, |path| {
+            read.push(path.to_path_buf());
+            if path.ends_with("a.pdf") {
+                // b.pdf, found already, becomes a link before its turn.
+                std::fs::remove_file(scans.join("b.pdf")).unwrap();
+                std::os::unix::fs::symlink(elsewhere.join("secret.pdf"), scans.join("b.pdf")).unwrap();
+            }
+            Ok((Arc::new(b"%PDF result".to_vec()), Vec::new()))
+        });
+        assert_eq!(read, vec![scans.join("a.pdf"), scans.join("sub/c.pdf")], "b.pdf is not read");
+        assert!(summary.starts_with("Recognized 0 words in 1 file; failed: b.pdf: "), "{summary}");
+        assert!(summary.contains("sub/c.pdf: "), "{summary}");
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 1, "nothing written through out/sub");
+        assert!(out.join("a.pdf").exists());
     }
 }
