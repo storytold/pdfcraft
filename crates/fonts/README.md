@@ -55,10 +55,17 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 - `document_japanese_fonts_for_style`: every `Jpan` face in that order of preference, so the
   editor can use the first one that has all of the replacement's glyphs (the faces differ in
   coverage, e.g. of Cyrillic).
-- `ui_thai_fonts` / `document_thai_font` / `shape_thai`: the `Thai` faces for the interface
-  and shaped Thai Add Text content. Harfrust positions stacked vowel/tone marks and decomposes
-  Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
-  embeds outlines, so reopening does not depend on installed fonts.
+- `ui_thai_fonts`: the `Thai` faces of the main manifest (Noto Sans Thai, loopless) for the
+  interface.
+- `document_thai_font` / `shape_thai`: the face for Thai text written into PDFs and its shaper.
+  It is the Regular face of craft-fonts' opt-in Thai document manifest (`fonts/thai-manifest.txt`,
+  Sarabun, looped Thai) when the checkout has one, else the interface face, as before that
+  manifest existed. Harfrust positions stacked vowel/tone marks and decomposes Sara Am; cluster
+  ToUnicode entries preserve the original text. The shared Type 3 writer embeds outlines, so
+  reopening does not depend on installed fonts. Only the Regular face is used so far.
+  The faces of that document manifest (native builds only) live in an internal
+  `CRAFT_DOCUMENT_FONTS`. They are never interface fallbacks, so they are kept out of
+  `CRAFT_FONTS` and every `ui_*` list.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect

@@ -2,7 +2,9 @@
 //!
 //! `build.rs` embeds every font in craft-fonts' manifest when PdfCraft is built with
 //! `CRAFT_FONTS_DIR=<checkout>`; otherwise [`CRAFT_FONTS`] is empty and everything here returns
-//! nothing. Callers must work either way.
+//! nothing. Callers must work either way. Native builds also embed craft-fonts' opt-in Thai
+//! document manifest, when the checkout has one, as [`CRAFT_DOCUMENT_FONTS`]: faces for text
+//! written into PDFs, never interface fallbacks.
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {
@@ -66,13 +68,24 @@ pub fn ui_telugu_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Telu")).collect()
 }
 
-/// Thai faces shared by the interface and PDF text writer.
+/// The `Thai` faces of the main manifest for interface text, in manifest order. The PDF text
+/// writer uses [`document_thai_font`], which prefers the document manifest's face.
 pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Thai")).collect()
 }
 
+/// The face for Thai text written into PDFs: the Regular face of craft-fonts' Thai document
+/// manifest (Sarabun, looped Thai) when the build has it, else the interface Thai face (Noto Sans
+/// Thai, loopless), else any document Thai face. `None` without a Thai face in the build.
 pub fn document_thai_font() -> Option<&'static CraftFont> {
-    ui_thai_fonts().into_iter().next()
+    thai_document_face(CRAFT_DOCUMENT_FONTS, CRAFT_FONTS)
+}
+
+/// [`document_thai_font`] over the given document-manifest and main-manifest faces. Plain text
+/// prefers the interface face to a document face of another style (no bold for regular text).
+fn thai_document_face<'a>(document: &'a [CraftFont], ui: &'a [CraftFont]) -> Option<&'a CraftFont> {
+    let thai = |faces: &'a [CraftFont]| faces.iter().filter(|f| f.covers("Thai"));
+    thai(document).find(|f| f.style == "Regular").or_else(|| thai(ui).next()).or_else(|| thai(document).next())
 }
 
 /// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
@@ -295,6 +308,44 @@ mod tests {
         // An Arabic face is never a CJK fallback, and the other way round.
         assert!(order_cjk(&faces, false).iter().all(|f| f.family == "BIZ UDPGothic"));
         assert_eq!(ui_arabic_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Arab")).count());
+    }
+
+    #[test]
+    fn thai_document_text_prefers_the_document_manifest_face() {
+        static THAI_LATN: &[&str] = &["Thai", "Latn"];
+        let document = [
+            CraftFont { family: "FakeLooped", style: "Bold", scripts: THAI_LATN, bytes: b"looped-bold" },
+            CraftFont { family: "FakeLooped", style: "Regular", scripts: THAI_LATN, bytes: b"looped" },
+            CraftFont { family: "FakeLatin", style: "Regular", scripts: &["Latn"], bytes: b"not-thai" },
+        ];
+        let ui = [
+            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], bytes: b"not-thai" },
+            CraftFont { family: "FakeLoopless", style: "Regular", scripts: &["Thai"], bytes: b"loopless" },
+        ];
+        // The document manifest's Regular face, whatever its position.
+        assert_eq!(thai_document_face(&document, &ui).map(|f| f.bytes), Some(&b"looped"[..]));
+        // Without a document Regular face, the interface face rather than a bold one for plain text.
+        assert_eq!(thai_document_face(&document[..1], &ui).map(|f| f.bytes), Some(&b"loopless"[..]));
+        // Without the document manifest (today's pinned craft-fonts), the interface face as before.
+        assert_eq!(thai_document_face(&[], &ui).map(|f| f.bytes), Some(&b"loopless"[..]));
+        // Some document Thai face rather than none; never a face of another script.
+        assert_eq!(thai_document_face(&document[..1], &ui[..1]).map(|f| f.bytes), Some(&b"looped-bold"[..]));
+        assert!(thai_document_face(&document[2..], &ui[..1]).is_none());
+        assert!(thai_document_face(&[], &[]).is_none());
+    }
+
+    /// Document-manifest faces are for text written into PDFs only: the interface keeps its own.
+    #[test]
+    fn document_manifest_faces_are_never_interface_fallbacks() {
+        assert!(ui_thai_fonts().iter().all(|f| !CRAFT_DOCUMENT_FONTS.iter().any(|d| std::ptr::eq(d, *f))));
+        assert_eq!(ui_thai_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Thai")).count());
+        let any_thai = CRAFT_FONTS.iter().chain(CRAFT_DOCUMENT_FONTS).any(|f| f.covers("Thai"));
+        assert_eq!(document_thai_font().is_some(), any_thai);
+        if let Some(face) = CRAFT_DOCUMENT_FONTS.iter().find(|f| f.covers("Thai") && f.style == "Regular") {
+            assert!(document_thai_font().is_some_and(|f| std::ptr::eq(f, face)));
+        }
+        #[cfg(target_arch = "wasm32")]
+        assert!(CRAFT_DOCUMENT_FONTS.is_empty());
     }
 
     #[test]
