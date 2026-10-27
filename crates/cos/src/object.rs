@@ -172,6 +172,11 @@ impl Dict {
         self.entries.iter().map(|(k, v)| (k, v))
     }
 
+    /// Whether the keys are held a second time, in the lookup index.
+    pub(crate) fn is_indexed(&self) -> bool {
+        self.index.is_some()
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

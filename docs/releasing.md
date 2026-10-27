@@ -148,7 +148,7 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - The portable zip holds both executables, the README, the licences, the OFL licence of each
   embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
   settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of
-  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/portable.rs`). The MSI carries the same
+  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/platform/portable.rs`). The MSI carries the same
   OFL notices; `-SkipBuild` requires `CRAFT_FONTS_DIR` so they can be staged, or
   `-BuiltWithoutCraftFonts` for binaries built without that input, and `test-msi.ps1` checks that
   the compiled MSI has OFL notice rows when expected (and none for a no-font build).

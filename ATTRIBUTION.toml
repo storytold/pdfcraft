@@ -6,7 +6,7 @@ source = "Contributor-original: clean-room translations of PdfCraft English UI l
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Greek UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Greek UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 # ATTRIBUTION.toml: one entry per asset (AGENTS.md §1). The source of truth for provenance and licences.
 # ATTRIBUTION.md is generated from this file: `cargo xtask assets --write`. Checked by `cargo xtask assets` (part of `xtask ci`).
@@ -30,7 +30,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -40,7 +40,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/cs.tsv"
@@ -50,7 +50,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Czech UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Czech UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/pt-br.tsv"
@@ -60,7 +60,7 @@ source = "Clean-room translations of PdfCraft's English UI labels, no proprietar
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Brazilian Portuguese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Brazilian Portuguese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/es.tsv"
@@ -70,7 +70,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Spanish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Spanish UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/fr.tsv"
@@ -80,7 +80,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "French UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/de.tsv"
@@ -90,7 +90,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "German UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "German UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/lo.tsv"
@@ -100,7 +100,7 @@ source = "Contributor-original: clean-room translations of PdfCraft English UI l
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Lao UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Lao UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/te.tsv"
@@ -110,7 +110,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Telugu UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Telugu UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/it.tsv"
@@ -120,7 +120,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Italian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Italian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/pl.tsv"
@@ -130,7 +130,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Polish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Polish UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ru.tsv"
@@ -140,7 +140,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Russian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Russian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/hu.tsv"
@@ -150,7 +150,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Hungarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Hungarian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/bg.tsv"
@@ -160,7 +160,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Bulgarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Bulgarian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/kk.tsv"
@@ -170,7 +170,7 @@ source = "Contributor-original: clean-room translations of the English UI labels
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Kazakh UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Kazakh UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ja.tsv"
@@ -180,7 +180,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Japanese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Japanese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/uk.tsv"
@@ -190,7 +190,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Ukrainian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Ukrainian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ar.tsv"
@@ -200,7 +200,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Arabic UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Arabic UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ckb.tsv"
@@ -210,7 +210,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Central Kurdish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Central Kurdish UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/fa.tsv"
@@ -220,7 +220,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Persian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Persian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/tr.tsv"
@@ -230,7 +230,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Turkish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Turkish UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/lt.tsv"
@@ -240,7 +240,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/hi.tsv"
@@ -250,7 +250,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Hindi UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Hindi UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 [[asset]]
 path = "crates/ui-egui/src/i18n/id.tsv"
 title = "Indonesian interface translation catalog"
@@ -259,7 +259,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Indonesian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Indonesian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 [[asset]]
 path = "crates/ui-egui/src/i18n/ko.tsv"
 title = "Korean interface translation catalog"
@@ -268,7 +268,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Korean UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Korean UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ro.tsv"
@@ -278,7 +278,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Romanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Romanian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 
 [[asset]]
@@ -289,7 +289,7 @@ source = "Contributor-original: AI-assisted (Claude Code) clean-room translation
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Finnish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Finnish UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "assets/icons/accessibility.svg"
@@ -3422,7 +3422,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Vietnamese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Vietnamese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/sl.tsv"
@@ -3432,7 +3432,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Slovene UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Slovene UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 
@@ -3454,7 +3454,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Norwegian Bokmål UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Norwegian Bokmål UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "assets/icons/superscript.svg"
@@ -3508,7 +3508,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Albanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Albanian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/th.tsv"
@@ -3518,7 +3518,7 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Thai UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Thai UI strings, compiled in by crates/ui-egui/src/i18n.rs"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ca.tsv"
@@ -3528,4 +3528,4 @@ source = "Contributor-original: clean-room translations of PdfCraft's English UI
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
-usage = "Catalan UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+usage = "Catalan UI strings, compiled in by crates/ui-egui/src/i18n.rs"

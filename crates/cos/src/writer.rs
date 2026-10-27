@@ -752,6 +752,28 @@ mod tests {
     }
 
     #[test]
+    fn kept_objects_count_names_and_dictionary_keys() {
+        let data = Arc::new(Vec::new());
+        let name = Object::Name(vec![b'n'; KeptObjects::BYTES + 1]);
+        let mut kept = KeptObjects::default();
+        assert!(!kept.admit(&name, &data), "a name over the byte budget is not kept");
+        assert_eq!((kept.bytes, kept.nodes), (0, 0));
+        let mut dict = Dict::new();
+        dict.set(vec![b'k'; KeptObjects::BYTES + 1], Object::Null);
+        assert!(!kept.admit(&Object::Dict(dict), &data), "nor a dictionary key");
+        let mut small = Dict::new();
+        small.set(b"Key".to_vec(), Object::name("Value"));
+        assert!(kept.admit(&Object::Dict(small), &data));
+        assert_eq!(kept.bytes, 3 + 5);
+        // A dictionary large enough to index its keys holds each one twice.
+        let mut big = Dict::new();
+        for i in 0..64 {
+            big.set(format!("K{i:03}").into_bytes(), Object::Null);
+        }
+        assert_eq!(owned_bytes(&Object::Dict(big), &data, 0), 64 * 4 * 2);
+    }
+
+    #[test]
     fn a_second_read_that_differs_fails_the_save_instead_of_writing_null() {
         let mut doc = Document::new_empty();
         let dict = doc.add(Object::Dict(Dict::new()));
