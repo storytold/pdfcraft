@@ -425,6 +425,29 @@ impl PdfCraftApp {
         self.stage_combine_with(incoming);
     }
 
+    /// Interleave the pages of the listed files (page 1 of each, then page 2 of each, and so on;
+    /// #4922) into a new, unsaved document; the tab makes way for it. A file split into parts
+    /// counts once, as a whole file: the Pages fields and the parts are Combine's.
+    pub fn interleave_staged(&mut self) {
+        let mut seen = BTreeSet::new();
+        let files: Vec<&CombineFile> = self.combine_draft.iter().filter(|f| !f.unreadable() && seen.insert(f.group)).collect();
+        if files.len() < 2 {
+            return;
+        }
+        let sources: Vec<(String, Arc<Vec<u8>>)> = files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone())).collect();
+        let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
+        let count = files.len();
+        match self.session.shuffle(&sources, &passwords) {
+            Ok(bytes) => {
+                self.close_combine_tab();
+                let message = crate::i18n::fmt(tl!("Interleaved {n} files"), &[("n", &count.to_string())]);
+                self.open_created("Interleaved.pdf", bytes, &message)
+            }
+            // The list stays, so the user can fix it.
+            Err(e) => self.notify_fmt("Couldn't interleave files: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
     /// Combine the listed files into a new, unsaved document; the tab makes way for it.
     /// Files that can't be read are left out (the user was asked).
     pub fn combine_staged(&mut self) {

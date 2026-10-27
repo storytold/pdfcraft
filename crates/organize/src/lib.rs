@@ -529,6 +529,29 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
     rebuild(doc, &rest)
 }
 
+/// Put the pages in a new order: `order[k]` is the current index of the page that goes at
+/// position `k`. It must list every page exactly once; anything else is refused before the
+/// document changes. One pass over the page tree, however many pages move.
+pub fn reorder_pages(doc: &mut Document, order: &[usize]) -> Result<(), OrganizeError> {
+    let all = walk(doc)?;
+    if order.len() != all.len() {
+        return Err(OrganizeError::Invalid(format!("the new order lists {} pages, the document has {}", order.len(), all.len())));
+    }
+    check(order, all.len())?;
+    let mut seen = vec![false; all.len()];
+    for &i in order {
+        // `check` has bounded every index, so `get_mut` always finds its slot.
+        if let Some(slot) = seen.get_mut(i) {
+            if *slot {
+                return Err(OrganizeError::Invalid(format!("page {} is listed twice in the new order", i + 1)));
+            }
+            *slot = true;
+        }
+    }
+    let reordered: Vec<(ObjRef, Dict)> = order.iter().filter_map(|i| all.get(*i).cloned()).collect();
+    rebuild(doc, &reordered)
+}
+
 /// Reverse the order of the pages at `indices` among the positions they occupy; every other
 /// page stays where it is. Fewer than two distinct pages is refused, since nothing would change.
 pub fn reverse_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {

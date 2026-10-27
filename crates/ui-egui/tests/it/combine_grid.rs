@@ -528,6 +528,32 @@ fn combine_follows_the_order_shown_in_the_grid() {
     assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["three", "one", "two"]);
 }
 
+/// #4922: Interleave pages alternates the pages of the listed files, in the order shown, and the
+/// result opens as one new document with a bookmark per file.
+#[test]
+fn interleave_pages_alternates_the_pages_of_the_files_in_the_order_shown() {
+    let mut h = grid_of_pages(&[("front.pdf", 3), ("back.pdf", 2)]);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.len(), 1, "the result opens, in place of the Combine tab");
+    // Page 1 of each file, then page 2, then the rest of the longer one. (Both files' pages say
+    // "Page n", so the order is the pages' numbers.)
+    assert_eq!(texts_of(app, 0), ["Page 1", "Page 1", "Page 2", "Page 2", "Page 3"]);
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["front", "back"]);
+}
+
+/// #4922: Interleave pages waits for two readable files, like Combine.
+#[test]
+fn interleave_pages_needs_two_files() {
+    use egui_kittest::kittest::NodeT;
+    let h = grid_of_pages(&[("only.pdf", 3)]);
+    assert!(h.get_by_label("Interleave pages").accesskit_node().is_disabled(), "one file has nothing to interleave with");
+    let h = grid_of_pages(&[("one.pdf", 1), ("two.pdf", 1)]);
+    assert!(!h.get_by_label("Interleave pages").accesskit_node().is_disabled());
+}
+
 #[test]
 fn long_and_unusual_names_are_shortened_on_the_card_but_kept_whole() {
     if crate::support::skip_without_glyphs("long_and_unusual_names_are_shortened_on_the_card_but_kept_whole", "en", "日本語のファイル名.pdf")

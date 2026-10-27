@@ -266,6 +266,34 @@ impl Automation {
         Ok(out)
     }
 
+    /// Interleave the pages of two or more files (`pdftk A B shuffle`, #4922).
+    pub(crate) fn doc_shuffle(&mut self, a: &Args) -> Result<Value> {
+        let paths = a.strs("paths")?;
+        if paths.len() < 2 {
+            return Err(ToolError::InvalidArgs("a shuffle needs at least two files".into()));
+        }
+        let passwords: Vec<Option<String>> = match a.get("passwords") {
+            None | Some(Value::Null) => vec![None; paths.len()],
+            Some(Value::Array(v)) if v.len() == paths.len() && v.iter().all(|x| x.is_string() || x.is_null()) => {
+                v.iter().map(|x| x.as_str().map(str::to_owned)).collect()
+            }
+            Some(_) => return Err(ToolError::InvalidArgs("passwords must list a password (or null) for each path".into())),
+        };
+        // Each file is read and made into a PDF in turn (images and text files too, as Combine does).
+        let mut files: Vec<(String, Arc<Vec<u8>>)> = Vec::with_capacity(paths.len());
+        for p in paths {
+            let path = self.resolve(p, false)?;
+            let bytes = Arc::new(read_input(&path)?);
+            let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let pdf = self.session.as_pdf(&file_name, &bytes).map_err(failed)?;
+            let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            files.push((title, pdf));
+        }
+        let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
+        let shuffled = self.session.shuffle(&files, &passwords).map_err(failed)?;
+        self.deliver(a, "Shuffled", shuffled)
+    }
+
     pub(crate) fn doc_combine(&mut self, a: &Args) -> Result<Value> {
         let paths = a.strs("paths")?;
         if paths.len() < 2 {

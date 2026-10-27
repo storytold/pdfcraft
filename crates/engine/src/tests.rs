@@ -4030,6 +4030,64 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// Shuffle (#4922): the pages of the files alternate, the longer files carry on when a shorter
+/// one runs out, and a file with one page, one file or none is handled.
+#[test]
+fn shuffle_interleaves_the_pages_of_files() {
+    let mut s = Session::new();
+    // Page `p` of file `f` is `f * 100 + p` points wide, so the result shows where each page came
+    // from, and in what order within its file.
+    let file = |s: &Session, f: u32, pages: u32| -> Arc<Vec<u8>> {
+        let one_page_each: Vec<(String, Arc<Vec<u8>>)> =
+            (1..=pages).map(|p| (format!("p{p}"), s.create_blank(f64::from(f * 100 + p), 100.0, 1).unwrap())).collect();
+        s.combine(&one_page_each).unwrap()
+    };
+    let widths = |s: &mut Session, bytes: Arc<Vec<u8>>| -> Vec<u32> {
+        let id = s.open_new("shuffled.pdf", bytes).unwrap();
+        s.get(id).unwrap().info.pages.iter().map(|p| p.width as u32).collect()
+    };
+    let name = |n: &str| n.to_string();
+    let (a, b, c) = (file(&s, 1, 5), file(&s, 2, 5), file(&s, 3, 1));
+    let short = file(&s, 2, 3);
+    assert_eq!(widths(&mut s, a.clone()), [101, 102, 103, 104, 105], "the fixture is in page order");
+
+    // The issue's example: fronts and backs.
+    let both = s.shuffle(&[(name("front"), a.clone()), (name("back"), b)], &[]).unwrap();
+    assert_eq!(widths(&mut s, both), [101, 201, 102, 202, 103, 203, 104, 204, 105, 205]);
+
+    // Different lengths: the rest of the longer file follows, in its own order.
+    let uneven = s.shuffle(&[(name("a"), a.clone()), (name("b"), short.clone())], &[]).unwrap();
+    assert_eq!(widths(&mut s, uneven), [101, 201, 102, 202, 103, 203, 104, 105]);
+    let reversed = s.shuffle(&[(name("b"), short.clone()), (name("a"), a.clone())], &[]).unwrap();
+    assert_eq!(widths(&mut s, reversed), [201, 101, 202, 102, 203, 103, 104, 105]);
+
+    // Three files, one of one page.
+    let three = s.shuffle(&[(name("a"), a.clone()), (name("b"), short), (name("c"), c)], &[]).unwrap();
+    assert_eq!(widths(&mut s, three), [101, 201, 301, 102, 202, 103, 203, 104, 105]);
+
+    // The same file twice interleaves with itself.
+    let twice = s.shuffle(&[(name("a"), a.clone()), (name("a"), a.clone())], &[]).unwrap();
+    assert_eq!(widths(&mut s, twice), [101, 101, 102, 102, 103, 103, 104, 104, 105, 105]);
+
+    // Fewer than two files is refused, and so is a file that is not a PDF.
+    assert!(matches!(s.shuffle(&[], &[]), Err(EditError::Invalid(_))));
+    assert!(matches!(s.shuffle(&[(name("a"), a.clone())], &[]), Err(EditError::Invalid(_))));
+    assert!(s.shuffle(&[(name("a"), a), (name("junk"), Arc::new(b"not a pdf".to_vec()))], &[]).is_err());
+}
+
+/// The pages a shuffle writes are capped, whatever the files say.
+#[test]
+fn shuffle_refuses_more_pages_than_its_cap() {
+    let s = Session::new();
+    // Ten thousand pages is the most a blank document has, so eleven of them are over the cap.
+    let big = s.create_blank(10.0, 10.0, 10_000).unwrap();
+    let files: Vec<(String, Arc<Vec<u8>>)> = (0..11).map(|i| (format!("f{i}"), big.clone())).collect();
+    let err = s.shuffle(&files, &[]).unwrap_err();
+    assert!(matches!(err, EditError::Invalid(_)), "{err:?}");
+    // Ten are exactly at it and are accepted.
+    assert!(s.shuffle(&files[..10], &[]).is_ok());
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]
