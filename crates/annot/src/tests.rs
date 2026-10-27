@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pdfcraft_cos::{Document, ObjRef, Object, SaveOptions, write_incremental};
 
 use super::*;
+use crate::modify::fitted_box;
 
 /// Two pages. Page 1 has an inline Square annotation in a direct /Annots array; page 2 has an
 /// indirect /Annots array holding a Stamp (a type we cannot redraw).
