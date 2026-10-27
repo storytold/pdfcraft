@@ -106,32 +106,39 @@ const TITLES: &[&str] = &[
 /// Separator.
 const SEP: &str = "---";
 
+/// The File menu in Acrobat's sections: open and create (Create follows Pin folder); save; reduce,
+/// optimize and export, then Protect; revert and close; properties (with Word count, which Acrobat
+/// lacks); print.
 const FILE: &[&str] = &[
-    "create.blank",
     "file.open",
     "file.open_recent",
     "file.pin_folder",
     SEP,
-    "page.combine",
-    SEP,
     "file.save",
     "file.save_as",
-    "file.revert",
-    SEP,
-    "file.close",
-    "file.close_all",
     SEP,
     "optimize.reduce",
     "optimize.advanced",
+    SEP,
+    "file.revert",
+    "file.close",
+    "file.close_all",
     SEP,
     "file.properties",
     "file.word_count",
     SEP,
     "print.dialog",
 ];
-const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];
-const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.rtf", "export.html", "export.text", SEP, "export.image", "export.all_images"];
+/// File ▸ Create in Acrobat's groups: PDFs from a source, PDFs from several files, a blank page.
+const CREATE: &[&str] =
+    &["create.file", "create.images", "create.clipboard", SEP, "page.combine", "create.multiple", "create.multiple_separate", SEP, "create.blank"];
+/// File ▸ Export in Acrobat's order: Word, PowerPoint, image and HTML; the other formats; the
+/// document's images.
+const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.image", "export.html", SEP, "export.rtf", "export.text", SEP, "export.all_images"];
 const PROTECT: &[&str] = &["protect.password", "protect.remove", "protect.unlock", SEP, "protect.properties"];
+/// The Edit menu in Acrobat's sections: undo; Cut, Copy, Paste, Delete and Select all (then
+/// Pages); column select and snapshot, where Acrobat has Take a Snapshot; changing content; search;
+/// preferences.
 const EDIT: &[&str] = &[
     "edit.undo",
     "edit.redo",
@@ -140,17 +147,16 @@ const EDIT: &[&str] = &[
     "edit.copy",
     PASTE,
     DELETE,
-    SEP,
     SELECT_ALL,
-    SEP,
-    "edit.find",
-    "edit.advanced_search",
     SEP,
     "edit.column_select",
     "edit.snapshot",
     SEP,
     "edit.attach",
     "form.clear",
+    SEP,
+    "edit.find",
+    "edit.advanced_search",
     SEP,
     "app.preferences",
 ];
@@ -282,8 +288,8 @@ impl PdfCraftApp {
         let file = {
             let mut nodes = Vec::new();
             for node in list(FILE, &mut used) {
-                // Open Recent is the live recent list; Create, Export and Protect follow Combine,
-                // Optimize and Close.
+                // Open Recent is the live recent list; Create follows Pin folder, and Export and
+                // Protect follow Optimize.
                 let recent = matches!(&node, Node::Item(it) if it.command.id == "file.open_recent");
                 if recent {
                     nodes.push(self.recent_menu());
@@ -295,7 +301,7 @@ impl PdfCraftApp {
                 };
                 nodes.push(node);
                 match after.as_str() {
-                    "page.combine" => nodes.push(Node::submenu(tl!("Create"), list(CREATE, &mut used))),
+                    "file.pin_folder" => nodes.push(Node::submenu(tl!("Create"), list(CREATE, &mut used))),
                     "optimize.advanced" => {
                         nodes.push(Node::submenu(tl!("Export"), list(EXPORT, &mut used)));
                         nodes.push(Node::Separator);
@@ -682,6 +688,79 @@ mod tests {
                 "{id} runs something"
             );
         }
+    }
+
+    /// A menu's items as command ids in sections (split at separators); a submenu is `>Label`.
+    fn sections(nodes: &[Node]) -> Vec<Vec<String>> {
+        let mut out = vec![Vec::new()];
+        for node in nodes {
+            let id = match node {
+                Node::Separator => {
+                    out.push(Vec::new());
+                    continue;
+                }
+                Node::Item(it) => it.command.id.clone(),
+                Node::Submenu { label, .. } => format!(">{label}"),
+                Node::Standard { label, .. } => label.clone(),
+            };
+            if let Some(section) = out.last_mut() {
+                section.push(id);
+            }
+        }
+        out
+    }
+
+    fn submenu<'n>(nodes: &'n [Node], name: &str) -> &'n [Node] {
+        nodes
+            .iter()
+            .find_map(|n| match n {
+                Node::Submenu { label, children, .. } if label == name => Some(children.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} is a submenu"))
+    }
+
+    #[test]
+    fn file_and_edit_follow_acrobats_sections() {
+        let (app, ctx) = app(&["a.pdf"]);
+        let bar = app.menu_bar(&ctx);
+        let file = &bar.menu(MenuRole::File).unwrap().children;
+        let recent = format!(">{}", commands::command("file.open_recent").unwrap().label);
+        assert_eq!(
+            sections(file),
+            [
+                vec!["file.open", recent.as_str(), "file.pin_folder", ">Create"],
+                vec!["file.save", "file.save_as"],
+                vec!["optimize.reduce", "optimize.advanced", ">Export"],
+                vec![">Protect"],
+                vec!["file.revert", "file.close", "file.close_all"],
+                vec!["file.properties", "file.word_count"],
+                vec!["print.dialog"],
+            ]
+        );
+        assert_eq!(
+            sections(submenu(file, "Create")),
+            [
+                vec!["create.file", "create.images", "create.clipboard"],
+                vec!["page.combine", "create.multiple", "create.multiple_separate"],
+                vec!["create.blank"],
+            ]
+        );
+        assert_eq!(
+            sections(submenu(file, "Export")),
+            [vec!["export.docx", "export.pptx", "export.image", "export.html"], vec!["export.rtf", "export.text"], vec!["export.all_images"]]
+        );
+        assert_eq!(
+            sections(&bar.menu(MenuRole::Edit).unwrap().children),
+            [
+                vec!["edit.undo", "edit.redo"],
+                vec![CUT, "edit.copy", PASTE, DELETE, SELECT_ALL, ">Pages"],
+                vec!["edit.column_select", "edit.snapshot"],
+                vec!["edit.attach", "form.clear"],
+                vec!["edit.find", "edit.advanced_search"],
+                vec!["app.preferences"],
+            ]
+        );
     }
 
     #[test]
