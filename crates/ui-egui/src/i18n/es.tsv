@@ -180,6 +180,15 @@
 	Available	Disponible
 	Ready	Listo
 	Search tools and commands…	Buscar herramientas y comandos…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texto añadido
+	Link URL	URL del enlace
+	Search tools and commands	Buscar herramientas y comandos
+	Text editing line	Línea de edición de texto
+	Text to place	Texto que colocar
+	Tooltip	Información sobre herramientas
+	Words or phrases to redact	Palabras o frases que censurar
 	No matching tools	Ninguna herramienta coincide
 	Tool	Herramienta
 	Command	Comando

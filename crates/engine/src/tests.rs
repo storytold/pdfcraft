@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
+use super::document::is_placeholder_title;
+use super::edit::check_permission;
 use super::*;
+use pdfcraft_render::{Layer, LayerOp, OpenError, ReadingColors};
 
 /// A minimal `n`-page document; page `i` shows "Page i+1".
 pub(crate) fn fixture(n: usize) -> Vec<u8> {

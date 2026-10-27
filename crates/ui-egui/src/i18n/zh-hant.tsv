@@ -1783,6 +1783,15 @@
 	Tool	工具
 	Command	指令
 	Search tools and commands…	搜尋工具與指令…
+
+# Accessible names for inputs that have no visible label.
+	Added text	已新增的文字
+	Link URL	連結 URL
+	Search tools and commands	搜尋工具與指令
+	Text editing line	文字編輯行
+	Text to place	要放置的文字
+	Tooltip	提示
+	Words or phrases to redact	要遮蔽的字詞或片語
 	No matching tools	找不到相符的工具
 	All tools	所有工具
 	Read	閱讀

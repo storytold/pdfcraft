@@ -1832,6 +1832,15 @@
 	Tool	Инструмент
 	Command	Команда
 	Search tools and commands…	Търсене на инструменти и команди…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Добавен текст
+	Link URL	URL на връзката
+	Search tools and commands	Търсене на инструменти и команди
+	Text editing line	Ред за редактиране на текст
+	Text to place	Текст за поставяне
+	Tooltip	Подсказка
+	Words or phrases to redact	Думи или фрази за заличаване
 	No matching tools	Няма съответстващи инструменти
 	All tools	Всички инструменти
 	Read	Четене

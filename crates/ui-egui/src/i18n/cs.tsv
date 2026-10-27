@@ -305,6 +305,15 @@ key	Space	Mezerník
 	Available	Dostupné
 	Ready	Připraveno
 	Search tools and commands…	Hledat nástroje a příkazy…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Přidaný text
+	Link URL	Adresa URL odkazu
+	Search tools and commands	Hledat nástroje a příkazy
+	Text editing line	Řádek pro úpravu textu
+	Text to place	Text k umístění
+	Tooltip	Popisek
+	Words or phrases to redact	Slova nebo fráze k začernění
 	No matching tools	Žádné odpovídající nástroje
 	Tool	Nástroj
 	Command	Příkaz

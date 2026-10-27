@@ -145,6 +145,15 @@
 	Available	Қолжетімді
 	Ready	Дайын
 	Search tools and commands…	Құралдар мен командаларды іздеу…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Қосылған мәтін
+	Link URL	Сілтеменің URL мекенжайы
+	Search tools and commands	Құралдар мен командаларды іздеу
+	Text editing line	Мәтінді өңдеу жолы
+	Text to place	Орналастырылатын мәтін
+	Tooltip	Қалтқы
+	Words or phrases to redact	Жасырылатын сөздер немесе сөз тіркестері
 	No matching tools	Сәйкес құралдар жоқ
 	Tool	Құрал
 	Command	Команда

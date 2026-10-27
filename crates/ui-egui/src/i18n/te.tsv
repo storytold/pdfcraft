@@ -161,6 +161,15 @@ comment menu	Edit	సవరించు
 	Available	అందుబాటులో ఉంది
 	Ready	సిద్ధం
 	Search tools and commands…	సాధనాలు, కమాండ్‌లలో వెతుకు…
+
+# Accessible names for inputs that have no visible label.
+	Added text	జోడించిన టెక్స్ట్
+	Link URL	లింక్ URL
+	Search tools and commands	సాధనాలు, కమాండ్‌లలో వెతుకు
+	Text editing line	టెక్స్ట్ సవరణ పంక్తి
+	Text to place	ఉంచాల్సిన టెక్స్ట్
+	Tooltip	టూల్‌టిప్
+	Words or phrases to redact	రెడాక్ట్ చేయాల్సిన పదాలు లేదా పదబంధాలు
 	No matching tools	సరిపోలే సాధనాలు లేవు
 	Tool	సాధనం
 	Command	కమాండ్

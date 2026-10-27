@@ -142,6 +142,15 @@
 	Available	Kullanılabilir
 	Ready	Hazır
 	Search tools and commands…	Araçları ve komutları ara…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Eklenen metin
+	Link URL	Bağlantı URL'si
+	Search tools and commands	Araçları ve komutları ara
+	Text editing line	Metin düzenleme satırı
+	Text to place	Yerleştirilecek metin
+	Tooltip	İpucu
+	Words or phrases to redact	Karartılacak sözcükler veya ifadeler
 	No matching tools	Eşleşen araç yok
 	Tool	Araç
 	Command	Komut

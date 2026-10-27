@@ -1020,6 +1020,15 @@
 	Scroll tabs right	Rull faner til høyre
 	Search comments	Søk i kommentarer
 	Search tools and commands…	Søk etter verktøy og kommandoer…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Lagt til tekst
+	Link URL	URL for lenken
+	Search tools and commands	Søk etter verktøy og kommandoer
+	Text editing line	Tekstredigeringslinje
+	Text to place	Tekst som skal plasseres
+	Tooltip	Verktøytips
+	Words or phrases to redact	Ord eller fraser som skal sladdes
 	Searchable Image (Exact)	Søkbart bilde (eksakt)
 	Searching… {s} of {p} pages	Søker… {s} av {p} sider
 	Searching… {s}/{p}	Søker… {s}/{p}

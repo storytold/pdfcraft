@@ -1585,6 +1585,15 @@
 	Search	Kërko
 	Search comments	Kërko te komentet
 	Search tools and commands…	Kërko mjete dhe komanda…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Tekst i shtuar
+	Link URL	URL e lidhjes
+	Search tools and commands	Kërko mjete dhe komanda
+	Text editing line	Rreshti i redaktimit të tekstit
+	Text to place	Teksti për t'u vendosur
+	Tooltip	Këshilla e mjetit
+	Words or phrases to redact	Fjalë ose fraza për redaktim
 	Searchable Image (Exact)	Imazh i kërkueshëm (i saktë)
 	Searching… {s} of {p} pages	Po kërkohet… {s} nga {p} faqe
 	Searching… {s}/{p}	Po kërkohet… {s}/{p}

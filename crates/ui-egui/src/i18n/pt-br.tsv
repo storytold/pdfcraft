@@ -1705,6 +1705,15 @@
 	Tool	Ferramenta
 	Command	Comando
 	Search tools and commands…	Pesquisar ferramentas e comandos…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texto adicionado
+	Link URL	URL do link
+	Search tools and commands	Pesquisar ferramentas e comandos
+	Text editing line	Linha de edição de texto
+	Text to place	Texto a colocar
+	Tooltip	Dica de ferramenta
+	Words or phrases to redact	Palavras ou frases para ocultar
 	No matching tools	Nenhuma ferramenta correspondente
 	All tools	Todas as ferramentas
 	Read	Ler

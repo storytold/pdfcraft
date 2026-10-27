@@ -2167,6 +2167,15 @@
 	View more	Περισσότερα
 	Available	Διαθέσιμο
 	Search tools and commands…	Αναζήτηση εργαλείων και εντολών…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Προστιθέμενο κείμενο
+	Link URL	Διεύθυνση URL συνδέσμου
+	Search tools and commands	Αναζήτηση εργαλείων και εντολών
+	Text editing line	Γραμμή επεξεργασίας κειμένου
+	Text to place	Κείμενο προς τοποθέτηση
+	Tooltip	Συμβουλή εργαλείου
+	Words or phrases to redact	Λέξεις ή φράσεις για απόκρυψη
 	No matching tools	Δεν βρέθηκαν εργαλεία
 	Tool	Εργαλείο
 	Command	Εντολή

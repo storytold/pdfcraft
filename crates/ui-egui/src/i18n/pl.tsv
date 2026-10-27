@@ -180,6 +180,15 @@
 	Available	Dostępne
 	Ready	Gotowe
 	Search tools and commands…	Szukaj narzędzi i poleceń…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Dodany tekst
+	Link URL	Adres URL łącza
+	Search tools and commands	Szukaj narzędzi i poleceń
+	Text editing line	Wiersz edycji tekstu
+	Text to place	Tekst do umieszczenia
+	Tooltip	Podpowiedź
+	Words or phrases to redact	Słowa lub frazy do utajenia
 	No matching tools	Brak pasujących narzędzi
 	Tool	Narzędzie
 	Command	Polecenie
