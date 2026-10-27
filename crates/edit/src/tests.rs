@@ -1262,8 +1262,11 @@ fn shaped_font_families(doc: &Document, page: usize) -> Vec<String> {
         .collect()
 }
 
-/// Thai Add Text is drawn from the document Thai face: Sarabun when the build has craft-fonts'
-/// Thai document manifest, else the interface face (Noto Sans Thai), as before.
+/// Thai Add Text is drawn from the document Thai face, whichever the build selected: Sarabun when
+/// craft-fonts' Thai document manifest is embedded, else the interface face (Noto Sans Thai), as
+/// before. Which face is selected is pinned in the fonts crate
+/// (`craft::tests::document_manifest_faces_are_never_interface_fallbacks`), which can see the
+/// embedded document faces; a manifest file on disk may have been skipped.
 #[test]
 fn added_thai_text_is_drawn_from_the_document_thai_face() {
     let Some(face) = pdfcraft_fonts::document_thai_font() else { return };
@@ -1273,12 +1276,6 @@ fn added_thai_text_is_drawn_from_the_document_thai_face() {
     let families = shaped_font_families(&doc, 0);
     assert!(!families.is_empty());
     assert!(families.iter().all(|f| f == face.family), "{families:?}, expected {}", face.family);
-    // Built against a checkout with the Thai document manifest (the fonts build script reads the
-    // same variable): its face, not the interface one.
-    let manifest = option_env!("CRAFT_FONTS_DIR").map(|d| std::path::Path::new(d).join("fonts/thai-manifest.txt"));
-    if cfg!(not(target_arch = "wasm32")) && manifest.is_some_and(|m| m.exists()) {
-        assert!(!pdfcraft_fonts::ui_thai_fonts().iter().any(|f| std::ptr::eq(*f, face)), "{} is an interface face", face.family);
-    }
 }
 
 #[test]
