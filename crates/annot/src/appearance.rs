@@ -19,7 +19,10 @@ use crate::{NOTE_SIZE, Rgb, n};
 mod symbols;
 
 pub(crate) use symbols::display_stamp;
-use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+#[cfg(test)]
+pub(crate) use symbols::fold_extra;
+use symbols::{CAPTION_SIZE, StampEncoding, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+pub(crate) use symbols::{line_width, stamp_line_drawable};
 
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
@@ -321,6 +324,17 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
         _ => return None,
     };
+    if d.name(b"Subtype") == Some(b"Stamp") {
+        // The same encoding [`stamp`] draws with: its label's and "By" line's extra Latin letters.
+        let lang = d.name(b"PCLang").and_then(|n| std::str::from_utf8(n).ok()).map_or(crate::StampLang::En, crate::StampLang::from_code);
+        let label = d.name(b"Name").and_then(crate::StampKind::from_name).map_or("", |k| k.label_in(lang));
+        let missing = StampEncoding::new(&[label, &text]).first_undrawable(&text)?;
+        // Otherwise drawn as outlines when a face has every character (see [`stamp`]).
+        if text.chars().count() > pdfcraft_fonts::MAX_LINE_CHARS {
+            return Some((what, missing));
+        }
+        return pdfcraft_fonts::line_missing(&text, &lang.faces(false)).map(|c| (what, c));
+    }
     Some((what, first_undrawable(&text)?))
 }
 
@@ -774,8 +788,19 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     }
                     let kind = crate::StampKind::from_name(other)?;
                     let by = d.get(b"PCByLine").and_then(|o| o.as_string()).map(PdfString::to_text);
+                    let lang = d.name(b"PCLang").and_then(|n| std::str::from_utf8(n).ok()).map_or(crate::StampLang::En, crate::StampLang::from_code);
                     let sign_here = kind.group() == crate::StampGroup::SignHere;
-                    return Some(turned(stamp(kind.label(), sign_here, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res)));
+                    // `None` when this build lacks the faces of the stamp's language: its artwork is kept.
+                    return Some(turned(stamp(
+                        kind.label_in(lang),
+                        lang,
+                        sign_here,
+                        draw,
+                        stroke.unwrap_or(kind.color()),
+                        by.as_deref(),
+                        opacity,
+                        res,
+                    )?));
                 }
             }
             if turn != 0 {

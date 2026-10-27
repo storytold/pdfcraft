@@ -179,7 +179,9 @@ fn edit_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability
 /// Add a stamp: Dynamic, Sign Here and Standard Business stamps; click one, then click on the
 /// page to place it.
 pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    use pdfcraft_engine::{StampGroup, StampKind};
+    use pdfcraft_engine::{StampGroup, StampKind, StampLang};
+    // As the stamps will be placed (`canvas::document_area`).
+    let lang = StampLang::for_interface(crate::i18n::current().code());
     ui.label(egui::RichText::new(tl!("Choose a stamp, then click on the page to place it.")).small().color(t.text_faint));
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (group, title) in [
@@ -191,7 +193,7 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens
             for kind in StampKind::ALL.into_iter().filter(|k| k.group() == group) {
                 let active = app.quick_tool == crate::QuickTool::Stamp(kind);
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, kind.label()));
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, kind.label_in(lang)));
                 let press = theme::Press::track(ui, &resp);
                 press.wash(ui, rect, 6, active);
                 let body = rect.translate(press.offset());
@@ -208,7 +210,7 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens
                         chip.left_bottom() + vec2(tip, 0.0),
                     ];
                     ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-                    let label = kind.label();
+                    let label = kind.label_in(lang);
                     let font = theme::semibold(11.0);
                     let shown = crate::widgets::fit_line(label, (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
                     ui.painter().with_clip_rect(chip.shrink(3.0)).text(
@@ -222,10 +224,11 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens
                     ui.painter().rect(chip, CornerRadius::same(5), col.gamma_multiply(0.1), Stroke::new(1.5, col), egui::StrokeKind::Inside);
                     let y = if group == StampGroup::Dynamic { chip.center().y - 4.0 } else { chip.center().y };
                     let font = theme::semibold(11.0);
-                    let shown = crate::widgets::fit_line(kind.label(), (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
+                    let shown =
+                        crate::widgets::fit_line(kind.label_in(lang), (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
                     ui.painter().with_clip_rect(chip.shrink(3.0)).text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, shown, font, col);
                     if group == StampGroup::Dynamic {
-                        let by = "By name at time, date";
+                        let by = lang.by_placeholder();
                         let by_font = theme::regular(7.5);
                         let by_shown = crate::widgets::fit_line(by, (chip.width() - 8.0).max(0.0), |s| crate::widgets::text_width(ui, s, &by_font));
                         ui.painter().with_clip_rect(chip.shrink(2.0)).text(

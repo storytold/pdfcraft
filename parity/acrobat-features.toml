@@ -4147,8 +4147,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.stamp"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
-notes = "12 standard business stamps in PdfCraft's own design; ISO 32000 stamp names where defined. A stamp placed on a rotated page reads upright as the page is displayed (#1398)"
+evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/annot/src/tests.rs::every_language_has_its_own_stamp_label", "crates/annot/src/tests.rs::stamps_outside_the_standard_fonts_are_drawn_as_outlines", "crates/annot/src/tests.rs::every_language_this_build_can_draw_draws_every_stamp", "crates/annot/src/tests.rs::a_stamp_whose_language_this_build_cant_draw_keeps_its_artwork", "crates/automation/tests/it/automation.rs::stamps_in_other_scripts_through_tools", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
+notes = "12 standard business stamps in PdfCraft's own design; ISO 32000 stamp names where defined. A stamp placed on a rotated page reads upright as the page is displayed (#1398). Labels and the By line follow the interface language (36 languages; automation: lang). Latin-script labels are Helvetica text (a /Differences encoding adds the Central European letters); the other scripts are glyph outlines shaped with harfrust and marked with /ActualText: Cyrillic, Greek and Vietnamese with the bundled Inter in every build; Japanese, Traditional Chinese (with the Japanese faces), Korean, Arabic, Kurdish, Persian, Thai, Hindi, Telugu and Lao with craft-fonts faces when the build has them, otherwise the stamp is placed in English, and one written by a build that had them keeps its artwork. Missing: Simplified Chinese (the build keeps no Chinese face), craft-fonts has no Korean, Devanagari, Telugu or Lao face yet (tested locally with Noto and Nanum faces), PdfCraft's own text extraction does not read /ActualText on outlines, and the translations want review by native speakers"
 
 [[feature]]
 id = "comment.stamps-sign-here"
@@ -4159,8 +4159,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.stamp"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
-notes = "Accepted, Initial Here, Rejected, Sign Here, Witness as pointed tags. The point stays on the left as the page is displayed, including /Rotate 90, 180 and 270 (#1398)"
+evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/annot/src/tests.rs::every_language_has_its_own_stamp_label", "crates/annot/src/tests.rs::stamps_outside_the_standard_fonts_are_drawn_as_outlines", "crates/annot/src/tests.rs::every_language_this_build_can_draw_draws_every_stamp", "crates/annot/src/tests.rs::a_stamp_whose_language_this_build_cant_draw_keeps_its_artwork", "crates/automation/tests/it/automation.rs::stamps_in_other_scripts_through_tools", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
+notes = "Accepted, Initial Here, Rejected, Sign Here, Witness as pointed tags. The point stays on the left as the page is displayed, including /Rotate 90, 180 and 270 (#1398). Labels (and the By line) follow the interface language, as for comment.stamps-standard, with the same gaps"
 
 [[feature]]
 id = "comment.stamps-dynamic"
@@ -4171,8 +4171,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["comment.stamp"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
-notes = "Approved, Confidential, Received, Reviewed, Revised with a By author at time, date line (local time). The label is turned with the page's /Rotate so it reads upright as displayed (#1398)"
+evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/annot/src/tests.rs::every_language_has_its_own_stamp_label", "crates/annot/src/tests.rs::stamps_outside_the_standard_fonts_are_drawn_as_outlines", "crates/annot/src/tests.rs::every_language_this_build_can_draw_draws_every_stamp", "crates/annot/src/tests.rs::a_stamp_whose_language_this_build_cant_draw_keeps_its_artwork", "crates/automation/tests/it/automation.rs::stamps_in_other_scripts_through_tools", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
+notes = "Approved, Confidential, Received, Reviewed, Revised with a By author at time, date line (local time). The label is turned with the page's /Rotate so it reads upright as displayed (#1398). Labels (and the By line) follow the interface language, as for comment.stamps-standard, with the same gaps"
 
 [[feature]]
 id = "comment.stamps-custom"

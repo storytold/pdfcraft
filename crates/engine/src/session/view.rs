@@ -73,6 +73,18 @@ impl Session {
         format!("{who}at {h12}:{mm:02} {}, {} {day:02}, {y}", if hh < 12 { "am" } else { "pm" }, MONTHS[(mo.clamp(1, 12) - 1) as usize])
     }
 
+    /// A dynamic stamp's second line in `lang`: "Par Ada le 02/10/2026 à 14:14" (local time, 24 h).
+    pub fn stamp_by_line_in(&self, author: &str, lang: crate::StampLang) -> String {
+        let Some((by, on, sep, at, year_first)) = lang.by_words() else { return self.stamp_by_line(author) };
+        let offset = self.local_offset();
+        let d = self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).unwrap_or_default();
+        let num = |a: usize, b: usize| d.get(a..b).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        let (y, mo, day, hh, mm) = (num(2, 6), num(6, 8), num(8, 10), num(10, 12), num(12, 14));
+        let who = if author.trim().is_empty() { String::new() } else { format!("{by} {}", author.trim()) };
+        let date = if year_first { format!("{y}{sep}{mo:02}{sep}{day:02}") } else { format!("{day:02}{sep}{mo:02}{sep}{y}") };
+        [who, on.to_string(), date, at.to_string(), format!("{hh:02}:{mm:02}")].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ")
+    }
+
     pub fn today(&self) -> (i64, u32, u32) {
         let offset = self.local_offset();
         self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))

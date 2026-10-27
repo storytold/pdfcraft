@@ -760,6 +760,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StampLang;
 
     const DAY: (i64, u32, u32) = (2026, 3, 7);
     const EN: &DateLanguage = &DATE_LANGUAGES[0];
@@ -859,6 +860,11 @@ mod tests {
         assert_eq!(sao_paulo.today_text(None, None).as_deref(), Ok("10/14/2026"));
         assert_eq!(sao_paulo.signing_date(), "D:20261014213000-03'00'");
         assert_eq!(sao_paulo.stamp_by_line("Ada"), "By Ada at 9:30 pm, Oct 14, 2026");
+        assert_eq!(sao_paulo.stamp_by_line_in("Ada", StampLang::Fr), "Par Ada le 14/10/2026 à 21:30");
+        assert_eq!(sao_paulo.stamp_by_line_in("Ada", StampLang::Ru), "Автор: Ada 14.10.2026 21:30");
+        assert_eq!(sao_paulo.stamp_by_line_in("Ada", StampLang::Ja), "作成者: Ada 2026/10/14 21:30", "year first");
+        assert_eq!(sao_paulo.stamp_by_line_in("Ada", StampLang::Ar), "بواسطة Ada في 14/10/2026 الساعة 21:30");
+        assert_eq!(sao_paulo.stamp_by_line_in(" ", StampLang::Hi), "दिनांक 14/10/2026 समय 21:30", "no author, no \"by\"");
         assert_eq!(sao_paulo.now_secs(), 1_792_024_200, "the file's instant stays in UTC");
 
         let utc = Session::new().with_wall_clock(|| 1_792_024_200, || 0);

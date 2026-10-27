@@ -58,7 +58,7 @@ pub(crate) fn display_stamp(d: &Dict) -> Option<Stream> {
     let stamp_intent = d.name(b"IT").is_none_or(|it| it == b"Stamp");
     let name = d.name(b"Name").or(stamp_intent.then_some(b"Draft".as_slice()));
     if let Some((label, col)) = name.and_then(standard_stamp) {
-        return Some(stamp(label, false, rect, stroke.unwrap_or(col), None, opacity, res));
+        return stamp(label, crate::StampLang::En, false, rect, stroke.unwrap_or(col), None, opacity, res);
     }
     let [x0, y0, x1, y1] = rect;
     let (a0, b0, a1, b1) = (x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5);
@@ -270,9 +270,154 @@ pub(super) fn line_layout(d: &Dict, [a, b]: [(f64, f64); 2], w: f64) -> LineLayo
     if all_finite { out } else { plain }
 }
 
+/// Latin Extended letters that WinAnsiEncoding lacks but Helvetica's glyph set has (Czech,
+/// Polish, Turkish, Hungarian, Romanian, …): the character, its glyph name and the base letter
+/// it is measured as.
+const EXTRA_GLYPHS: &[(char, &str, char)] = &[
+    ('Ą', "Aogonek", 'A'),
+    ('ą', "aogonek", 'a'),
+    ('Ă', "Abreve", 'A'),
+    ('ă', "abreve", 'a'),
+    ('Ć', "Cacute", 'C'),
+    ('ć', "cacute", 'c'),
+    ('Č', "Ccaron", 'C'),
+    ('č', "ccaron", 'c'),
+    ('Ď', "Dcaron", 'D'),
+    ('ď', "dcaron", 'd'),
+    ('Đ', "Dcroat", 'D'),
+    ('đ', "dcroat", 'd'),
+    ('Ę', "Eogonek", 'E'),
+    ('ę', "eogonek", 'e'),
+    ('Ě', "Ecaron", 'E'),
+    ('ě', "ecaron", 'e'),
+    ('Ė', "Edotaccent", 'E'),
+    ('ė', "edotaccent", 'e'),
+    ('Ğ', "Gbreve", 'G'),
+    ('ğ', "gbreve", 'g'),
+    ('İ', "Idotaccent", 'I'),
+    ('Į', "Iogonek", 'I'),
+    ('į', "iogonek", 'i'),
+    ('Ł', "Lslash", 'L'),
+    ('ł', "lslash", 'l'),
+    ('Ń', "Nacute", 'N'),
+    ('ń', "nacute", 'n'),
+    ('Ň', "Ncaron", 'N'),
+    ('ň', "ncaron", 'n'),
+    ('Ő', "Ohungarumlaut", 'O'),
+    ('ő', "ohungarumlaut", 'o'),
+    ('Ř', "Rcaron", 'R'),
+    ('ř', "rcaron", 'r'),
+    ('Ś', "Sacute", 'S'),
+    ('ś', "sacute", 's'),
+    ('Ş', "Scedilla", 'S'),
+    ('ş', "scedilla", 's'),
+    ('Ș', "Scommaaccent", 'S'),
+    ('ș', "scommaaccent", 's'),
+    ('Ť', "Tcaron", 'T'),
+    ('ť', "tcaron", 't'),
+    ('Ț', "Tcommaaccent", 'T'),
+    ('ț', "tcommaaccent", 't'),
+    ('Ů', "Uring", 'U'),
+    ('ů', "uring", 'u'),
+    ('Ű', "Uhungarumlaut", 'U'),
+    ('ű', "uhungarumlaut", 'u'),
+    ('Ų', "Uogonek", 'U'),
+    ('ų', "uogonek", 'u'),
+    ('Ū', "Umacron", 'U'),
+    ('ū', "umacron", 'u'),
+    ('Ź', "Zacute", 'Z'),
+    ('ź', "zacute", 'z'),
+    ('Ż', "Zdotaccent", 'Z'),
+    ('ż', "zdotaccent", 'z'),
+    ('ı', "dotlessi", 'i'),
+];
+
+/// `s` with the [`EXTRA_GLYPHS`] letters replaced by their base letters, to measure it.
+pub(crate) fn fold_extra(s: &str) -> String {
+    s.chars().map(|c| EXTRA_GLYPHS.iter().find(|g| g.0 == c).map_or(c, |g| g.2)).collect()
+}
+
+/// The font encoding of one stamp: WinAnsi, plus the extra letters its texts need, put on
+/// otherwise unused codes through `/Differences`.
+pub(super) struct StampEncoding {
+    extra: Vec<(char, u8, &'static str)>,
+}
+
+impl StampEncoding {
+    pub(super) fn new(texts: &[&str]) -> Self {
+        let used: Vec<u8> = texts.iter().flat_map(|t| t.chars()).filter_map(pdfcraft_fonts::win_ansi_byte).collect();
+        let mut free = (0x80u8..=0x9f).filter(|c| !used.contains(c));
+        let mut extra: Vec<(char, u8, &'static str)> = Vec::new();
+        for c in texts.iter().flat_map(|t| t.chars()) {
+            if pdfcraft_fonts::win_ansi_byte(c).is_some() || extra.iter().any(|e| e.0 == c) {
+                continue;
+            }
+            if let Some(g) = EXTRA_GLYPHS.iter().find(|g| g.0 == c)
+                && let Some(code) = free.next()
+            {
+                extra.push((c, code, g.1));
+            }
+        }
+        Self { extra }
+    }
+
+    /// The first character of `s` this encoding can't draw.
+    pub(super) fn first_undrawable(&self, s: &str) -> Option<char> {
+        s.chars().find(|c| !self.extra.iter().any(|e| e.0 == *c) && first_undrawable(&c.to_string()).is_some())
+    }
+
+    fn encode(&self, s: &str) -> Vec<u8> {
+        s.chars()
+            .map(|c| match self.extra.iter().find(|e| e.0 == c) {
+                Some(e) => e.1,
+                None => win_ansi(&c.to_string()).first().copied().unwrap_or(b'?'),
+            })
+            .collect()
+    }
+
+    fn font_encoding(&self) -> Object {
+        if self.extra.is_empty() {
+            return Object::name("WinAnsiEncoding");
+        }
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Encoding"));
+        d.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+        let differences = self.extra.iter().flat_map(|e| [Object::Int(i64::from(e.1)), Object::name(e.2)]).collect();
+        d.set(b"Differences".to_vec(), Object::Array(differences));
+        Object::Dict(d)
+    }
+}
+
+/// The width of one line of a stamp at `size` points, as [`stamp`] draws it before fitting it:
+/// its label (`bold`) or its "By" line.
+pub(crate) fn line_width(line: &str, lang: crate::StampLang, size: f64, bold: bool) -> f64 {
+    // Helvetica-Bold is about 12% wider than the Helvetica widths measure.
+    let helvetica = text_width(&fold_extra(line), size) * if bold { 1.12 } else { 1.0 };
+    if StampEncoding::new(&[line]).first_undrawable(line).is_none() {
+        return helvetica;
+    }
+    pdfcraft_fonts::line_outline(line, &lang.faces(bold), lang.bcp47()).map_or(helvetica, |o| o.width * size)
+}
+
+/// Whether [`stamp`] can draw `line` in `lang`: in Helvetica, or with the language's faces.
+pub(crate) fn stamp_line_drawable(line: &str, lang: crate::StampLang, bold: bool) -> bool {
+    StampEncoding::new(&[line]).first_undrawable(line).is_none() || pdfcraft_fonts::line_missing(line, &lang.faces(bold)).is_none()
+}
+
 /// A rubber stamp: a rounded frame (a pointed tag for sign-here stamps) with the label in bold
-/// capitals, and the dynamic stamps' "By … at …" line.
-pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: Option<&str>, opacity: f64, mut res: Dict) -> Stream {
+/// capitals, and the dynamic stamps' "By … at …" line. `None` when the label can't be drawn:
+/// no face this build has covers its language.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stamp(
+    label: &str,
+    lang: crate::StampLang,
+    sign_here: bool,
+    rect: [f64; 4],
+    col: Rgb,
+    by: Option<&str>,
+    opacity: f64,
+    mut res: Dict,
+) -> Option<Stream> {
     let [x0, y0, x1, y1] = rect;
     let h = y1 - y0;
     let mut c = String::new();
@@ -347,50 +492,104 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
             n(b0)
         ));
     }
+    let enc = StampEncoding::new(&[label, by.unwrap_or_default()]);
     let (title_h, by_h) = if by.is_some() { (h * 0.5, h * 0.22) } else { (h * 0.52, 0.0) };
     let text_area = if sign_here { (x0 + h * 0.45, x1 - lw * 2.0) } else { (x0 + lw * 2.0, x1 - lw * 2.0) };
-    let mut size = title_h;
-    let tw = text_width(label, size) * 1.12;
-    if tw > text_area.1 - text_area.0 - 4.0 {
-        size *= (text_area.1 - text_area.0 - 4.0) / tw;
-    }
-    let tw = text_width(label, size) * 1.12;
+    let room = text_area.1 - text_area.0 - 4.0;
+    let mid = (text_area.0 + text_area.1) / 2.0;
     let text_col = if sign_here { [1.0, 1.0, 1.0] } else { col };
-    let ty = if by.is_some() { y0 + h * 0.48 } else { y0 + (h - size * 0.72) / 2.0 };
     let mut out = c.into_bytes();
-    out.extend(
-        format!("BT\n{}/HelvB {} Tf\n1 0 0 1 {} {} Tm ", rg(text_col), n(size), n(text_area.0 + (text_area.1 - text_area.0 - tw) / 2.0), n(ty))
-            .bytes(),
-    );
-    out.extend(literal(&win_ansi(label)));
-    out.extend_from_slice(b" Tj\n");
-    if let Some(b) = by {
-        let mut s = by_h;
-        let bw = text_width(b, s);
-        if bw > text_area.1 - text_area.0 - 4.0 {
-            s *= (text_area.1 - text_area.0 - 4.0) / bw;
+    out.extend(format!("{}{}", rg(text_col), rg_stroke(text_col)).bytes());
+    // Lines the standard fonts can draw are text in Helvetica; the others are their glyphs'
+    // outlines, shaped in the stamp's language (see `pdfcraft_fonts::line_outline`).
+    let mut text: Vec<u8> = Vec::new();
+    if enc.first_undrawable(label).is_none() {
+        let mut size = title_h;
+        let tw = text_width(&fold_extra(label), size) * 1.12;
+        if tw > room {
+            size *= room / tw;
         }
-        let bw = text_width(b, s);
-        out.extend(
-            format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
-        );
-        out.extend(literal(&win_ansi(b)));
-        out.extend_from_slice(b" Tj\n");
+        let tw = text_width(&fold_extra(label), size) * 1.12;
+        let ty = if by.is_some() { y0 + h * 0.48 } else { y0 + (h - size * 0.72) / 2.0 };
+        text.extend(format!("/HelvB {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(text_area.0 + (text_area.1 - text_area.0 - tw) / 2.0), n(ty)).bytes());
+        text.extend(literal(&enc.encode(label)));
+        text.extend_from_slice(b" Tj\n");
+    } else {
+        let o = pdfcraft_fonts::line_outline(label, &lang.faces(true), lang.bcp47()).ok()?;
+        let (max_h, cy) = if by.is_some() { (h * 0.34, y0 + h * 0.64) } else { (h * 0.4, y0 + h / 2.0) };
+        out.extend(outline_ops(&o, label, title_h, room, max_h, [mid, cy], true).bytes());
     }
-    out.extend_from_slice(b"ET\n");
+    if let Some(b) = by {
+        // A name no face has is drawn with `?` and marked (`undrawable_text`), as before.
+        let outline = enc.first_undrawable(b).and_then(|_| pdfcraft_fonts::line_outline(b, &lang.faces(false), lang.bcp47()).ok());
+        if let Some(o) = outline {
+            out.extend(outline_ops(&o, b, by_h, room, h * 0.19, [mid, y0 + h * 0.24], false).bytes());
+        } else {
+            let mut s = by_h;
+            let bw = text_width(&fold_extra(b), s);
+            if bw > room {
+                s *= room / bw;
+            }
+            let bw = text_width(&fold_extra(b), s);
+            text.extend(
+                format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
+            );
+            text.extend(literal(&enc.encode(b)));
+            text.extend_from_slice(b" Tj\n");
+        }
+    }
+    if !text.is_empty() {
+        out.extend_from_slice(b"BT\n");
+        out.extend(text);
+        out.extend_from_slice(b"ET\n");
+    }
+    let encoding = enc.font_encoding();
     let font = |base: &str| {
         let mut f = Dict::new();
         f.set(b"Type".to_vec(), Object::name("Font"));
         f.set(b"Subtype".to_vec(), Object::name("Type1"));
         f.set(b"BaseFont".to_vec(), Object::name(base));
-        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        f.set(b"Encoding".to_vec(), encoding.clone());
         Object::Dict(f)
     };
     let mut fonts = Dict::new();
     fonts.set(b"HelvB".to_vec(), font("Helvetica-Bold"));
     fonts.set(b"Helv".to_vec(), font("Helvetica"));
     res.set(b"Font".to_vec(), Object::Dict(fonts));
-    form(rect, &out, res)
+    Some(form(rect, &out, res))
+}
+
+/// Draw one line of a stamp as its glyphs' outlines, filled (and outlined for a bold title, as
+/// the faces aren't all bold): `size` points high at most, shrunk to fit `room` wide and its ink
+/// `max_h` high, its ink centred on `centre`. Marked with the line as `/ActualText`, so it is
+/// still read, searched and copied as text. Nothing for a line without ink.
+fn outline_ops(o: &pdfcraft_fonts::ScriptOutline, line: &str, size: f64, room: f64, max_h: f64, centre: [f64; 2], bold: bool) -> String {
+    let mut ink: Option<[f64; 4]> = None;
+    for p in o.contours.iter().flatten() {
+        let b = ink.get_or_insert([p[0], p[1], p[0], p[1]]);
+        *b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+    }
+    let Some([ix0, iy0, ix1, iy1]) = ink else { return String::new() };
+    let (iw, ih) = ((ix1 - ix0).max(1e-3), (iy1 - iy0).max(1e-3));
+    let size = size.min(room.max(1.0) / iw).min(max_h.max(1.0) / ih);
+    if !size.is_finite() || size <= 0.0 {
+        return String::new();
+    }
+    let (dx, dy) = (centre[0] - (ix0 + ix1) / 2.0 * size, centre[1] - (iy0 + iy1) / 2.0 * size);
+    let actual: String = std::iter::once(0xFEFF).chain(line.encode_utf16()).map(|u| format!("{u:04X}")).collect();
+    let mut c = format!("/Span <</ActualText <{actual}>>> BDC\nq\n");
+    if bold {
+        c.push_str(&format!("{} w 1 j\n", n(size * 0.03)));
+    }
+    for contour in &o.contours {
+        for (i, p) in contour.iter().enumerate() {
+            c.push_str(&format!("{} {} {}\n", n(dx + p[0] * size), n(dy + p[1] * size), if i == 0 { "m" } else { "l" }));
+        }
+        c.push_str("h\n");
+    }
+    // Non-zero winding: glyph contours overlap (PR #2513).
+    c.push_str(if bold { "B\nQ\nEMC\n" } else { "f\nQ\nEMC\n" });
+    c
 }
 
 /// An ellipse inscribed in a rectangle, as four Bézier arcs.

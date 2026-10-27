@@ -5036,6 +5036,35 @@ fn stamps_through_tools() {
     assert!(matches!(a.call("stamp_custom", &json!({ "doc": doc, "page": 1, "path": "nope.png", "at": [1, 1] })), Err(ToolError::Failed(_))));
 }
 
+/// A stamp in a script the standard fonts lack (Cyrillic here, drawn with the bundled Inter in
+/// every build) is placed and drawn as outlines; a language this build has no face for is
+/// refused; the tool description lists every language.
+#[test]
+fn stamps_in_other_scripts_through_tools() {
+    use pdfcraft_engine::StampLang;
+    let dir = workdir("stamps_scripts");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let add =
+        json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "approved", "dynamic": true, "lang": "ru", "at": [150, 100], "author": "Иван" });
+    ok(&mut a, "comment_add", add);
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1, "{list}");
+    let comment_add = tools().into_iter().find(|t| t.name == "comment_add").unwrap();
+    let listed = comment_add.description.split("optional `lang` (").nth(1).and_then(|s| s.split(')').next()).unwrap_or_default();
+    let listed: Vec<&str> = listed.split(", ").collect();
+    assert_eq!(listed.len(), StampLang::ALL.len() - 1, "{listed:?}");
+    for lang in StampLang::ALL.into_iter().filter(|l| *l != StampLang::En) {
+        assert!(listed.contains(&lang.code()), "{} is listed", lang.code());
+        let call = json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "draft", "lang": lang.code(), "at": [150, 300] });
+        if lang.drawable() {
+            ok(&mut a, "comment_add", call);
+        } else {
+            assert!(matches!(a.call("comment_add", &call), Err(ToolError::InvalidArgs(m)) if m.contains("craft-fonts")), "{}", lang.code());
+        }
+    }
+}
+
 /// #4077: a PDF page placed at a given width (a text column, 483 pt) through `rect`, fitted
 /// inside it keeping its shape and centred, and still vector (its text is text).
 #[test]

@@ -159,7 +159,7 @@ fn rubber_stamps_point_left_as_displayed_on_rotated_pages() {
         let (mut session, id) = rotated_blank(degrees);
         let info = session.get(id).unwrap().info.pages[0].clone();
         let rect = displayed_rect(&info, 100.0, 40.0, w, h);
-        let shape = Shape::Stamp { rect, stamp: StampKind::SignHere, by: None };
+        let shape = Shape::Stamp { rect, stamp: StampKind::SignHere, lang: StampLang::En, by: None };
         session
             .apply(
                 id,

@@ -1268,7 +1268,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
     let date_text = crate::date_text_for_pdf(&app.session);
     let mut refused: Option<String> = None;
-    let by_line = app.session.stamp_by_line(&author);
+    // Stamps are written in the interface language where a translation exists and this build
+    // has the faces to draw it.
+    let stamp_lang = pdfcraft_engine::StampLang::for_interface(crate::i18n::current().code());
+    let by_line = app.session.stamp_by_line_in(&author, stamp_lang);
     let mut stamp_placed = false;
     let mut image_action: Option<crate::edit_text_ui::ImageAction> = None;
     let custom_stamp = match app.quick_tool {
@@ -1550,12 +1553,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     // Centred on the click, upright as the page is shown.
                     let (vx, vy) = xf.screen_to_view(p);
-                    let (w, h) = kind.size();
+                    let (w, h) = kind.size_in(stamp_lang);
                     let corners = [(vx as f64 - w / 2.0, vy as f64 - h / 2.0), (vx as f64 + w / 2.0, vy as f64 + h / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
                     let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
-                    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
+                    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, lang: stamp_lang, by };
                     view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                         page: i,
                         style: pdfcraft_engine::Style::default_for(&shape),
