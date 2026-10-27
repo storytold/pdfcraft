@@ -48,14 +48,17 @@ impl Default for Fling {
 }
 
 impl Fling {
+    /// Creates a new fling momentum tracker, enabled where supported by the platform.
     pub(crate) fn new(enabled: bool) -> Self {
         Self { enabled, touch_active: false, samples: Vec::new(), velocity: Vec2::ZERO, at: 0.0, stalled: 0 }
     }
 
+    /// Whether the view is currently gliding on fling momentum.
     pub(crate) fn gliding(&self) -> bool {
         self.velocity != Vec2::ZERO
     }
 
+    /// Stops any ongoing glide and resets stalled counter.
     pub(crate) fn stop(&mut self) {
         self.velocity = Vec2::ZERO;
         self.stalled = 0;
@@ -102,6 +105,7 @@ impl Fling {
         }
     }
 
+    /// Records one sample of gesture delta at time `now`.
     fn push(&mut self, now: f64, delta: Vec2) {
         if !(delta.x.is_finite() && delta.y.is_finite()) {
             return;
@@ -172,6 +176,7 @@ mod tests {
     use super::*;
     use egui::{Modifiers, vec2};
 
+    /// Helper creating a wheel point event with the given phase.
     fn wheel(dy: f32, phase: TouchPhase) -> Event {
         Event::MouseWheel {
             unit: MouseWheelUnit::Point,

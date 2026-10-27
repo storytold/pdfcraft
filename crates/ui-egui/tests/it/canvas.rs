@@ -14,6 +14,7 @@ const PAGES: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Creates a test harness with stepped frame time and standard continuous layout.
 fn harness(step_dt: f32) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -29,10 +30,12 @@ fn harness(step_dt: f32) -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Helper getting the screen rect of a page.
 fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
+/// Measures total vertical scroll movement over `frames` steps.
 fn scroll_over(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> f32 {
     let tops = |h: &Harness<'static, PdfCraftApp>| (0..3).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
     let mut moved = 0.0;
@@ -66,7 +69,6 @@ fn fast_mouse_wheel_scrolling_does_not_trigger_kinetic_fling_jumps() {
         h.step();
     }
 
-    // Step 2 frames to let egui finish consuming any buffered line easing.
     // Step 20 frames to allow egui's internal ~0.25s notch easing to finish settling.
     h.run_steps(20);
 
