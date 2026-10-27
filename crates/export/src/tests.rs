@@ -1001,27 +1001,52 @@ fn direction_follows_the_unicode_bidi_class_of_the_first_strong_character() {
     assert!(!rtf(&[p]).contains("\\rtlpar\\fs22 \\u8206"));
 }
 
-/// #4653: a run that mixes Arabic and Latin is cut into runs of one direction, so only the Arabic
-/// is marked right to left; a weak character (space, digit) stays with the stretch before it.
+/// #4653: a run that mixes Arabic and Latin is cut into runs, and only what is right to left for
+/// certain is marked `w:rtl`: the strong Arabic, its marks, and the spaces and punctuation between
+/// two Arabic characters. Numbers, Latin and the neutral characters at the edges are not, because
+/// Word treats every neutral and weak character in a `w:rtl` run as right to left, which reverses
+/// numbers and misplaces paired brackets.
 #[test]
 fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
     let arabic = "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}";
-    // Text and its pieces: nothing is lost, nothing is empty, the directions are right.
-    let text = format!("  {arabic} ABC 123 {arabic}");
-    let parts = directional_runs(&text);
-    assert_eq!(parts.iter().map(|(t, _)| *t).collect::<String>(), text);
-    assert_eq!(
-        parts.iter().map(|(t, d)| (t.trim(), *d)).collect::<Vec<_>>(),
-        [(arabic, true), ("ABC 123", false), (arabic, true)],
-        "leading spaces go with the first stretch"
-    );
-    assert!(parts.iter().all(|(t, _)| !t.is_empty()));
-    assert_eq!(directional_runs("plain Latin text"), [("plain Latin text", false)]);
+    let more = "\u{0628}\u{0643}";
+    let cases: [(String, Vec<(String, bool)>); 11] = [
+        // Arabic and then a number: the number is not in the right-to-left run.
+        (format!("{arabic} 123"), vec![(arabic.into(), true), (" 123".into(), false)]),
+        // A number before the Arabic.
+        (format!("123 {arabic}"), vec![("123 ".into(), false), (arabic.into(), true)]),
+        // Latin and brackets: both brackets are outside the right-to-left run.
+        (format!("abc ({arabic})"), vec![("abc (".into(), false), (arabic.into(), true), (")".into(), false)]),
+        // Spaces and punctuation between two Arabic words are inside it.
+        (format!("{arabic} {more}"), vec![(format!("{arabic} {more}"), true)]),
+        // The Arabic comma is a weak (separator) character, not a neutral one: it is not inside.
+        (format!("{arabic}\u{060c} {more}"), vec![(arabic.into(), true), ("\u{060c} ".into(), false), (more.into(), true)]),
+        // A number between two Arabic words splits it.
+        (format!("{arabic} 12 {more}"), vec![(arabic.into(), true), (" 12 ".into(), false), (more.into(), true)]),
+        // Marks and joiners stay with their letter; a mark after Latin stays with the Latin.
+        (
+            format!("\u{0645}\u{064e}\u{0631}\u{200c}\u{0628} x"),
+            vec![("\u{0645}\u{064e}\u{0631}\u{200c}\u{0628}".into(), true), (" x".into(), false)],
+        ),
+        ("e\u{0301} \u{0645}".into(), vec![("e\u{0301} ".into(), false), ("\u{0645}".into(), true)]),
+        // Leading and trailing spaces are outside; the first strong character decides nothing here.
+        (
+            format!("  {arabic} ABC 123 {arabic}  "),
+            vec![("  ".into(), false), (arabic.into(), true), (" ABC 123 ".into(), false), (arabic.into(), true), ("  ".into(), false)],
+        ),
+        // No strong right-to-left character: one run, not marked.
+        ("12, 34 (x)".into(), vec![("12, 34 (x)".into(), false)]),
+        ("".into(), vec![("".into(), false)]),
+    ];
+    for (text, expected) in cases {
+        let got: Vec<(String, bool)> = directional_runs(&text).into_iter().map(|(t, d)| (t.to_string(), d)).collect();
+        assert_eq!(got, expected, "{text:?}");
+        assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<String>(), text, "nothing is lost");
+        assert!(text.is_empty() || got.iter().all(|(t, _)| !t.is_empty()), "no empty run in {text:?}");
+    }
     assert_eq!(directional_runs(arabic), [(arabic, true)]);
-    assert_eq!(directional_runs(""), [("", false)]);
-    assert_eq!(directional_runs("12, 34"), [("12, 34", false)], "no strong character: left to right");
 
-    // In Word: one block, Arabic first, with Latin in the middle: three runs, the Latin one unmarked.
+    // In Word: one block, Arabic first, with Latin and a number in the middle.
     let p = Page {
         width: 612.0,
         height: 792.0,
@@ -1036,11 +1061,18 @@ fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
     let latin = with("ABC 123");
     assert!(!latin.contains("<w:rtl/>") && !latin.contains("<w:szCs"), "{latin}");
     assert!(xml.contains("<w:p><w:pPr><w:bidi/></w:pPr>"), "the paragraph is right to left: {xml}");
-    // Bold Arabic keeps its complex-script bold on every right-to-left piece, and none on the Latin.
+    // A number after Arabic, and brackets around Arabic, are in runs without w:rtl.
+    for (text, plain) in [(format!("{arabic} 123"), " 123"), (format!("abc ({arabic})"), ")")] {
+        let q = Page { width: 612.0, height: 792.0, blocks: vec![block(&text, 72.0, 600.0, 500.0, 612.0)], images: Vec::new(), background: None };
+        let xml = part(&docx(&[q], "Edge"), "word/document.xml");
+        let run = xml.split("<w:r>").skip(1).find(|r| r.contains(&format!(">{plain}</w:t>"))).unwrap_or_else(|| panic!("no run {plain:?}: {xml}"));
+        assert!(!run.contains("<w:rtl/>"), "{plain:?} stays out of the right-to-left run: {run}");
+    }
+    // Bold Arabic keeps its complex-script bold on the right-to-left run, and none on the Latin.
     let mut bold = block(&format!("{arabic} ABC"), 72.0, 600.0, 500.0, 612.0);
     bold.bold = true;
     let q = Page { width: 612.0, height: 792.0, blocks: vec![bold], images: Vec::new(), background: None };
     let xml = part(&docx(&[q], "Bold"), "word/document.xml");
     assert!(xml.contains("<w:b/><w:bCs/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/><w:rtl/>"), "{xml}");
-    assert!(xml.contains("<w:b/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\">ABC</w:t>"), "{xml}");
+    assert!(xml.contains("<w:b/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\"> ABC</w:t>"), "{xml}");
 }

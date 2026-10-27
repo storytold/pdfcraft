@@ -20,26 +20,72 @@ pub(crate) fn is_rtl(text: &str) -> bool {
     text.chars().find_map(strong_direction).unwrap_or(false)
 }
 
-/// `text` cut into stretches of one direction, each with whether it reads right to left. A weak or
-/// neutral character (a space, a digit, a comma) stays with the stretch before it, and those at the
-/// start with the first strong stretch, so no stretch is empty unless `text` is. Marking a whole
-/// mixed run as right to left would mark its Latin letters too, which Word leaves unspecified.
+/// `text` cut into runs, each with whether it is marked right to left. A right-to-left run holds
+/// only what is right to left for certain: the strong right-to-left characters (bidi class R and
+/// AL), the combining marks and joiners that follow them, and the neutral characters (spaces,
+/// punctuation) strictly between two such characters, which the Unicode bidi algorithm resolves
+/// to right to left too. Everything else, Latin letters, digits and other weak characters, and
+/// the punctuation and brackets at the edges, is left in runs without `w:rtl`: Word marks every
+/// neutral and weak character in a `w:rtl` run as right to left, which would reverse numbers and
+/// misplace paired brackets, so they are left to be resolved in the paragraph's context (#4653).
+/// The runs cover `text` exactly, none empty unless `text` is.
 pub(crate) fn directional_runs(text: &str) -> Vec<(&str, bool)> {
-    let mut runs = Vec::new();
-    let mut current = is_rtl(text);
-    let mut start = 0;
-    for (at, c) in text.char_indices() {
-        if let Some(direction) = strong_direction(c)
-            && direction != current
-        {
-            if at > start {
-                runs.push((text.get(start..at).unwrap_or_default(), current));
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        /// Strong right to left.
+        R,
+        /// A mark or joiner that goes with what is before it.
+        Follows,
+        /// A space, punctuation or bracket: no direction of its own.
+        Neutral,
+        /// Anything else: Latin and other left-to-right letters, digits, weak characters.
+        Other,
+    }
+    let kind = |c: char| match bidi_class(c) {
+        BidiClass::R | BidiClass::AL => Kind::R,
+        BidiClass::NSM | BidiClass::BN => Kind::Follows,
+        BidiClass::WS | BidiClass::ON | BidiClass::S | BidiClass::B => Kind::Neutral,
+        _ => Kind::Other,
+    };
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    // For each character, whether it is in a right-to-left run: from a strong character through
+    // what follows it, over neutrals only when another strong character comes after them.
+    let mut rtl = vec![false; chars.len()];
+    let mut i = 0;
+    while i < chars.len() {
+        if chars.get(i).map(|(_, c)| kind(*c)) != Some(Kind::R) {
+            i += 1;
+            continue;
+        }
+        // A run starting at the strong character `i`; `end` is just past the last character it keeps.
+        let mut end = i + 1;
+        let mut at = i + 1;
+        while let Some((_, c)) = chars.get(at) {
+            match kind(*c) {
+                Kind::R | Kind::Follows => {
+                    at += 1;
+                    end = at;
+                }
+                Kind::Neutral => at += 1,
+                Kind::Other => break,
             }
-            start = at;
-            current = direction;
+        }
+        for flag in rtl.iter_mut().take(end).skip(i) {
+            *flag = true;
+        }
+        i = end.max(i + 1);
+    }
+    // A mark or joiner after a character left out of a run goes with that character, not alone.
+    let mut runs: Vec<(&str, bool)> = Vec::new();
+    let mut start = 0;
+    for (index, (at, _)) in chars.iter().enumerate() {
+        let direction = rtl.get(index).copied().unwrap_or(false);
+        if index > 0 && rtl.get(index - 1).copied().unwrap_or(false) != direction {
+            runs.push((text.get(start..*at).unwrap_or_default(), !direction));
+            start = *at;
         }
     }
-    runs.push((text.get(start..).unwrap_or_default(), current));
+    runs.push((text.get(start..).unwrap_or_default(), rtl.last().copied().unwrap_or(false)));
     runs
 }
 
