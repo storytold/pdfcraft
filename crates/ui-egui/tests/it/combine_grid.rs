@@ -544,6 +544,34 @@ fn interleave_pages_alternates_the_pages_of_the_files_in_the_order_shown() {
     assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["front", "back"]);
 }
 
+/// #4922: the Pages chosen for a file are the pages that are interleaved, not the whole file, and a
+/// file split into parts is its parts one after the other.
+#[test]
+fn interleave_pages_takes_the_pages_the_list_gives_each_file() {
+    let mut h = grid_of_pages(&[("front.pdf", 3), ("back.pdf", 3)]);
+    // Only page 2 of the front, pages 3 then 1 of the back.
+    h.state_mut().combine_draft[0].range = "2".into();
+    h.state_mut().combine_draft[1].range = "3, 1".into();
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // Round one: front 2, back 3; then the back's page 1, which the front has no page for.
+    assert_eq!(texts_of(h.state(), 0), ["Page 2", "Page 3", "Page 1"]);
+
+    // A file split in two parts (both parts' ranges, in the order shown) is one file of both.
+    let mut h = grid_of_pages(&[("front.pdf", 4), ("back.pdf", 2)]);
+    h.state_mut().combine_draft[0].range = "1".into();
+    let mut part = h.state().combine_draft[0].clone();
+    part.id += 1000;
+    part.range = "4".into();
+    h.state_mut().combine_draft.push(part);
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // front's pages 1 then 4; back's 1 then 2: Page 1, Page 1, Page 4, Page 2.
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 4", "Page 2"]);
+}
+
 /// #4922: Interleave pages waits for two readable files, like Combine.
 #[test]
 fn interleave_pages_needs_two_files() {
