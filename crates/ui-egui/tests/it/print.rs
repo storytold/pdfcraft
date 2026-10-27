@@ -913,3 +913,56 @@ fn a_booklet_decides_two_sided_itself() {
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
+
+#[test]
+fn eco_mode_enables_grayscale_and_duplex_and_persists() {
+    use pdfcraft_engine::print::spool::Duplex;
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    // Initial state: eco_mode is false, grayscale is false, duplex is None.
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+
+    // Click Eco mode checkbox in the dialog.
+    h.get_by_label("Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+
+    // Persist and verify JSON serialization.
+    let saved = h.state().persist();
+    let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(json["print_eco_mode"], true);
+
+    // Restore into a fresh app and verify settings are applied.
+    let mut app = PdfCraftApp::new();
+    app.restore(&saved);
+    assert!(app.print_draft.eco_mode);
+    assert!(app.print_draft.grayscale);
+    assert_eq!(app.print_draft.duplex, Some(Duplex::LongEdge));
+
+    // In the dialog, unticking grayscale unsets eco_mode.
+    h.get_by_label("Print in grayscale").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.grayscale);
+    assert!(!h.state().print_draft.eco_mode);
+
+    // Clicking Eco mode again re-enables both.
+    h.get_by_label("Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+
+    // Unticking Eco mode resets grayscale and duplex.
+    h.get_by_label("Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+}
