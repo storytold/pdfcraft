@@ -21,6 +21,13 @@ thread_local! {
     static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
 }
 
+thread_local! {
+    /// Objects this thread has put into a document's parsed-object cache. A reader compares
+    /// it before and after a read: a read that inserted exactly one object cannot have
+    /// evicted or replaced anything else, whatever the cache length says.
+    static CACHE_INSERTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
 /// `/Length`, object streams): an object already being loaded is a cycle, and the nesting is
 /// bounded as well.
@@ -460,7 +467,9 @@ impl ObjectReader {
     }
 
     pub(crate) fn try_get(&mut self, reference: ObjRef) -> Result<Arc<Object>, CosError> {
+        let inserts_before = CACHE_INSERTS.with(|c| c.get());
         let object = self.document.try_get(reference.num);
+        let inserted = CACHE_INSERTS.with(|c| c.get()).wrapping_sub(inserts_before);
         // A missed eviction here only costs a re-parse, so never fail the read on a poisoned
         // lock. The editing-cache evictors propagate instead; they guard user edits.
         if let Ok(mut streams) = self.document.objstms.lock() {
@@ -492,13 +501,16 @@ impl ObjectReader {
         // have cached large objects.
         if let Ok(mut cache) = self.document.cache.lock() {
             let data = &self.document.data;
-            // The common read parsed exactly this object and nothing else (a hit changes
-            // nothing): add its size to the running total. Anything else, such as a failed
-            // load, a /Length that cached further objects or a cache changed from outside,
-            // measures the whole cache again.
-            let grew_by_this_object = cache.len() == self.counted_objects.saturating_add(1)
+            // A hit inserted nothing; a read that inserted exactly this object (no nested
+            // /Length or object stream load) added only it. Cache length and pointer equality
+            // alone cannot tell that from a read that evicted and replaced entries (a large
+            // nested object makes the editor cache keep only the newcomer), so count the
+            // inserts. Anything else, such as a failed load, a /Length that cached further
+            // objects or a cache changed from outside, measures the whole cache again.
+            let grew_by_this_object = inserted == 1
+                && cache.len() == self.counted_objects.saturating_add(1)
                 && matches!((&object, cache.get(&reference.num)), (Ok(read), Some(cached)) if Arc::ptr_eq(read, cached));
-            if object.is_ok() && cache.len() == self.counted_objects {
+            if object.is_ok() && inserted == 0 && cache.len() == self.counted_objects {
                 // Unchanged: a hit, or an object held by the overlay.
             } else if let (true, Ok(read)) = (grew_by_this_object, &object) {
                 self.counted_bytes = self.counted_bytes.saturating_add(owned_bytes(read, data, 0));
@@ -1075,6 +1087,7 @@ impl Document {
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
         // is cheap, and returned objects outlive eviction.
         self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
+        CACHE_INSERTS.with(|c| c.set(c.get().wrapping_add(1)));
         self.evict_editor_cache_if_over_budget(num, &obj)?;
         Ok(obj)
     }
@@ -3044,6 +3057,22 @@ endobj
             assert_eq!((reader.counted_objects, reader.counted_bytes), (cache.len(), measured), "after object {num}");
             assert!(cache.len() < ObjectReader::OBJECTS);
         }
+    }
+
+    #[test]
+    fn temporary_reader_recounts_when_a_read_replaces_cache_entries() {
+        // One cached object, then a read of a string over the editor cache's byte budget: the
+        // editor eviction keeps only the newcomer, so the cache length stays at one. The
+        // string is data of its own and must not stay cached past the reader's budget.
+        let big = format!("({})", "a".repeat(Document::EDITOR_CACHE_BYTES + 1));
+        let bytes = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Small 1 >>", &big], "/Root 1 0 R");
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let mut reader = doc.object_reader();
+        let _ = reader.get(ObjRef::new(3, 0));
+        assert_eq!((reader.document.cache.lock().unwrap().len(), reader.counted_objects), (1, 1));
+        assert!(matches!(&*reader.get(ObjRef::new(4, 0)), Object::String(_)));
+        assert!(reader.document.cache.lock().unwrap().is_empty(), "a replaced entry must be counted: the string is over budget");
+        assert_eq!((reader.counted_objects, reader.counted_bytes), (0, 0));
     }
 
     #[test]
