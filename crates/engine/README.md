@@ -24,6 +24,10 @@ field actions and XFA events can still show messages; ordinary PDFs, static XFA 
 without an active layout keep their document scripts. Converting XFA to a static form and
 undoing that conversion switches the context with the document state.
 
+When XFA datasets supply combo-box or list-box values on opening or data import, exact option exports take priority over matching display labels.
+A legacy display label is accepted when no export matches, including each multi-select value, and editable combo boxes retain unmatched text.
+The import path keeps field appearances and saved/exported datasets consistent with the resolved values, as direct field filling does.
+
 ## The editing model
 
 Each open document holds a `pdfcraft_cos::Document`: the object graph plus a copy-on-write overlay.

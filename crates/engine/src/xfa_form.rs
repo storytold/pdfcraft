@@ -271,9 +271,15 @@ pub(crate) fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Resu
         let Some(f) = by_name.get(name.as_str()) else { continue };
         let new = match value {
             pdfcraft_xfa::FieldData::Text(t) if matches!(f.kind, pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List) => {
-                // Saved values, one per line for a multi-select list; shown text stands for
-                // its saved value (an older viewer may have written it).
-                let saved = |v: &str| f.options.iter().find(|(e, s)| e == v || s == v).map_or(v.to_string(), |(e, _)| e.clone());
+                // Saved values, one per line for a multi-select list. Prefer exact exports;
+                // an older viewer's display text is accepted only when no export matches.
+                let saved = |v: &str| {
+                    f.options
+                        .iter()
+                        .find(|(e, _)| e == v)
+                        .or_else(|| f.options.iter().find(|(_, s)| s == v))
+                        .map_or(v.to_string(), |(e, _)| e.clone())
+                };
                 let picked: Vec<String> = if f.has(pdfcraft_forms::flags::MULTI_SELECT) {
                     t.lines().map(str::trim).filter(|l| !l.is_empty()).map(saved).collect()
                 } else {

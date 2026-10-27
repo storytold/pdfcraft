@@ -1,5 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
+> **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M6: choice filling and import prefer exact export values over matching display labels; scores and estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (localization current state: Arabic logical catalog, explicit RTL direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite. Scores and estimates unchanged)
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (localization ≈59% → ≈68%; weighted readiness 49.25 → 49.7 ≈ 50%) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -131,7 +132,7 @@ workflows, exchange edge cases and everything outside the mainstream slice are e
 | Find, select and copy text | 8% | 85% | Find, options, results list; word-F1 0.98 |
 | Print | 8% | 55% | Good on macOS and Linux; Windows prints since #847 (#756), not yet re-scored |
 | Highlight, sticky notes, text comments | 12% | 85% | All markup types, replies, properties |
-| Fill in forms | 10% | 85% | Every AcroForm field type, Acrobat's formatting and calculations |
+| Fill in forms | 10% | 85% | Every AcroForm field type, Acrobat's formatting and calculations; exact choice exports take priority over matching labels when filling/importing, with display fallback retained |
 | Fill & Sign: typed, drawn or image signature | 10% | 85% | Fill & Sign tools; flatten on save |
 | Rotate, delete, reorder and extract pages | 8% | 85% | Organize grid, drag reorder, thumbnails |
 | Combine files | 6% | 85% | Combine tab with bookmarks per file |
@@ -294,6 +295,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | M6: choice filling/import prefers exact export values over another option's matching display label. Combo/list/multi-select, invalid-input atomicity, history, XFDF and save/reopen have synthetic regressions; matching stays case-sensitive and duplicate-export behavior is unchanged. Scores and estimates unchanged. |
 | 2026-10-25 | minor | Localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Scores and estimates unchanged. |
 | 2026-10-20 | minor | M12 #3673: the Character encoding rule accepts Identity-H/V fonts with Adobe CJK collections, or a predefined non-Identity CMap, while rejecting unknown names and foreign registries. Synthetic checker and read-only automation regressions passed after failing before the fix; per-glyph mapping validation and embedded-font extraction remain separate. Breadth, readiness and hours unchanged. |
 | 2026-10-12 | minor | Exclusive image crops resize with their pixels across nested states, intervening operators and content streams; shared clips remain fixed. Synthetic engine/tool regressions and private image save/reopen checks; estimates unchanged. |

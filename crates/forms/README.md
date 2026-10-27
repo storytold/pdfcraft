@@ -69,6 +69,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   original entry is preserved. Positive limits still apply.
 - Values are validated (options, `MaxLen`, single vs multi-select, NoToggleToOff, read-only) and a
   failed call changes nothing.
+- Combo-box and list-box inputs prefer an exact export value over another option's matching display label.
+  If no export matches, a display label remains accepted, including each value in a multi-select list.
+  Matching stays case-sensitive, and an editable combo box still accepts free text.
+  Duplicate export values and duplicate display labels keep their existing selection behavior.
 - `FieldProps::appearance` applies a `LookPatch` independently to each widget. `None` keeps
   a property; `Some(None)` removes a border/fill colour. Unchanged `/DA`, custom font resources,
   widget-specific `/DA` overrides, indirect `/MK` and `/BS` contents, dash arrays and unknown

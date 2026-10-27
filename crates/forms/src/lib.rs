@@ -237,6 +237,7 @@ pub enum FieldValue {
     /// Radio group: the on-state to select (`None`: none selected).
     Radio(Option<String>),
     /// Combo box or list box: export values (several only for multi-select lists).
+    /// A display label is accepted when no export value matches; exact exports take priority.
     Choice(Vec<String>),
 }
 
@@ -288,6 +289,7 @@ fn name_obj(text: &str) -> Object {
     Object::Name(name_bytes(text))
 }
 
+/// Return an invalid-value error for a rejected field operation.
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
 }

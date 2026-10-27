@@ -68,6 +68,14 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## Choice field values
+
+`form_fields` reports each combo-box and list-box option as `{value, label}`.
+`form_fill` prefers an exact option `value` over any other option's matching `label`.
+When no export value matches, an existing display label is still accepted.
+Each value of a multi-select list resolves independently by the same rule, which also preserves export values imported from form data such as XFDF.
+Matching remains case-sensitive; duplicate export values or duplicate labels keep their existing selection behavior.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:

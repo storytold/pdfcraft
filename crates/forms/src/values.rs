@@ -195,6 +195,8 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
         .collect()
 }
 
+/// Validate a value for its field kind, write the stored selection and regenerate its appearance.
+/// Choice fields normalize both text and choice inputs through the same export-first lookup.
 pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
@@ -268,10 +270,11 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             if vals.len() > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
                 return invalid(format!("{:?} takes a single value", f.name));
             }
-            // Accept export values or display texts; free text only in editable combo boxes.
+            // Prefer an exact export value over another option's matching display label.
+            // Keep accepting display texts; free text only in editable combo boxes.
             let mut exports = Vec::new();
             for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
+                match f.options.iter().find(|(e, _)| e == v).or_else(|| f.options.iter().find(|(_, d)| d == v)) {
                     Some((e, _)) => exports.push(e.clone()),
                     None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
                     None if f.options.is_empty() => exports.push(v.clone()),

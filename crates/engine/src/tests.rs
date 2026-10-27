@@ -5913,6 +5913,78 @@ fn xfa_data_import_on_a_static_form_replaces_every_value_and_pictures_reach_its_
     assert!(xml.contains("<name>Bob</name>") && !xml.contains("<agree>1</agree>"), "{xml}");
 }
 
+/// Dataset imports and opening values use the same export-first choice policy as direct fills.
+/// A display-only match and an editable combo's unmatched text retain their existing fallbacks.
+#[test]
+fn xfa_choice_dataset_values_prefer_exports_over_display_labels() {
+    use pdfcraft_cos::{Object, PdfString, SaveOptions, write_full};
+    use pdfcraft_forms::flags;
+    let name = "form1[0].page1[0].name[0]";
+    for flags in [0, flags::COMBO, flags::MULTI_SELECT, flags::COMBO | flags::EDIT] {
+        for reversed in [false, true] {
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_shell(
+                "<form1><page1><name>C</name><agree>1</agree></page1></form1>",
+            )))
+            .unwrap();
+            let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == name).unwrap().obj;
+            let mut options = [("A", "B"), ("B", "Target"), ("C", "Friendly")];
+            if reversed {
+                options.reverse();
+            }
+            let string = |s: &str| Object::String(PdfString::literal(s.as_bytes().to_vec()));
+            cos.update_dict(field, |d| {
+                d.set(b"FT".to_vec(), Object::name("Ch"));
+                d.set(b"Ff".to_vec(), Object::Int(flags as i64));
+                d.set(b"Opt".to_vec(), Object::Array(options.into_iter().map(|(e, s)| Object::Array(vec![string(e), string(s)])).collect()));
+                d.set(b"V".to_vec(), string("C"));
+            })
+            .unwrap();
+            let original = Arc::new(write_full(&cos, &SaveOptions::default()).unwrap());
+            let mut s = Session::new().with_clock(|| 1_700_000_000);
+            let id = s.open("choice.pdf", None, original.clone(), None).unwrap();
+            let control = s.open("direct-control.pdf", None, original.clone(), None).unwrap();
+            let value = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+            assert_eq!(value(&s, id), ["C"]);
+            let multi = flags & flags::MULTI_SELECT != 0;
+            let picked: Vec<String> = if multi { vec!["B".into(), "C".into()] } else { vec!["B".into()] };
+            let imported = if multi { " B \n\n Friendly " } else { " B " };
+            let xml = format!("<form1><page1><name>{imported}</name><agree>1</agree></page1></form1>");
+            s.apply(control, Edit::SetFieldValue { name: name.into(), value: FieldValue::Choice(picked.clone()) }).unwrap();
+            let expected_pixels = render_page(&s, control).rgba;
+            s.apply(id, Edit::ImportData { name: "values.xml".into(), bytes: Arc::new(xml.as_bytes().to_vec()) }).unwrap();
+            assert_eq!(value(&s, id), picked, "flags={flags}, reversed={reversed}: export B must beat display B");
+            assert_eq!(render_page(&s, id).rgba, expected_pixels, "imported choice appearances match a direct fill");
+            s.undo(id).unwrap();
+            assert_eq!(value(&s, id), ["C"], "import is one undoable change");
+            s.redo(id).unwrap();
+            assert_eq!(value(&s, id), picked);
+            let saved = s.save_bytes(id).unwrap();
+            let data = pdfcraft_xfa::data_of(&pdfcraft_cos::Document::open(saved.clone()).unwrap()).unwrap();
+            assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path(name)), Some(if multi { "B\nC" } else { "B" }));
+            let reopened = s.open("saved.pdf", None, saved, None).unwrap();
+            assert_eq!(value(&s, reopened), picked, "saved fields and datasets agree on reopening");
+            assert_eq!(render_page(&s, reopened).rgba, expected_pixels);
+
+            // The same data can arrive in a file another viewer filled, before the first open.
+            let mut external = pdfcraft_cos::Document::open(original).unwrap();
+            pdfcraft_xfa::import_data(&mut external, &xml, None, None).unwrap();
+            let external = Arc::new(write_full(&external, &SaveOptions::default()).unwrap());
+            let opened = s.open("external-data.pdf", None, external, None).unwrap();
+            assert_eq!(value(&s, opened), picked, "opening reads export values with the same precedence");
+            assert_eq!(render_page(&s, opened).rgba, expected_pixels);
+
+            let fallback = b"<form1><page1><name>Friendly</name><agree>1</agree></page1></form1>";
+            s.apply(id, Edit::ImportData { name: "labels.xml".into(), bytes: Arc::new(fallback.to_vec()) }).unwrap();
+            assert_eq!(value(&s, id), ["C"], "a label remains accepted when no export matches it");
+            if flags & flags::EDIT != 0 {
+                let free_text = b"<form1><page1><name>Unlisted</name><agree>1</agree></page1></form1>";
+                s.apply(id, Edit::ImportData { name: "free.xml".into(), bytes: Arc::new(free_text.to_vec()) }).unwrap();
+                assert_eq!(value(&s, id), ["Unlisted"], "editable combos retain unmatched data values");
+            }
+        }
+    }
+}
+
 /// Importing data into a dynamic form adds and removes the rows of its repeating subform to
 /// match, and the calculations over them run again.
 #[test]

@@ -1067,6 +1067,7 @@ fn check_boxes_keep_non_utf8_state_names() {
     assert_eq!(doc.get(f.widgets[0].obj).as_dict().unwrap().name(b"AS"), Some(&b"Off"[..]));
 }
 
+/// State names preserve their original bytes across Unicode and escaped-name conversions.
 #[test]
 fn name_text_round_trips() {
     for bytes in [&b"Yes"[..], b"\x82\xcd\x82\xa2", "はい".as_bytes(), b"A#1", b"a b", b"", b"\xff#\x00"] {
@@ -1078,6 +1079,7 @@ fn name_text_round_trips() {
     assert_eq!(name_bytes("#G1#4"), b"#G1#4");
 }
 
+/// Display labels normalize to saved exports, while invalid or excessive selections are refused.
 #[test]
 fn choices_accept_exports_or_display_text() {
     let mut doc = fixture();
@@ -1099,6 +1101,60 @@ fn choices_accept_exports_or_display_text() {
     assert!(matches!(set_value(&mut doc, "country", &FieldValue::Choice(vec!["ca".into(), "fr".into()])), Err(FormError::Invalid(_))));
 }
 
+/// An option's display label must not shadow another option's exact export value.
+/// Exercise both option orders and all choice field kinds through a save/reopen.
+#[test]
+fn choice_export_values_take_precedence_over_display_text() {
+    for flags in [0, flags::COMBO, flags::COMBO | flags::EDIT, flags::MULTI_SELECT] {
+        for reversed in [false, true] {
+            let options = if reversed { "[[(C) (Friendly)] [(B) (Target)] [(A) (B)]]" } else { "[[(A) (B)] [(B) (Target)] [(C) (Friendly)]]" };
+            let objects = vec![
+                "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".into(),
+                "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+                "<< /Fields [6 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+                format!("<< /Type /Annot /Subtype /Widget /FT /Ch /T (pick) /Ff {flags} /Opt {options} /V (A) /Rect [20 100 220 160] /P 3 0 R >>"),
+            ];
+            for value in [FieldValue::Text("B".into()), FieldValue::Choice(vec!["B".into()])] {
+                let mut doc = document(&objects);
+                set_value(&mut doc, "pick", &value).unwrap();
+                let doc = reopen(&doc);
+                let all = fields(&doc);
+                let picked = field(&all, "pick");
+                assert_eq!(picked.value, ["B"], "flags={flags}, reversed={reversed}, value={value:?}");
+                assert_eq!(picked.display_value(), "Target");
+                let indices = doc.get(picked.obj).as_dict().unwrap().get(b"I").unwrap().as_array().unwrap().clone();
+                assert_eq!(indices.iter().filter_map(Object::as_int).collect::<Vec<_>>(), [1]);
+                assert!(ap(&doc, &picked.widgets[0]).contains("(Target) Tj"));
+                if flags & flags::MULTI_SELECT != 0 {
+                    let mut doc = doc;
+                    set_value(&mut doc, "pick", &FieldValue::Choice(vec!["B".into(), "Friendly".into()])).unwrap();
+                    let doc = reopen(&doc);
+                    let all = fields(&doc);
+                    let picked = field(&all, "pick");
+                    assert_eq!(picked.value, ["B", "C"], "each selection resolves independently");
+                    let indices = doc.get(picked.obj).as_dict().unwrap().get(b"I").unwrap().as_array().unwrap().clone();
+                    assert_eq!(indices.iter().filter_map(Object::as_int).collect::<Vec<_>>(), if reversed { vec![0, 1] } else { vec![1, 2] });
+                    assert_eq!(ap(&doc, &picked.widgets[0]).matches("0.6 0.75 0.86 rg").count(), 2);
+                    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+                    let mut doc = doc;
+                    assert!(matches!(
+                        set_value(&mut doc, "pick", &FieldValue::Choice(vec!["A".into(), "missing".into()])),
+                        Err(FormError::Invalid(_))
+                    ));
+                    assert_eq!(
+                        write_incremental(&doc, &SaveOptions::default()).unwrap(),
+                        before,
+                        "an invalid later value keeps all values, indices and appearances"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Picking rows outside the current view scrolls the list so both selections are visibly highlighted.
 #[test]
 fn list_box_selection_scrolls_to_show_selected_options() {
     let objs: Vec<String> = vec![
