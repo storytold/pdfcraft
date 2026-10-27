@@ -1,5 +1,7 @@
 use super::tab_order::rank_tabs;
-use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfString, Widget, af, appearance, flags, name_text, text_of};
+use super::{
+    DecodeBudget, Dict, Document, Field, FieldDisplay, FieldKind, ObjRef, Object, PdfString, Widget, af, appearance, flags, name_text, text_of,
+};
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
@@ -520,6 +522,7 @@ fn walk(
                 tab: usize::MAX,
                 locked: annot_flags & 128 != 0,
                 hidden: annot_flags & (2 | 32) != 0,
+                display: FieldDisplay::from_flags(annot_flags),
                 read_only: (ff | own_ff) & flags::READ_ONLY != 0,
                 rotation: appearance::mk_rotation(doc, wd),
                 caption: (kind == FieldKind::PushButton)
