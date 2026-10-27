@@ -966,3 +966,81 @@ fn right_to_left_table_cells_and_text_boxes_are_marked() {
     assert!(xml.contains("<w:txbxContent><w:p><w:pPr><w:bidi/><w:spacing"), "{xml}");
     assert!(xml.contains("<w:txbxContent><w:p><w:pPr><w:spacing"), "the English box has no direction");
 }
+
+/// #4653: the direction is the first strong character's by its Unicode bidi class, not by its
+/// script: an explicit left-to-right mark before Arabic makes it left to right, and Hebrew
+/// punctuation that is not a letter is still strong right to left.
+#[test]
+fn direction_follows_the_unicode_bidi_class_of_the_first_strong_character() {
+    // LRM (strong L) before Arabic text: left to right.
+    assert!(!is_rtl("\u{200e}\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}"));
+    assert!(is_rtl("\u{200f}abc"), "RLM is strong R");
+    assert!(is_rtl("\u{061c}abc"), "ALM is strong AL");
+    // The maqaf is punctuation, and strong R: it starts a right-to-left text.
+    assert!(is_rtl("\u{05be}abc"));
+    assert!(is_rtl("123 (\u{05be}) abc"));
+    // Arabic-Indic digits are weak numbers: they decide nothing.
+    assert!(!is_rtl("\u{0661}\u{0662} abc"));
+    assert!(is_rtl("\u{0661}\u{0662} \u{0645}"));
+    // Across runs: the first strong character of the paragraph, wherever it is.
+    let runs = |texts: &[&str]| -> Vec<Run<'static>> {
+        let b: &'static Block = Box::leak(Box::new(block("x", 0.0, 0.0, 1.0, 1.0)));
+        texts.iter().map(|t| Run { block: b, text: (*t).into() }).collect()
+    };
+    assert!(!paragraph_rtl(&runs(&["\u{200e}", "\u{0645}\u{0631}"])), "LRM in the first run");
+    assert!(paragraph_rtl(&runs(&["12 ", ", ", "\u{05be}x"])), "weak runs, then the maqaf");
+    assert!(paragraph_rtl(&runs(&["", " ", "\u{0645}"])));
+    assert!(!paragraph_rtl(&runs(&["12", "\u{0661}"])));
+    assert!(!paragraph_rtl(&runs(&[])));
+    // The same through the exporters: an LRM-first Arabic paragraph is not marked.
+    let mut p = bidi_page();
+    p.blocks[0].text = format!("\u{200e}{}", p.blocks[0].text);
+    let xml = part(&docx(&[p.clone()], "LRM"), "word/document.xml");
+    assert!(!xml.contains("<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/><w:rtl/>"), "{xml}");
+    assert!(!html(&[p.clone()], "LRM").contains("<p dir=\"rtl\">\u{200e}"));
+    assert!(!rtf(&[p]).contains("\\rtlpar\\fs22 \\u8206"));
+}
+
+/// #4653: a run that mixes Arabic and Latin is cut into runs of one direction, so only the Arabic
+/// is marked right to left; a weak character (space, digit) stays with the stretch before it.
+#[test]
+fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
+    let arabic = "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}";
+    // Text and its pieces: nothing is lost, nothing is empty, the directions are right.
+    let text = format!("  {arabic} ABC 123 {arabic}");
+    let parts = directional_runs(&text);
+    assert_eq!(parts.iter().map(|(t, _)| *t).collect::<String>(), text);
+    assert_eq!(
+        parts.iter().map(|(t, d)| (t.trim(), *d)).collect::<Vec<_>>(),
+        [(arabic, true), ("ABC 123", false), (arabic, true)],
+        "leading spaces go with the first stretch"
+    );
+    assert!(parts.iter().all(|(t, _)| !t.is_empty()));
+    assert_eq!(directional_runs("plain Latin text"), [("plain Latin text", false)]);
+    assert_eq!(directional_runs(arabic), [(arabic, true)]);
+    assert_eq!(directional_runs(""), [("", false)]);
+    assert_eq!(directional_runs("12, 34"), [("12, 34", false)], "no strong character: left to right");
+
+    // In Word: one block, Arabic first, with Latin in the middle: three runs, the Latin one unmarked.
+    let p = Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![block(&format!("{arabic} ABC 123 {arabic} and more text so that it is long enough to be the body"), 72.0, 600.0, 500.0, 612.0)],
+        images: Vec::new(),
+        background: None,
+    };
+    let xml = part(&docx(&[p], "Mixed"), "word/document.xml");
+    let runs: Vec<&str> = xml.split("<w:r>").skip(1).collect();
+    let with = |needle: &str| *runs.iter().find(|r| r.contains(needle)).unwrap_or_else(|| panic!("no run with {needle}: {xml}"));
+    assert!(with(arabic).contains("<w:rtl/>"));
+    let latin = with("ABC 123");
+    assert!(!latin.contains("<w:rtl/>") && !latin.contains("<w:szCs"), "{latin}");
+    assert!(xml.contains("<w:p><w:pPr><w:bidi/></w:pPr>"), "the paragraph is right to left: {xml}");
+    // Bold Arabic keeps its complex-script bold on every right-to-left piece, and none on the Latin.
+    let mut bold = block(&format!("{arabic} ABC"), 72.0, 600.0, 500.0, 612.0);
+    bold.bold = true;
+    let q = Page { width: 612.0, height: 792.0, blocks: vec![bold], images: Vec::new(), background: None };
+    let xml = part(&docx(&[q], "Bold"), "word/document.xml");
+    assert!(xml.contains("<w:b/><w:bCs/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/><w:rtl/>"), "{xml}");
+    assert!(xml.contains("<w:b/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\">ABC</w:t>"), "{xml}");
+}

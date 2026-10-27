@@ -1,24 +1,46 @@
 use std::collections::HashMap;
 
-/// Whether `c` is a strong right-to-left character: a letter of Hebrew, Arabic, Syriac, Thaana,
-/// N'Ko, Samaritan, Mandaic and the other right-to-left scripts, or an explicit RLM or ALM mark.
-fn strong_rtl(c: char) -> bool {
-    matches!(c, '\u{200F}' | '\u{061C}')
-        || (c.is_alphabetic() && matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF))
+use unicode_bidi::{BidiClass, bidi_class};
+
+/// The strong direction of `c` by its Unicode bidi class: `Some(true)` for right to left (R, AL:
+/// Hebrew, Arabic, the RLM and ALM marks, Hebrew punctuation such as the maqaf…), `Some(false)`
+/// for left to right (L: letters of the left-to-right scripts, the LRM mark…), `None` for the weak
+/// and neutral characters (digits, punctuation, spaces).
+fn strong_direction(c: char) -> Option<bool> {
+    match bidi_class(c) {
+        BidiClass::R | BidiClass::AL => Some(true),
+        BidiClass::L => Some(false),
+        _ => None,
+    }
 }
 
 /// Whether `text` reads right to left: its first strong character is a right-to-left one, as the
-/// HTML `dir="auto"` rule has it (#4653). Digits, punctuation and spaces are not strong.
+/// HTML `dir="auto"` rule has it (#4653).
 pub(crate) fn is_rtl(text: &str) -> bool {
-    for c in text.chars() {
-        if strong_rtl(c) {
-            return true;
-        }
-        if c.is_alphabetic() {
-            return false;
+    text.chars().find_map(strong_direction).unwrap_or(false)
+}
+
+/// `text` cut into stretches of one direction, each with whether it reads right to left. A weak or
+/// neutral character (a space, a digit, a comma) stays with the stretch before it, and those at the
+/// start with the first strong stretch, so no stretch is empty unless `text` is. Marking a whole
+/// mixed run as right to left would mark its Latin letters too, which Word leaves unspecified.
+pub(crate) fn directional_runs(text: &str) -> Vec<(&str, bool)> {
+    let mut runs = Vec::new();
+    let mut current = is_rtl(text);
+    let mut start = 0;
+    for (at, c) in text.char_indices() {
+        if let Some(direction) = strong_direction(c)
+            && direction != current
+        {
+            if at > start {
+                runs.push((text.get(start..at).unwrap_or_default(), current));
+            }
+            start = at;
+            current = direction;
         }
     }
-    false
+    runs.push((text.get(start..).unwrap_or_default(), current));
+    runs
 }
 
 /// A paragraph of a page.
@@ -204,7 +226,7 @@ pub(crate) struct Run<'a> {
 
 /// Whether a paragraph's runs read right to left: its first strong character, across the runs.
 pub(crate) fn paragraph_rtl(runs: &[Run]) -> bool {
-    runs.iter().find_map(|r| r.text.chars().find(|c| strong_rtl(*c) || c.is_alphabetic())).is_some_and(strong_rtl)
+    runs.iter().flat_map(|r| r.text.chars()).find_map(strong_direction).unwrap_or(false)
 }
 
 /// A page's paragraphs, each a list of runs from left to right along its line. A block that

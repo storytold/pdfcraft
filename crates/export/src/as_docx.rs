@@ -1,6 +1,6 @@
 use super::Zip;
 use super::as_html::esc;
-use super::layout::{Image, Item, Page, Table, body_size, is_rtl, items, paragraph_rtl};
+use super::layout::{Image, Item, Page, Table, body_size, directional_runs, is_rtl, items, paragraph_rtl};
 
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
 pub(crate) fn rgb8(c: [f64; 3]) -> [u8; 3] {
@@ -14,10 +14,16 @@ pub(crate) fn hex(c: [f64; 3]) -> Option<String> {
     (r | g | b != 0).then(|| format!("{r:02X}{g:02X}{b:02X}"))
 }
 
-/// A formatted text run (shared by paragraphs and table cells).
+/// A formatted text run (shared by paragraphs and table cells), as one Word run per stretch of
+/// one direction: text in a right-to-left script is complex-script text to Word (its bold, italic
+/// and size are the `Cs` ones, and `w:rtl` says its direction), and only that text is marked, not
+/// the Latin letters that share its formatting (#4653).
 fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
+    directional_runs(text).into_iter().map(|(part, rtl)| run_part(part, rtl, size, bold, italic, color)).collect()
+}
+
+fn run_part(text: &str, rtl: bool, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
     let mut rpr = String::new();
-    let rtl = is_rtl(text);
     if bold {
         rpr.push_str(if rtl { "<w:b/><w:bCs/>" } else { "<w:b/>" });
     }
@@ -29,8 +35,6 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> 
     }
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) as i64 } else { 24 };
     rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/>"));
-    // Text in a right-to-left script is complex-script text to Word: its bold, italic and size are
-    // the `Cs` ones, and `w:rtl` says its direction (#4653).
     if rtl {
         rpr.push_str(&format!("<w:szCs w:val=\"{half_points}\"/><w:rtl/>"));
     }
