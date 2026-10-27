@@ -65,36 +65,56 @@ impl DocView {
     /// row up or down, selecting only that page; with ⇧ the selection runs from the anchor to
     /// it instead (#3436). ⌘/Ctrl with an arrow is left to the other page keys.
     pub(crate) fn grid_arrow_keys(&mut self, ctx: &egui::Context) {
-        use egui::{Key, Modifiers};
+        use egui::{Event, Key, Modifiers};
+        // Every arrow press this frame, in order, each with the Shift it was pressed with: the
+        // frame's modifier state can differ from a press's when Shift changes mid-frame.
+        let presses: Vec<(Key, bool)> = ctx.input_mut(|i| {
+            let mut presses = Vec::new();
+            i.events.retain(|event| match event {
+                Event::Key { key, pressed: true, modifiers, .. }
+                    if matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)
+                        && modifiers.matches_logically(Modifiers::NONE) =>
+                {
+                    presses.push((*key, modifiers.shift));
+                    false
+                }
+                _ => true,
+            });
+            presses
+        });
+        for (key, shift) in presses {
+            self.grid_arrow(key, shift);
+        }
+    }
+
+    /// One arrow press in the organize grid (see [`Self::grid_arrow_keys`]).
+    fn grid_arrow(&mut self, key: egui::Key, shift: bool) {
+        use egui::Key;
         let Some(last) = self.page_count.checked_sub(1) else { return };
         let cols = self.grid_cols.max(1);
         let current = self.current.min(last);
-        let shift = ctx.input(|i| i.modifiers.shift);
-        for (key, forward, step) in
-            [(Key::ArrowLeft, false, 1), (Key::ArrowRight, true, 1), (Key::ArrowUp, false, cols), (Key::ArrowDown, true, cols)]
-        {
-            // Without Shift in the pattern, a held Shift still matches (egui ignores it).
-            if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, key)) {
-                continue;
-            }
-            let target = if forward {
-                // ↓ on the row above a short last row goes to the last page.
-                current.checked_add(step).map(|t| t.min(last)).filter(|t| *t != current && (step == 1 || t / cols > current / cols))
-            } else {
-                current.checked_sub(step)
-            };
-            let Some(target) = target else { continue };
-            if shift {
-                let anchor = self.select_anchor.filter(|a| *a <= last).unwrap_or(current);
-                self.selected = (anchor.min(target)..=anchor.max(target)).collect();
-                self.select_anchor = Some(anchor);
-            } else {
-                self.clear_page_selection(Some(target));
-            }
-            self.go_to_page(target);
-            self.grid_follow = Some(target);
-            return;
+        let (forward, step) = match key {
+            Key::ArrowLeft => (false, 1),
+            Key::ArrowRight => (true, 1),
+            Key::ArrowUp => (false, cols),
+            _ => (true, cols),
+        };
+        let target = if forward {
+            // ↓ on the row above a short last row goes to the last page.
+            current.checked_add(step).map(|t| t.min(last)).filter(|t| *t != current && (step == 1 || t / cols > current / cols))
+        } else {
+            current.checked_sub(step)
+        };
+        let Some(target) = target else { return };
+        if shift {
+            let anchor = self.select_anchor.filter(|a| *a <= last).unwrap_or(current);
+            self.selected = (anchor.min(target)..=anchor.max(target)).collect();
+            self.select_anchor = Some(anchor);
+        } else {
+            self.clear_page_selection(Some(target));
         }
+        self.go_to_page(target);
+        self.grid_follow = Some(target);
     }
 
     /// Drop the page selection; a later ⇧-click ranges from `anchor`.

@@ -91,3 +91,22 @@ fn clicking_between_pages_in_the_organize_grid_drops_the_selection() {
     assert_eq!(state(&h).1, Vec::<usize>::new());
     assert_eq!(state(&h).0, 1, "the current page stays where it was");
 }
+
+/// Shift comes from each arrow press, not from the frame's modifier state: Shift pressed or let
+/// go within one frame must not flip what an arrow does (#4993 review).
+#[test]
+fn each_arrow_press_uses_the_shift_it_was_pressed_with() {
+    let mut h = organize();
+    let key = |key: Key, modifiers: Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    // The frame's modifiers stay NONE; only the events carry Shift.
+    h.event(key(Key::ArrowRight, Modifiers::SHIFT));
+    h.event(key(Key::ArrowRight, Modifiers::SHIFT));
+    h.run_steps(2);
+    assert_eq!(state(&h), (2, vec![0, 1, 2]), "both presses in one frame extend the selection");
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    h.event(key(Key::ArrowLeft, Modifiers::NONE));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+    assert_eq!(state(&h), (1, vec![]), "a plain press with Shift held later in the frame selects only its page");
+}
