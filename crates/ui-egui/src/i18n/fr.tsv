@@ -2845,3 +2845,4 @@ certificate	Version	Version
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
 	Show Page Edge Shadows	Afficher les ombres des bords des pages
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	La police de signature ne peut pas afficher « {c} » ({code}). Saisissez-le en lettres latines, cyrilliques ou grecques, ou utilisez « Dessiner » ou « Image ».

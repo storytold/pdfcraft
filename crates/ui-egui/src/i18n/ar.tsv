@@ -2855,3 +2855,4 @@ certificate	Version	الإصدار
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
 	Show Page Edge Shadows	إظهار ظلال حواف الصفحات
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	لا يستطيع خط التوقيع رسم «{c}» ({code}). اكتبه بحروف لاتينية أو كيريلية أو يونانية، أو استخدم «رسم» أو «صورة».

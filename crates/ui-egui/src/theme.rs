@@ -305,6 +305,28 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     fonts
 }
 
+/// Whether the interface faces outside a Chinese interface ([`installed_font_definitions`]: the
+/// embedded faces, craft-fonts and the installed fallbacks) draw every character of `text` other
+/// than white space, in the proportional family.
+pub fn interface_draws(text: &str) -> bool {
+    draws(&installed_font_definitions(CjkPreference::Default), text)
+}
+
+/// Whether some face of `fonts`' proportional family maps each character of `text` other than
+/// white space. A face that doesn't parse draws nothing.
+pub fn draws(fonts: &FontDefinitions, text: &str) -> bool {
+    use skrifa::MetadataProvider as _;
+    let faces: Vec<skrifa::FontRef<'_>> = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .into_iter()
+        .flatten()
+        .filter_map(|name| fonts.font_data.get(name))
+        .filter_map(|data| skrifa::FontRef::from_index((*data.font).as_ref(), data.index).ok())
+        .collect();
+    text.chars().filter(|c| !c.is_whitespace()).all(|c| faces.iter().any(|face| face.charmap().map(c).is_some()))
+}
+
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
 /// the CJK, Arabic, Telugu, Hebrew and Thai faces of the optional craft-fonts build input as the
 /// last fallback in every family. Without craft-fonts there is no Japanese, Chinese, Arabic,

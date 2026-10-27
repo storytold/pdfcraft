@@ -2564,3 +2564,4 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Fonti i nënshkrimit nuk mund të vizatojë “{c}” ({code}). Shkruajeni me shkronja latine, cirilike ose greke, ose përdorni Vizato ose Imazh.

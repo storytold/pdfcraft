@@ -2809,3 +2809,4 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	हस्ताक्षर फ़ॉन्ट “{c}” ({code}) नहीं बना सकता। इसे लैटिन, सिरिलिक या ग्रीक अक्षरों में टाइप करें, या “ड्रॉ” या “छवि” का उपयोग करें।
