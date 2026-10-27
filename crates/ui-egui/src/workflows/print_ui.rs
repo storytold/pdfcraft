@@ -38,12 +38,16 @@ pub fn system_printers() -> PrinterSource {
     std::sync::Arc::new(spool::printers)
 }
 
+/// Maximum duration to wait for the system spooler to return printers before timing out (#5020).
+pub const PRINTER_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// The Print dialog's work in the background: the printer list being read, and the jobs being
 /// spooled, oldest first.
 #[derive(Default)]
 pub(crate) struct PrintTasks {
+    /// Background receiver for the printer list, paired with the start instant for timeout handling.
     #[cfg(not(target_arch = "wasm32"))]
-    printers: Option<std::sync::mpsc::Receiver<Vec<spool::Printer>>>,
+    printers: Option<(std::sync::mpsc::Receiver<Vec<spool::Printer>>, std::time::Instant)>,
     #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<PrintJob>,
     /// The progress card is showing a print job (it is shared with other long jobs).
@@ -232,7 +236,7 @@ impl PdfCraftApp {
             // The receiver may be gone (the app quit): nothing to report to then.
             let _ = tx.send(source());
         });
-        self.print_tasks.printers = Some(rx);
+        self.print_tasks.printers = Some((rx, std::time::Instant::now()));
     }
 
     /// Read `printer`'s driver options off the GUI thread (#1818); `poll_print` picks them up.
@@ -299,9 +303,14 @@ impl PdfCraftApp {
             for (printer, options) in arrived {
                 self.receive_options(printer, options);
             }
-            if let Some(rx) = &self.print_tasks.printers {
+            if let Some((rx, started)) = &self.print_tasks.printers {
+                let timeout = started.elapsed() >= PRINTER_SEARCH_TIMEOUT;
                 let printers = match rx.try_recv() {
                     Ok(p) => Some(p),
+                    Err(std::sync::mpsc::TryRecvError::Empty) if timeout => {
+                        // The search took too long (e.g. hung Windows spooler or offline network printer; #5020).
+                        Some(self.print_draft.printers.clone())
+                    }
                     Err(std::sync::mpsc::TryRecvError::Empty) => None,
                     // A source that died lists nothing new; the dialog keeps what it has.
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(self.print_draft.printers.clone()),
@@ -316,6 +325,9 @@ impl PdfCraftApp {
                     }
                     d.printers = printers;
                     d.printers_loading = false;
+                } else if let Some(ctx) = &self.ctx {
+                    let remaining = PRINTER_SEARCH_TIMEOUT.saturating_sub(started.elapsed());
+                    ctx.request_repaint_after(remaining);
                 }
             }
             let mut finished = Vec::new();
