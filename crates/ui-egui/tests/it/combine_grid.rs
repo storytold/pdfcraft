@@ -570,6 +570,20 @@ fn interleave_pages_takes_the_pages_the_list_gives_each_file() {
     h.run_steps(3);
     // front's pages 1 then 4; back's 1 then 2: Page 1, Page 1, Page 4, Page 2.
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 4", "Page 2"]);
+
+    // A part whose Pages is cleared is the whole file at that place, and the other parts stay:
+    // front is 4, then 1 2 3 4 (the second part cleared); back is 1 2.
+    let mut h = grid_of_pages(&[("front.pdf", 4), ("back.pdf", 2)]);
+    h.state_mut().combine_draft[0].range = "4".into();
+    let mut whole = h.state().combine_draft[0].clone();
+    whole.id += 1000;
+    whole.range = String::new();
+    h.state_mut().combine_draft.push(whole);
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // Round one: front 4, back 1; round two: front 1, back 2; then front 2, 3, 4.
+    assert_eq!(texts_of(h.state(), 0), ["Page 4", "Page 1", "Page 1", "Page 2", "Page 2", "Page 3", "Page 4"]);
 }
 
 /// #4922: Interleave pages waits for two readable files, like Combine.

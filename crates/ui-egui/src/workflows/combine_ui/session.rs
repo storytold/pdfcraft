@@ -430,8 +430,9 @@ impl PdfCraftApp {
     /// list gives it: its Pages field, and all its parts if it is split, in the order shown.
     pub fn interleave_staged(&mut self) {
         // One entry per file, in the order each first appears; a file split into parts is the
-        // parts' ranges one after the other (a part with no range is the whole file).
-        let mut files: Vec<(u64, &CombineFile, Vec<&str>, bool)> = Vec::new();
+        // parts' ranges one after the other, and a part with no Pages is all of its file's pages
+        // at that place (as the grid shows it). A file none of whose parts has Pages is simply whole.
+        let mut files: Vec<(u64, &CombineFile, Vec<String>, bool)> = Vec::new();
         for f in self.combine_draft.iter().filter(|f| !f.unreadable()) {
             let at = match files.iter().position(|(group, ..)| *group == f.group) {
                 Some(at) => at,
@@ -440,10 +441,14 @@ impl PdfCraftApp {
                     files.len() - 1
                 }
             };
-            if let Some((_, _, ranges, whole)) = files.get_mut(at) {
+            if let Some((_, _, ranges, restricted)) = files.get_mut(at) {
                 match f.range.trim() {
-                    "" => *whole = true,
-                    range => ranges.push(range),
+                    "" if f.pages > 0 => ranges.push(format!("1-{}", f.pages)),
+                    "" => {}
+                    range => {
+                        *restricted = true;
+                        ranges.push(range.to_string());
+                    }
                 }
             }
         }
@@ -452,7 +457,7 @@ impl PdfCraftApp {
         }
         let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> = files
             .iter()
-            .map(|(_, f, ranges, whole)| (title_of(&f.name).to_string(), f.bytes.clone(), (!*whole && !ranges.is_empty()).then(|| ranges.join(", "))))
+            .map(|(_, f, ranges, restricted)| (title_of(&f.name).to_string(), f.bytes.clone(), restricted.then(|| ranges.join(", "))))
             .collect();
         let passwords: Vec<Option<&str>> = files.iter().map(|(_, f, ..)| f.password.as_ref().map(|p| p.0.as_str())).collect();
         let count = files.len();

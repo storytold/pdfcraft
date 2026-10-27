@@ -4104,6 +4104,9 @@ fn shuffle_takes_the_pages_a_range_chooses() {
     // A range on one file only, and the file's other pages follow when it is the longer.
     let out = pick(&s, None, range("4")).unwrap().bytes;
     assert_eq!(widths(&mut s, out), [101, 204, 102, 103, 104, 105]);
+    // A descending range lists its pages backwards: a back side scanned last page first.
+    let out = pick(&s, None, range("5-1")).unwrap().bytes;
+    assert_eq!(widths(&mut s, out), [101, 205, 102, 204, 103, 203, 104, 202, 105, 201]);
     // An empty range is all the pages.
     let out = pick(&s, range(" "), range("1-2")).unwrap().bytes;
     assert_eq!(widths(&mut s, out), [101, 201, 102, 202, 103, 104, 105]);
