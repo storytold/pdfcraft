@@ -137,7 +137,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         }
         if let Some(display) = c.display {
             for w in &f.widgets {
-                let old = doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0);
+                let old = doc.get(w.obj).as_dict().and_then(|d| d.get(b"F")).and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
                 let new = crate::FieldDisplay::from_script_code(display).apply_to(old);
                 if new != old {
                     doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
