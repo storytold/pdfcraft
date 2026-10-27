@@ -450,40 +450,55 @@ impl PdfCraftApp {
         }
     }
 
-    /// A file dropped on the Combine files tab: added to its list.
+    /// Files dropped on the Combine files tab: added to its list in batch.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
-        // A folder: the PDFs in it and in the folders inside it.
-        if f.path().is_absolute() && f.path().is_dir() {
-            self.add_folder_to_combine(f.path(), true);
+    pub(crate) fn drop_into_combine(&mut self, dropped: &[egui::DroppedFileHandle], _ctx: &egui::Context) {
+        if dropped.is_empty() {
             return;
         }
-        if f.path().is_absolute() {
-            self.use_paths(FilePurpose::Combine, &[f.path().to_path_buf()]);
-            return;
+        let mut paths = Vec::new();
+        let mut in_memory = Vec::new();
+        for f in dropped {
+            if let Some(clean_path) = clean_dropped_path(f.path()) {
+                if clean_path.is_dir() {
+                    self.add_folder_to_combine(&clean_path, true);
+                } else {
+                    paths.push(clean_path);
+                }
+                continue;
+            }
+            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            match f.bytes() {
+                Ok(bytes) => in_memory.push((name, bytes)),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+            }
         }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-        match f.bytes() {
-            Ok(bytes) => self.use_files(FilePurpose::Combine, vec![(name, bytes)]),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+        if !paths.is_empty() {
+            self.use_paths(FilePurpose::Combine, &paths);
+        }
+        if !in_memory.is_empty() {
+            self.use_files(FilePurpose::Combine, in_memory);
         }
     }
 
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
-        let requests = self.requests.clone();
-        let request = self.file_request(FilePurpose::Combine, Vec::new());
-        let ctx = ctx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-            if let Ok(bytes) = f.bytes_async().await
-                && let Ok(mut q) = requests.lock()
-            {
-                q.push(FileRequest { files: vec![(name, bytes)], ..request });
-                ctx.request_repaint();
-            }
-        });
+    pub(crate) fn drop_into_combine(&mut self, dropped: &[egui::DroppedFileHandle], ctx: &egui::Context) {
+        for f in dropped {
+            let f = f.clone();
+            let requests = self.requests.clone();
+            let request = self.file_request(FilePurpose::Combine, Vec::new());
+            let ctx = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+                if let Ok(bytes) = f.bytes_async().await
+                    && let Ok(mut q) = requests.lock()
+                {
+                    q.push(FileRequest { files: vec![(name, bytes)], ..request });
+                    ctx.request_repaint();
+                }
+            });
+        }
     }
 
     /// A request to use `files` for `purpose`, bound to the document it will edit: the active
@@ -1111,6 +1126,83 @@ impl PdfCraftApp {
     }
 }
 
+/// Resolve a dropped file path, stripping `file://` URI schemes and percent-decoding
+/// paths sent by Linux desktop environments (e.g. KDE Plasma / Dolphin) and other file managers.
+pub(crate) fn clean_dropped_path(raw: &std::path::Path) -> Option<std::path::PathBuf> {
+    let s = raw.to_string_lossy();
+    let trimmed = s.trim().trim_matches(|c| c == '\r' || c == '\n');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let cleaned = if let Some(rest) = lower.strip_prefix("file://") {
+        let after_host = if rest.starts_with("localhost/") {
+            trimmed.get("file://localhost".len()..).unwrap_or("")
+        } else {
+            trimmed.get("file://".len()..).unwrap_or("")
+        };
+        decode_uri_path(after_host)
+    } else if lower.starts_with("file:/") {
+        let after_scheme = trimmed.get("file:".len()..).unwrap_or("");
+        decode_uri_path(after_scheme)
+    } else {
+        trimmed.to_string()
+    };
+
+    let p = std::path::PathBuf::from(cleaned);
+    if p.is_absolute() || raw.is_absolute() { Some(p) } else { None }
+}
+
+/// Decode percent-encoded byte sequences and strip any leading slash preceding Windows drive letters.
+fn decode_uri_path(s: &str) -> String {
+    let bytes = percent_decode(s);
+    let decoded = String::from_utf8_lossy(&bytes).into_owned();
+    let trimmed = decoded.trim();
+    if trimmed.len() >= 3
+        && (trimmed.starts_with('/') || trimmed.starts_with('\\'))
+        && trimmed.as_bytes().get(1).is_some_and(|b| b.is_ascii_alphabetic())
+        && trimmed.as_bytes().get(2) == Some(&b':')
+    {
+        trimmed.get(1..).unwrap_or("").to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Decode percent-encoded byte sequences (e.g. `%20` -> ` `).
+fn percent_decode(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) == Some(&b'%')
+            && i + 2 < bytes.len()
+            && let (Some(&b1), Some(&b2)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(hi), Some(lo)) = (hex_val(b1), hex_val(b2))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else if let Some(&b) = bytes.get(i) {
+            out.push(b);
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Convert an ASCII byte representing a hexadecimal digit (0-9, a-f, A-F) to its numerical value.
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod stem_tests {
     use super::{attachment_file_name, file_stem_from_user, is_plain_file_name};
@@ -1198,6 +1290,35 @@ mod stem_tests {
         app.write_files(&[("x.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec()))], "t");
         assert_eq!(walk(&dir), vec![out.join("x.pdf")]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clean_dropped_path_decodes_file_uris_and_percent_encoded_characters() {
+        use super::{clean_dropped_path, percent_decode};
+        assert_eq!(String::from_utf8(percent_decode("hello%20world")).unwrap(), "hello world");
+        assert_eq!(String::from_utf8(percent_decode("%E5%B9%B4%E5%BA%A6")).unwrap(), "年度");
+        assert_eq!(percent_decode("invalid%2G%"), b"invalid%2G%");
+
+        #[cfg(not(windows))]
+        {
+            let unix_path = std::path::Path::new("file:///tmp/my%20file.pdf\r\n");
+            assert_eq!(clean_dropped_path(unix_path), Some(std::path::PathBuf::from("/tmp/my file.pdf")));
+
+            let localhost = std::path::Path::new("file://localhost/tmp/%E5%B9%B4%E5%BA%A6.pdf");
+            assert_eq!(clean_dropped_path(localhost), Some(std::path::PathBuf::from("/tmp/年度.pdf")));
+        }
+
+        #[cfg(windows)]
+        {
+            let win_path = std::path::Path::new("file:///C:/Users/User/Desktop/my%20file.pdf");
+            assert_eq!(clean_dropped_path(win_path), Some(std::path::PathBuf::from("C:/Users/User/Desktop/my file.pdf")));
+
+            let localhost_win = std::path::Path::new("file://localhost/D:/docs/report.pdf");
+            assert_eq!(clean_dropped_path(localhost_win), Some(std::path::PathBuf::from("D:/docs/report.pdf")));
+        }
+
+        assert_eq!(clean_dropped_path(std::path::Path::new("")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("relative.pdf")), None);
     }
 
     fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
