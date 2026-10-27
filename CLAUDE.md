@@ -2,6 +2,13 @@
 
 PdfCraft is a clean-room, open-source, Rust-native PDF application targeting Adobe Acrobat Pro parity. It runs natively on macOS, Windows, Linux and FreeBSD, and on the web via WASM. It is the sibling of `../photocraft` (a Photoshop-class editor) and follows the same conventions.
 
+## User documentation
+
+Follow the [user-documentation rule in AGENTS.md](AGENTS.md#user-documentation): update the
+English usage guide and affected existing translations with user-facing feature and keyboard
+changes. German is the initial example; the [language index](docs/usage/README.md) explains
+how to add other languages.
+
 ## Start every session here
 1. Read `plan/STATUS.md`: the current milestone, the next unchecked task and any blockers. `ROADMAP.md` is the one-page summary (stage, numbers, progress log) and `docs/roadmap.md` the milestone table; at the end of every session update the milestone row and add a line to the ROADMAP.md progress log.
    - Read `docs/gaps.md` (the ranked gaps: Acrobat interop, the open-issue backlog, the renderer and a fidelity harness, editing existing content, Pro workflows, 1.0 polish) and `docs/target-app-parity.md` (the numbers and how they are measured) before choosing work. Prefer the gaps over new P2/P3 features, and keep both documents true when things change (`docs/` progress docs follow craftrules `standards/progress-docs.md`: status line, revision history).
