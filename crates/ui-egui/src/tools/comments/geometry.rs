@@ -159,11 +159,7 @@ pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64
     let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
     let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
     let has_thai = text.chars().any(pdfcraft_fonts::is_thai);
-    let h = if has_thai {
-        (lines as f64 - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0
-    } else {
-        lines as f64 * size * 1.2 + 2.0 * pad + 2.0
-    };
+    let h = if has_thai { (lines as f64 - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0 } else { lines as f64 * size * 1.2 + 2.0 * pad + 2.0 };
     pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
 }
 

@@ -132,8 +132,8 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if props.look.is_some() || props.appearance.is_some_and(|p| p.font.is_some()) {
         ensure_form(doc)?;
     }
-    let explicit_thai = props.look.as_ref().is_some_and(|l| l.font == FieldFont::Thai)
-        || props.appearance.as_ref().is_some_and(|p| p.font == Some(FieldFont::Thai));
+    let explicit_thai =
+        props.look.as_ref().is_some_and(|l| l.font == FieldFont::Thai) || props.appearance.as_ref().is_some_and(|p| p.font == Some(FieldFont::Thai));
     let default_has_thai = props.default_value.as_ref().and_then(|d| d.as_ref()).is_some_and(|d| d.chars().any(crate::appearance::is_thai));
     if explicit_thai || default_has_thai {
         ensure_thai_font(doc)?;

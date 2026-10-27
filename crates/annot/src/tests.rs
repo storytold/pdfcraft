@@ -1608,7 +1608,10 @@ fn thai_free_text_stacked_marks_headroom_and_no_clip() {
     let pad = 2.0;
     let expected_y = 550.0 - (size * 1.35 + pad);
     let expected_tm = format!("1 0 0 1 102 {expected_y:.1} Tm");
-    assert!(ap.contains(&expected_tm) || ap.contains(&format!("1 0 0 1 102 {expected_y:.2} Tm")), "Baseline must have 1.35 em headroom below top edge: {ap}");
+    assert!(
+        ap.contains(&expected_tm) || ap.contains(&format!("1 0 0 1 102 {expected_y:.2} Tm")),
+        "Baseline must have 1.35 em headroom below top edge: {ap}"
+    );
 
     // Test fitted_box with Thai text
     let (_, reference) = annot_ref(&mut doc, 0, index).unwrap();

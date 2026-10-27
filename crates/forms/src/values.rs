@@ -404,6 +404,7 @@ pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) ->
 
 /// Regenerate the normal appearance of every widget of a text or choice field.
 fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    let mut f_snapshot = f.clone();
     let has_thai = values.iter().any(|v| v.chars().any(appearance::is_thai));
     if has_thai {
         let _ = author::ensure_thai_font(doc);
@@ -421,6 +422,7 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             .is_some_and(|f| f.contains(b"Thai"));
         if has_thai_resource && matches!(parsed.font.as_str(), "Helv" | "TiRo" | "Cour") {
             let new_da = format!("/Thai {} Tf {}", appearance::fmt(parsed.size), parsed.color);
+            f_snapshot.da = new_da.clone();
             let _ = doc.update_dict(f.obj, |d| d.set(b"DA".to_vec(), PdfString::literal(new_da.as_bytes().to_vec())));
             for w in &f.widgets {
                 let _ = doc.update_dict(w.obj, |d| {
@@ -432,15 +434,15 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
         }
     }
     let shown = match values {
-        [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
+        [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, &f_snapshot, one, scripts),
         _ => None,
     };
     let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     let mut undrawn = false;
     for w in &f.widgets {
         let (stream, missing) = match &shown {
-            Some(s) => appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false),
-            None => appearance::field_appearance_drawn(doc, f, w, values, true),
+            Some(s) => appearance::field_appearance_drawn(doc, &f_snapshot, w, std::slice::from_ref(s), false),
+            None => appearance::field_appearance_drawn(doc, &f_snapshot, w, values, true),
         };
         undrawn |= missing.is_some();
         let existing_ap = in_place

@@ -240,11 +240,7 @@ fn new(page: usize, shape: Shape, contents: String, author: &str) -> Edit {
 /// `rotation` (its `/Rotate`).
 pub fn typed(page: usize, at: [f64; 2], text: &str, size: f64, rotation: i64, author: &str) -> Edit {
     let has_thai = text.chars().any(pdfcraft_fonts::is_thai);
-    let at = if has_thai {
-        pdfcraft_engine::displayed_offset(rotation, at, 0.0, size * 0.45)
-    } else {
-        at
-    };
+    let at = if has_thai { pdfcraft_engine::displayed_offset(rotation, at, 0.0, size * 0.45) } else { at };
     let rect = crate::comments::text_box_rect(at, text, size, rotation);
     new(page, Shape::Typewriter { rect, font_size: size }, text.to_string(), author)
 }

@@ -794,7 +794,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         return Err(EditError::Invalid("type the header or footer text first".into()));
     }
     if let Some(ref name) = hf.font_name {
-        let _ = pdfcraft_fonts::set_active_thai_font_by_name(name);
+        pdfcraft_fonts::set_active_thai_font_by_name(name).map_err(|_| EditError::Invalid(format!("the requested font {name:?} is unavailable")))?;
     }
     if let Some(c) = hf.first_undrawable() {
         if added::is_thai(c) && pdfcraft_fonts::document_thai_font().is_none() {

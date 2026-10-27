@@ -354,10 +354,7 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
         None => egui::Id::unique("added_text_format_font_choice_new"),
     };
     let chosen: Option<(String, pdfcraft_engine::FontFamily)> = ui.data(|d| d.get_temp(font_choice_id));
-    let shown = chosen
-        .filter(|(_, family)| *family == style.family)
-        .map(|(label, _)| label)
-        .unwrap_or_else(|| style.family.label().to_string());
+    let shown = chosen.filter(|(_, family)| *family == style.family).map(|(label, _)| label).unwrap_or_else(|| style.family.label().to_string());
     let mut font_changed = false;
 
     let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
@@ -368,9 +365,7 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
             font_changed = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        Some(crate::format_text_ui::FontChoice::Thai(entry))
-            if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() =>
-        {
+        Some(crate::format_text_ui::FontChoice::Thai(entry)) if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() => {
             let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
             ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
             if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
@@ -382,9 +377,7 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
             font_changed = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        Some(crate::format_text_ui::FontChoice::Installed(path))
-            if pdfcraft_fonts::set_active_thai_font_by_path(&path).is_ok() =>
-        {
+        Some(crate::format_text_ui::FontChoice::Installed(path)) if pdfcraft_fonts::set_active_thai_font_by_path(&path).is_ok() => {
             let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
             ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
             if let Some(entry) = pdfcraft_fonts::active_thai_font_entry() {

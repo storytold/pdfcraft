@@ -226,10 +226,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
                 // The standard faces a header can be drawn in (#3754).
-                let current_font_name =
-                    d.hf.font_name
-                        .clone()
-                        .unwrap_or_else(|| d.hf.font.label().to_string());
+                let current_font_name = d.hf.font_name.clone().unwrap_or_else(|| d.hf.font.label().to_string());
                 egui::ComboBox::from_id_salt("hf-font-selector").selected_text(&current_font_name).width(160.0).show_ui(ui, |ui| {
                     ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
                     for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {

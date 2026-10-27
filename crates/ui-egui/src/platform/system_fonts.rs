@@ -335,9 +335,6 @@ fn thai_candidates() -> Vec<PathBuf> {
         }
         paths
     } else if cfg!(target_os = "macos") {
-        if let Some(font_path) = std::env::var_os("PDFCRAFT_THAI_FONT").map(PathBuf::from) {
-            paths.push(font_path);
-        }
         for file in [
             "/System/Library/Fonts/Supplemental/Thonburi.ttc",
             "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
@@ -633,11 +630,23 @@ mod tests {
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), thai_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            thai_candidates(),
+            hebrew_candidates(),
+            hangul_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || p.starts_with("assets") || p.starts_with("../assets") || cfg!(windows)), "{list:?}");
-            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc") || e.eq_ignore_ascii_case("otf"))), "{list:?}");
+            assert!(
+                list.iter().all(|p| p
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc") || e.eq_ignore_ascii_case("otf"))),
+                "{list:?}"
+            );
         }
     }
 

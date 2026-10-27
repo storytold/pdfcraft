@@ -466,7 +466,9 @@ impl Automation {
                             hf.font_name = Some(entry.file_name.clone());
                             thai_entry = Some(entry.clone());
                         } else {
-                            return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\", \"Courier\", or an installed Thai font, not {font:?}")));
+                            return Err(ToolError::InvalidArgs(format!(
+                                "font must be \"Helvetica\", \"Times\", \"Courier\", or an installed Thai font, not {font:?}"
+                            )));
                         }
                     }
                 }
@@ -532,10 +534,12 @@ impl Automation {
             let prev_entry = pdfcraft_fonts::active_thai_font_entry();
             pdfcraft_fonts::set_active_thai_font_entry(&entry).map_err(|e| ToolError::Failed(e.to_string()))?;
             let res = self.apply(a, edit);
-            if res.is_err()
-                && let Some(prev) = prev_entry
-            {
-                let _ = pdfcraft_fonts::set_active_thai_font_entry(&prev);
+            if res.is_err() {
+                if let Some(prev) = prev_entry {
+                    let _ = pdfcraft_fonts::set_active_thai_font_entry(&prev);
+                } else {
+                    pdfcraft_fonts::clear_active_thai_font();
+                }
             }
             res
         } else {

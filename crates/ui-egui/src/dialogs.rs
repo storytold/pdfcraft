@@ -1595,9 +1595,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Protect / Remove security replace the Properties dialog.
     let replaces = link_command.is_some_and(|c| c.starts_with("protect.")) || open_revision.is_some();
     if modal.should_close() || close || replaces {
-        if !field_props_now
-            && let Some(d) = app.field_props.take()
-        {
+        if !field_props_now && let Some(d) = app.field_props.take() {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(entry) = &d.prior_thai_font {
                 let _ = pdfcraft_fonts::set_active_thai_font_entry(entry);

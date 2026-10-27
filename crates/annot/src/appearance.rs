@@ -10,7 +10,7 @@
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
 
-use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, is_thai, literal, win_ansi};
 
 /// Advance of `s` in Helvetica at `size` points, or shaped Thai clusters if `s` contains Thai.
@@ -983,38 +983,40 @@ pub fn build_with_doc(doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
                 Some("Courier") => ("Cour", "Courier"),
                 _ => ("Helv", "Helvetica"),
             };
-            let mut t3_font = None;
-            if has_thai && let Some(doc) = doc {
+            let mut t3_fonts: Vec<(ObjRef, String)> = Vec::new();
+            let mut cluster_font_map: std::collections::HashMap<OwnedClusterKey, (usize, usize)> = std::collections::HashMap::new();
+            if has_thai {
+                let doc = doc?;
                 let mut unique_clusters = Vec::new();
-                let mut cluster_index: std::collections::HashMap<OwnedClusterKey, usize> = std::collections::HashMap::new();
+                let mut seen_keys = std::collections::HashSet::new();
                 for line in &lines {
                     if line.chars().any(is_thai)
                         && let Ok(clusters) = pdfcraft_fonts::shape_thai(line)
                     {
                         for c in clusters {
                             let key = owned_key(&c);
-                            if let std::collections::hash_map::Entry::Vacant(e) = cluster_index.entry(key) {
-                                e.insert(unique_clusters.len());
-                                unique_clusters.push(c);
+                            if seen_keys.insert(key.clone()) {
+                                unique_clusters.push((key, c));
                             }
                         }
                     }
                 }
                 if !unique_clusters.is_empty() {
-                    let key_refs: Vec<&pdfcraft_fonts::ShapedCluster> = unique_clusters.iter().collect();
-                    if let Ok(t3) = pdfcraft_fonts::type3_for_clusters(doc, &key_refs) {
-                        t3_font = Some((t3, cluster_index));
+                    for (chunk_idx, chunk) in unique_clusters.chunks(240).enumerate() {
+                        let chunk_refs: Vec<&pdfcraft_fonts::ShapedCluster> = chunk.iter().map(|(_, c)| c).collect();
+                        let Ok(t3) = pdfcraft_fonts::type3_for_clusters(doc, &chunk_refs) else {
+                            return None;
+                        };
+                        let font_name = if chunk_idx == 0 { "T3Thai".to_string() } else { format!("T3Thai{chunk_idx}") };
+                        t3_fonts.push((t3, font_name));
+                        for (local_idx, (key, _)) in chunk.iter().enumerate() {
+                            cluster_font_map.insert(key.clone(), (chunk_idx, local_idx));
+                        }
                     }
                 }
             }
             if bw > 0.0 || bg.is_some() {
-                c.push_str(&format!(
-                    "{} {} {} {} re W n\n",
-                    n(rect[0]),
-                    n(rect[1]),
-                    n(rect[2] - rect[0]),
-                    n(rect[3] - rect[1])
-                ));
+                c.push_str(&format!("{} {} {} {} re W n\n", n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
             }
             c.push_str(&format!("BT\n{}", rg(text_color)));
             let mut out = c.into_bytes();
@@ -1031,15 +1033,21 @@ pub fn build_with_doc(doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
                     2 => rect[2] - pad - lw,
                     _ => rect[0] + pad,
                 };
-                if let Some((_, cluster_index)) = &t3_font
+                if !t3_fonts.is_empty()
                     && line.chars().any(is_thai)
                     && let Ok(clusters) = pdfcraft_fonts::shape_thai(&line)
                 {
-                    out.extend(format!("1 0 0 1 {} {} Tm /T3Thai {} Tf ", n(x), n(y), n(size)).bytes());
+                    out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
+                    let mut current_font_idx: Option<usize> = None;
                     for c in clusters {
                         let key = owned_key(&c);
-                        if let Some(&idx) = cluster_index.get(&key) {
-                            out.extend(format!("<{:02X}> Tj ", idx + 1).bytes());
+                        if let Some(&(chunk_idx, local_idx)) = cluster_font_map.get(&key) {
+                            if current_font_idx != Some(chunk_idx) {
+                                let font_res = &t3_fonts[chunk_idx].1;
+                                out.extend(format!("/{} {} Tf ", font_res, n(size)).bytes());
+                                current_font_idx = Some(chunk_idx);
+                            }
+                            out.extend(format!("<{:02X}> Tj ", local_idx + 1).bytes());
                         }
                     }
                     out.extend_from_slice(b"\n");
@@ -1058,8 +1066,8 @@ pub fn build_with_doc(doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
             base.set(b"BaseFont".to_vec(), Object::name(base_font));
             base.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
             fonts.set(font_alias.as_bytes().to_vec(), Object::Dict(base));
-            if let Some((t3_ref, _)) = &t3_font {
-                fonts.set(b"T3Thai".to_vec(), Object::Ref(*t3_ref));
+            for (t3_ref, font_name) in &t3_fonts {
+                fonts.set(font_name.as_bytes().to_vec(), Object::Ref(*t3_ref));
             }
             res.set(b"Font".to_vec(), Object::Dict(fonts));
             let mut stream = form(full, &out, res);

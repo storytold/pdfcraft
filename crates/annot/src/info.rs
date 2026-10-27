@@ -259,7 +259,8 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
             for (i, t) in toks.iter().enumerate() {
                 if *t == "Tf" && i >= 2 {
                     let font_tok = toks[i - 2].trim_start_matches('/');
-                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro")
+                    {
                         return "Times".to_string();
                     } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
                         return "Courier".to_string();

@@ -459,6 +459,13 @@ pub fn active_thai_font() -> Option<&'static CraftFont> {
     document_thai_font()
 }
 
+/// Clear active Thai font values and invalidate the Thai shaping cache.
+pub fn clear_active_thai_font() {
+    set_active_thai_font(None);
+    set_active_thai_entry(None);
+    crate::shaping::invalidate_thai_cache();
+}
+
 /// Register a custom Thai font from static slices.
 pub fn register_custom_thai_font(family: &'static str, style: &'static str, bytes: &'static [u8]) -> Result<(), crate::GlyphError> {
     let font = Box::leak(Box::new(CraftFont { family, style, scripts: &["Thai"], bytes }));

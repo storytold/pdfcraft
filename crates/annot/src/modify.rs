@@ -61,7 +61,8 @@ pub(crate) fn rich_text(d: &mut Dict) {
             for (i, t) in toks.iter().enumerate() {
                 if *t == "Tf" && i >= 2 {
                     let font_tok = toks[i - 2].trim_start_matches('/');
-                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro")
+                    {
                         return Some("Times".to_string());
                     } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
                         return Some("Courier".to_string());
@@ -203,11 +204,7 @@ pub(crate) fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 
     };
     let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
     let has_thai = text.chars().any(pdfcraft_fonts::is_thai);
-    let h = if has_thai {
-        (lines - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0
-    } else {
-        lines * size * 1.2 + 2.0 * pad + 2.0
-    };
+    let h = if has_thai { (lines - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0 } else { lines * size * 1.2 + 2.0 * pad + 2.0 };
     Some([x0, top - h, x0 + w, top])
 }
 
@@ -632,7 +629,10 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
                 for (i, t) in toks.iter().enumerate() {
                     if *t == "Tf" && i >= 2 {
                         let font_tok = toks[i - 2].trim_start_matches('/');
-                        if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                        if font_tok.eq_ignore_ascii_case("times")
+                            || font_tok.eq_ignore_ascii_case("times-roman")
+                            || font_tok.eq_ignore_ascii_case("tiro")
+                        {
                             return Some("/Times");
                         } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
                             return Some("/Cour");
@@ -694,7 +694,8 @@ pub fn set_font(doc: &mut Document, page: usize, index: usize, font: &str, meta:
     let result = match fitted_box(doc, r, &text) {
         Some(fit) => {
             let cur = annot_dict(doc, r);
-            let nums: Vec<f64> = cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+            let nums: Vec<f64> =
+                cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
             match four(&nums).map(normalize) {
                 Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
                 _ => apply_text_box(doc, r, fit, meta, false),

@@ -294,7 +294,24 @@ pub fn look(doc: &Document, f: &Field) -> Look {
         font: match parsed.font.as_str() {
             "TiRo" | "Times-Roman" => FieldFont::Times,
             "Cour" | "Courier" => FieldFont::Courier,
-            s if s.eq_ignore_ascii_case("thai") || s.to_lowercase().contains("thai") || s.starts_with("PCFull") => FieldFont::Thai,
+            s if s.eq_ignore_ascii_case("thai") || s.to_lowercase().contains("thai") => FieldFont::Thai,
+            s if s.starts_with("PCFull") => {
+                let is_thai = crate::read::acroform(doc)
+                    .and_then(|af| af.get(b"DR").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+                    .and_then(|dr| dr.get(b"Font").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+                    .and_then(|fonts| fonts.get(s.as_bytes()).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+                    .is_some_and(|font| {
+                        let base = font.name(b"BaseFont").map(String::from_utf8_lossy).unwrap_or_default().to_lowercase();
+                        if base.contains("thai") {
+                            return true;
+                        }
+                        if let Some(bytes) = pdfcraft_fonts::pdf::embedded_sfnt(doc, &font) {
+                            return pdfcraft_fonts::embedding::covers(&bytes, "\u{0E01}");
+                        }
+                        false
+                    });
+                if is_thai { FieldFont::Thai } else { FieldFont::Helvetica }
+            }
             _ => FieldFont::Helvetica,
         },
     }

@@ -233,34 +233,31 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     }
                     if let Some(font) = e.font.as_mut() {
                         ui.label(tl!("Font"));
-                        egui::ComboBox::from_id_salt("comment-font")
-                            .selected_text(font.as_str())
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
-                                for f in ["Helvetica", "Times", "Courier"] {
-                                    if ui.selectable_label(font == f, f).clicked() {
-                                        *font = f.to_string();
-                                    }
+                        egui::ComboBox::from_id_salt("comment-font").selected_text(font.as_str()).width(180.0).show_ui(ui, |ui| {
+                            ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
+                            for f in ["Helvetica", "Times", "Courier"] {
+                                if ui.selectable_label(font == f, f).clicked() {
+                                    *font = f.to_string();
                                 }
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    let thai_fonts = pdfcraft_fonts::available_thai_fonts();
-                                    if !thai_fonts.is_empty() {
-                                        ui.separator();
-                                        ui.label(egui::RichText::new("Thai / System fonts").small().color(t.text_muted));
-                                        for entry in &thai_fonts {
-                                            if ui.selectable_label(font == &entry.name, &entry.name).clicked()
-                                                && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
-                                            {
-                                                *font = entry.name.clone();
-                                                let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
-                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
-                                            }
+                            }
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                let thai_fonts = pdfcraft_fonts::available_thai_fonts();
+                                if !thai_fonts.is_empty() {
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Thai / System fonts").small().color(t.text_muted));
+                                    for entry in &thai_fonts {
+                                        if ui.selectable_label(font == &entry.name, &entry.name).clicked()
+                                            && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
+                                        {
+                                            *font = entry.name.clone();
+                                            let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+                                            ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
                                         }
                                     }
                                 }
-                            });
+                            }
+                        });
                         ui.end_row();
                     }
                     if let Some(size) = e.font_size.as_mut() {
