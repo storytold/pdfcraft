@@ -9,8 +9,9 @@
 //! - images: fully covered → the `Do` is removed; partly covered → the covered pixels are
 //!   cleared in a copy of the image (or the image is removed when its codec can't be re-encoded);
 //!   inline images under a region are removed;
-//! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
-//!   inside the regions; shadings are clipped the same way;
+//! - vectors: intersecting painted paths are removed whole; removed clip-and-paint paths leave
+//!   an empty clip instead of their geometry, hiding later drawing until the clip is restored;
+//!   shadings are clipped around the regions;
 //! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
 //!   other pages using the original are untouched).
 //!
@@ -214,6 +215,11 @@ fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
     }
 }
 
+/// Replace a removed clipping path without retaining its geometry or exposing later drawing.
+fn empty_clip() -> [Op; 3] {
+    [Op::new("re", vec![num(0.0); 4]), Op::new("W", vec![]), Op::new("n", vec![])]
+}
+
 /// One glyph of a shown string.
 struct Glyph {
     bytes: std::ops::Range<usize>,
@@ -254,6 +260,9 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
     let mut path: Vec<Op> = Vec::new();
     let mut path_box: Option<[f64; 4]> = None;
     let mut clip = false;
+    // Construction can span streams. Remember only the path tails already emitted, so a later
+    // removal also retires their geometry without touching preceding text or completed paths.
+    let mut path_tails: Vec<(usize, usize)> = Vec::new();
     let mut forced_change = false;
 
     // The streams are one content stream in pieces, which may be split between any two tokens
@@ -293,7 +302,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         }
     }
 
-    let mut processed = Vec::new();
+    let mut processed: Vec<(Vec<Op>, bool)> = Vec::new();
     for (piece, mut changed) in pieces.into_iter().zip(rewrite) {
         let mut ops: Vec<Op> = Vec::with_capacity(piece.len());
         for op in piece {
@@ -322,17 +331,23 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 let clips = std::mem::replace(&mut clip, false);
                 let hit = scope.mode == Mode::Apply && o != b"n" && bbox.is_some_and(|b| scope.hits(b));
                 if !hit {
+                    path_tails.clear();
                     ops.extend(body);
                     ops.push(op);
                     continue;
                 }
-                let b = bbox.unwrap_or_default();
                 changed = true;
                 scope.report.paths_removed += 1;
-                if scope.covered(b) && clips {
-                    // Keep the clipping, drop the painting.
-                    ops.extend(body);
-                    ops.push(Op::new("n", vec![]));
+                for (piece, start) in path_tails.drain(..) {
+                    if let Some((ops, changed)) = processed.get_mut(piece) {
+                        ops.truncate(start);
+                        *changed = true;
+                    }
+                }
+                if clips {
+                    // Keep later artwork hidden without retaining the confidential clip shape.
+                    // This conservatively hides the rest of its scope, until an enclosing Q.
+                    ops.extend(empty_clip());
                 }
                 // Partial vector redaction must not retain underlying drawing commands
                 // behind clipping (F-008). Refuse partial clip retention and remove the path.
@@ -343,6 +358,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
                 ops.append(&mut path);
                 path_box = None;
                 clip = false;
+                path_tails.clear();
             }
             match o {
                 b"q" => stack.push(gs.clone()),
@@ -494,6 +510,7 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
             ops.push(op);
         }
         if !path.is_empty() {
+            path_tails.push((processed.len(), ops.len()));
             ops.append(&mut path);
         }
         processed.push((ops, changed));

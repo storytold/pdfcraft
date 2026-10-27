@@ -23,8 +23,11 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   area are removed. Images with separate `/SMask` or `/Mask` data, and images whose data decodes
   to more than twice their declared raster (plus a byte per row and 4 KiB), are removed whole;
   cleared copies drop `/Alternates` so alternate pixels cannot survive;
-- **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
-  nothing paints inside the areas;
+- **vectors**: painted paths intersecting an area are removed whole; shadings are clipped around the areas.
+  A removed path that also sets a clip (`W`/`W*` followed by painting) leaves an explicit empty clip, so later drawing cannot become newly visible.
+  This conservatively hides subsequent drawing, including outside the marked area, until the earlier graphics state is restored, such as by an enclosing `Q`.
+  Path construction spread across content streams is retired together, preserving unrelated operators before each path tail.
+  Pure clipping paths ending in `n` and the existing recognition limits for paths interrupted by other graphics or text operators remain outside this change;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
   widget under a mark;

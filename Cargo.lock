@@ -1174,7 +1174,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09
 [[package]]
 name = "craft-keymap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=acab34c0d8d84363ea3d05885f1a15601c233a19#acab34c0d8d84363ea3d05885f1a15601c233a19"
 dependencies = [
  "egui",
  "serde",
@@ -1184,7 +1184,7 @@ dependencies = [
 [[package]]
 name = "craft-menu"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=acab34c0d8d84363ea3d05885f1a15601c233a19#acab34c0d8d84363ea3d05885f1a15601c233a19"
 dependencies = [
  "craft-keymap",
  "craft-quit",
@@ -1210,7 +1210,7 @@ dependencies = [
 [[package]]
 name = "craft-quit"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=acab34c0d8d84363ea3d05885f1a15601c233a19#acab34c0d8d84363ea3d05885f1a15601c233a19"
 dependencies = [
  "dispatch2",
  "egui",
@@ -1221,7 +1221,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=acab34c0d8d84363ea3d05885f1a15601c233a19#acab34c0d8d84363ea3d05885f1a15601c233a19"
 dependencies = [
  "egui",
  "log",
@@ -4340,6 +4340,7 @@ dependencies = [
  "ocrs",
  "pdfcraft-fonts",
  "rten",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -5473,6 +5474,7 @@ dependencies = [
  "rten-base",
  "rten-gemm",
  "rten-model-file",
+ "rten-onnx",
  "rten-parallel",
  "rten-shape-inference",
  "rten-simd",
@@ -5521,6 +5523,12 @@ dependencies = [
  "flatbuffers",
  "rten-base",
 ]
+
+[[package]]
+name = "rten-onnx"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96944374568990b8d1bbc5bae5957585866f9dd8256130460405730948bfd42e"
 
 [[package]]
 name = "rten-parallel"

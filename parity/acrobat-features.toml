@@ -5792,8 +5792,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
-evidence = ["crates/redact/src/tests.rs::vectors_are_removed_or_clipped_and_inline_images_go"]
-notes = "intersecting paths removed to avoid leaking geometry behind clipping; shadings clipped"
+evidence = ["crates/redact/src/tests.rs::vectors_are_removed_or_clipped_and_inline_images_go", "crates/redact/src/tests.rs::removed_vector_clips_keep_an_empty_clip", "crates/redact/src/tests.rs::removed_vector_clips_drop_geometry_from_earlier_streams", "crates/redact/src/tests.rs::removed_vector_clips_reset_tails_without_exposing_stream_comments", "crates/redact/src/tests.rs::unremoved_vector_clips_stay_unchanged"]
+notes = "Intersecting painted paths are removed whole; shadings are clipped. Removed full/partial clip-and-paint paths leave an explicit empty clip without their original geometry, including construction tails in earlier content streams. This conservatively hides subsequent drawing, even outside the marked area, until the earlier graphics state is restored. Unrelated preceding operators and drawing after Q remain. Pure clipping paths ending in n and existing recognition limits for paths interrupted by other graphics or text operators remain outside this change."
 
 [[feature]]
 id = "protect.redact-annots-fields"
@@ -6544,8 +6544,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
 id = "ocr.recognize-range"

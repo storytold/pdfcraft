@@ -260,6 +260,8 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
     Some(ops)
 }
 
+/// Collect operators that can use these resources, including forms that inherit them.
+/// Refuse incomplete parsing or oversized traversal before deciding which properties survive.
 pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
     let parsed = Pieces::join(content).parse();
     if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {

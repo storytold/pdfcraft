@@ -289,6 +289,7 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
 }
 
+/// Partly covered painted paths, including clip-and-paint paths, must not retain their geometry.
 #[test]
 fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
     // A vector path with detailed drawing commands (e.g. outlined text or confidential geometry)
@@ -313,6 +314,110 @@ fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
     assert!(!c.contains("20 20 l"), "partial clip geometry must not leak: {c}");
     // Unrelated non-intersecting path remains untouched.
     assert!(c.contains("300 300 m\n350 350 l\nS"), "unaffected vector path must be kept: {c}");
+}
+
+/// Removing a clipping path's painting must keep subsequent drawing clipped without retaining
+/// the removed geometry. Both coverage cases and either winding rule need the same empty clip.
+#[test]
+fn removed_vector_clips_keep_an_empty_clip() {
+    for clip in ["W", "W*"] {
+        for paint in ["S", "s", "f", "F", "f*", "B", "B*", "b", "b*"] {
+            for area in [[50.0, 60.0, 70.0, 80.0], [15.0, 15.0, 105.0, 105.0]] {
+                let src = format!("q 20 20 80 80 re {clip} {paint} 140 140 40 40 re f Q 0 0 1 rg 20 150 20 20 re f");
+                let mut doc = one_page(src.as_bytes(), "", vec![]);
+                mark(&mut doc, 0, &[area], "");
+                let report = apply(&mut doc, None).unwrap();
+                assert_eq!((report.paths_removed, report.paths_clipped), (1, 0));
+                let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+                for result in [&doc, &saved] {
+                    let c = content(result, 0);
+                    assert!(!c.contains("20 20 80 80 re"), "removed clip geometry must not survive: {clip} {paint}, {area:?}: {c}");
+                    assert!(c.contains("0 0 0 0 re\nW\nn\n140 140 40 40 re\nf\nQ"), "later drawing keeps an empty clip until Q: {c}");
+                    assert!(c.contains("Q\n0 0 1 rg\n20 150 20 20 re\nf"), "unrelated drawing after Q stays intact: {c}");
+                }
+            }
+        }
+    }
+}
+
+/// A path built in earlier content streams must lose all of its geometry, while other
+/// operators preceding each path tail and the drawing after Q survive.
+#[test]
+fn removed_vector_clips_drop_geometry_from_earlier_streams() {
+    for clip in ["W", "W*"] {
+        for area in [[50.0, 60.0, 70.0, 80.0], [15.0, 15.0, 105.0, 105.0]] {
+            let mut doc = one_page(b"BT /F1 10 Tf 200 250 Td (HEAD) Tj ET 0 0 1 rg 250 250 10 10 re f q 20 20 80 80 re", "", vec![]);
+            let middle = doc.add(Object::Stream(Stream::from_raw(
+                Dict::new(),
+                format!("BT /F1 10 Tf 200 230 Td (MIDDLE) Tj ET 30 30 m 90 90 l {clip}").into_bytes(),
+            )));
+            let tail =
+                doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"f 140 140 40 40 re f Q BT /F1 10 Tf 200 210 Td (TAIL) Tj ET".to_vec())));
+            doc.update_dict(ObjRef::new(3, 0), |d| {
+                d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(middle), Object::Ref(tail)]));
+            })
+            .unwrap();
+            mark(&mut doc, 0, &[area], "");
+            assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+            let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            for result in [&doc, &saved] {
+                let c = content(result, 0);
+                assert!(!c.contains("20 20 80 80 re"), "geometry from an earlier stream must not survive: {clip}, {area:?}: {c}");
+                assert!(!c.contains("30 30 m") && !c.contains("90 90 l"), "every segment of the removed path goes: {c}");
+                assert!(c.contains("0 0 0 0 re\nW\nn\n140 140 40 40 re\nf\nQ"), "later drawing retains an empty clip: {c}");
+                for text in ["HEAD", "MIDDLE", "TAIL"] {
+                    assert!(c.contains(&format!("({text}) Tj")), "unrelated text before each tail and after Q stays: {c}");
+                }
+                assert!(c.contains("250 250 10 10 re\nf"), "a completed earlier path stays: {c}");
+            }
+        }
+    }
+}
+
+/// Completed paths, pure clips and removed ordinary paths reset tail tracking; comments that
+/// cross a rewritten stream boundary must not expose operators they originally hid.
+#[test]
+fn removed_vector_clips_reset_tails_without_exposing_stream_comments() {
+    let mut doc = one_page(b"q 250 250 10 10 re", "", vec![]);
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    for data in [
+        b"f Q q 200 20 20 20 re W".as_slice(),
+        b"n Q q 50 60 m",
+        b"60 70 l S Q q 20 20 80 80 re W% hide next prefix",
+        b"f 240 240 20 20 re f\nf 140 140 40 40 re f Q 0 0 1 rg 20 150 20 20 re f",
+    ] {
+        contents.push(Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), data.to_vec())))));
+    }
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    mark(&mut doc, 0, &[[50.0, 60.0, 70.0, 80.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 2);
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    for result in [&doc, &saved] {
+        let c = content(result, 0);
+        assert!(c.contains("250 250 10 10 re") && c.contains("200 20 20 20 re"), "completed and pure clipping paths stay: {c}");
+        for removed in ["50 60 m", "60 70 l", "20 20 80 80 re", "240 240 20 20 re"] {
+            assert!(!c.contains(removed), "removed geometry and commented operators stay absent: {c}");
+        }
+        assert_eq!(c.matches("0 0 0 0 re\nW\nn").count(), 1, "only the removed clip-and-paint path gets a replacement: {c}");
+        assert!(c.contains("Q\n0 0 1 rg\n20 150 20 20 re\nf"), "the later independent path stays: {c}");
+    }
+}
+
+/// Pure clipping paths and clip-and-paint paths outside the marks retain their original clips.
+#[test]
+fn unremoved_vector_clips_stay_unchanged() {
+    for clip in ["W", "W*"] {
+        for paint in ["n", "f"] {
+            let area = if paint == "n" { [50.0, 60.0, 70.0, 80.0] } else { [210.0, 210.0, 230.0, 230.0] };
+            let src = format!("q 20 20 80 80 re {clip} {paint} 140 140 40 40 re f Q {} {} 5 5 re f", area[0], area[1]);
+            let mut doc = one_page(src.as_bytes(), "", vec![]);
+            mark(&mut doc, 0, &[area], "");
+            assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+            let c = content(&doc, 0);
+            assert!(c.contains(&format!("20 20 80 80 re\n{clip}\n{paint}")), "the original clip stays: {c}");
+            assert!(!c.contains("0 0 0 0 re\nW\nn"), "an unchanged clip needs no replacement: {c}");
+        }
+    }
 }
 
 /// A chain of nested forms deeper than the pass can walk was removed from the page, taking
