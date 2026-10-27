@@ -6544,8 +6544,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -8156,8 +8156,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects"]
-notes = "Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources"
+evidence = ["crates/print/src/tests/appearances.rs::chained_annotation_values_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_reference_chains_are_skipped_when_printing", "crates/print/src/tests/appearances.rs::indirect_annotation_states_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_states_do_not_select_an_appearance", "crates/print/src/tests/appearances.rs::indirect_annotation_rectangles_keep_their_printed_appearances", "crates/print/src/tests/appearances.rs::invalid_annotation_rectangles_are_skipped_when_printing", "crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects"]
+notes = "Existing field and comment appearances retain direct or indirect rectangle coordinates and appearance-state names, including reference chains of up to 64 objects with cycle detection. State dictionaries require a usable AS name; missing/invalid/unresolved/cyclic/overly deep or unknown names select no appearance, while a single normal stream needs no AS. Print content modes and source objects are preserved. Malformed rectangles are skipped; missing appearances are not generated. Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources"
 
 [[feature]]
 id = "print.print-with-comment-summary"
