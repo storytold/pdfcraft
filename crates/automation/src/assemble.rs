@@ -279,19 +279,36 @@ impl Automation {
             }
             Some(_) => return Err(ToolError::InvalidArgs("passwords must list a password (or null) for each path".into())),
         };
+        let ranges: Vec<Option<String>> = match a.get("pages") {
+            None | Some(Value::Null) => vec![None; paths.len()],
+            Some(Value::Array(v)) if v.len() == paths.len() => v
+                .iter()
+                .enumerate()
+                .map(|(index, value)| match value {
+                    Value::Null => Ok(None),
+                    Value::String(range) => Ok(Some(range.clone())),
+                    _ => Err(ToolError::InvalidArgs(format!("pages[{index}] must be a range string or null"))),
+                })
+                .collect::<Result<_>>()?,
+            Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
+        };
         // Each file is read and made into a PDF in turn (images and text files too, as Combine does).
-        let mut files: Vec<(String, Arc<Vec<u8>>)> = Vec::with_capacity(paths.len());
+        let mut files: Vec<CombineSource> = Vec::with_capacity(paths.len());
         for p in paths {
             let path = self.resolve(p, false)?;
             let bytes = Arc::new(read_input(&path)?);
             let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let pdf = self.session.as_pdf(&file_name, &bytes).map_err(failed)?;
             let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            files.push((title, pdf));
+            files.push((title, pdf, ranges.get(files.len()).cloned().flatten()));
         }
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
         let shuffled = self.session.shuffle(&files, &passwords).map_err(failed)?;
-        self.deliver(a, "Shuffled", shuffled)
+        let mut result = self.deliver(a, "Shuffled", shuffled.bytes)?;
+        if !shuffled.renamed_fields.is_empty() {
+            result["renamed_fields"] = json!(shuffled.renamed_fields.iter().map(|(old, new)| json!([old, new])).collect::<Vec<_>>());
+        }
+        Ok(result)
     }
 
     pub(crate) fn doc_combine(&mut self, a: &Args) -> Result<Value> {

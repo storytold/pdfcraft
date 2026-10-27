@@ -426,22 +426,41 @@ impl PdfCraftApp {
     }
 
     /// Interleave the pages of the listed files (page 1 of each, then page 2 of each, and so on;
-    /// #4922) into a new, unsaved document; the tab makes way for it. A file split into parts
-    /// counts once, as a whole file: the Pages fields and the parts are Combine's.
+    /// #4922) into a new, unsaved document; the tab makes way for it. A file is the pages the
+    /// list gives it: its Pages field, and all its parts if it is split, in the order shown.
     pub fn interleave_staged(&mut self) {
-        let mut seen = BTreeSet::new();
-        let files: Vec<&CombineFile> = self.combine_draft.iter().filter(|f| !f.unreadable() && seen.insert(f.group)).collect();
+        // One entry per file, in the order each first appears; a file split into parts is the
+        // parts' ranges one after the other (a part with no range is the whole file).
+        let mut files: Vec<(u64, &CombineFile, Vec<&str>, bool)> = Vec::new();
+        for f in self.combine_draft.iter().filter(|f| !f.unreadable()) {
+            let at = match files.iter().position(|(group, ..)| *group == f.group) {
+                Some(at) => at,
+                None => {
+                    files.push((f.group, f, Vec::new(), false));
+                    files.len() - 1
+                }
+            };
+            if let Some((_, _, ranges, whole)) = files.get_mut(at) {
+                match f.range.trim() {
+                    "" => *whole = true,
+                    range => ranges.push(range),
+                }
+            }
+        }
         if files.len() < 2 {
             return;
         }
-        let sources: Vec<(String, Arc<Vec<u8>>)> = files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone())).collect();
-        let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
+        let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> = files
+            .iter()
+            .map(|(_, f, ranges, whole)| (title_of(&f.name).to_string(), f.bytes.clone(), (!*whole && !ranges.is_empty()).then(|| ranges.join(", "))))
+            .collect();
+        let passwords: Vec<Option<&str>> = files.iter().map(|(_, f, ..)| f.password.as_ref().map(|p| p.0.as_str())).collect();
         let count = files.len();
         match self.session.shuffle(&sources, &passwords) {
-            Ok(bytes) => {
+            Ok(shuffled) => {
                 self.close_combine_tab();
                 let message = crate::i18n::fmt(tl!("Interleaved {n} files"), &[("n", &count.to_string())]);
-                self.open_created("Interleaved.pdf", bytes, &message)
+                self.open_created("Interleaved.pdf", shuffled.bytes, &message)
             }
             // The list stays, so the user can fix it.
             Err(e) => self.notify_fmt("Couldn't interleave files: {e}", &[("e", &e.to_string())]),

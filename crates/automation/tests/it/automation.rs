@@ -1260,6 +1260,21 @@ fn shuffle_interleaves_files_through_the_tool() {
     let marks = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
     let titles: Vec<&str> = marks.as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
     assert_eq!(titles, ["a", "scan", "notes"]);
+    // Colliding form field names are renamed and reported, as doc_combine does.
+    std::fs::write(dir.join("form-a.pdf"), form_pdf("Text1")).unwrap();
+    std::fs::write(dir.join("form-b.pdf"), form_pdf("Text1")).unwrap();
+    let forms = ok(&mut a, "doc_shuffle", json!({ "paths": ["form-a.pdf", "form-b.pdf"], "open": true }));
+    assert_eq!(forms["renamed_fields"], json!([["Text1", "Text1-1"]]), "{forms}");
+    assert!(two.get("renamed_fields").is_none(), "no fields, nothing renamed: {two}");
+    // pages chooses each file's pages, in the range's order.
+    let chosen = ok(&mut a, "doc_shuffle", json!({ "paths": ["a.pdf", "a.pdf"], "pages": ["3, 1", "2"], "open": true }));
+    let doc = chosen["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc), ["Page 3", "Page 2", "Page 1"]);
+    for bad in [json!({ "pages": ["1"] }), json!({ "pages": [1, 2] }), json!({ "pages": ["9", null] })] {
+        let mut args = json!({ "paths": ["a.pdf", "b.pdf"] });
+        args["pages"] = bad["pages"].clone();
+        assert!(a.call("doc_shuffle", &args).is_err(), "{args}");
+    }
     // Written to a file inside the root, without opening it.
     let written = ok(&mut a, "doc_shuffle", json!({ "paths": ["a.pdf", "b.pdf"], "out": "shuffled.pdf", "open": false }));
     assert!(written.get("document").is_none());
