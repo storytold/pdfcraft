@@ -107,6 +107,8 @@ pub struct AddedText {
     /// Paragraphs (lines typed with Enter) aligned other than [`AddedText::align`], by index;
     /// `None` and paragraphs past the end follow `align` ([`crate::paragraph_align`]).
     pub aligns: Vec<Option<Align>>,
+    /// The fill behind the text box, if any: independent of the text colour.
+    pub background: Option<[f64; 3]>,
 }
 
 impl AddedText {
@@ -129,6 +131,7 @@ impl Default for AddedText {
             align: Align::Left,
             aligns: Vec::new(),
             char_spacing: 0.0,
+            background: None,
         }
     }
 }
