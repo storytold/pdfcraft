@@ -102,10 +102,8 @@ impl Recipe {
                         let go = progress(done, total);
                         stopped |= !go;
                         go
-                    })?;
-                    if stopped {
-                        return Err(CANCELLED.into());
-                    }
+                    });
+                    let result = stopped_first(stopped, result)?;
                     log.push(StepLog::Ocr { words: result.words(), skipped_pages: result.pages.iter().filter(|p| p.skipped.is_some()).count() });
                     bytes = result.bytes;
                     continue;
@@ -124,6 +122,12 @@ impl Recipe {
         }
         Ok((bytes, log))
     }
+}
+
+/// A file whose recognition was stopped is [`CANCELLED`], even when applying or saving the pages
+/// read before the stop failed: a cancel must not be counted as a failed file.
+fn stopped_first<T>(stopped: bool, result: Result<T, String>) -> Result<T, String> {
+    if stopped { Err(CANCELLED.into()) } else { result }
 }
 
 /// Whether `metadata` (from `symlink_metadata`) is a link, never followed. On Windows that is a
@@ -344,6 +348,15 @@ mod tests {
         assert_eq!(recipe.process(&path, |done, _| done == 0).unwrap_err(), CANCELLED);
         let (bytes, log) = recipe.process(&path, |_, _| true).unwrap();
         assert!(bytes.len() > scan.len() && matches!(log.first(), Some(StepLog::Ocr { words, .. }) if *words > 0));
+    }
+
+    /// A stop wins over an error from applying or saving what was read before it.
+    #[test]
+    fn a_stop_is_cancelled_even_when_the_partial_file_fails() {
+        assert_eq!(stopped_first::<()>(true, Err("save failed".into())).unwrap_err(), CANCELLED);
+        assert_eq!(stopped_first(true, Ok(1)).unwrap_err(), CANCELLED);
+        assert_eq!(stopped_first::<()>(false, Err("save failed".into())).unwrap_err(), "save failed");
+        assert_eq!(stopped_first(false, Ok(1)), Ok(1));
     }
 
     #[test]

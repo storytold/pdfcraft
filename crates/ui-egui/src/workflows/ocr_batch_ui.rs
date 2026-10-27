@@ -31,6 +31,19 @@ pub struct OcrBatchDraft {
     pub out_dir: Option<PathBuf>,
     /// Read the folders' subfolders too.
     pub recursive: bool,
+    /// What the file system said about `inputs` and `out_dir`, for drawing: the dialog is drawn
+    /// every frame, and a folder on an unresponsive network drive must not stall each one.
+    checked: Option<Checked>,
+}
+
+/// [`OcrBatchDraft::refresh`]'s answers, with the inputs and output folder they are for.
+#[derive(Clone, Debug, PartialEq)]
+struct Checked {
+    inputs: Vec<PathBuf>,
+    out_dir: Option<PathBuf>,
+    /// Whether each input is a folder, in the order of `inputs`.
+    folders: Vec<bool>,
+    problem: Option<&'static str>,
 }
 
 impl OcrBatchDraft {
@@ -45,17 +58,56 @@ impl OcrBatchDraft {
 
     /// Why the job can't start, to show under the output folder; `None` when it can, or when
     /// what's missing (no input, no output folder) is plain from the empty fields.
+    /// Asks the file system each time: [`Self::shown_problem`] is what the dialog draws.
     pub fn problem(&self) -> Option<&'static str> {
+        let folders: Vec<bool> = self.inputs.iter().map(|p| p.is_dir()).collect();
+        self.problem_with(&folders)
+    }
+
+    /// [`Self::problem`] with whether each input is a folder already known.
+    fn problem_with(&self, folders: &[bool]) -> Option<&'static str> {
         let out = self.out_dir.as_deref()?;
         let out = batch::absolute(out).ok()?;
         // The engine's rule: the results must not land in a folder that is being read.
-        let reads_output = self.inputs.iter().filter(|p| p.is_dir()).filter_map(|p| batch::absolute(p).ok()).any(|input| input.starts_with(&out));
+        let reads_output = self
+            .inputs
+            .iter()
+            .zip(folders)
+            .filter(|(_, folder)| **folder)
+            .filter_map(|(p, _)| batch::absolute(p).ok())
+            .any(|input| input.starts_with(&out));
         reads_output.then_some("The output folder can't be one of the folders being read, or contain one.")
     }
 
-    /// Whether Recognize text can start.
+    /// Whether Recognize text can start, asking the file system: checked again when it starts.
     pub fn ready(&self) -> bool {
         !self.inputs.is_empty() && self.out_dir.is_some() && self.problem().is_none()
+    }
+
+    /// Check the inputs and the output folder again, only if they changed since the last check
+    /// (also when written directly rather than through [`Self::add`]).
+    pub fn refresh(&mut self) {
+        if self.checked.as_ref().is_some_and(|c| c.inputs == self.inputs && c.out_dir == self.out_dir) {
+            return;
+        }
+        let folders: Vec<bool> = self.inputs.iter().map(|p| p.is_dir()).collect();
+        let problem = self.problem_with(&folders);
+        self.checked = Some(Checked { inputs: self.inputs.clone(), out_dir: self.out_dir.clone(), folders, problem });
+    }
+
+    /// [`Self::problem`] as of the last [`Self::refresh`].
+    pub fn shown_problem(&self) -> Option<&'static str> {
+        self.checked.as_ref().and_then(|c| c.problem)
+    }
+
+    /// Whether input `i` was a folder at the last [`Self::refresh`].
+    fn shown_folder(&self, i: usize) -> bool {
+        self.checked.as_ref().and_then(|c| c.folders.get(i)).copied().unwrap_or(false)
+    }
+
+    /// [`Self::ready`] as of the last [`Self::refresh`]: what the Recognize text button shows.
+    fn shown_ready(&self) -> bool {
+        !self.inputs.is_empty() && self.out_dir.is_some() && self.checked.is_some() && self.shown_problem().is_none()
     }
 }
 
@@ -64,6 +116,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let title = crate::i18n::menu_label("ocr.recognize_batch", "Recognize text in multiple files…");
     ui.label(RichText::new(title.trim_end_matches('…').trim_end_matches("...")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
+    app.ocr_batch_draft.refresh();
     let available = pdfcraft_engine::ocr::available();
     card(ui, t, None, |ui| inputs(ui, app, t));
     card(ui, t, Some(tl!("Output folder")), |ui| output(ui, app, t));
@@ -78,7 +131,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         );
         ui.add_space(6.0);
     }
-    let ready = available && app.ocr_batch_draft.ready() && app.ocr_batch.is_none();
+    let ready = available && app.ocr_batch_draft.shown_ready() && app.ocr_batch.is_none();
     let (mut go, mut cancel) = (false, false);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -126,7 +179,7 @@ fn inputs(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         egui::ScrollArea::vertical().id_salt("ocr-batch-inputs").max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
             for (i, path) in draft.inputs.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    let icon = if path.is_dir() { "folder" } else { "file-text" };
+                    let icon = if draft.shown_folder(i) { "folder" } else { "file-text" };
                     ui.add(crate::icons::image(icon, 16.0, t.icon));
                     path_label(ui, path, t, 30.0);
                     if crate::icons::button(ui, "x", 22.0, false, tl!("Remove")).clicked() {
@@ -199,7 +252,7 @@ fn output(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
             app.ocr_batch_choose_output();
         }
     });
-    if let Some(problem) = app.ocr_batch_draft.problem() {
+    if let Some(problem) = app.ocr_batch_draft.shown_problem() {
         ui.add(egui::Label::new(RichText::new(tl!(problem)).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B))).wrap());
     }
     hint(ui, t, tl!("The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number."));
@@ -250,10 +303,20 @@ impl PdfCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-batch".into()).spawn(work).ok();
+            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr-batch".into()).spawn(work));
         }
         self.ocr_batch = Some(progress);
         self.poll_ocr();
+    }
+}
+
+/// No worker thread: end the run with the failure instead of waiting for a summary that never
+/// comes (which would also refuse every later run as already running).
+fn unstarted<T>(p: &Mutex<BatchProgress>, spawned: std::io::Result<T>) {
+    if let Err(e) = spawned
+        && let Ok(mut s) = p.lock()
+    {
+        s.message = Some(failed(&e.to_string()));
     }
 }
 
@@ -393,7 +456,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let scans = dir.path().join("scans");
         std::fs::create_dir_all(scans.join("sub")).unwrap();
-        let mut d = OcrBatchDraft { inputs: vec![scans.clone()], out_dir: None, recursive: true };
+        let mut d = OcrBatchDraft { inputs: vec![scans.clone()], recursive: true, ..Default::default() };
         assert!(!d.ready(), "no output folder yet");
         for bad in [scans.clone(), dir.path().to_path_buf()] {
             d.out_dir = Some(bad);
@@ -414,6 +477,39 @@ mod tests {
         let s = summary(1, 3, 2, &errors);
         assert!(s.starts_with("Recognized 3 words in 1 file; skipped: 2; failed: 1.pdf: broken"), "{s}");
         assert!(s.ends_with("5.pdf: broken; … (+2)"), "{s}");
+    }
+
+    /// The dialog draws what the last check found: it doesn't ask the file system again until
+    /// the inputs or the output folder change.
+    #[test]
+    fn drawing_does_not_ask_the_file_system_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let scans = dir.path().join("scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        let mut d = OcrBatchDraft { inputs: vec![scans.clone()], out_dir: Some(scans.clone()), ..Default::default() };
+        assert!(d.shown_problem().is_none() && !d.shown_ready(), "nothing checked yet");
+        d.refresh();
+        assert!(d.shown_problem().is_some() && d.shown_folder(0));
+        std::fs::remove_dir(&scans).unwrap();
+        d.refresh();
+        assert!(d.problem().is_none(), "the file system has changed");
+        assert!(d.shown_problem().is_some() && d.shown_folder(0), "not checked again for the same paths");
+        // A change written straight into the field is checked on the next refresh.
+        d.out_dir = Some(dir.path().join("out"));
+        d.refresh();
+        assert!(d.shown_problem().is_none() && !d.shown_folder(0) && d.shown_ready());
+    }
+
+    /// A worker that can't start ends the run with the reason, so the progress card goes and
+    /// the next run isn't refused as already running.
+    #[test]
+    fn a_worker_that_cannot_start_ends_the_run() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let p = Mutex::new(BatchProgress::default());
+        unstarted(&p, Ok(()));
+        assert!(p.lock().unwrap().message.is_none());
+        unstarted::<()>(&p, Err(std::io::Error::other("no threads left")));
+        assert_eq!(p.lock().unwrap().message.as_deref(), Some("Recognize text failed: no threads left"));
     }
 
     /// Cancelled before a file is read: nothing is written, and the summary says it was cancelled.
