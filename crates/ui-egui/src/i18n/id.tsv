@@ -1077,9 +1077,11 @@
 	Sign this field…	Tanda tangani kolom ini…
 	Sign yourself	Tanda tangani sendiri
 	Signature Details	Detail Tanda Tangan
+	Signature invalid	Tanda tangan tidak valid
 	Signature is INVALID:	Tanda tangan TIDAK VALID:
 	Signature is valid:	Tanda tangan valid:
 	Signature panel	Panel tanda tangan
+	Signature valid	Tanda tangan valid
 	Signature validity is UNKNOWN:	Keabsahan tanda tangan TIDAK DIKETAHUI:
 	Signer's name	Nama penanda tangan
 	Simplified field notation:	Notasi kolom sederhana:
@@ -2370,6 +2372,7 @@ comment menu	Edit	Edit
 	Validate	Validasi
 	Validity ends	Validitas berakhir
 	Validity starts	Validitas dimulai
+	Validity unknown	Keabsahan tidak diketahui
 	Vertically	Vertikal
 	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Video, suara, dan media kaya harus diberi tag agar dapat diumumkan. Beri tag pada anotasi multimedia.
 	Viewing	Melihat

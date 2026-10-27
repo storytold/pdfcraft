@@ -245,6 +245,61 @@ pub struct Snapshot {
     pub from: String,
 }
 
+/// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
+/// or whether a signature's appearance draws it.
+pub(crate) fn signature_states_changed(before: &[pdfcraft_engine::SignatureInfo], after: &[pdfcraft_engine::SignatureInfo]) -> bool {
+    before.len() != after.len()
+        || before.iter().zip(after).any(|(b, a)| b.field != a.field || b.status != a.status || b.verdict_shown != a.verdict_shown)
+}
+
+/// The mark's side as a share of the widget's shorter side.
+const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points: a widget whose shorter side is under
+/// `MARK_SIDE_MIN / MARK_SIDE_SHARE` (32 points) keeps only its outline. A field over that at 100%
+/// can fall under it when the page is zoomed out to fit.
+const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+const MARK_ICON_SHARE: f32 = 0.64;
+
+/// The screen position of a widget's bottom-right corner on the page (`rect`, user space): where
+/// its validation mark goes, wherever the page's /Rotate and the view turn it.
+fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Pos2 {
+    let [_, bottom, right, _] = rect.map(|v| v as f32);
+    xf.user_rect(info, page, [right, bottom, right, bottom]).min
+}
+
+/// Where the validation mark sits in a signature widget's screen rectangle, or `None` when the
+/// widget is too small for a legible one. It goes in the corner nearest `anchor`, the screen
+/// position of the widget's bottom-right corner on the page, so it turns with the page and the
+/// view: off the middle, where a signer's artwork usually is, and clear of the state a named-layer
+/// appearance captions across its top.
+fn verdict_mark_rect(widget: Rect, anchor: Pos2) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    // A NaN anchor compares false either way and takes the bottom-right corner.
+    let left = anchor.x - widget.min.x < widget.max.x - anchor.x;
+    let top = anchor.y - widget.min.y < widget.max.y - anchor.y;
+    let x = if left { widget.min.x + inset } else { widget.max.x - inset - side };
+    let y = if top { widget.min.y + inset } else { widget.max.y - inset - side };
+    Some(Rect::from_min_size(pos2(x, y), vec2(side, side)))
+}
+
 /// The name shown for a document tab, the window title and the Combine picker.
 /// A snapshot reads like its source document, plus the snapshot suffix that tells
 /// the tabs apart. Without a title the file name (which already carries the suffix)
@@ -1997,6 +2052,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                 }
             }
+            // Comment and badge tips: not while a dialog or the palette is open (tips draw above both,
+            // so one would show even beside them), under Fill & Sign's cursor or while drawing freehand.
+            let tips = unobstructed
+                && !matches!(tool, QuickTool::Fill(_) | QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser))
+                && view.comments.gesture.is_none();
             // Fill & Sign keeps its placement cursor clear of link/comment hover feedback. Tips
             // draw above the palette, so none shows while it is open, even beside it.
             if !matches!(tool, QuickTool::Fill(_))
@@ -2024,12 +2084,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
                 // freehand, where it would cover the next stroke (#429).
-                let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
-                let gesturing = view.comments.gesture.is_some() || freehand;
                 // Inspection sorts annotations spatially, but the renderer paints in /Annots
                 // order. Keep the shared list intact and choose the last eligible raw index.
                 if hover_text.is_none()
-                    && !gesturing
+                    && tips
                     && let Some((_, text)) = info
                         .annotations
                         .iter()
@@ -2071,25 +2129,27 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     view.flash = None;
                 }
             }
-            // Validation is viewer chrome over the signer's original artwork, which
-            // may still say "Signature Not Verified". These badges never enter document
-            // streams, image/text exports, vector printing or Print as Image.
+            // Validation badges are viewer chrome over the widget. A recognised named-layer
+            // appearance may show the verdict in the display copy too; saves retain its original
+            // streams. Badges never enter document streams, exports or either print path.
+            // Their tips follow the comment tips (`tips`).
             for badge in signature_badges(&doc.signatures, i) {
                 let [x0, y0, x1, y1] = badge.rect;
                 let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
-                let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
-                painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
-                // A widget too small for the mark keeps its outline: the verdict still shows.
-                if sr.width() < 4.0 || sr.height() < 4.0 {
+                // The page transform can turn a finite widget into one the screen cannot place;
+                // stroking it would put NaN into the mesh.
+                if !sr.is_finite() {
                     continue;
                 }
-                // Big enough to read at a glance, small enough to leave the signer's own
-                // text visible around it.
-                let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
-                let mark = Rect::from_center_size(sr.center(), vec2(side, side));
-                icons::paint(ui, mark, icon, side * 0.64, color);
-                if let Some(p) = pointer.filter(|p| mark.expand(2.0).contains(*p)) {
-                    badge_hover = Some((p, badge.summary.to_string()));
+                let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
+                painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
+                if let Some(mark) = verdict_mark_rect(sr, mark_anchor(&xf, info, i, badge.rect)) {
+                    icons::paint(ui, mark, icon, mark.width() * MARK_ICON_SHARE, color);
+                }
+                // The whole widget answers the pointer, so a field too small for a mark still
+                // shows its verdict on hover; only where it is on the page, though.
+                if tips && let Some(p) = pointer.filter(|p| sr.expand(2.0).intersect(r).contains(*p)) {
+                    badge_hover = Some((p, crate::i18n::t(badge.summary).to_string()));
                 }
             }
             // Overlapping widgets paint in order, so the topmost badge owns the hover; an

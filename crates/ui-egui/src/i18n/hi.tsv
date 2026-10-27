@@ -884,6 +884,9 @@
 	Signature is valid:	हस्ताक्षर वैध है:
 	Signature validity is UNKNOWN:	हस्ताक्षर की वैधता अज्ञात है:
 	Signature is INVALID:	हस्ताक्षर अमान्य है:
+	Signature valid	हस्ताक्षर मान्य
+	Validity unknown	वैधता अज्ञात
+	Signature invalid	हस्ताक्षर अमान्य
 	Signature Details	हस्ताक्षर विवरण
 	Reason	कारण
 	Signing time	हस्ताक्षर करने का समय

@@ -1027,6 +1027,9 @@ key	Space	Mezerník
 	Signature is valid:	Podpis je platný:
 	Signature validity is UNKNOWN:	Platnost podpisu je NEZNÁMÁ:
 	Signature is INVALID:	Podpis je NEPLATNÝ:
+	Signature valid	Platný podpis
+	Validity unknown	Neznámá platnost
+	Signature invalid	Neplatný podpis
 	Signature Details	Podrobnosti podpisu
 	Reason	Důvod
 	Signing time	Čas podpisu
@@ -2699,6 +2702,7 @@ animation effects	Off	Vypnuto
 	The window shows the file name, not the title (Initial View > Show)	Okno zobrazuje název souboru, ne název dokumentu (Počáteční zobrazení > Zobrazit)
 	This document has not been modified since this signature was applied.	Tento dokument nebyl od připojení tohoto podpisu upraven.
 	This document has not been modified since this timestamp was applied.	Tento dokument nebyl od připojení tohoto časového razítka upraven.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Tento formulář má příliš mnoho polí nebo příliš dlouhý název pole, než aby je PdfCraft mohl přečíst všechna. Případný podpis mezi ostatními se v seznamu nezobrazí, takže se s dokumentem zachází jako s podepsaným.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Tento podpis používá RIPEMD-160, zastaralý 160bitový hashovací algoritmus, který se už pro podpisy nedoporučuje. Podpis se stále ověří, ale nelze na něj spoléhat.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Tento podpis používá SHA-1, slabý hashovací algoritmus, u kterého byly prokázány kolize. Stále se ověří, protože jej používá mnoho dokumentů podepsaných před lety, ale nelze na něj spoléhat.
 	Unsigned signature field	Nepodepsané podpisové pole

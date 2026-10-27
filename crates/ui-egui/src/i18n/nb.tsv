@@ -1086,9 +1086,11 @@
 	Sign this field…	Signer dette feltet…
 	Sign yourself	Signer selv
 	Signature Details	Signaturdetaljer
+	Signature invalid	Signatur ugyldig
 	Signature is INVALID:	Signaturen er UGYLDIG:
 	Signature is valid:	Signaturen er gyldig:
 	Signature panel	Signaturpanel
+	Signature valid	Signatur gyldig
 	Signature validity is UNKNOWN:	Signaturens gyldighet er UKJENT:
 	Signer's name	Underskriverens navn
 	Simplified field notation:	Forenklet feltnotasjon:
@@ -1758,6 +1760,7 @@
 	There is no folder to save the digital ID in.	Det finnes ingen mappe å lagre den digitale ID-en i.
 	This document has not been modified since this signature was applied.	Dette dokumentet er ikke endret etter at denne signaturen ble påført.
 	This document has not been modified since this timestamp was applied.	Dette dokumentet er ikke endret etter at dette tidsstempelet ble påført.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Dette skjemaet har for mange felt, eller et for langt feltnavn, til at PdfCraft kan lese dem alle. En eventuell signatur blant de øvrige vises ikke i listen, så dokumentet behandles som signert.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Denne signaturen bruker RIPEMD-160, en eldre 160-bits hashalgoritme som ikke lenger anbefales for signaturer. Den validerer fortsatt, men bør ikke stoles på.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Denne signaturen bruker SHA-1, en svak hashalgoritme: kollisjoner i den er påvist. Den validerer fortsatt fordi mange dokumenter signert for flere år siden bruker den, men bør ikke stoles på.
 	Undo {action}	Angre {action}
@@ -2375,6 +2378,7 @@
 	Validate	Valider
 	Validity ends	Gyldighet slutter
 	Validity starts	Gyldighet starter
+	Validity unknown	Gyldighet ukjent
 	Vertically	Loddrett
 	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Video, lyd og rike medier må være tagget for å bli lest opp. Tagg multimediemerknadene.
 	Viewing	Visning

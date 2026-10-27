@@ -918,6 +918,9 @@
 	Signature is valid:	واژووەکە دروستە:
 	Signature validity is UNKNOWN:	دروستیی واژووەکە نەناسراوە:
 	Signature is INVALID:	واژووەکە نادروستە:
+	Signature valid	واژووەکە دروستە
+	Validity unknown	دروستیی واژووەکە نەناسراوە
+	Signature invalid	واژووەکە نادروستە
 	Signature Details	وردەکارییەکانی واژوو
 	Reason	هۆکار
 	Signing time	کاتی واژووکردن

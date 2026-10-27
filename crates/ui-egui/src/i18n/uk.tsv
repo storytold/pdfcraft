@@ -947,6 +947,9 @@
 	Signature is valid:	Підпис дійсний:
 	Signature validity is UNKNOWN:	Дійсність підпису НЕВІДОМА:
 	Signature is INVALID:	Підпис НЕДІЙСНИЙ:
+	Signature valid	Підпис дійсний
+	Validity unknown	Дійсність невідома
+	Signature invalid	Підпис недійсний
 	Signature Details	Відомості про підпис
 	Reason	Причина
 	Signing time	Час підписування

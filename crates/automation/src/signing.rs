@@ -119,6 +119,7 @@ impl Automation {
             "page": s.page.map(|p| p + 1),
             "rect": rect,
             "visible": s.visible,
+            "verdict_shown": s.verdict_shown,
             "revision": s.revision,
             "sub_filter": s.sub_filter,
             "algorithm": s.algorithm,

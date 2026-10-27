@@ -1086,9 +1086,11 @@
 	Sign this field…	Semnare acest câmp…
 	Sign yourself	Semnați personal
 	Signature Details	Detalii semnătură
+	Signature invalid	Semnătură nevalidă
 	Signature is INVALID:	Semnătura este NEVALIDĂ:
 	Signature is valid:	Semnătura este validă:
 	Signature panel	Panou semnături
+	Signature valid	Semnătură validă
 	Signature validity is UNKNOWN:	Valabilitatea semnăturii este NECUNOSCUTĂ:
 	Signer's name	Numele semnatarului
 	Simplified field notation:	Notație simplificată pentru câmpuri:
@@ -1758,6 +1760,7 @@
 	There is no folder to save the digital ID in.	Nu există niciun folder în care să se salveze ID-ul digital.
 	This document has not been modified since this signature was applied.	Acest document nu a fost modificat de la aplicarea acestei semnături.
 	This document has not been modified since this timestamp was applied.	Acest document nu a fost modificat de la aplicarea acestui marcaj temporal.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Acest formular are prea multe câmpuri sau un nume de câmp prea lung pentru ca PdfCraft să le poată citi pe toate. Nicio semnătură dintre celelalte nu apare în listă, așa că documentul este tratat ca semnat.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Această semnătură folosește RIPEMD-160, un algoritm hash vechi de 160 de biți, care nu mai este recomandat pentru semnături. Se validează în continuare, dar nu ar trebui să vă bazați pe ea.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Această semnătură folosește SHA-1, un algoritm hash slab, pentru care s-au demonstrat coliziuni. Se validează în continuare pentru că multe documente semnate acum ani îl folosesc, dar nu ar trebui să vă bazați pe ea.
 	Undo {action}	Anulare {action}
@@ -2381,6 +2384,7 @@ comment menu	Edit	Editare
 	Validate	Validare
 	Validity ends	Sfârșitul valabilității
 	Validity starts	Începutul valabilității
+	Validity unknown	Valabilitate necunoscută
 	Vertically	Pe verticală
 	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Videoclipurile, sunetele și conținutul media îmbogățit trebuie etichetate pentru a fi anunțate. Etichetați adnotările multimedia.
 	Viewing	Vizualizare

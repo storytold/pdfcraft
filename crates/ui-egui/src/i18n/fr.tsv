@@ -923,6 +923,9 @@
 	Signature is valid:	La signature est valide :
 	Signature validity is UNKNOWN:	La validité de la signature est INCONNUE :
 	Signature is INVALID:	La signature n'est PAS VALIDE :
+	Signature valid	Signature valide
+	Validity unknown	Validité inconnue
+	Signature invalid	Signature non valide
 	Signature Details	Détails de la signature
 	Reason	Motif
 	Signing time	Heure de signature

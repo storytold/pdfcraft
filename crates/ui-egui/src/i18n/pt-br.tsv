@@ -565,6 +565,9 @@
 	Signature is valid:	A assinatura é válida:
 	Signature validity is UNKNOWN:	A validade da assinatura é DESCONHECIDA:
 	Signature is INVALID:	A assinatura é INVÁLIDA:
+	Signature valid	Assinatura válida
+	Validity unknown	Validade desconhecida
+	Signature invalid	Assinatura inválida
 	Signature Details	Detalhes da assinatura
 	Reason	Motivo
 	Signing time	Hora da assinatura
@@ -2725,6 +2728,7 @@ animation effects	Off	Desativados
 	This document has not been modified since this signature was applied.	Este documento não foi modificado desde que esta assinatura foi aplicada.
 	This document has not been modified since this timestamp was applied.	Este documento não foi modificado desde que este carimbo de data e hora foi aplicado.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Este arquivo foi alterado no disco. Recarregue-o para ver a nova versão; suas alterações não salvas serão perdidas.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Este formulário tem campos demais, ou um nome de campo longo demais, para que o PdfCraft consiga ler todos. Uma eventual assinatura entre os demais não aparece na lista, então o documento é tratado como assinado.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Esta assinatura usa RIPEMD-160, um algoritmo de hash legado de 160 bits que não é mais recomendado para assinaturas. Ela ainda é validada, mas não deve ser considerada confiável.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Esta assinatura usa SHA-1, um algoritmo de hash fraco para o qual já foram demonstradas colisões. Ela ainda é validada porque muitos documentos assinados há anos o utilizam, mas não deve ser considerada confiável.
 	Unsigned signature field	Campo de assinatura não assinado

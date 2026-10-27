@@ -917,6 +917,9 @@
 	Signature is valid:	ລາຍເຊັນຖືກຕ້ອງ:
 	Signature validity is UNKNOWN:	ຄວາມຖືກຕ້ອງຂອງລາຍເຊັນ: ບໍ່ຮູ້ຈັກ:
 	Signature is INVALID:	ລາຍເຊັນບໍ່ຖືກຕ້ອງ:
+	Signature valid	ລາຍເຊັນຖືກຕ້ອງ
+	Validity unknown	ຄວາມຖືກຕ້ອງຂອງລາຍເຊັນ: ບໍ່ຮູ້ຈັກ
+	Signature invalid	ລາຍເຊັນບໍ່ຖືກຕ້ອງ
 	Signature Details	ລາຍລະອຽດລາຍເຊັນ
 	Reason	ເຫດຜົນ
 	Signing time	ເວລາທີ່ເຊັນ

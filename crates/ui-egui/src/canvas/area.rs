@@ -13,6 +13,9 @@ pub(crate) struct SignatureBadge {
 pub(crate) fn signature_badges(signatures: &[pdfcraft_engine::SignatureInfo], page: usize) -> Vec<SignatureBadge> {
     signatures
         .iter()
+        // A signature whose appearance draws its state keeps the badge too: the document controls
+        // its own layers and can clip the drawn state away or cover it with its own artwork,
+        // which it cannot do to the badge.
         .filter(|s| s.signed && s.visible && s.page == Some(page))
         .filter_map(|s| {
             s.rect.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() < f32::MAX as f64)).map(|rect| SignatureBadge {

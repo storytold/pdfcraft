@@ -280,6 +280,162 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
 }
 
 #[test]
+fn actual_text_over_painted_paths_reads_where_they_are_painted() {
+    // Words drawn as outlines (a face that can't be embedded) carry their text in /ActualText
+    // (ISO 32000-2 §14.9.4): it reads at the box of the paths it marks, in view space (y down).
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (valid)>> BDC 100 40 m 160 40 l 160 60 l 100 60 l f EMC",
+        // A curve is measured by its control points, as redaction measures it.
+        "/Span <</ActualText (arc)>> BDC 100 40 m 100 100 160 100 160 40 c f EMC",
+        "BT /F1 20 Tf 1 0 0 1 20 150 Tm (a) Tj ET /Span <</ActualText (b)>> BDC 100 140 60 20 re f EMC BT /F1 20 Tf 1 0 0 1 200 150 Tm (c) Tj ET",
+        // Glyphs inside the span keep their own box; the paths beside them don't widen it.
+        "/Span <</ActualText (x)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (y) Tj ET 0 0 300 300 re f EMC",
+        // Paths are not text without a replacement, and an empty one stands for nothing.
+        "100 140 60 20 re f",
+        "/Span <</ActualText ()>> BDC 100 140 60 20 re f EMC",
+        // Too far apart to be the place of words.
+        "/Span <</ActualText (far)>> BDC 100 40 10 10 re f 20100 40 10 10 re f EMC",
+    ]);
+    let painted = marked_text(&pdf, 0);
+    assert_eq!(painted.plain_text(), "valid");
+    assert_eq!(painted.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+    assert_eq!(marked_text(&pdf, 1).glyphs[0].rect, [100.0, 200.0, 160.0, 260.0]);
+    let between = marked_text(&pdf, 2);
+    assert_eq!(between.glyphs.iter().map(|g| g.text.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+    let mixed = marked_text(&pdf, 3);
+    assert_eq!(mixed.plain_text(), "x");
+    assert!(mixed.glyphs[0].rect[2] - mixed.glyphs[0].rect[0] < 20.0, "{:?}", mixed.glyphs[0].rect);
+    for page in 4..7 {
+        assert_eq!(marked_text(&pdf, page).plain_text(), "", "page {page}");
+    }
+}
+
+#[test]
+fn the_painted_filter_leaves_out_replacements_that_mark_no_glyph() {
+    // A page's own text, without words that only /ActualText names.
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (valid)>> BDC 100 40 m 160 40 l 160 60 l 100 60 l f EMC",
+        "BT /F1 20 Tf 1 0 0 1 20 150 Tm (a) Tj ET /Span <</ActualText (b)>> BDC 100 140 60 20 re f EMC BT /F1 20 Tf 1 0 0 1 200 150 Tm (c) Tj ET",
+    ]);
+    let own = |page| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), TextFilter { painted: true, ..Default::default() });
+    assert_eq!(own(0).unwrap().plain_text(), "");
+    let between = own(1).unwrap().plain_text();
+    assert!(between.contains('a') && between.contains('c') && !between.contains('b'), "the glyphs stay: {between:?}");
+}
+
+#[test]
+fn actual_text_over_paint_reads_only_where_it_shows() {
+    let pdf = marked_pages(&[
+        // A page-sized fill clipped to a word's box reads at that box.
+        "q 100 40 30 20 re W n /Span <</ActualText (c)>> BDC 0 0 300 300 re f EMC Q",
+        // Wholly clipped away, it reads nowhere.
+        "q 0 0 10 10 re W n /Span <</ActualText (gone)>> BDC 100 40 60 20 re f EMC Q",
+        // A clip that ended before the paint no longer cuts it.
+        "q 0 0 10 10 re W n Q /Span <</ActualText (back)>> BDC 100 40 60 20 re f EMC",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).glyphs[0].rect, [100.0, 240.0, 130.0, 260.0]);
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "");
+    assert_eq!(marked_text(&pdf, 2).glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+}
+
+#[test]
+fn actual_text_over_paint_reads_along_the_way_it_is_drawn() {
+    // The same quarter turn for a path and for text: the replacement runs the way the text does.
+    let pdf = marked_pages(&[
+        "q 0 1 -1 0 150 150 cm /Span <</ActualText (turned)>> BDC 0 0 40 10 re f EMC Q",
+        "q 0 1 -1 0 150 150 cm BT /F1 10 Tf 0 0 Td (t) Tj ET Q",
+    ]);
+    let (painted, text) = (marked_text(&pdf, 0), marked_text(&pdf, 1));
+    assert_eq!(painted.plain_text(), "turned");
+    assert_eq!(painted.glyphs[0].direction, text.glyphs[0].direction);
+    let [x0, y0, x1, y1] = painted.glyphs[0].rect;
+    assert_eq!((x1 - x0, y1 - y0), (10.0, 40.0), "40 along the turned line, 10 across it");
+}
+
+#[test]
+fn actual_text_over_a_picture_reads_where_it_is_drawn() {
+    // Two pixels square, so a box placed in pixels rather than across the picture shows.
+    let pdf = marked_pages(&["/Span <</ActualText (E=mc2)>> BDC q 60 0 0 20 100 40 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q EMC"]);
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "E=mc2");
+    assert_eq!(text.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0]);
+    // Counting without images leaves it out.
+    let filter = TextFilter { images: true, ..Default::default() };
+    assert_eq!(extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), filter).unwrap().plain_text(), "");
+}
+
+#[test]
+fn excluded_glyphs_beside_paint_leave_the_whole_replacement_out() {
+    // The marked glyphs are a figure's, so the replacement goes with them; the paint beside
+    // them neither keeps it nor turns it into a mixed span that can't be counted.
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (f)>> BDC /Figure BMC BT /F1 20 Tf 1 0 0 1 100 150 Tm (x) Tj ET EMC 100 40 60 20 re f EMC",
+        // Paint inside an excluded region is excluded with it.
+        "/Span <</ActualText (z)>> BDC /Figure BMC 100 40 60 20 re f EMC EMC",
+        "/Span <</ActualText (t)>> BDC /Table BMC q 60 0 0 20 100 40 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q EMC EMC",
+    ]);
+    let filtered = |page, filter| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), filter).unwrap().plain_text();
+    let (figures, tables) = (TextFilter { images: true, ..Default::default() }, TextFilter { tables: true, ..Default::default() });
+    assert_eq!(filtered(0, figures.clone()), "");
+    assert_eq!((filtered(1, TextFilter::default()), filtered(1, figures)), ("z".to_string(), String::new()));
+    assert_eq!((filtered(2, TextFilter::default()), filtered(2, tables)), ("t".to_string(), String::new()));
+}
+
+#[test]
+fn paint_split_by_an_exclusion_is_a_mixed_span_that_cant_be_counted() {
+    // Paint places a replacement that marks no glyph, so paint left out mixes it as excluded
+    // glyphs do: the words left out can't be told from the rest.
+    let picture = "q 60 0 0 20 100 40 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q";
+    let (table, beside) = (
+        format!("/Span <</ActualText (t)>> BDC /Table BMC {picture} EMC 200 40 60 20 re f EMC"),
+        format!("/Span <</ActualText (p)>> BDC {picture} 200 40 60 20 re f EMC"),
+    );
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (w)>> BDC /Figure BMC 100 40 60 20 re f EMC 200 40 60 20 re f EMC",
+        &table,
+        &beside,
+        // Glyphs place this one, and the paint beside them is not its words.
+        "/Span <</ActualText (g)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (y) Tj ET /Figure BMC 100 40 60 20 re f EMC EMC",
+    ]);
+    let filtered = |page, filter| extract_page_filtered(&pdf, page, &InterpreterSettings::default(), filter).map(|t| t.plain_text());
+    let (figures, tables) = (TextFilter { images: true, ..Default::default() }, TextFilter { tables: true, ..Default::default() });
+    for (page, text, filter) in [(0, "w", figures.clone()), (1, "t", tables), (2, "p", figures.clone())] {
+        assert_eq!(filtered(page, TextFilter::default()), Ok(text.to_string()));
+        assert!(filtered(page, filter).is_err(), "page {page}");
+    }
+    assert_eq!(filtered(3, figures), Ok("g".to_string()));
+}
+
+#[test]
+fn annotations_never_join_a_replacement_the_page_left_open() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let pages = doc.new_object_id();
+    let content = doc.add_object(Stream::new(dictionary! {}, b"/Span <</ActualText (open)>> BDC 100 40 60 20 re f".to_vec()));
+    let ap = doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 50.into(), 50.into()] },
+        b"0 0 50 50 re f".to_vec(),
+    ));
+    let annot = doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Square", "F" => 4,
+        "Rect" => vec![200.into(), 200.into(), 250.into(), 250.into()], "AP" => dictionary! { "N" => ap },
+    });
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages, "Contents" => content, "Annots" => vec![Object::Reference(annot)],
+        "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)],
+    });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "open");
+    assert_eq!(text.glyphs[0].rect, [100.0, 240.0, 160.0, 260.0], "the square comment is not part of it");
+}
+
+#[test]
 fn an_unmarked_redraw_of_actual_text_reads_as_the_same_text() {
     // Canva draws text twice (an outline or shadow) and marks only one drawing. The copy,
     // before or after the marked one and half a point off, takes the same replacement and is

@@ -901,6 +901,9 @@
 	Signature is valid:	Allekirjoitus on kelvollinen:
 	Signature validity is UNKNOWN:	Allekirjoituksen kelpoisuus on TUNTEMATON:
 	Signature is INVALID:	Allekirjoitus on VIRHEELLINEN:
+	Signature valid	Allekirjoitus kelvollinen
+	Validity unknown	Kelpoisuus tuntematon
+	Signature invalid	Allekirjoitus virheellinen
 	Signature Details	Allekirjoituksen tiedot
 	Reason	Syy
 	Signing time	Allekirjoitusaika
@@ -2538,6 +2541,7 @@ animation effects	Off	Ei käytössä
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Asiakirjaa on muutettu tämän aikaleiman lisäämisen jälkeen tavoilla, joita se ei salli ({}).
 	The timestamp token is valid and its authority is trusted.	Aikaleimatunniste on kelvollinen ja sen myöntäjä on luotettu.
 	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Aikaleimatunniste on kelvollinen, mutta aikaleiman myöntäjä ei ole luotettujen varmenteiden luettelossa.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Tässä lomakkeessa on liian monta kenttää tai liian pitkä kentän nimi, jotta PdfCraft voisi lukea ne kaikki. Muiden joukossa olevia allekirjoituksia ei näytetä luettelossa, joten asiakirjaa käsitellään allekirjoitettuna.
 	Unsigned signature field	Allekirjoittamaton allekirjoituskenttä
 	Signature is valid	Allekirjoitus on kelvollinen
 	Signature validity is unknown	Allekirjoituksen kelpoisuus on tuntematon

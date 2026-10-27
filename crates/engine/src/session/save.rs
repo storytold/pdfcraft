@@ -239,15 +239,53 @@ impl Session {
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
-            doc.trust = self.trust.clone();
-            let Some(editor) = doc.editor.as_mut() else { continue };
-            // Keep verdict refresh and renderer refresh together. Viewer caches are
-            // invalidated by the UI trust path; trust alone changes no document artwork.
-            let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
-            doc.display = display_bytes(Some(editor), &doc.bytes);
-            doc.signatures = Arc::new(signatures);
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+            Self::revalidate(doc, self.trust.clone());
         }
+    }
+
+    /// Validate `doc`'s signatures against `trust`, and rebuild its display copy and renderer
+    /// with them: the verdicts choose what the copy draws. An unsigned document has nothing to
+    /// validate and keeps both. Viewer caches are invalidated by the UI trust path.
+    pub(crate) fn revalidate(doc: &mut Document, trust: Arc<TrustStore>) {
+        doc.trust = trust;
+        if doc.signatures.is_empty() {
+            return;
+        }
+        let Some(editor) = doc.editor.as_mut() else { return };
+        let mut signatures = signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
+        doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
+        doc.signatures = Arc::new(signatures);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+    }
+
+    /// The words the caption of a named-layer signature appearance is drawn with
+    /// ([`pdfcraft_sign::show_status_layers`]), in the interface language. When they change, every
+    /// open document's display copy and renderer are rebuilt; like trust, this is not an edit.
+    /// Returns whether they changed.
+    pub fn set_signature_captions(&mut self, captions: StatusCaptions) -> bool {
+        if *self.captions == captions {
+            return false;
+        }
+        self.captions = Arc::new(captions);
+        for doc in &mut self.docs {
+            Self::draw_captions(doc, self.captions.clone());
+        }
+        true
+    }
+
+    /// Draw `doc`'s signature status layers with `captions`: the display copy and renderer are
+    /// rebuilt when it draws a signature's state (working file, generation and dirty unchanged).
+    /// Whether a state is drawn does not depend on the words: a caption that can't be drawn in
+    /// them is drawn in English.
+    pub(crate) fn draw_captions(doc: &mut Document, captions: Arc<StatusCaptions>) {
+        doc.captions = captions;
+        if !doc.signatures.iter().any(|s| s.verdict_shown) {
+            return;
+        }
+        let Some(editor) = doc.editor.as_mut() else { return };
+        let signatures = Arc::make_mut(&mut doc.signatures);
+        doc.display = display_bytes(Some(editor), &doc.bytes, signatures, &doc.captions);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).

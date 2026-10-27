@@ -60,6 +60,67 @@ fn reopen(doc: &Document) -> Document {
     Document::open(Arc::new(write_incremental(doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// A word drawn as outlines names itself in /ActualText. A mark over part of it removes the
+/// outlines (a shading painting them is clipped instead), and the name, which would still read the
+/// whole word, goes with them. A word the mark misses keeps its own.
+#[test]
+fn redacted_paint_loses_the_actual_text_that_names_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (SECRET)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f EMC /Span <</ActualText (KEPT)>> BDC 100 200 60 20 re f EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_clipped, r.paths_removed), (0, 1));
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("KEPT"), "{c}");
+
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(b"/Span <</ActualText (SHADED)>> BDC /Sh0 sh EMC", "/Shading << /Sh0 7 0 R >>", vec![shading.as_bytes().to_vec()]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    apply(&mut doc, None).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("SHADED") && c.contains(" sh"), "{c}");
+
+    // A path that clips as it paints.
+    let mut doc = one_page(b"q /Span <</ActualText (CLIPS)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h W f EMC Q", "", vec![]);
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let c = content(&doc, 0);
+    assert!(!c.contains("CLIPS"), "{c}");
+}
+
+/// Nested names around redacted paint all go, the innermost too, whichever scope was cut first.
+#[test]
+fn redacted_paint_loses_every_name_around_it() {
+    let mut doc = one_page(
+        b"/Span <</ActualText (OUTER)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h f /Span <</ActualText (INNER)>> BDC 100 130 m 160 130 l 160 150 l 100 150 l h f EMC EMC",
+        "",
+        vec![],
+    );
+    mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 155.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 2);
+    let c = content(&doc, 0);
+    assert!(!c.contains("OUTER") && !c.contains("INNER"), "{c}");
+}
+
+/// Removing hidden text clips nothing, so a shading on the same page keeps the words that name it.
+#[test]
+fn removing_hidden_text_keeps_the_alt_text_of_a_shading() {
+    let shading =
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 300 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>";
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 3 Tr 10 200 Td (SECRET) Tj ET /Figure <</Alt (chart)>> BDC /Sh0 sh EMC",
+        "/Shading << /Sh0 7 0 R >>",
+        vec![shading.as_bytes().to_vec()],
+    );
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("SECRET") && c.contains("(chart)"), "{c}");
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.

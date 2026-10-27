@@ -942,6 +942,9 @@
 	Signature is valid:	La firma es válida:
 	Signature validity is UNKNOWN:	La validez de la firma es DESCONOCIDA:
 	Signature is INVALID:	La firma NO ES VÁLIDA:
+	Signature valid	Firma válida
+	Validity unknown	Validez desconocida
+	Signature invalid	Firma no válida
 	Signature Details	Detalles de la firma
 	Reason	Motivo
 	Signing time	Hora de la firma
@@ -2402,6 +2405,7 @@ action wizard	Start	Iniciar
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El documento se ha alterado desde que se aplicó este sello de tiempo de maneras que no permite ({}).
 	The timestamp token is valid and its authority is trusted.	El sello de tiempo es válido y su autoridad es de confianza.
 	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	El sello de tiempo es válido, pero la autoridad de sellado de tiempo no está en tu lista de certificados de confianza.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Este formulario tiene demasiados campos, o un nombre de campo demasiado largo, para que PdfCraft los lea todos. Las firmas que haya entre los demás no aparecen en la lista, así que el documento se considera firmado.
 	Unsigned signature field	Campo de firma sin firmar
 	Signature is valid	La firma es válida
 	Signature validity is unknown	La validez de la firma es desconocida

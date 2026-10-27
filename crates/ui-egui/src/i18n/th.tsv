@@ -895,6 +895,9 @@
 	Signature is valid:	ลายเซ็นถูกต้อง:
 	Signature validity is UNKNOWN:	ไม่ทราบความถูกต้องของลายเซ็น:
 	Signature is INVALID:	ลายเซ็นไม่ถูกต้อง:
+	Signature valid	ลายเซ็นถูกต้อง
+	Validity unknown	ไม่ทราบความถูกต้อง
+	Signature invalid	ลายเซ็นไม่ถูกต้อง
 	Signature Details	รายละเอียดลายเซ็น
 	Reason	เหตุผล
 	Signing time	เวลาที่เซ็น

@@ -884,6 +884,9 @@
 	Signature is valid:	서명이 유효합니다:
 	Signature validity is UNKNOWN:	서명 유효성을 알 수 없습니다:
 	Signature is INVALID:	서명이 유효하지 않습니다:
+	Signature valid	서명 유효
+	Validity unknown	유효성 알 수 없음
+	Signature invalid	서명 유효하지 않음
 	Signature Details	서명 세부 정보
 	Reason	이유
 	Signing time	서명 시간

@@ -284,6 +284,19 @@ pub(crate) fn appearance_labels(lang: crate::i18n::Lang) -> (AppearanceLabels, b
     }
 }
 
+/// The words a named-layer signature appearance's status caption is drawn with: all three in
+/// `lang`, or all three in English when `lang` misses one of them. The sign crate picks the
+/// face and shapes right-to-left words itself, so they go in the catalogue's logical order.
+pub(crate) fn status_captions(lang: crate::i18n::Lang) -> StatusCaptions {
+    let english = StatusCaptions::default();
+    if lang == crate::i18n::Lang::EN {
+        return english;
+    }
+    let said = |s: &str| crate::i18n::has(lang, s).then(|| crate::i18n::tr(lang, s).to_owned());
+    (|| Some(StatusCaptions { valid: said(&english.valid)?, unknown: said(&english.unknown)?, invalid: said(&english.invalid)? }))()
+        .unwrap_or(english)
+}
+
 /// The detail lines of a visible signature, as `sign::pdf` stamps them (the distinguished name
 /// aside, which the dialog doesn't know before the ID is opened): the label above the name, then
 /// the reason, location and date, each after its label. `reason` and `location` are as typed.

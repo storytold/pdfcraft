@@ -940,6 +940,9 @@
 	Signature is valid:	Podpis jest prawidłowy:
 	Signature validity is UNKNOWN:	Ważność podpisu jest NIEZNANA:
 	Signature is INVALID:	Podpis jest NIEPRAWIDŁOWY:
+	Signature valid	Podpis prawidłowy
+	Validity unknown	Ważność nieznana
+	Signature invalid	Podpis nieprawidłowy
 	Signature Details	Szczegóły podpisu
 	Reason	Powód
 	Signing time	Czas podpisania
@@ -2559,6 +2562,7 @@ animation effects	Off	Wyłączone
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Dokument zmieniono po dodaniu tego znacznika czasu w sposób, na który znacznik nie pozwala ({}).
 	The timestamp token is valid and its authority is trusted.	Token znacznika czasu jest prawidłowy, a jego urząd jest zaufany.
 	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Token znacznika czasu jest prawidłowy, ale urzędu znacznika czasu nie ma na liście zaufanych certyfikatów.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Ten formularz ma zbyt wiele pól lub zbyt długą nazwę pola, aby PdfCraft mógł odczytać je wszystkie. Ewentualny podpis wśród pozostałych nie jest wyświetlany na liście, więc dokument jest traktowany jako podpisany.
 	Unsigned signature field	Niepodpisane pole podpisu
 	Signature is valid	Podpis jest prawidłowy
 	Signature validity is unknown	Ważność podpisu jest nieznana

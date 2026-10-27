@@ -407,12 +407,16 @@ impl Session {
         let mut out = Vec::new();
         for page in list {
             let Some(info) = doc.info.pages.get(page) else { continue };
-            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let shapes = pdfcraft_forms::detect::page_shapes(cos, page);
             let existing: Vec<[f64; 4]> = doc.form.iter().flat_map(|f| f.widgets.iter()).filter(|w| w.page == Some(page)).map(|w| w.rect).collect();
             let (found, turn) = if shapes.boxes.is_empty() && shapes.rules.is_empty() && crate::scan_fields::is_scan(doc, page, info) {
-                self.detect_on_scan(id, &mut r, page, res.text.as_deref(), &existing, &taken)
+                // Labels come from the page's own text. Words that only /ActualText names (a stamp
+                // drawn as outlines) are no labels, and leave the scan to be read.
+                let own = crate::ocr::own_text(&mut r, page).ok();
+                self.detect_on_scan(id, &mut r, page, own.as_ref(), &existing, &taken)
             } else {
+                let res =
+                    r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
                 let words = res.text.map(|t| detection_words(&t, info)).unwrap_or_default();
                 (pdfcraft_forms::detect::detect(&words, &shapes, &existing, &taken), 0)
             };

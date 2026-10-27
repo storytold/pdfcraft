@@ -901,6 +901,9 @@
 	Signature is valid:	La signatura és vàlida:
 	Signature validity is UNKNOWN:	La validesa de la signatura és DESCONEGUDA:
 	Signature is INVALID:	La signatura NO és vàlida:
+	Signature valid	Signatura vàlida
+	Validity unknown	Validesa desconeguda
+	Signature invalid	Signatura no vàlida
 	Signature Details	Detalls de la signatura
 	Reason	Motiu
 	Signing time	Hora de signatura
@@ -2325,6 +2328,7 @@ action wizard	Start	Inicia
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El document ha estat alterat des que es va aplicar aquesta marca de temps d'una manera que no permet ({}).
 	The timestamp token is valid and its authority is trusted.	El testimoni de marca de temps és vàlid i la seva autoritat és de confiança.
 	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	El testimoni de marca de temps és vàlid, però l'autoritat de marca de temps no és a la llista de certificats de confiança.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Aquest formulari té massa camps, o un nom de camp massa llarg, perquè PdfCraft els pugui llegir tots. Cap signatura d'entre la resta no apareix a la llista, de manera que el document es tracta com a signat.
 	Unsigned signature field	Camp de signatura sense signar
 	Signature is valid	La signatura és vàlida
 	Signature validity is unknown	La validesa de la signatura és desconeguda

@@ -901,6 +901,9 @@
 	Signature is valid:	Қолтаңба жарамды:
 	Signature validity is UNKNOWN:	Қолтаңбаның жарамдылығы БЕЛГІСІЗ:
 	Signature is INVALID:	Қолтаңба ЖАРАМСЫЗ:
+	Signature valid	Қолтаңба жарамды
+	Validity unknown	Жарамдылығы белгісіз
+	Signature invalid	Қолтаңба жарамсыз
 	Signature Details	Қолтаңба мәліметтері
 	Reason	Себеп
 	Signing time	Қол қою уақыты

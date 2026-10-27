@@ -22,6 +22,14 @@ pub(super) struct TextDevice {
     /// The outermost open `/ActualText` replacement: its depth, text and the glyphs drawn inside
     /// it (with no text of their own yet).
     actual: Option<(usize, String, Vec<Drawn>)>,
+    /// What the open `/ActualText` replacement paints besides glyphs (paths, images), as far as
+    /// it can be seen: where its text reads when it marks no glyph (words drawn as outlines).
+    painted: Option<Painted>,
+    /// Whether the open `/ActualText` replacement paints anything an exclusion leaves out.
+    paint_filtered: bool,
+    /// The bounding boxes of the clip paths in force (view space), innermost last, each cut to the
+    /// one before it: an outer bound on what can show.
+    clips: Vec<Rect>,
     /// Every `/ActualText` replacement made on the page.
     pub(super) replaced: Vec<Replaced>,
     filter: TextFilter,
@@ -99,12 +107,101 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }))
 }
 
+/// The widest or tallest box (view-space points) a glyph, or the paint standing in for one, may
+/// have and still be placed: anything bigger is damage, not text.
+const MAX_GLYPH_EXTENT: f64 = 10_000.0;
+
+/// The quarter turn of direction `(dx, dy)` (view space, y down): 0 right, 1 down, 2 left, 3 up.
+fn quarter_turn(dx: f64, dy: f64) -> usize {
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 { 0 } else { 2 }
+    } else if dy > 0.0 {
+        1
+    } else {
+        3
+    }
+}
+
+/// What an `/ActualText` replacement paints besides glyphs, measured as [`merge`] measures
+/// glyphs: along the writing direction of the first of it (its transform's x axis, `u`) and
+/// across it.
+struct Painted {
+    quarter: usize,
+    u: [f64; 2],
+    along: [f64; 2],
+    across: [f64; 2],
+}
+
+impl Painted {
+    fn new(transform: Affine) -> Self {
+        let [a, b, ..] = transform.as_coeffs();
+        let length = a.hypot(b);
+        let u = if length.is_finite() && length > 0.0 { [a / length, b / length] } else { [1.0, 0.0] };
+        let empty = [f64::INFINITY, f64::NEG_INFINITY];
+        Painted { quarter: quarter_turn(u[0], u[1]), u, along: empty, across: empty }
+    }
+
+    /// Grow the measure by the view-space box `b`.
+    fn add(&mut self, b: Rect) {
+        let n = [-self.u[1], self.u[0]];
+        for (x, y) in [(b.x0, b.y0), (b.x1, b.y0), (b.x1, b.y1), (b.x0, b.y1)] {
+            let (s, t) = (x * self.u[0] + y * self.u[1], x * n[0] + y * n[1]);
+            self.along = [self.along[0].min(s), self.along[1].max(s)];
+            self.across = [self.across[0].min(t), self.across[1].max(t)];
+        }
+    }
+
+    /// A stand-in glyph with no text of its own, boxed around what was painted and read along its
+    /// direction; `None` when that is too big to be the place of words.
+    fn glyph(self) -> Option<Drawn> {
+        let ([s0, s1], [t0, t1]) = (self.along, self.across);
+        // Too big to be the place of words, or NaN.
+        if !(s1 - s0 <= MAX_GLYPH_EXTENT && t1 - t0 <= MAX_GLYPH_EXTENT) {
+            return None;
+        }
+        let (u, n) = (self.u, [-self.u[1], self.u[0]]);
+        let point = |s: f64, t: f64| [(s * u[0] + t * n[0]) as f32, (s * u[1] + t * n[1]) as f32];
+        // The edge towards the next line starts the quad, as a glyph's em box does.
+        let quad = [point(s0, t1), point(s1, t1), point(s1, t0), point(s0, t0)];
+        let rect = quad.iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |r, p| {
+            [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]
+        });
+        rect.iter()
+            .all(|v| v.is_finite())
+            .then(|| (self.quarter, u, TextGlyph { text: String::new(), rect, quad, direction: [u[0] as f32, u[1] as f32] }))
+    }
+}
+
+/// The view-space box of `path` drawn with `transform`, from its control points (as redaction
+/// measures a path), or `None` when it has no finite point.
+fn control_box(path: &BezPath, transform: Affine) -> Option<Rect> {
+    let mut b: Option<Rect> = None;
+    let mut add = |p: kurbo::Point| {
+        let q = transform * p;
+        if q.is_finite() {
+            b = Some(b.map_or_else(|| Rect::from_points(q, q), |r| r.union_pt(q)));
+        }
+    };
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
+            kurbo::PathEl::QuadTo(p1, p2) => [p1, p2].into_iter().for_each(&mut add),
+            kurbo::PathEl::CurveTo(p1, p2, p3) => [p1, p2, p3].into_iter().for_each(&mut add),
+            kurbo::PathEl::ClosePath => {}
+        }
+    }
+    b
+}
+
 impl TextDevice {
     pub(super) fn new() -> Self {
         TextDevice {
             glyphs: Vec::new(),
             depth: 0,
             actual: None,
+            painted: None,
+            paint_filtered: false,
+            clips: Vec::new(),
             replaced: Vec::new(),
             filter: TextFilter::default(),
             excluded_depth: None,
@@ -120,14 +217,29 @@ impl TextDevice {
     /// words can't be found.
     ///
     /// A replacement spanning several lines or writing directions stays per glyph (each glyph's own
-    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all.
+    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all. One
+    /// that marks no glyph reads where it paints, as far as that can be seen: words drawn as
+    /// outlines or pictures.
     fn end_actual_text(&mut self) {
-        let Some((_, text, drawn)) = self.actual.take() else { return };
+        let Some((_, text, mut drawn)) = self.actual.take() else { return };
+        let painted = self.painted.take();
+        let paint_filtered = std::mem::take(&mut self.paint_filtered);
         if std::mem::take(&mut self.actual_filtered) {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
             return;
+        }
+        if drawn.is_empty()
+            && !self.filter.painted
+            && let Some(stand_in) = painted.and_then(Painted::glyph)
+        {
+            // The paint places it, so paint left out mixes it as excluded glyphs would.
+            if paint_filtered {
+                self.partial_replacement = true;
+                return;
+            }
+            drawn.push(stand_in);
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
             self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(char::is_control)));
@@ -141,6 +253,28 @@ impl TextDevice {
             Some(self.glyphs.len() - 1)
         };
         self.replaced.push(Replaced { at, text, originals });
+    }
+
+    /// Record view-space box `b`, drawn with `transform`, as painted by the open `/ActualText`
+    /// replacement, cut to the visible area; paint an exclusion leaves out (`excluded`) only marks
+    /// the replacement.
+    fn paint(&mut self, b: Rect, transform: Affine, excluded: bool) {
+        let seen = match self.clips.last() {
+            Some(c) => {
+                let (x0, y0, x1, y1) = (b.x0.max(c.x0), b.y0.max(c.y0), b.x1.min(c.x1), b.y1.min(c.y1));
+                // Clipped away entirely: nothing of it shows.
+                if !(x0 <= x1 && y0 <= y1) {
+                    return;
+                }
+                Rect::new(x0, y0, x1, y1)
+            }
+            None => b,
+        };
+        if excluded {
+            self.paint_filtered = true;
+        } else {
+            self.painted.get_or_insert_with(|| Painted::new(transform)).add(seen);
+        }
     }
 
     /// Ends the page. Some producers draw text twice, the copy for an outline, shadow or
@@ -246,8 +380,23 @@ fn text_debug() -> bool {
 impl<'a> Device<'a> for TextDevice {
     fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _: BlendMode) {}
-    fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
-    fn push_clip_path(&mut self, _: &ClipPath) {}
+    fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'a>, _: &PathDrawMode) {
+        // A path is no text, but it places an `/ActualText` replacement that marks no glyph.
+        if self.actual.is_some()
+            && let Some(b) = control_box(path, transform)
+        {
+            self.paint(b, transform, self.excluded_depth.is_some());
+        }
+    }
+    fn push_clip_path(&mut self, clip: &ClipPath) {
+        // Clip paths arrive in view space. NaN edges (a damaged clip) leave that edge unclipped.
+        let b = clip.path.bounding_box();
+        let visible = match self.clips.last() {
+            Some(c) => Rect::new(c.x0.max(b.x0), c.y0.max(b.y0), c.x1.min(b.x1), c.y1.min(b.y1)),
+            None => b,
+        };
+        self.clips.push(visible);
+    }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
@@ -296,13 +445,7 @@ impl<'a> Device<'a> for TextDevice {
         } else {
             (coefficients[0], coefficients[1])
         };
-        let dir = if dx.abs() >= dy.abs() {
-            if dx >= 0.0 { 0 } else { 2 }
-        } else if dy > 0.0 {
-            1
-        } else {
-            3
-        };
+        let dir = quarter_turn(dx, dy);
         let em = Rect::new(0.0, -200.0, advance, 800.0);
         let corners = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
             [(em.x0, em.y1), (em.x0, em.y0), (em.x1, em.y0), (em.x1, em.y1)]
@@ -313,7 +456,10 @@ impl<'a> Device<'a> for TextDevice {
         let b = corners.iter().fold(Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, p| {
             Rect::new(b.x0.min(p.x), b.y0.min(p.y), b.x1.max(p.x), b.y1.max(p.y))
         });
-        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
+        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite())
+            || b.width() > MAX_GLYPH_EXTENT
+            || b.height() > MAX_GLYPH_EXTENT
+        {
             return;
         }
         let length = dx.hypot(dy);
@@ -331,8 +477,23 @@ impl<'a> Device<'a> for TextDevice {
             None => self.glyphs.push((dir, direction, glyph)),
         }
     }
-    fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
-    fn pop_clip_path(&mut self) {}
+    fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+        // A picture of words, like an outline, places a replacement that marks no glyph; with
+        // images excluded, it is not counted.
+        if self.actual.is_none() {
+            return;
+        }
+        // The transform places the picture's pixels, not a unit square.
+        let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+        let corners = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].map(|(x, y)| transform * kurbo::Point::new(x, y));
+        let [a, b, c, d] = corners;
+        if corners.iter().all(|p| p.is_finite()) {
+            self.paint(Rect::from_points(a, c).union_pt(b).union_pt(d), transform, self.excluded_depth.is_some() || self.filter.images);
+        }
+    }
+    fn pop_clip_path(&mut self) {
+        self.clips.pop();
+    }
     fn pop_transparency_group(&mut self) {}
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
         self.depth = self.depth.saturating_add(1);
@@ -354,6 +515,11 @@ impl<'a> Device<'a> for TextDevice {
             self.excluded_depth = None;
         }
         self.depth = self.depth.saturating_sub(1);
+    }
+    fn begin_annotations(&mut self) {
+        // A replacement the page content never closed ends with it: the annotations drawn next
+        // are not part of it.
+        self.end_actual_text();
     }
 }
 

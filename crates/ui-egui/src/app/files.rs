@@ -77,6 +77,9 @@ impl PdfCraftApp {
     }
 
     pub(super) fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
+        // Files opened before the first frame (the ones named at startup) are drawn once, in the
+        // interface language, rather than in English and again when the frame applies it.
+        self.apply_status_captions(i18n::Lang::from_pref(&self.language));
         // Images and text files become new, unsaved PDFs (Create a PDF).
         let active = self.active;
         if let Some(r) = self.open_converted(name, &bytes) {

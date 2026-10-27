@@ -920,6 +920,9 @@
 	Signature is valid:	Az aláírás érvényes:
 	Signature validity is UNKNOWN:	Az aláírás érvényessége ISMERETLEN:
 	Signature is INVALID:	Az aláírás ÉRVÉNYTELEN:
+	Signature valid	Érvényes aláírás
+	Validity unknown	Ismeretlen érvényesség
+	Signature invalid	Érvénytelen aláírás
 	Signature Details	Aláírás részletei
 	Reason	Ok
 	Signing time	Aláírás időpontja

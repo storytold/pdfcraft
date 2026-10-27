@@ -35,6 +35,7 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -347,6 +348,7 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        self.apply_status_captions(lang);
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(worker) = &self.open_worker {

@@ -1678,9 +1678,11 @@
 	Sign yourself	Nënshkruani vetë
 	Signature	Nënshkrimi
 	Signature Details	Detajet e nënshkrimit
+	Signature invalid	Nënshkrim i pavlefshëm
 	Signature is INVALID:	Nënshkrimi është i PAVLEFSHËM:
 	Signature is valid:	Nënshkrimi është i vlefshëm:
 	Signature panel	Paneli i nënshkrimit
+	Signature valid	Nënshkrim i vlefshëm
 	Signature validity is UNKNOWN:	Vlefshmëria e nënshkrimit është E PANJOHUR:
 	Signatures	Nënshkrimet
 	Signatures panel	Paneli i nënshkrimeve
@@ -1950,6 +1952,7 @@
 	Validate all signatures	Vlerëso të gjitha nënshkrimet
 	Validity ends	Vlefshmëria mbaron
 	Validity starts	Vlefshmëria fillon
+	Validity unknown	Vlefshmëri e panjohur
 	Value is not calculated	Vlera nuk llogaritet
 	Value is the	Vlera është
 	Value:	Vlera:

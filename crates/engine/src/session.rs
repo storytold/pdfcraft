@@ -11,11 +11,11 @@ use crate::edit::{EditCtx, check_permission, run_edit};
 use crate::history::{Keys, MAX_UNDO, Scope, keys_after, scope_of, uses_scripts};
 use crate::{
     BookmarkPage, BookmarkRow, CombineSource, Combined, DataFormat, DocId, Document, Edit, EditError, Hidden, ImageResolution,
-    LOW_RESOLUTION_PRINT_DPI, Label, ObjectKind, OptimizeReport, RecoverySnapshot, SignOptions, SourceKind, SplitPart, SummarySort, TrustStore,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, comment_list, comment_summary, decode_text, display_bytes, guard, info_fields, js,
-    local_utc_offset, note_warnings, open_source, open_source_with, optimize, outline_rows, parse_ymd, print, print_raster, render_threads,
-    scan_colours, set_default_layer_state, shown_under_redactions, signatures_of, source_kind, sync_xfa_state, undrawn_notices, use_layer_choices,
-    writable, xfa, xfa_sync_datasets,
+    LOW_RESOLUTION_PRINT_DPI, Label, ObjectKind, OptimizeReport, RecoverySnapshot, SignOptions, SourceKind, SplitPart, StatusCaptions, SummarySort,
+    TrustStore, XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, carry_verdict_marks, comment_list, comment_summary, decode_text,
+    display_bytes, guard, info_fields, js, local_utc_offset, note_warnings, open_source, open_source_with, optimize, outline_rows, parse_ymd, print,
+    print_raster, render_threads, scan_colours, set_default_layer_state, shown_under_redactions, signatures_of, source_kind, sync_xfa_state,
+    undrawn_notices, use_layer_choices, writable, xfa, xfa_sync_datasets,
 };
 
 mod editing;
@@ -36,6 +36,8 @@ pub struct Session {
     utc_offset: Option<fn() -> i64>,
     /// Certificates trusted for signing (Acrobat: Trusted Certificates).
     pub(crate) trust: Arc<TrustStore>,
+    /// The words signature status layers are drawn with, in the interface language.
+    pub(crate) captions: Arc<StatusCaptions>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     pub(crate) js_off: bool,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).

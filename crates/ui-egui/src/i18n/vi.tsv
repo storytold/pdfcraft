@@ -1128,6 +1128,9 @@ theme	Appearance	Giao diện
 	Signature is valid:	Chữ ký hợp lệ:
 	Signature panel	Bảng chữ ký
 	Signature validity is UNKNOWN:	Tính hợp lệ của chữ ký KHÔNG RÕ:
+	Signature valid	Chữ ký hợp lệ
+	Validity unknown	Không rõ tính hợp lệ
+	Signature invalid	Chữ ký không hợp lệ
 	Signer's name	Tên người ký
 	Simplified field notation:	Ký hiệu trường rút gọn:
 	Single Page	Một trang
@@ -1801,6 +1804,7 @@ theme	Appearance	Giao diện
 	There is no folder to save the digital ID in.	Không có thư mục nào để lưu Digital ID.
 	This document has not been modified since this signature was applied.	Tài liệu này chưa bị sửa đổi kể từ khi chữ ký này được áp dụng.
 	This document has not been modified since this timestamp was applied.	Tài liệu này chưa bị sửa đổi kể từ khi dấu thời gian này được áp dụng.
+	This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.	Biểu mẫu này có quá nhiều trường, hoặc tên trường quá dài, nên PdfCraft không đọc hết được. Chữ ký trong các trường còn lại không được liệt kê, vì vậy tài liệu được coi là đã ký.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Chữ ký này dùng RIPEMD-160, một thuật toán băm 160 bit cũ không còn được khuyến nghị cho chữ ký. Nó vẫn xác thực được, nhưng không nên dựa vào nó.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Chữ ký này dùng SHA-1, một thuật toán băm yếu: các va chạm trong nó đã được chứng minh. Nó vẫn xác thực được vì nhiều tài liệu được ký từ nhiều năm trước dùng nó, nhưng không nên dựa vào nó.
 	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Chữ ký này dùng khóa RSA ngắn hơn 2048 bit, không còn được coi là đủ mạnh cho chữ ký. Nó vẫn xác thực được, nhưng không nên dựa vào nó.

@@ -5884,6 +5884,43 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
 }
 
 #[test]
+fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Lexer, ObjRef, Object, SaveOptions, Stream};
+    let dir = workdir("named-layer-verdict");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let dict = |text: &str| Lexer::new(text.as_bytes(), 0).object().unwrap().as_dict().unwrap().clone();
+    let form = |resources: Dict, ops: &str| {
+        let mut d = dict("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] >>");
+        d.set(b"Resources".to_vec(), resources);
+        Stream::from_raw(d, ops.as_bytes().to_vec())
+    };
+    let blank = cos.add(form(Dict::new(), ""));
+    let layers = dict(&format!("<< /XObject << /n1 {blank} /n3 {blank} >> >>"));
+    let layer_form = cos.add(form(layers, "/n1 Do /n3 Do"));
+    let normal = cos.add(form(dict(&format!("<< /XObject << /FRM {layer_form} >> >>")), "/FRM Do"));
+    // Deliberately malformed CMS: an invalid signature still gets the redrawn invalid state.
+    let value = cos.add(dict("<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 0 0 0] /Contents <00> >>"));
+    let widget = cos
+        .add(dict(&format!("<< /FT /Sig /T (Signature1) /Subtype /Widget /F 4 /Rect [50 50 150 150] /P 4 0 R /V {value} /AP << /N {normal} >> >>")));
+    cos.update_dict(ObjRef::new(4, 0), |p| p.set(b"Annots".to_vec(), vec![Object::Ref(widget)])).unwrap();
+    cos.update_dict(cos.root().unwrap(), |root| root.set(b"AcroForm".to_vec(), dict(&format!("<< /Fields [{widget}] >>")))).unwrap();
+    let original = pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap();
+    std::fs::write(dir.join("named.pdf"), &original).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "named.pdf"}))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "sign_list", json!({"doc": doc}));
+    assert_eq!(list["signatures"][0]["status"], "invalid");
+    assert_eq!(list["signatures"][0]["verdict_shown"], true);
+    let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
+    let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
+    let pixels = image::load_from_memory_with_format(data, image::ImageFormat::Png).unwrap().to_rgba8();
+    let red = pixels.pixels().filter(|p| p.0.iter().zip([0xD7, 0x37, 0x3F]).all(|(a, b)| a.abs_diff(b) < 30)).count();
+    assert!(red > 100, "the invalid state is drawn: {red} red pixels");
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
+    assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
+}
+
+#[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
     let mut a = auto(&dir);
@@ -5933,6 +5970,8 @@ fn digital_ids_signing_and_validation_through_tools() {
     assert_eq!(t["trusted"].as_array().unwrap().len(), 1);
     let list = ok(&mut a, "sign_list", json!({ "doc": doc }));
     assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")));
+    // PdfCraft's own appearance has no status layers to draw into: only the page badge shows it.
+    assert_eq!(list["signatures"][0]["verdict_shown"], false);
     ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "ok" }));
     let s = &ok(&mut a, "sign_list", json!({ "doc": doc }))["signatures"][0];
     assert_eq!((s["status"].as_str(), s["modification"].as_str()), (Some("valid"), Some("allowed")));
