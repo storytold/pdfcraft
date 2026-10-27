@@ -45,10 +45,11 @@ pub const MAX_LINES_PER_PATH: u32 = 1 << (32 - INT_MASK_SHIFT);
 pub struct CulledWindings {
     /// Fractional winding coverage for each individual scanline in a row.
     pub partial: Vec<[f32; Tile::HEIGHT as usize]>,
-    // Note that this will cause issues if we have windings greater/less than i8,
-    // but this should only occur in pathological cases.
+    // PdfCraft patch: an `i32`, as the strip winding that reads it is. Upstream's `i8` overflowed
+    // (a panic in a checked build, a wrong fill in a release one) once more than 127 same-direction
+    // subpaths enclosed the viewport, which a valid path can do (linebender/vello#1670).
     /// Accumulated integer winding deltas for each tile row.
-    pub coarse: Vec<i8>,
+    pub coarse: Vec<i32>,
     /// Bitmask tracking which rows contain active geometry or winding data.
     pub active: Vec<u32>,
     /// Flag indicating if any geometry was early-culled outside the viewport.
@@ -2223,6 +2224,57 @@ mod tests {
         let expected = [Tile::new(0, 0, 0, W), Tile::new(0, 0, 1, W)];
 
         tiles.assert_tiles_match(&lines, VIEW_DIM, VIEW_DIM, &expected);
+    }
+
+    //==============================================================================================
+    // PdfCraft patch: windings past an `i8`
+    //==============================================================================================
+
+    /// The four edges of a rectangle surrounding the viewport, wound `forward` (or the other way
+    /// round), as a path of that many nested subpaths makes them.
+    fn surrounding_rectangle(forward: bool) -> [Line; 4] {
+        let (lo, hi) = (-10.0_f32, F_V_DIM + 10.0);
+        let corners = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)];
+        let mut edges = [Line { p0: Point { x: 0.0, y: 0.0 }, p1: Point { x: 0.0, y: 0.0 } }; 4];
+        for (i, edge) in edges.iter_mut().enumerate() {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            let (a, b) = if forward { (a, b) } else { (b, a) };
+            *edge = Line { p0: Point { x: a.0, y: a.1 }, p1: Point { x: b.0, y: b.1 } };
+        }
+        edges
+    }
+
+    /// Many same-direction rectangles around the viewport pile their winding into the culled
+    /// rows' counters. Past 127 an `i8` overflowed: a panic in a checked build, a wrong fill in a
+    /// release one. The rows must hold the exact count, and opposite directions must cancel.
+    #[test]
+    fn culled_rows_count_windings_past_an_i8() {
+        // The left and right edges cross every row of the viewport; the top and bottom do not.
+        for (forward, count, expected) in [(true, 128_usize, 128_i32), (true, 129, 129), (true, 1000, 1000), (false, 129, -129), (false, 1000, -1000)]
+        {
+            let mut lines = Vec::new();
+            for _ in 0..count {
+                lines.extend(surrounding_rectangle(forward));
+            }
+            let mut tiles = Tiles::new(Level::baseline(), VIEW_DIM);
+            tiles.make_tiles_analytic_aa(Level::baseline(), &lines, VIEW_DIM, VIEW_DIM);
+            let rows = tiles.windings.coarse.len();
+            assert!(rows > 0);
+            assert!(
+                tiles.windings.coarse.iter().all(|w| i32::from(*w) == expected),
+                "{count} rectangles, forward: {forward}: every row's winding is {expected}, got {:?}",
+                &tiles.windings.coarse[..rows.min(4)]
+            );
+        }
+        // Equal numbers wound each way cancel exactly.
+        let mut lines = Vec::new();
+        for _ in 0..200 {
+            lines.extend(surrounding_rectangle(true));
+            lines.extend(surrounding_rectangle(false));
+        }
+        let mut tiles = Tiles::new(Level::baseline(), VIEW_DIM);
+        tiles.make_tiles_analytic_aa(Level::baseline(), &lines, VIEW_DIM, VIEW_DIM);
+        assert!(tiles.windings.coarse.iter().all(|w| i32::from(*w) == 0), "{:?}", tiles.windings.coarse);
     }
 
     //==============================================================================================
