@@ -281,9 +281,9 @@ pub struct PdfCraftApp {
     pub reading_colors: pdfcraft_render::ReadingColors,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.
     #[cfg(target_os = "linux")]
-    desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,
+    appearance: Option<craft_platform::appearance::Watcher>,
     #[cfg(target_os = "linux")]
-    desktop_theme_enabled: bool,
+    appearance_enabled: bool,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.

@@ -61,9 +61,9 @@ impl PdfCraftApp {
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
             #[cfg(target_os = "linux")]
-            desktop_theme: None,
+            appearance: None,
             #[cfg(target_os = "linux")]
-            desktop_theme_enabled: false,
+            appearance_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
@@ -360,7 +360,7 @@ impl eframe::App for PdfCraftApp {
             egui_extras::install_image_loaders(ctx);
             theme::install_fonts_for(ctx, cjk);
             self.fonts_cjk = cjk;
-            theme::apply(ctx, self.theme);
+            theme::apply_preference(ctx, self.theme_preference);
             self.styled = true;
         } else {
             self.fonts_ready = true;

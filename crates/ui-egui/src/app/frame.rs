@@ -8,28 +8,22 @@ impl PdfCraftApp {
         }
     }
 
+    /// Start the Linux appearance watcher when the app follows the system, and mirror the
+    /// palette egui's current theme slot holds into [`PdfCraftApp::theme`].
     pub(super) fn sync_theme(&mut self, ctx: &egui::Context) {
-        #[cfg_attr(not(target_os = "linux"), expect(unused_mut))]
-        let mut system = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
         #[cfg(target_os = "linux")]
         {
             let active = self.theme_preference == ThemePreference::System;
-            if self.desktop_theme_enabled && active && self.desktop_theme.is_none() {
+            if self.appearance_enabled && active && self.appearance.is_none() {
                 let ctx = ctx.clone();
-                self.desktop_theme = Some(pdfcraft_platform::desktop_theme::DesktopTheme::start(move || ctx.request_repaint()));
+                self.appearance = craft_platform::appearance::Watcher::start_active(true, move || ctx.request_repaint());
             }
-            if let Some(desktop) = &self.desktop_theme {
-                desktop.set_active(active);
-                // The standard portal supplies Linux desktop appearance. No preference
-                // must clear an earlier answer rather than retaining stale dark chrome.
-                system = desktop.get().map(|appearance| appearance == pdfcraft_platform::desktop_theme::DesktopAppearance::Dark);
+            if let Some(watcher) = &self.appearance {
+                watcher.set_active(active);
+                craft_platform::appearance::sync_native_window_theme(ctx, watcher.current());
             }
         }
-        let kind = self.theme_preference.resolve(system, ThemeKind::Light);
-        if kind != self.theme {
-            self.theme = kind;
-            theme::apply(ctx, kind);
-        }
+        self.theme = theme::Tokens::get(ctx).kind;
     }
 }
 
@@ -81,6 +75,15 @@ impl PdfCraftApp {
         // The control plugin's input hook runs next: give it this pass's input generation.
         if let Some(control) = &self.control {
             control.set_epoch(self.input_epoch());
+        }
+        // The standard portal supplies Linux desktop appearance. No answer must clear winit's
+        // rather than retain stale dark chrome.
+        #[cfg(target_os = "linux")]
+        if let Some(watcher) = &self.appearance {
+            raw.system_theme = watcher.current().map(|appearance| match appearance {
+                craft_platform::appearance::Theme::Dark => egui::Theme::Dark,
+                craft_platform::appearance::Theme::Light => egui::Theme::Light,
+            });
         }
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);

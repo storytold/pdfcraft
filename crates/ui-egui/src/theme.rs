@@ -122,9 +122,9 @@ impl Tokens {
         }
     }
 
-    /// Return the cached theme tokens, falling back to the light palette before the first apply.
+    /// Return the cached tokens of the egui theme slot in use, falling back to the light palette before the first apply.
     pub fn get(ctx: &egui::Context) -> Self {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
+        ctx.data(|d| d.get_temp::<Tokens>(tokens_key(ctx.theme()))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
     pub fn dark(&self) -> bool {
@@ -422,15 +422,50 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
-/// Install the palette, widget styling, text sizes and right-to-left flag for the chosen theme.
+/// Install the palette, widget styling, text sizes and right-to-left flag for one fixed theme,
+/// in both egui theme slots.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+    let tokens = Tokens::for_kind(kind);
+    install(ctx, tokens, tokens);
+}
+
+/// Install the app-default palettes for a saved preference: under System each egui slot holds
+/// its own variant and egui picks between them, so an operating-system change needs no rebuild;
+/// a fixed choice puts that variant in both slots.
+pub fn apply_preference(ctx: &egui::Context, preference: ThemePreference) {
+    let (light, dark) = (Tokens::for_kind(ThemeKind::Light), Tokens::for_kind(ThemeKind::Dark));
+    match preference {
+        ThemePreference::System => install(ctx, light, dark),
+        ThemePreference::Light => install(ctx, light, light),
+        ThemePreference::Dark => install(ctx, dark, dark),
+    }
+}
+
+/// Install `light` as egui's Light slot and `dark` as its Dark slot, and keep both token sets
+/// for [`Tokens::get`].
+pub fn install(ctx: &egui::Context, light: Tokens, dark: Tokens) {
     // Keep the native window inherited. A concrete egui theme pins macOS's
     // NSWindow appearance and prevents winit from delivering ThemeChanged.
-    // Our saved choice owns the palette; both egui branches receive it below.
+    // Our saved choice owns the palettes; each egui slot receives its own below.
     ctx.set_theme(egui::ThemePreference::System);
+    // Without a system answer egui uses this slot.
+    ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);
     let rtl = crate::i18n::current().rtl();
-    let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("pdfcraft-theme"), t));
+    for (slot, t) in [(egui::Theme::Light, light), (egui::Theme::Dark, dark)] {
+        ctx.data_mut(|d| d.insert_temp(tokens_key(slot), t));
+        ctx.style_mut_of(slot, |s| style_for(s, &t, rtl));
+    }
+    ctx.data_mut(|d| d.insert_temp(direction_key(), rtl));
+}
+
+/// The token set stored for an egui theme slot.
+fn tokens_key(slot: egui::Theme) -> egui::Id {
+    egui::Id::unique("pdfcraft-theme").with(slot == egui::Theme::Dark)
+}
+
+/// Rebuild `s` for the tokens `t`.
+fn style_for(s: &mut egui::Style, t: &Tokens, rtl: bool) {
+    let t = *t;
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.panel;
     v.window_fill = t.card;
@@ -470,28 +505,22 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     if !t.dark() {
         v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(0.75);
     }
-    ctx.set_visuals(v);
-    ctx.global_style_mut(|s| {
-        // RTL languages mirror stock chrome (menus, combo boxes, scroll bars, headers).
-        // Labels still get their paragraph direction explicitly from `bidi::ui_direction`.
-        s.right_to_left = rtl;
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(10.0, 5.0);
-        s.spacing.menu_margin = egui::Margin::same(6);
-        s.spacing.scroll.bar_width = 8.0;
-        s.spacing.scroll.floating = true;
-        s.spacing.scroll.floating_width = 3.0;
-        s.spacing.scroll.foreground_color = true;
-        s.text_styles.insert(egui::TextStyle::Body, regular(13.0));
-        s.text_styles.insert(egui::TextStyle::Button, regular(13.0));
-        s.text_styles.insert(egui::TextStyle::Small, regular(11.0));
-        s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
-        s.interaction.tooltip_delay = 0.35;
-    });
-    let style = ctx.global_style();
-    ctx.set_style_of(egui::Theme::Light, style.clone());
-    ctx.set_style_of(egui::Theme::Dark, style);
-    ctx.data_mut(|d| d.insert_temp(direction_key(), rtl));
+    s.visuals = v;
+    // RTL languages mirror stock chrome (menus, combo boxes, scroll bars, headers).
+    // Labels still get their paragraph direction explicitly from `bidi::ui_direction`.
+    s.right_to_left = rtl;
+    s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    s.spacing.button_padding = egui::vec2(10.0, 5.0);
+    s.spacing.menu_margin = egui::Margin::same(6);
+    s.spacing.scroll.bar_width = 8.0;
+    s.spacing.scroll.floating = true;
+    s.spacing.scroll.floating_width = 3.0;
+    s.spacing.scroll.foreground_color = true;
+    s.text_styles.insert(egui::TextStyle::Body, regular(13.0));
+    s.text_styles.insert(egui::TextStyle::Button, regular(13.0));
+    s.text_styles.insert(egui::TextStyle::Small, regular(11.0));
+    s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
+    s.interaction.tooltip_delay = 0.35;
 }
 
 /// Return the stable egui id holding the current right-to-left style flag.

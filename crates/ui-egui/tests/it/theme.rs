@@ -22,10 +22,17 @@ fn assert_theme(h: &Harness<'static, PdfCraftApp>, preference: ThemePreference, 
     assert_eq!(Tokens::get(&h.ctx).kind, kind);
     assert_eq!(h.ctx.global_style().visuals.dark_mode, kind == ThemeKind::Dark);
     assert_eq!(h.ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
-    for branch in [egui::Theme::Light, egui::Theme::Dark] {
-        let style = h.ctx.style_of(branch);
-        assert_eq!(style.visuals.dark_mode, kind == ThemeKind::Dark);
-        assert_eq!(style.visuals.panel_fill, Tokens::for_kind(kind).panel);
+    // Following the system, each egui slot holds its own variant; a fixed choice fills both.
+    for slot in [egui::Theme::Light, egui::Theme::Dark] {
+        let expected = match preference {
+            ThemePreference::System if slot == egui::Theme::Dark => ThemeKind::Dark,
+            ThemePreference::System => ThemeKind::Light,
+            ThemePreference::Light => ThemeKind::Light,
+            ThemePreference::Dark => ThemeKind::Dark,
+        };
+        let style = h.ctx.style_of(slot);
+        assert_eq!(style.visuals.dark_mode, expected == ThemeKind::Dark, "{slot:?}");
+        assert_eq!(style.visuals.panel_fill, Tokens::for_kind(expected).panel, "{slot:?}");
     }
 }
 

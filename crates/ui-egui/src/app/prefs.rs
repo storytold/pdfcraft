@@ -39,8 +39,8 @@ impl PdfCraftApp {
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
         if let Some(ctx) = self.ctx.clone() {
+            theme::apply_preference(&ctx, preference);
             self.sync_theme(&ctx);
-            theme::apply(&ctx, self.theme);
         } else {
             self.theme = preference.resolve(None, ThemeKind::Light);
         }
@@ -62,8 +62,8 @@ impl PdfCraftApp {
     /// Enable the Linux desktop portal in a native window. Headless contexts keep
     /// their supplied input and never connect to the user's session bus.
     #[cfg(target_os = "linux")]
-    pub fn enable_desktop_theme(&mut self) {
-        self.desktop_theme_enabled = true;
+    pub fn enable_desktop_appearance(&mut self) {
+        self.appearance_enabled = true;
     }
 
     /// Today in `fmt` (or Preferences ▸ Date format), with month and weekday names in the date
