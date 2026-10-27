@@ -43,7 +43,7 @@ use area::{
 };
 #[cfg(test)]
 use bars::in_size_hint_zone;
-use bars::{Notice, notices, page_size_hint, quick_bar};
+use bars::{Notice, notices, page_size_hint, picked_image_bar, quick_bar};
 pub use cache::RasterMemory;
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
 #[cfg(test)]
@@ -2241,6 +2241,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                 };
                 if let Some(image) = hit {
+                    if ui.button(tl!("Replace Image…")).clicked() {
+                        copy_image = Some(comments::CanvasAction::ReplaceImage(page, image));
+                        ui.close();
+                    }
                     if ui.button(tl!("Copy Image")).clicked() {
                         copy_image = Some(comments::CanvasAction::CopyImage(page, image));
                         ui.close();
@@ -2496,6 +2500,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
+        Some(comments::CanvasAction::ReplaceImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Replace(p, i)),
         None => {}
     }
     // Full screen: the click turns the page unless it did something else first. It waits out the
@@ -2647,6 +2652,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
+        picked_image_bar(app, ui);
         quick_bar(app, avail, ui);
     }
     if let Some((source, file, destination)) = remote_open {

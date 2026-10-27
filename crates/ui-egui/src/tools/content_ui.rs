@@ -867,7 +867,16 @@ impl crate::PdfCraftApp {
     pub fn replace_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick_image(tl!("Replace image"), move |app, name, bytes| {
-            app.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
+            let Some((_, id)) = app.active_ids() else { return };
+            let is_added = app.session.get(id).is_some_and(|d| {
+                d.added().iter().filter(|a| a.page == page).nth(index).is_some_and(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_)))
+            });
+            let edit = if is_added {
+                Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) }
+            } else {
+                Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) } }
+            };
+            app.apply_edit(edit);
         });
         #[cfg(target_arch = "wasm32")]
         {

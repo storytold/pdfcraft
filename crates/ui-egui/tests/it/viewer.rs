@@ -1830,6 +1830,42 @@ fn right_click_on_a_picture_copies_it_at_full_size() {
     assert_eq!(rgba, px.into_raw(), "the image's own pixels, not a rendering of the page");
 }
 
+#[test]
+fn right_click_and_floating_bar_offer_replace_image() {
+    let (_, mut h) = picture_harness();
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    // 1. Right-click context menu offers "Replace Image…"
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Replace Image…");
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // 2. Left-click selects the picture and floating bar offers "Replace image…"
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
+    h.get_by_label("Replace image…");
+
+    // 3. Applying replacement updates image data
+    let png = {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(10, 10, image::Rgba([0, 255, 0, 255])).write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        buf.into_inner()
+    };
+    let replace = pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Replace { name: "green.png".into(), bytes: std::sync::Arc::new(png) },
+    };
+    assert!(h.state_mut().apply_edit(replace));
+}
+
 /// A picture drawn through grouped Form artwork with a caption over it (as Word, InDesign and
 /// scanners with OCR write them): one click still selects it, and ⌘C copies the picture.
 #[test]

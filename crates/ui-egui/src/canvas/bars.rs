@@ -485,3 +485,38 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
             });
     });
 }
+
+/// Floating toolbar for a selected picture (`picked_image`).
+pub(super) fn picked_image_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let Some((view_idx, doc_id)) = app.active_ids() else { return };
+    let Some(picked) = app.views.get(view_idx).and_then(|v| v.picked_image) else { return };
+    let Some(doc) = app.session.get(doc_id) else { return };
+    let Some(xf) = app.views.get(view_idx).and_then(|v| v.page_xform(picked.page)) else { return };
+    if doc.info.pages.get(picked.page).is_none() || !picked.rect.iter().all(|v| v.is_finite()) {
+        return;
+    }
+    let r = xf.user_rect(&doc.info, picked.page, picked.rect.map(|v| v as f32));
+    let t = Tokens::get(ui.ctx());
+    let pos = pos2(r.center().x - 40.0, (r.top() - 36.0).max(10.0));
+    let mut replace = false;
+    let can_modify = doc.allows_modification();
+    egui::Area::new(egui::Id::unique("picked-image-bar")).order(egui::Order::Foreground).fixed_pos(pos).show(ui.ctx(), |ui| {
+        egui::Frame::NONE
+            .fill(t.card)
+            .stroke(Stroke::new(1.0, t.border))
+            .corner_radius(CornerRadius::same(8))
+            .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: Color32::from_black_alpha(if t.dark() { 80 } else { 20 }) })
+            .inner_margin(egui::Margin::same(4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if ui.add_enabled_ui(can_modify, |ui| icons::button(ui, "replace", 24.0, false, tl!("Replace image…"))).inner.clicked() {
+                        replace = true;
+                    }
+                });
+            });
+    });
+    if replace {
+        app.replace_image_dialog(picked.page, picked.index);
+    }
+}
