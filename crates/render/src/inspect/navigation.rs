@@ -1,10 +1,10 @@
 #[cfg(test)]
 use super::core::inspect;
-use super::core::spend;
+use super::core::{load_options, spend};
 use super::model::{DestView, OutlineItem, PageInfo};
 use super::{
-    BTreeMap, Dictionary, HashMap, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK,
-    MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
+    Arc, AssertUnwindSafe, BTreeMap, Dictionary, Document, HashMap, HashSet, Inspector, LazyStructure, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES,
+    MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, Structure, alpha, catch_unwind, roman,
 };
 
 /// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
@@ -443,6 +443,31 @@ fn label_work(left: &mut usize, count: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The (0-based page, view) of the named destination `name` (ISO 32000-2 §12.3.2.4): a key of
+/// the `/Names /Dests` name tree or of the PDF 1.1 catalog `/Dests` dictionary, as a link's or
+/// `/OpenAction`'s name resolves. `None` when the document can't be read, has no such name, or
+/// the name leads to no page of it. A key matches as written (UTF-8), or as a text string
+/// (UTF-16 or PDFDocEncoding) that reads as `name`, the way a link's string destination is read.
+/// Read like [`inspect`]: the lazy reader first, lopdf's tolerant one when the lazy reader fails.
+pub fn named_destination(bytes: Arc<Vec<u8>>, password: Option<&str>, name: &str) -> Option<(usize, DestView)> {
+    let find = |doc: &dyn Structure| {
+        let insp = Inspector::new(doc);
+        let dest = insp.named_dest(name.as_bytes()).or_else(|| insp.named.iter().find(|(key, _)| text_string(key) == name).map(|(_, dest)| *dest))?;
+        insp.dest(dest, 1).filter(|(page, _)| *page < insp.page_ids.len())
+    };
+    let lazy = catch_unwind(AssertUnwindSafe(|| {
+        let doc = LazyStructure::new(bytes.clone(), password).ok()?;
+        let found = find(&doc);
+        (!doc.failed()).then_some(found)
+    }))
+    .ok()
+    .flatten();
+    if let Some(found) = lazy {
+        return found;
+    }
+    catch_unwind(AssertUnwindSafe(|| find(&Document::load_mem_with_options(&bytes, load_options(password)).ok()?))).ok().flatten()
+}
+
 #[cfg(test)]
 mod open_dest_tests {
     use std::sync::Arc;
@@ -503,6 +528,31 @@ mod open_dest_tests {
             ),
             Some((2, XYZ))
         );
+    }
+
+    fn named(catalog: &str, extra: &[String], name: &str) -> Option<(usize, DestView)> {
+        super::named_destination(Arc::new(pdf(catalog, extra)), None, name)
+    }
+
+    #[test]
+    fn a_named_destination_is_looked_up_by_its_name() {
+        // A string key of the /Names /Dests name tree, whose value may be a dictionary with /D.
+        let tree = "/Names << /Dests 6 0 R >>";
+        let nodes = ["<< /Kids [7 0 R] >>".to_string(), "<< /Names [(here) [3 0 R /Fit] (there) << /D [5 0 R /XYZ 100 500 2] >>] >>".to_string()];
+        assert_eq!(named(tree, &nodes, "there"), Some((2, XYZ)));
+        assert_eq!(named(tree, &nodes, "here"), Some((0, DestView::Fit)));
+        // A name key of the PDF 1.1 catalog /Dests dictionary.
+        assert_eq!(named("/Dests << /old [4 0 R /FitH 400] >>", &[], "old"), Some((1, DestView::FitH { top: Some(400.0) })));
+        // A key written as UTF-16 or in PDFDocEncoding matches the text it reads as.
+        assert_eq!(named("/Names << /Dests << /Names [<FEFF0074006800E9> [4 0 R /Fit]] >> >>", &[], "thé"), Some((1, DestView::Fit)));
+        assert_eq!(named("/Names << /Dests << /Names [(th\\351) [5 0 R /Fit]] >> >>", &[], "thé"), Some((2, DestView::Fit)));
+        // A name that isn't there, one past the last page, one that names itself, no names at
+        // all, and bytes that aren't a PDF.
+        assert_eq!(named(tree, &nodes, "missing"), None);
+        assert_eq!(named("/Dests << /far [7 /Fit] >>", &[], "far"), None);
+        assert_eq!(named("/Dests << /loop /loop >>", &[], "loop"), None);
+        assert_eq!(named("", &[], "there"), None);
+        assert_eq!(super::named_destination(Arc::new(b"not a pdf".to_vec()), None, "there"), None);
     }
 
     #[test]

@@ -66,13 +66,30 @@ impl PdfCraftApp {
     }
 
     pub(super) fn apply_remote_destination(&mut self, destination: pdfcraft_render::RemoteDestination) {
-        let Some(index) = self.views.len().checked_sub(1) else { return };
-        let Some(doc) = self.session.get(self.views[index].id) else { return };
+        if let Some(index) = self.views.len().checked_sub(1) {
+            self.apply_destination_at(index, destination);
+        }
+    }
+
+    /// Show `destination` in the tab at `index`: a document just opened from a link or with open
+    /// parameters (#3425), or one already open that such a link or launch names.
+    pub(super) fn apply_destination_at(&mut self, index: usize, destination: pdfcraft_render::RemoteDestination) {
+        let Some(view) = self.views.get_mut(index) else { return };
+        let Some(doc) = self.session.get(view.id) else { return };
+        let destination = match destination {
+            pdfcraft_render::RemoteDestination::Named(name) => {
+                match pdfcraft_render::named_destination(doc.bytes.clone(), doc.password.as_deref(), &name) {
+                    Some((page, dest)) => pdfcraft_render::RemoteDestination::Page { page, view: dest },
+                    None => pdfcraft_render::RemoteDestination::Named(name),
+                }
+            }
+            other => other,
+        };
         let warning = match destination {
             pdfcraft_render::RemoteDestination::Default => None,
             pdfcraft_render::RemoteDestination::Named(_) => Some("The linked PDF opened, but its named destination was not applied."),
-            pdfcraft_render::RemoteDestination::Page { page, view } if page < doc.info.pages.len() => {
-                self.views[index].go_to_dest(page, view, &doc.info);
+            pdfcraft_render::RemoteDestination::Page { page, view: dest } if page < doc.info.pages.len() => {
+                view.go_to_dest(page, dest, &doc.info);
                 None
             }
             pdfcraft_render::RemoteDestination::Page { .. } => Some("The linked PDF opened, but its page destination was out of range."),
