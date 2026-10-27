@@ -391,7 +391,7 @@ impl PdfCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work), |s, e| s.result = Some(Err(e)));
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -448,7 +448,7 @@ impl PdfCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
+            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work), |s, e| s.message = Some(e));
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -487,8 +487,9 @@ fn recognize_files(
                 }
                 BatchProgress::file_done(p);
                 let saved = r.and_then(|r| {
+                    // A name the folder already has is kept; the new file gets a number (#1795).
                     #[cfg(not(target_arch = "wasm32"))]
-                    crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
+                    pdfcraft_engine::batch::publish(&dir.join(file_name(&name)), &r.bytes)?;
                     #[cfg(target_arch = "wasm32")]
                     crate::editing::download(&name, &r.bytes)?;
                     Ok(r.words())
@@ -705,6 +706,23 @@ impl PdfCraftApp {
 }
 
 /// "Recognize text failed: {e}", in the current language.
+/// No worker thread: end the run with the failure, written into its progress by `report`,
+/// instead of waiting for a result that never comes and refusing every later run (#1819).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn unstarted<P, T>(p: &Mutex<P>, spawned: std::io::Result<T>, report: impl FnOnce(&mut P, String)) {
+    if let Err(e) = spawned
+        && let Ok(mut s) = p.lock()
+    {
+        report(&mut s, failed(&e.to_string()));
+    }
+}
+
+/// The last part of a file's name, so a name with folders in it still lands in the chosen folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn file_name(name: &str) -> &std::ffi::OsStr {
+    std::path::Path::new(name).file_name().unwrap_or(std::ffi::OsStr::new("document.pdf"))
+}
+
 fn failed(e: &str) -> String {
     crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", tl!("Recognize text")), ("e", e)])
 }
@@ -735,6 +753,45 @@ mod tests {
         app.open_bytes("doc.pdf", None, pdf).unwrap();
         app.quick_tool = QuickTool::EditText;
         app
+    }
+
+    /// #1819: a recognition whose worker can't start ends with the reason, so the next one isn't
+    /// refused as already running.
+    #[test]
+    fn a_recognition_whose_worker_cannot_start_ends() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = app_with(scan());
+        let doc = app.active_ids().unwrap().1;
+        let progress = Arc::new(Mutex::new(OcrProgress::default()));
+        unstarted(&progress, Ok(()), |s: &mut OcrProgress, e| s.result = Some(Err(e)));
+        assert!(progress.lock().unwrap().result.is_none());
+        unstarted::<_, ()>(&progress, Err(std::io::Error::other("no threads left")), |s, e| s.result = Some(Err(e)));
+        app.ocr_run = Some(OcrRun { doc, progress, automatic: None });
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run ended");
+        assert_eq!(app.toast.clone().unwrap().0, "Recognize text failed: no threads left");
+        let batch = Arc::new(Mutex::new(BatchProgress::default()));
+        unstarted::<_, ()>(&batch, Err(std::io::Error::other("no threads left")), |s, e| s.message = Some(e));
+        app.ocr_batch = Some(batch);
+        app.poll_ocr();
+        assert!(app.ocr_batch.is_none(), "the batch ended");
+    }
+
+    /// #1795: a searchable copy never replaces a file the folder already has, nor leaves it.
+    #[test]
+    fn recognized_files_keep_the_files_already_in_the_folder() {
+        if !pdfcraft_engine::ocr::available() {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("scan.pdf"), b"keep me").unwrap();
+        let p = Mutex::new(BatchProgress::default());
+        let summary = recognize_files(vec![("scan.pdf".into(), scan()), ("../up.pdf".into(), scan())], &OcrSettings::default(), &p, dir.path());
+        assert!(summary.ends_with("in 2 files"), "{summary}");
+        assert_eq!(std::fs::read(dir.path().join("scan.pdf")).unwrap(), b"keep me");
+        assert!(dir.path().join("scan (2).pdf").exists() && dir.path().join("up.pdf").exists());
     }
 
     fn found(app: &mut PdfCraftApp) -> Option<usize> {

@@ -12,7 +12,7 @@ use egui::{Align, Layout, RichText};
 use pdfcraft_engine::batch::{self, Discovery, Recipe, StepLog};
 use pdfcraft_engine::ocr::OcrSettings;
 
-use crate::ocr_ui::BatchProgress;
+use crate::ocr_ui::{BatchProgress, unstarted};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
@@ -303,20 +303,10 @@ impl PdfCraftApp {
         if self.run_inline {
             work();
         } else {
-            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr-batch".into()).spawn(work));
+            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr-batch".into()).spawn(work), |s, e| s.message = Some(e));
         }
         self.ocr_batch = Some(progress);
         self.poll_ocr();
-    }
-}
-
-/// No worker thread: end the run with the failure instead of waiting for a summary that never
-/// comes (which would also refuse every later run as already running).
-fn unstarted<T>(p: &Mutex<BatchProgress>, spawned: std::io::Result<T>) {
-    if let Err(e) = spawned
-        && let Ok(mut s) = p.lock()
-    {
-        s.message = Some(failed(&e.to_string()));
     }
 }
 
@@ -506,9 +496,9 @@ mod tests {
     fn a_worker_that_cannot_start_ends_the_run() {
         crate::i18n::set_current(crate::i18n::Lang::EN);
         let p = Mutex::new(BatchProgress::default());
-        unstarted(&p, Ok(()));
+        unstarted(&p, Ok(()), |s: &mut BatchProgress, e| s.message = Some(e));
         assert!(p.lock().unwrap().message.is_none());
-        unstarted::<()>(&p, Err(std::io::Error::other("no threads left")));
+        unstarted::<_, ()>(&p, Err(std::io::Error::other("no threads left")), |s, e| s.message = Some(e));
         assert_eq!(p.lock().unwrap().message.as_deref(), Some("Recognize text failed: no threads left"));
     }
 
