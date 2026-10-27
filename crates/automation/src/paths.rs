@@ -1,4 +1,4 @@
-use super::error::{Result, failed};
+use super::error::{Result, ToolError, failed};
 use super::{Automation, Path, PathBuf, StagingName, file_access, foreign_share, staging_suffixes};
 
 impl Automation {
@@ -143,6 +143,19 @@ pub(crate) fn read_input_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
 
 pub(crate) fn read_input(path: &Path) -> Result<Vec<u8>> {
     read_input_bytes(path).map_err(|e| failed(format!("{}: {e}", path.display())))
+}
+
+/// A font file, read no further than the 16 MiB a font may be (`embedding::validate`), so a
+/// larger file is refused without being read whole.
+pub(crate) fn read_font_input(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).map_err(failed)?;
+    let mut bytes = Vec::new();
+    file.take((16 << 20) + 1).read_to_end(&mut bytes).map_err(failed)?;
+    if bytes.len() > 16 << 20 {
+        return Err(ToolError::InvalidArgs("font input exceeds 16 MiB".into()));
+    }
+    Ok(bytes)
 }
 
 /// Write and sync a temporary file in the same directory, then rename over the target.
