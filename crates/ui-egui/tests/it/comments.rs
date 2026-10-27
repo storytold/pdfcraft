@@ -2657,3 +2657,71 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+/// #4825: A comment or text box placed near the edge of a page can have its resize handles
+/// extend slightly outside the page boundary. Dragging an off-page handle must be recognized,
+/// entering `Gesture::Resize` and updating the comment's size, while starting a new drawing off-page remains blocked.
+#[test]
+fn off_page_resize_handle_is_selectable_and_resizes() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape};
+    use pdfcraft_ui_egui::comments::Gesture;
+    let mut h = harness(|app| app.set_option("quick", "select").unwrap());
+    let shape = Shape::TextBox { rect: [0.0, 50.0, 100.0, 150.0], font_size: 12.0 };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "Edge box".into(), author: "Tester".into() }));
+    h.run_steps(2);
+    let c = comments(&h);
+    // Select the comment so its resize handles appear.
+    let idx = c[0].index;
+    h.state_mut().views[0].comments.selected = Some((0, idx));
+    h.run_steps(2);
+
+    let page_rect = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    // The comment's left edge is at x = 0.0, which corresponds to page_rect.left().
+    // The left-middle handle (-1, 0) is centered at x = page_rect.left().
+    // Position the pointer 3 pixels to the left of the page (outside page_rect, but on the handle).
+    let handle_y = page_rect.top() + 0.5 * page_rect.height();
+    let off_page_from = pos2(page_rect.left() - 3.0, handle_y);
+    assert!(!page_rect.contains(off_page_from), "start point is outside the page bounds");
+
+    // Begin dragging the off-page handle to the right.
+    let to = pos2(page_rect.left() + 30.0, handle_y);
+    h.hover_at(off_page_from);
+    h.run_steps(1);
+    h.drag_at(off_page_from);
+    h.run_steps(1);
+    h.hover_at(off_page_from + (to - off_page_from) * 0.25);
+    h.run_steps(1);
+
+    // Verify that the resize gesture is actively recognized even though the press was off-page.
+    assert!(matches!(h.state().views[0].comments.gesture, Some(Gesture::Resize { .. })), "dragging an off-page handle starts a resize gesture");
+
+    for k in 2..=4 {
+        h.hover_at(off_page_from + (to - off_page_from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+
+    // The comment must have been resized and registered in undo history.
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    let after_rect = c[0].rect;
+    assert!(after_rect[0] > 0.0, "left edge moved inward: {after_rect:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"));
+
+    // Verify that drawing a new shape starting off-page does not begin a drag or create a comment.
+    let mut h_draw = harness(|app| app.set_option("quick", "square").unwrap());
+    let page_rect_draw = h_draw.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let off_page_draw = pos2(page_rect_draw.left() - 4.0, page_rect_draw.top() + 50.0);
+    h_draw.hover_at(off_page_draw);
+    h_draw.run_steps(1);
+    h_draw.drag_at(off_page_draw);
+    h_draw.run_steps(1);
+    h_draw.hover_at(pos2(page_rect_draw.left() + 40.0, page_rect_draw.top() + 50.0));
+    h_draw.run_steps(1);
+    assert!(h_draw.state().views[0].comments.gesture.is_none(), "off-page drag does not start a new drawing");
+    h_draw.drop_at(pos2(page_rect_draw.left() + 40.0, page_rect_draw.top() + 50.0));
+    h_draw.run_steps(2);
+    assert_eq!(comments(&h_draw).len(), 0, "no comment created from off-page press");
+}

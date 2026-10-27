@@ -12,6 +12,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
+    let handle_pressed = origin.is_some_and(|o| page_rect.expand(12.0).contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
     let fill_grab = fill_grabs(cx, view);
     let draw_grab = draw_grabs(cx, view);
@@ -34,7 +35,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     match cx.tool {
         // The shape just drawn is selected with its handles showing: they resize it without a
         // trip to the Select tool (#2338). Anywhere else the tool keeps drawing.
-        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, handle_pressed),
         QuickTool::Comment(tool) if tool.draws() => {
             if !cx.allowed {
                 return false;
@@ -272,8 +273,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             true
         }
-        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
-        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, handle_pressed),
+        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, handle_pressed),
         _ => false,
     }
 }
@@ -327,9 +328,9 @@ fn grabs(cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) ->
 }
 
 /// Where a gesture on this page is decided: the press while the button is down, otherwise the
-/// pointer (egui clears the press origin on release). `None` off the page.
+/// pointer (egui clears the press origin on release). `None` off the page or beyond handle reach.
 fn press_point(cx: &PageCx<'_>) -> Option<Pos2> {
-    (if cx.ptr.any_down { cx.ptr.origin } else { cx.ptr.pos }).filter(|p| cx.xf.rect.contains(*p))
+    (if cx.ptr.any_down { cx.ptr.origin } else { cx.ptr.pos }).filter(|p| cx.xf.rect.expand(12.0).contains(*p))
 }
 
 /// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
@@ -446,7 +447,7 @@ fn select_input(
         }
     }
     // (egui clears the press origin on release, so clicks are located by the pointer.)
-    let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
+    let on_page = pointer.is_some_and(|p| cx.xf.rect.expand(12.0).contains(p));
     if resp.clicked() && on_page {
         let follow_link = cx.tool == QuickTool::Select
             && !consumed
@@ -454,7 +455,8 @@ fn select_input(
             && !resp.double_clicked()
             && pointer
                 .is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p)));
-        match pointer.and_then(|p| cx.hit(p)) {
+        let handle_hit = selected.filter(|_| pointer.is_some_and(|p| handle_at(p).is_some() || point_at(p).is_some()));
+        match handle_hit.or_else(|| pointer.and_then(|p| cx.hit(p))) {
             Some(a) if a.subtype == "Highlight" && follow_link => {
                 // A plain click follows the link beneath text highlighting. Keep other
                 // annotations and active gestures in control of their own input.
