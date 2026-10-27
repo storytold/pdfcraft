@@ -12,6 +12,7 @@ fn read_grid_file((name, source): GridFile) -> Result<(String, Vec<u8>), (String
 }
 
 impl PdfCraftApp {
+    /// Open a file dropped onto the application window outside of special drop targets.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_dropped(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
         if let Some(clean_path) = crate::workflows::files::clean_dropped_path(f.path()) {
