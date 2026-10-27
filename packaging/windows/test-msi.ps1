@@ -288,13 +288,16 @@ $modelsDir = Read-Row 'SELECT `Directory_Parent`, `DefaultDir` FROM `Directory` 
 Assert-Equal $modelsDir[0] 'INSTALLFOLDER' 'OCR models folder parent'
 # DefaultDir is `models`, or `SHORT|models` with a generated 8.3 name.
 if ($modelsDir[1] -notmatch '(^|\|)models$') { throw "OCR models folder name: '$($modelsDir[1])'" }
-$modelFiles = 0
+$modelFiles = @()
 $view = $Database.OpenView('SELECT `File`.`FileName` FROM `File`, `Component` WHERE `File`.`Component_` = `Component`.`Component` AND `Component`.`Directory_` = ''ModelsFolder''')
 try {
   [void] $view.Execute()
-  while ($record = $view.Fetch()) { if ($record.StringData(1) -match '\.rten$') { $modelFiles++ } }
+  # FileName can contain a generated 8.3 name before the long name: SHORT|long.
+  while ($record = $view.Fetch()) { $modelFiles += ($record.StringData(1) -split '\|')[-1] }
 } finally { [void] $view.Close() }
-if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
+foreach ($model in @('text-detection.onnx', 'text-recognition.onnx')) {
+  Assert-Equal (@($modelFiles | Where-Object { $_ -ceq $model }).Count) 1 "OCR model $model in models\"
+}
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)

@@ -56,13 +56,28 @@ fn tree_entries(doc: &Document, node: &Object) -> Vec<(Vec<u8>, Object)> {
     out
 }
 
+/// Whether an action's subtype is local GoTo, following at most 64 indirect references.
+/// Cycles, excessive chains and non-name values cannot retain local named destinations.
+fn is_local_go_to(doc: &Document, action: &Dict) -> bool {
+    let Some(kind) = action.get(b"S") else { return false };
+    let mut kind = std::sync::Arc::new(kind.clone());
+    let mut seen = HashSet::new();
+    while let Object::Ref(reference) = &*kind {
+        if seen.len() == 64 || !seen.insert(*reference) {
+            return false;
+        }
+        kind = doc.get(*reference);
+    }
+    kind.as_name() == Some(b"GoTo".as_slice())
+}
+
 /// The destination of a link, bookmark or action dictionary: `/Dest`, or a GoTo's `/D`.
 fn destination(doc: &Document, d: &Dict) -> Option<Object> {
     if let Some(dest) = d.get(b"Dest") {
         return Some(doc.resolve(dest).as_ref().clone());
     }
     let a = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())?;
-    (a.name(b"S") == Some(b"GoTo")).then(|| a.get(b"D").map(|x| doc.resolve(x).as_ref().clone())).flatten()
+    is_local_go_to(doc, &a).then(|| a.get(b"D").map(|x| doc.resolve(x).as_ref().clone())).flatten()
 }
 
 /// The name a destination refers to, if it is a named one.
@@ -145,6 +160,14 @@ pub(crate) fn remove_invalid(doc: &mut Document, pages: &[ObjRef]) -> Result<(us
 /// Every named destination some object refers to (links, bookmarks, actions, open action).
 fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
+    // The catalog may name its opening destination directly, without a GoTo action.
+    if let Some(name) = doc
+        .root()
+        .and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"OpenAction").cloned()))
+        .and_then(|action| dest_name(doc.resolve(&action).as_ref()))
+    {
+        out.insert(name);
+    }
     let mut visit = |o: &Object| {
         let mut stack = vec![o.clone()];
         while let Some(o) = stack.pop() {
@@ -157,7 +180,7 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
                     if let Some(n) = d.get(b"Dest").and_then(|x| dest_name(doc.resolve(x).as_ref())) {
                         out.insert(n);
                     }
-                    if d.name(b"S") == Some(b"GoTo")
+                    if is_local_go_to(doc, &d)
                         && let Some(n) = d.get(b"D").and_then(|x| dest_name(doc.resolve(x).as_ref()))
                     {
                         out.insert(n);

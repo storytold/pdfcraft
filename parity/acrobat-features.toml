@@ -6544,8 +6544,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -7648,8 +7648,8 @@ milestone = "M11"
 status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::invalid_links_and_unreferenced_destinations_go"]
-notes = "Clean Up: links to missing pages or names are removed; bookmarks keep their place (and children) but lose a broken destination; named destinations nothing refers to (links, bookmarks, actions anywhere) are removed from the name tree and the old /Dests; counts reported"
+evidence = ["crates/optimize/tests/optimize.rs::indirect_go_to_subtypes_keep_navigation_destinations", "crates/optimize/tests/optimize.rs::nonlocal_or_invalid_action_subtypes_do_not_keep_local_destinations", "crates/optimize/tests/optimize.rs::indirect_go_to_subtypes_still_remove_missing_link_and_bookmark_targets", "crates/optimize/tests/optimize.rs::invalid_links_and_unreferenced_destinations_go", "crates/optimize/tests/optimize.rs::named_opening_destinations_survive_optimization", "crates/optimize/tests/optimize.rs::only_local_named_opening_destinations_are_retained"]
+notes = "Clean Up: links to missing pages or names are removed; bookmarks keep their place (and children) but lose a broken destination; named destinations nothing refers to (links, bookmarks, actions anywhere) are removed from the name tree and the old /Dests; counts reported. Names used by the catalog opening view are retained through optimize/save/reopen, including direct and indirect name/string OpenAction values. Remote GoToR/GoToE targets do not pin local destinations. A bare name or string under a private nested OpenAction key does not count as the catalog opening view. Existing conservative scanning still retains names referenced by Dest entries or recognized local GoTo D entries anywhere, including private extension dictionaries. Local GoTo subtypes follow up to 64 indirect references with cycle detection for use tracking and invalid-link/bookmark cleanup; remote actions and malformed or excessive subtype chains do not pin local names. Viewer action-resolution limits remain unchanged. This cleanup does not repair an already-missing opening destination."
 
 [[feature]]
 id = "optimize.optimize-content"
