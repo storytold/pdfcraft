@@ -820,7 +820,11 @@ impl PdfCraftApp {
     pub fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        let dirty = if v.imported_image { doc.dirty && doc.can_undo().is_some() } else { doc.dirty };
+        let dirty = if let Some(baseline) = &v.imported_image_baseline {
+            !std::sync::Arc::ptr_eq(&doc.bytes, baseline) && doc.bytes.as_slice() != baseline.as_slice()
+        } else {
+            doc.dirty
+        };
         dirty
             || v.pending_edit.is_some()
             || v.content.blocked().is_some()

@@ -124,7 +124,7 @@ impl PdfCraftApp {
         let info = &self.session.get(id).ok_or("the new document could not be opened")?.info;
         let mut view = crate::DocView::new(id, info, self.view_defaults);
         if is_image {
-            view.imported_image = true;
+            view.imported_image_baseline = self.session.get(id).map(|d| d.bytes.clone());
         }
         if self.full_screen {
             view.enter_presentation();

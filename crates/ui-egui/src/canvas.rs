@@ -467,9 +467,8 @@ pub struct DocView {
     pub close_requested: bool,
     /// A historical snapshot of another document (see [`Snapshot`]): `None` for real documents.
     pub snapshot: Option<Snapshot>,
-    /// Whether this tab was converted from an imported image and has received no edits yet.
-    /// Unmodified imported images close without a save prompt.
-    pub(crate) imported_image: bool,
+    /// Baseline bytes of an imported image document used to detect user edits independently of undo history (#4942).
+    pub(crate) imported_image_baseline: Option<std::sync::Arc<Vec<u8>>>,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
@@ -896,7 +895,7 @@ impl DocView {
             disk_changed: false,
             close_requested: false,
             snapshot: None,
-            imported_image: false,
+            imported_image_baseline: None,
             cover: false,
             back: Vec::new(),
             forward: Vec::new(),

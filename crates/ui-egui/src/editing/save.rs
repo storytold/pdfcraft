@@ -96,6 +96,7 @@ impl PdfCraftApp {
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
+                        view.imported_image_baseline = None;
                     }
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
@@ -198,7 +199,7 @@ impl PdfCraftApp {
                     view.document_changed(&doc.info);
                     // Saving over a version that changed on disk keeps this one: nothing to ask.
                     view.disk_changed = false;
-                    view.imported_image = false;
+                    view.imported_image_baseline = None;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]
