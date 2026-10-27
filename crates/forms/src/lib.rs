@@ -104,12 +104,14 @@ pub enum FieldDisplay {
 }
 
 impl FieldDisplay {
-    /// The display a widget's `/F` flags give it: Hidden first, then NoView, then no Print flag.
+    /// The display a widget's `/F` flags give it: Hidden first, then NoView (printable only with
+    /// the Print flag; without it the widget neither shows nor prints, which is Hidden), then no
+    /// Print flag.
     pub fn from_flags(flags: i64) -> Self {
         if flags & 2 != 0 {
             Self::Hidden
         } else if flags & 32 != 0 {
-            Self::HiddenPrintable
+            if flags & 4 != 0 { Self::HiddenPrintable } else { Self::Hidden }
         } else if flags & 4 == 0 {
             Self::VisibleNoPrint
         } else {
