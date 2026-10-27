@@ -2556,7 +2556,17 @@ fn appearance_label_outside_helvetica_is_refused_beside_an_embedded_font_name() 
 /// the files. An interface then has these to translate and only these.
 #[test]
 fn wordings_are_complete() {
-    let source = include_str!("../../src/pdf.rs");
+    // `pdf.rs` and the modules it was split into, read as one text.
+    let source = [
+        include_str!("../../src/pdf.rs"),
+        include_str!("../../src/pdf/changes.rs"),
+        include_str!("../../src/pdf/listing.rs"),
+        include_str!("../../src/pdf/signing.rs"),
+        include_str!("../../src/pdf/types.rs"),
+        include_str!("../../src/pdf/validate.rs"),
+    ]
+    .concat();
+    let source = source.as_str();
     // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
     // what a certificate does not allow.
     let elsewhere = [
