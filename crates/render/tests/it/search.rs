@@ -9,25 +9,63 @@ fn page(parts: &[&str]) -> PageText {
     }
 }
 
-// The original straightforward search is an independent oracle for valid page metadata.
-fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
-    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
-    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
-    if needle.is_empty() || limit == 0 {
-        return Vec::new();
-    }
+fn is_hyphen(c: char) -> bool {
+    matches!(c, '-' | '\u{00AD}' | '\u{2010}' | '\u{2011}')
+}
+
+fn collect_ref_chars(page: &PageText, fold: &impl Fn(&str) -> String, dehyphenate: bool) -> (Vec<(char, usize)>, bool) {
     let mut chars = Vec::new();
+    let mut has_hyphen_break = false;
     for (i, glyph) in page.glyphs.iter().enumerate() {
-        if i > 0 && (page.space_before[i] || page.line_of[i] != page.line_of[i - 1]) && chars.last().is_some_and(|&(c, _)| c != ' ') {
+        let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
+        let is_hyphen_break = line_break && {
+            let prev_idx = i.saturating_sub(1);
+            let prev_text = page.glyphs.get(prev_idx).map_or("", |g| g.text.as_str());
+            let prev_ends_hyphen = prev_text.chars().last().is_some_and(is_hyphen);
+            let prev_has_alpha = prev_text.chars().rev().nth(1).is_some_and(|c| c.is_alphanumeric())
+                || (prev_text.chars().count() <= 1
+                    && prev_idx
+                        .checked_sub(1)
+                        .and_then(|p2| page.glyphs.get(p2))
+                        .is_some_and(|g| g.text.chars().last().is_some_and(|c| c.is_alphanumeric())));
+            let next_has_alpha = glyph.text.chars().next().is_some_and(|c| c.is_alphanumeric());
+            prev_ends_hyphen && prev_has_alpha && next_has_alpha
+        };
+        if is_hyphen_break {
+            has_hyphen_break = true;
+        }
+        let gap = page.space_before.get(i).copied().unwrap_or(false) || (line_break && !is_hyphen_break);
+        if i > 0 && gap && chars.last().is_some_and(|&(c, _)| c != ' ') {
             chars.push((' ', i));
         }
-        for c in fold(&glyph.text).chars() {
+        let folded = fold(&glyph.text);
+        let char_count = folded.chars().count();
+        for (ci, c) in folded.chars().enumerate() {
+            if dehyphenate && ci + 1 == char_count && is_hyphen(c) {
+                let next_is_break = page.line_of.get(i).zip(page.line_of.get(i.saturating_add(1))).is_some_and(|(a, b)| a != b);
+                if next_is_break {
+                    let next_has_alpha =
+                        page.glyphs.get(i.saturating_add(1)).is_some_and(|g| g.text.chars().next().is_some_and(|c| c.is_alphanumeric()));
+                    let has_alpha_before = ci > 0
+                        || i.checked_sub(1)
+                            .and_then(|p| page.glyphs.get(p))
+                            .is_some_and(|g| g.text.chars().last().is_some_and(|c| c.is_alphanumeric()));
+                    if next_has_alpha && has_alpha_before {
+                        has_hyphen_break = true;
+                        continue;
+                    }
+                }
+            }
             let c = if c.is_whitespace() { ' ' } else { c };
             if c != ' ' || chars.last().is_none_or(|&(last, _)| last != ' ') {
                 chars.push((c, i));
             }
         }
     }
+    (chars, has_hyphen_break)
+}
+
+fn scan(chars: &[(char, usize)], needle: &[char], whole: bool, limit: usize) -> Vec<Range<usize>> {
     let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, _)| c.is_alphanumeric());
     let mut hits = Vec::new();
     let mut start = 0;
@@ -44,6 +82,61 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
         }
     }
     hits
+}
+
+// The original straightforward search is an independent oracle for valid page metadata.
+fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
+    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
+    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    if needle.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let (chars_dehyphenated, has_hyphen_break) = collect_ref_chars(page, &fold, true);
+    let mut hits = scan(&chars_dehyphenated, &needle, whole, limit);
+    if hits.is_empty() && has_hyphen_break {
+        let (chars_preserved, _) = collect_ref_chars(page, &fold, false);
+        hits = scan(&chars_preserved, &needle, whole, limit);
+    }
+    hits
+}
+
+#[test]
+fn search_matches_words_hyphenated_across_line_breaks() {
+    let text = PageText {
+        glyphs: vec![
+            TextGlyph { text: "docu-".into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] },
+            TextGlyph { text: "ment".into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] },
+        ],
+        line_of: vec![0, 1],
+        space_before: vec![false, false],
+    };
+    assert_eq!(text.find("document"), vec![0..2]);
+    assert_eq!(text.find_opts("document", false, true), vec![0..2]);
+    assert_eq!(text.find("docu-ment"), vec![0..2]);
+
+    let text2 = PageText {
+        glyphs: ["d", "o", "c", "u", "-", "m", "e", "n", "t"]
+            .iter()
+            .map(|t| TextGlyph { text: (*t).into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] })
+            .collect(),
+        line_of: vec![0, 0, 0, 0, 0, 1, 1, 1, 1],
+        space_before: vec![false; 9],
+    };
+    assert_eq!(text2.find("document"), vec![0..9]);
+    assert_eq!(text2.find_opts("document", false, true), vec![0..9]);
+    assert_eq!(text2.find("docu-ment"), vec![0..9]);
+
+    let text3 = PageText {
+        glyphs: ["d", "o", "c", "u", "\u{2010}", "m", "e", "n", "t"]
+            .iter()
+            .map(|t| TextGlyph { text: (*t).into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] })
+            .collect(),
+        line_of: vec![0, 0, 0, 0, 0, 1, 1, 1, 1],
+        space_before: vec![false; 9],
+    };
+    assert_eq!(text3.find("document"), vec![0..9]);
+    assert_eq!(text3.find_opts("document", false, true), vec![0..9]);
+    assert_eq!(text3.find("docu\u{2010}ment"), vec![0..9]);
 }
 
 #[test]
