@@ -2063,11 +2063,10 @@ impl Document {
             xref_marks.push(p);
             mark_from = p + 1;
         }
-        for (i, &(num, offset, generation, body)) in headers.iter().enumerate() {
+        for &(num, offset, generation, body) in &headers {
             entries.insert(num, XrefEntry::InFile { offset, generation });
             objstms.push(num);
-            let end = headers.get(i + 1).and_then(|h| usize::try_from(h.1).ok()).unwrap_or(data.len());
-            if may_be_object_stream(&data, body, end) {
+            if may_be_object_stream(&data, body) {
                 candidates.insert(num);
             } else {
                 candidates.remove(&num);
@@ -2185,22 +2184,107 @@ fn shifted_subsection_end(data: &[u8], at: usize) -> Option<u32> {
     }
 }
 
-/// Whether the object whose body is `data[from..to]` could be an object stream: its dictionary
-/// holds `ObjStm`, or a `#` (a name may hide its letters as `#xx`, as in `/Obj#53tm`). A stream's
-/// data is not searched: it ends the dictionary, at the `stream` keyword after `>>`.
-fn may_be_object_stream(data: &[u8], from: usize, to: usize) -> bool {
-    let Some(body) = data.get(from..to.min(data.len())) else { return false };
-    let mut dict = body;
-    let mut at = 0;
-    while let Some(p) = find(body, b"stream", at, body.len()) {
-        at = p + 6;
-        let after_dict = body[..p].trim_ascii_end().ends_with(b">>");
-        if after_dict && matches!(body.get(at), Some(b'\r' | b'\n')) {
-            dict = &body[..p];
-            break;
+/// Longest dictionary [`may_be_object_stream`] reads before it gives up and says "maybe".
+const DICTIONARY_SCAN_LIMIT: usize = 1 << 20;
+
+/// Where the dictionary that starts at `data[from..]` (after `N G obj`) ends, reading it as the
+/// parser does: strings, hex strings, comments, names and nested dictionaries. `Some(None)`: the
+/// object is not a dictionary, so it is never a stream. `None`: the end is not certain (no end
+/// within the limit, a hex string with a bad digit, a `>>` inside an array); the caller must
+/// then treat the object as a possible object stream.
+fn dictionary_end(data: &[u8], from: usize) -> Option<Option<usize>> {
+    let limit = data.len().min(from.saturating_add(DICTIONARY_SCAN_LIMIT));
+    let mut i = from;
+    while i < limit && (is_whitespace(data[i]) || data[i] == b'%') {
+        if data[i] == b'%' {
+            while i < limit && !matches!(data[i], b'\n' | b'\r') {
+                i += 1;
+            }
+        } else {
+            i += 1;
         }
     }
-    dict.contains(&b'#') || find(dict, b"ObjStm", 0, dict.len()).is_some()
+    if data.get(i..i + 2) != Some(b"<<") {
+        return if i < limit { Some(None) } else { None };
+    }
+    i += 2;
+    let (mut dicts, mut arrays) = (1usize, 0usize);
+    while i < limit {
+        match data[i] {
+            b'(' => {
+                let mut depth = 1usize;
+                i += 1;
+                while i < limit && depth > 0 {
+                    match data[i] {
+                        b'\\' => i += 1,
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                if depth > 0 {
+                    return None;
+                }
+            }
+            b'<' if data.get(i + 1) == Some(&b'<') => {
+                dicts += 1;
+                i += 2;
+            }
+            b'<' => {
+                i += 1;
+                while i < limit && data[i] != b'>' {
+                    if !data[i].is_ascii_hexdigit() && !is_whitespace(data[i]) {
+                        return None;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'>' if data.get(i + 1) == Some(&b'>') => {
+                if arrays > 0 {
+                    return None;
+                }
+                dicts -= 1;
+                i += 2;
+                if dicts == 0 {
+                    return Some(Some(i));
+                }
+            }
+            b'%' => {
+                while i < limit && !matches!(data[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+            b'[' => {
+                arrays += 1;
+                i += 1;
+            }
+            b']' => {
+                arrays = arrays.saturating_sub(1);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Whether the object whose body starts at `data[from..]` could be an object stream: its
+/// dictionary holds `ObjStm`, or a `#` (a name may hide its letters as `#xx`, as in
+/// `/Obj#53tm`). Only the dictionary is searched, not the data of a stream. Where the
+/// dictionary ends is read by [`dictionary_end`], so text inside a string (an object header, a
+/// `stream` keyword) is not taken for syntax; when that is not certain the object counts as a
+/// candidate, so a doubtful object is parsed as it always was.
+fn may_be_object_stream(data: &[u8], from: usize) -> bool {
+    match dictionary_end(data, from) {
+        Some(None) => false,
+        None => true,
+        Some(Some(end)) => {
+            let dict = &data[from..end];
+            dict.contains(&b'#') || find(dict, b"ObjStm", 0, dict.len()).is_some()
+        }
+    }
 }
 
 /// Every `N G obj` header in `data`, in file order, as (number, offset, generation, position
@@ -3584,6 +3668,61 @@ endobj
     /// cross-reference data, as in #2365), is rebuilt from its object headers. The rebuild used
     /// to look only for the `trailer` keyword, so /Info and /ID were lost, and a full save after
     /// editing one Info field dropped every other.
+    /// Whether parsing `body` as an object gives a stream whose /Type is /ObjStm.
+    fn parses_as_object_stream(file: &[u8]) -> bool {
+        matches!(parse_indirect(file, 0, &|_| None), Ok((_, Object::Stream(s))) if s.dict.name(b"Type") == Some(b"ObjStm"))
+    }
+
+    #[test]
+    fn the_object_stream_pre_check_never_rejects_what_parses_as_one() {
+        // Two inputs from review: header-shaped text, and `>>` + `stream` + newline, inside a
+        // string that comes before the /Type.
+        for dict in [
+            "<< /Note (9 0 obj\n) /Type /ObjStm /N 0 /First 0 >>",
+            "<< /Note (>>stream\n) /Type /ObjStm /N 0 /First 0 >>",
+            "<< /Note (a (nested\n9 0 obj\nstream) \\) )) /Type /ObjStm >>",
+            "<< /Note <3e3e> /Other << /A (>>\nstream\n) >> /Type /ObjStm >>",
+        ] {
+            let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
+            assert!(parses_as_object_stream(&file), "test input must be an object stream: {dict}");
+            assert!(may_be_object_stream(&file, 7), "{dict}");
+        }
+        // Ordinary streams stay out; their data is never read.
+        let plain = b"1 0 obj\n<< /Length 9 >>\nstream\nObjStm # \nendstream\nendobj\n";
+        assert!(!may_be_object_stream(plain, 7));
+        assert!(!may_be_object_stream(b"1 0 obj\n[ /ObjStm ]\nendobj\n", 7));
+        // Unterminated: not certain, so a candidate.
+        assert!(may_be_object_stream(b"1 0 obj\n<< /Note (open ", 7));
+        // Random dictionaries built from tricky pieces: whatever parses as an object stream is
+        // a candidate.
+        let pieces: [&str; 22] = [
+            "/Type /ObjStm", "/Type/ObjStm", "/Type /Obj#53tm", "/T#79pe /ObjStm", "(", ")", "\\", "(>>stream\n)", "(9 0 obj\n)", "<3e3e>", "<", ">", ">>",
+            "<<", "[", "]", "% c\n", "% >>\n", "/N 0", " ", "\n", "<zz>",
+        ];
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut hits = 0;
+        for _ in 0..200_000 {
+            let mut dict = String::from("<<");
+            for _ in 0..(next() % 9) {
+                dict.push_str(pieces[(next() % pieces.len() as u64) as usize]);
+                dict.push(' ');
+            }
+            dict.push_str(if next() % 8 == 0 { "" } else { ">>" });
+            let file = format!("1 0 obj\n{dict}\nstream\nxx\nendstream\nendobj\n").into_bytes();
+            if parses_as_object_stream(&file) {
+                hits += 1;
+                assert!(may_be_object_stream(&file, 7), "rejected an object stream: {dict:?}");
+            }
+        }
+        assert!(hits > 1000, "the generator must produce object streams ({hits})");
+    }
+
     #[test]
     fn reconstruction_takes_the_trailer_from_a_cross_reference_stream() {
         let table = build(
