@@ -180,7 +180,7 @@ impl Default for Settings {
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 21] = [
+pub const PAPERS: [(&str, (f64, f64)); 22] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
@@ -202,6 +202,7 @@ pub const PAPERS: [(&str, (f64, f64)); 21] = [
     ("A0", (2383.94, 3370.39)),
     ("4 x 6 in label (101.6 x 152.4 mm)", (288.0, 432.0)),
     ("US #10 Envelope (4.125 x 9.5 in)", (297.0, 684.0)),
+    ("Folio (8.5 x 13 in)", (612.0, 936.0)),
 ];
 
 /// `PAPERS` index of the 4 × 6 in shipping label.
@@ -236,6 +237,7 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
         "A1" => "iso_a1_594x841mm",
         "A0" => "iso_a0_841x1189mm",
         "US #10 Envelope (4.125 x 9.5 in)" => "Env10",
+        "Folio (8.5 x 13 in)" => "na_foolscap_8.5x13in",
         _ if index == LABEL_PAPER => "w288h432",
         // A size added to PAPERS without a name here: its tests fail, and meanwhile the queue's
         // paper stands, as it did for every size before #1583.

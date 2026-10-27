@@ -6544,8 +6544,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -8072,8 +8072,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/print/src/tests.rs::us_number_10_envelope_is_offered_and_fed_by_name", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
-notes = "fit, actual size, shrink oversized, custom %; ARCH A/B/C/D/E1/E, ANSI C/D/E, ISO A0/A1/A2, A6 and US #10 envelope presets; Match page at 100% matches the current page to a standard sheet. PDF scale shows the previewed source-to-sheet transform, not calibrated physical output; driver substitution/scaling remains possible"
+evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/print/src/tests.rs::us_number_10_envelope_is_offered_and_fed_by_name", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent", "crates/print/src/tests.rs::folio_paper_keeps_full_scale_and_existing_preset_indices"]
+notes = "fit, actual size, shrink oversized, custom %; ARCH A/B/C/D/E1/E, ANSI C/D/E, ISO A0/A1/A2, A6 and US #10 envelope presets; Match page at 100% matches the current page to a standard sheet. PDF scale shows the previewed source-to-sheet transform, not calibrated physical output; driver substitution/scaling remains possible; Folio (8.5 x 13 in, 612 x 936 pt) is selectable through the shared Paper list and doc_print (#4767), with registered na_foolscap_8.5x13in spooler media and portrait/landscape save coverage; printer media support remains device-dependent"
 
 [[feature]]
 id = "print.paper-source-by-size"
@@ -8144,8 +8144,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent"]
-notes = "auto portrait/landscape"
+evidence = ["crates/print/src/tests.rs::size_modes", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale", "crates/automation/tests/it/automation.rs::architectural_and_iso_papers_through_tools", "crates/ui-egui/tests/it/print.rs::architectural_page_can_be_matched_at_100_percent", "crates/print/src/tests.rs::folio_paper_keeps_full_scale_and_existing_preset_indices"]
+notes = "auto portrait/landscape; Folio (8.5 x 13 in, 612 x 936 pt) is selectable through the shared Paper list and doc_print (#4767), with registered na_foolscap_8.5x13in spooler media and portrait/landscape save coverage; printer media support remains device-dependent"
 
 [[feature]]
 id = "print.comments-and-forms"

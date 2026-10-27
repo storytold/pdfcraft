@@ -70,6 +70,9 @@ grayscale.
 The Paper menu and `doc_print` share Letter, Legal, Tabloid, A3/A4/A5/A6 plus
 ARCH A/B/C/D/E1/E, ANSI C/D/E and ISO A0/A1/A2. ARCH D is 24 × 36 inches;
 ANSI D is 22 × 34 inches. Dimensions follow the [HP DesignJet paper-size table](https://support.hp.com/hr-en/document/bpp01676).
+Folio (8.5 x 13 in) is a 612 x 936 pt preset shared by the Paper menu and `doc_print` (#4767).
+Its CUPS media name is `na_foolscap_8.5x13in`, as registered by [IANA](https://www.iana.org/assignments/ipp-registrations).
+Automation accepts `"Folio"` or the full label, case-insensitively.
 Automation accepts short names such as `"ARCH D"` (case-insensitive) or the full menu label.
 For example, `doc_print` with `paper: "ARCH D"`, `layout: "actual"`,
 `orientation: "auto"` and `path: "plan.pdf"` writes a print-ready PDF at 100%.

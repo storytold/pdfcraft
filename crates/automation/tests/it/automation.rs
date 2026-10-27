@@ -8202,6 +8202,8 @@ fn architectural_and_iso_papers_through_tools() {
         ("A6", 105.0 * mm, 148.0 * mm),
         ("Letter", 612.0, 792.0),
         ("US Legal", 612.0, 1008.0),
+        ("Folio", 612.0, 936.0),
+        ("folio (8.5 x 13 in)", 612.0, 936.0),
         ("Tabloid", 792.0, 1224.0),
         ("US #10 Envelope", 4.125 * 72.0, 9.5 * 72.0),
     ] {

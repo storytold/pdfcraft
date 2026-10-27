@@ -68,6 +68,13 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## Folio print paper
+
+`doc_print` accepts `paper: "Folio"` or `paper: "Folio (8.5 x 13 in)"`, case-insensitively, for an 8.5 x 13-inch sheet (#4767).
+Portrait output is 612 x 936 points; landscape swaps those dimensions.
+`layout: "actual"` preserves the source scale in the print-ready PDF, and printer jobs carry the registered `na_foolscap_8.5x13in` media name.
+Printer support, media substitution and driver scaling still depend on the chosen printer.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:

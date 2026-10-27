@@ -747,6 +747,7 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
             ("A0", "iso_a0_841x1189mm"),
             ("4 x 6 in label (101.6 x 152.4 mm)", "w288h432"),
             ("US #10 Envelope (4.125 x 9.5 in)", "Env10"),
+            ("Folio (8.5 x 13 in)", "na_foolscap_8.5x13in"),
         ]
     );
 }
@@ -761,6 +762,25 @@ fn us_number_10_envelope_is_offered_and_fed_by_name() {
     assert_eq!(cups_media(index), Some("Env10"));
     let s = Settings { pages: vec![0], paper: PAPERS[index].1, layout: Layout::Size(SizeMode::Actual), ..Settings::default() };
     assert_eq!(layout(&[(297.0, 684.0)], &s).unwrap()[0].size, (297.0, 684.0));
+}
+
+/// The 8.5 x 13 in Folio preset keeps its full size and uses the registered Foolscap media.
+#[test]
+fn folio_paper_keeps_full_scale_and_existing_preset_indices() {
+    let index = matching_paper((612.0, 936.0)).unwrap();
+    assert_eq!(PAPERS[index].0, "Folio (8.5 x 13 in)");
+    assert_eq!(matching_paper((936.0, 612.0)), Some(index));
+    assert_eq!(cups_media(index), Some("na_foolscap_8.5x13in"));
+    assert_eq!(media_option(index), Some(("media".into(), "na_foolscap_8.5x13in".into())));
+    assert_eq!(LABEL_PAPER, 19);
+    assert_eq!(PAPERS[19].0, "4 x 6 in label (101.6 x 152.4 mm)");
+    assert_eq!(PAPERS[20].0, "US #10 Envelope (4.125 x 9.5 in)");
+    for size in [(612.0, 936.0), (936.0, 612.0)] {
+        let settings = Settings { pages: vec![0], paper: PAPERS[index].1, layout: Layout::Size(SizeMode::Actual), ..Settings::default() };
+        let sheets = layout(&[size], &settings).unwrap();
+        assert_eq!(sheets[0].size, size);
+        assert_eq!(sheets[0].placed[0].matrix.0, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
 }
 
 #[test]

@@ -272,6 +272,7 @@ mod tests {
         // Short forms find the same paper.
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
+        assert_eq!(job(json!({}), Some("Folio")).options, [media("na_foolscap_8.5x13in")]);
         assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
         assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0).ok().map(|j| j.printer), Some(None));
         assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0).is_err());
