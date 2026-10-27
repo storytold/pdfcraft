@@ -137,6 +137,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             if row(ui, t, "scissors", tl!("Split"), Availability::Ready, false).clicked() {
                 act = Some(Act::View(ViewAction::Split));
             }
+            if row(ui, t, "arrow-up-down", tl!("Reverse pages"), Availability::Ready, false).clicked() {
+                act = Some(Act::Command("page.reverse"));
+            }
         });
         if row(ui, t, "hash", tl!("Bates numbering"), Availability::Ready, false).clicked() {
             act = Some(Act::Command("edit.bates"));

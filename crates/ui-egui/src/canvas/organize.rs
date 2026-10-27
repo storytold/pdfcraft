@@ -392,6 +392,13 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
                         view.pending_action = Some(ViewAction::ReplacePages);
                         ui.close();
                     }
+                    if ui
+                        .add_enabled(editable && (view.selected.len() >= 2 || info.pages.len() >= 2), egui::Button::new(tl!("Reverse pages")))
+                        .clicked()
+                    {
+                        view.pending_action = Some(ViewAction::Command("page.reverse"));
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.add_enabled(editable, egui::Button::new(tl!("Cut"))).clicked() {
                         view.pending_action = Some(ViewAction::CopyPages { cut: true });

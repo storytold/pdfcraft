@@ -2871,8 +2871,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.reverse"]
 tools = ["page_reverse"]
-evidence = ["crates/organize/src/tests.rs::reverse_pages_reorders", "crates/organize/src/tests.rs::cannot_reverse_missing_or_fewer_than_two_pages", "crates/automation/tests/it/automation.rs::reversing_pages_through_tools", "crates/ui-egui/tests/it/editing.rs::reverse_pages_reverses_the_selection_or_else_the_whole_document"]
-notes = "Organize Pages ▸ More ▸ Reverse pages, or the command palette: two or more selected pages swap among their own positions, otherwise the whole document reverses. One undo step. Not yet: an entry in the page thumbnails' right-click menu"
+evidence = ["crates/organize/src/tests.rs::reverse_pages_reorders", "crates/organize/src/tests.rs::cannot_reverse_missing_or_fewer_than_two_pages", "crates/automation/tests/it/automation.rs::reversing_pages_through_tools", "crates/ui-egui/tests/it/editing.rs::reverse_pages_reverses_the_selection_or_else_the_whole_document", "crates/ui-egui/tests/it/editing.rs::reverse_pages_from_thumbnail_context_menu"]
+notes = "Organize pages panel, thumbnails' right-click context menu, Edit ▸ Pages ▸ Reverse pages, or the command palette: two or more selected pages swap among their own positions, otherwise the whole document reverses. Disabled on single-page documents. One undo step."
 
 [[feature]]
 id = "organize.cut-copy-paste-pages"

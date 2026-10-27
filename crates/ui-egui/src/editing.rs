@@ -134,6 +134,9 @@ impl PdfCraftApp {
                     }
                     Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
+                    Edit::ReversePages { ref pages } => {
+                        view.select_pages(pages);
+                    }
                     // A stroke drawn with the pen stays unselected, so the selection box and
                     // author popup don't sit over the next stroke (#429).
                     Edit::AddAnnotation(a)
@@ -276,6 +279,9 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::CameraLevel) => self.camera_level(i),
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
+                self.execute(command);
+            }
+            Some(crate::canvas::ViewAction::Command(command)) => {
                 self.execute(command);
             }
             None => {}
