@@ -672,7 +672,7 @@ fn a_field_can_be_visible_but_not_print() {
     let display_of = |a: &mut Automation, field: &str| -> Option<String> {
         let list = ok(a, "form_fields", json!({ "doc": doc }));
         let f = list["fields"].as_array().unwrap().iter().find(|f| f["name"] == field).unwrap().clone();
-        f["display"].as_str().map(str::to_string)
+        f["field_display"].as_str().map(str::to_string)
     };
     // Both shown and printed to begin with.
     assert_eq!(display_of(&mut a, "submit"), None);
@@ -5199,6 +5199,11 @@ fn form_formats_and_calculations_through_tools() {
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!((total["value"].as_str(), total["display"].as_str()), (Some("59.97"), Some("$59.97")), "{total}");
+    // The form-field display has its own key, so a formatted field keeps both.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "Total", "display": "visible_no_print" }));
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap();
+    assert_eq!((total["display"].as_str(), total["field_display"].as_str()), (Some("$59.97"), Some("visible_no_print")), "{total}");
     assert_eq!(total["calculate"]["notation"], "Price * Qty");
     assert!(page_text(&mut a, doc)[0].contains("$59.97"));
     let err = a.call("form_fill", &json!({ "doc": doc, "values": { "Price": "-5" } })).unwrap_err();

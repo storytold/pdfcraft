@@ -391,7 +391,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "from", "to"],
         )),
-        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags, and display (visible_no_print, hidden or hidden_printable) when the field is not the usual shown-and-printed. A calculated field includes calculate: {op, fields} or {notation} as form_set_props takes them, or {script} for a custom Calculate script (set with form_set_script). Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based).")
+        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags, and field_display (visible_no_print, hidden or hidden_printable) when the field is not the usual shown-and-printed. A calculated field includes calculate: {op, fields} or {notation} as form_set_props takes them, or {script} for a custom Calculate script (set with form_set_script). Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(

@@ -259,11 +259,12 @@ impl Automation {
                 if let Some(t) = &f.tooltip {
                     o.insert("tooltip".into(), json!(t));
                 }
-                // How the field shows and prints, when it is not the usual shown-and-printed.
+                // How the field shows and prints, when it is not the usual shown-and-printed. Its own
+                // key: `display` is the formatted value below.
                 let display = w.map(|w| w.display).unwrap_or_default();
                 if display != pdfcraft_engine::FieldDisplay::Visible {
                     o.insert(
-                        "display".into(),
+                        "field_display".into(),
                         json!(match display {
                             pdfcraft_engine::FieldDisplay::Visible => "visible",
                             pdfcraft_engine::FieldDisplay::Hidden => "hidden",

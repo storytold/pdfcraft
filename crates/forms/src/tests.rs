@@ -5586,4 +5586,7 @@ fn field_display_flags_round_trip_through_every_other_flag() {
     assert_eq!(FieldDisplay::from_flags(0), FieldDisplay::VisibleNoPrint);
     assert_eq!(FieldDisplay::from_flags(2), FieldDisplay::Hidden);
     assert_eq!(FieldDisplay::from_flags(32 | 4), FieldDisplay::HiddenPrintable);
+    // NoView without Print neither shows nor prints: Hidden, not "hidden but printable".
+    assert_eq!(FieldDisplay::from_flags(32), FieldDisplay::Hidden);
+    assert_eq!(FieldDisplay::from_flags(32 | 128), FieldDisplay::Hidden);
 }
