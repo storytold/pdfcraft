@@ -396,22 +396,41 @@ mod tests {
         // discovered file again before `process` reads it or `publish` writes it.
         const RESOLVED_BY_CALLER: &[&str] =
             &["write_atomic", "write_atomic_with", "read_input", "read_input_bytes", "read_review_sidecar", "process", "linked", "walk", "publish"];
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut files = vec![];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| !n.to_string_lossy().starts_with("tests")) {
+                        dirs.push(path);
+                    }
+                } else {
+                    files.push(path);
+                }
+            }
+        }
         let mut offenders = vec![];
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
+        for path in files {
             if path.extension().is_none_or(|e| e != "rs")
                 || path.file_name().is_some_and(|n| n == "file_access.rs" || n.to_string_lossy().starts_with("tests"))
             {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            // Test modules (which build their own fixtures) come last in each file.
-            let code = text.split("\n#[cfg(test)]").next().unwrap_or("");
+            // Inline test modules (which build their own fixtures) come last in each file. A
+            // `#[cfg(test)]` on a `use` line or a `mod tests;` declaration doesn't start one.
+            let code = text
+                .match_indices("\n#[cfg(test)]\nmod ")
+                .find(|(at, m)| text[at + m.len()..].lines().next().is_some_and(|l| l.trim_end().ends_with('{')))
+                .map_or(text.as_str(), |(at, _)| &text[..at]);
             let lines: Vec<&str> = code.lines().collect();
             for (n, line) in lines.iter().enumerate() {
                 let trimmed = line.trim_start();
+                // A `use` line only names a helper; the call is checked where it is made.
                 if trimmed.starts_with("//")
+                    || trimmed.starts_with("use ")
+                    || (trimmed.starts_with("pub") && trimmed.contains(" use "))
                     || !(trimmed.contains("std::fs")
                         || trimmed.contains("File::open")
                         || trimmed.contains("File::create")

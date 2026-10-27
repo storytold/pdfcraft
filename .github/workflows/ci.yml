@@ -82,7 +82,7 @@ jobs:
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
         libgtk-3-dev qpdf poppler-utils
       # cargo-deny for the deny step of `cargo xtask ci`, which requires it under CI.
-      tools: cargo-nextest@0.9.149,cargo-deny@0.20.2
+      tools: cargo-nextest@0.9.150,cargo-deny@0.20.2
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
       linux-env: PDFCRAFT_ORACLES_REQUIRED=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1
