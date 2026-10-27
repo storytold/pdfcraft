@@ -2268,3 +2268,63 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// #4810: an optional persistent `1 / N` page indicator pill can be enabled in Preferences or via
+/// `set_option`, updates as the current page changes, survives settings persistence, and never
+/// modifies the PDF bytes.
+#[test]
+fn persistent_page_indicator_shows_updates_and_leaves_document_bytes_untouched() {
+    use egui::accesskit::Role;
+    let initial_bytes = fixture(3);
+    let expected_bytes = initial_bytes.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("three.pdf", None, initial_bytes.clone()).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("page-indicator"));
+    assert!(!h.state().show_page_indicator, "off by default");
+    assert_eq!(h.state().get_option("page_indicator").as_deref(), Some("false"));
+    assert!(!h.ctx.memory(|m| m.areas().visible_last_frame(&layer)));
+    assert!(h.query_by_label("1 / 3").is_none());
+
+    // Toggle on via Preferences -> Documents and view -> "Always show page number indicator".
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "Always show page number indicator").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::CheckBox, "Always show page number indicator").click();
+    h.run_steps(2);
+    assert!(h.state().show_page_indicator);
+    assert_eq!(h.state().get_option("page_indicator").as_deref(), Some("true"));
+    h.state_mut().dialog = None;
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(3);
+
+    // Draws "1 / 3" on page 1.
+    assert!(h.ctx.memory(|m| m.areas().visible_last_frame(&layer)));
+    h.get_by_label("1 / 3");
+
+    // Changing to page 2 updates the indicator to "2 / 3".
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("1 / 3").is_none());
+    h.get_by_label("2 / 3");
+
+    // Persists across settings save/load and supports set_option validation.
+    let saved = h.state().save_settings();
+    let mut restored = PdfCraftApp::new();
+    restored.load_settings(&saved);
+    assert!(restored.show_page_indicator);
+    restored.set_option("page_indicator", "false").unwrap();
+    assert!(!restored.show_page_indicator);
+    assert_eq!(restored.set_option("page_indicator", "invalid"), Err("page_indicator must be true or false".into()));
+
+    // Display-only: document is clean and bytes are untouched.
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(!doc.dirty, "showing the page indicator must not dirty the document");
+    assert_eq!(doc.bytes.as_slice(), expected_bytes.as_slice(), "document bytes must remain untouched");
+}

@@ -328,6 +328,14 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--page-indicator true` / `--page_indicator true`: show a persistent `1 / N` indicator pill over the document.
+            ("page_indicator" | "page-indicator" | "show_page_indicator", _) => {
+                self.show_page_indicator = match value {
+                    "true" | "on" => true,
+                    "false" | "off" => false,
+                    _ => return Err(format!("{key} must be true or false")),
+                };
+            }
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,
@@ -388,5 +396,15 @@ impl PdfCraftApp {
             (other, _) => return Err(format!("unknown option {other}")),
         }
         Ok(())
+    }
+
+    /// Read the current value of a named application option (`"page_indicator"`, `"language"`, …).
+    pub fn get_option(&self, key: &str) -> Option<String> {
+        match key {
+            "page_indicator" | "page-indicator" | "show_page_indicator" => Some(self.show_page_indicator.to_string()),
+            "secured-notice" | "show_secured_notice" => Some(self.show_secured_notice.to_string()),
+            "language" => Some(self.language.clone()),
+            _ => None,
+        }
     }
 }

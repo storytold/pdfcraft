@@ -440,6 +440,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .color(t.text_muted),
     );
     ui.add(widgets::checkbox(&mut app.always_default_view, tl!("Always use my default zoom and page layout")));
+    ui.add(widgets::checkbox(&mut app.show_page_indicator, tl!("Always show page number indicator")));
     ui.horizontal(|ui| {
         ui.label(tl!("Units"));
         for u in crate::units::Unit::ALL {

@@ -39,6 +39,32 @@ pub(super) fn page_size_hint(
         });
 }
 
+/// Persistent `current / total` page indicator pill at the bottom of the document area (#4810).
+/// Display-only: never modifies the PDF or its content streams.
+pub(super) fn page_indicator(view: &DocView, total: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
+    if total == 0 {
+        return;
+    }
+    let current = view.current.min(total.saturating_sub(1)).saturating_add(1);
+    let text = format!("{current} / {total}");
+    let fill = Color32::from_rgba_unmultiplied(t.card.r(), t.card.g(), t.card.b(), 220);
+    egui::Area::new(egui::Id::unique("page-indicator"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .fixed_pos(pos2(area.center().x, area.bottom() - 14.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(fill)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(99))
+                .inner_margin(egui::Margin::symmetric(10, 4))
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(text).font(theme::medium(12.0)).color(t.text)).selectable(false));
+                });
+        });
+}
+
 /// What the notice bar's buttons ask for.
 pub(super) enum Notice {
     /// Reload the file that changed on disk, dropping unsaved changes.
