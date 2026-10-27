@@ -426,13 +426,17 @@ impl PdfCraftApp {
                 std::fs::read(p)
             };
             match read {
-                Ok(b) => files.push((name, b)),
+                Ok(b) => {
+                    files.push((name, b));
+                    modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
+                }
                 Err(e) => {
                     self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                    return;
+                    if purpose != FilePurpose::Combine {
+                        return;
+                    }
                 }
             }
-            modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
         }
         if files.is_empty() {
             return;
@@ -450,7 +454,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Files dropped on the Combine files tab: added to its list in batch.
+    /// Files dropped on the Combine files tab: added to its list in batch, preserving drop order.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn drop_into_combine(&mut self, dropped: &[egui::DroppedFileHandle], _ctx: &egui::Context) {
         if dropped.is_empty() {
@@ -461,7 +465,20 @@ impl PdfCraftApp {
         for f in dropped {
             if let Some(clean_path) = clean_dropped_path(f.path()) {
                 if clean_path.is_dir() {
-                    self.add_folder_to_combine(&clean_path, true);
+                    let (folder_paths, more) = crate::workflows::combine_ui::combinable_in(&clean_path, true);
+                    let folder =
+                        clean_path.file_name().map_or_else(|| clean_path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+                    if folder_paths.is_empty() {
+                        self.notify_fmt("No PDFs, images or text files found in {folder}", &[("folder", &folder)]);
+                    } else {
+                        paths.extend(folder_paths);
+                        if more {
+                            self.notify_fmt(
+                                "Added the first {n} files in {folder}",
+                                &[("n", &crate::workflows::combine_ui::MAX_FOLDER_FILES.to_string()), ("folder", &folder)],
+                            );
+                        }
+                    }
                 } else {
                     paths.push(clean_path);
                 }

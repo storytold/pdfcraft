@@ -1964,3 +1964,46 @@ fn dropping_file_uris_and_url_encoded_paths_into_combine_grid_adds_them() {
 
     assert_eq!(names(&h), ["first doc.pdf", "second_doc.pdf"], "dropped file URIs are added to combine draft in batch");
 }
+
+/// #4985: Dropping mixed files and folders preserves drop order, and unreadable paths do not prevent readable files from being staged.
+#[test]
+fn dropping_mixed_files_and_folders_into_combine_preserves_order() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-mixed-drop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let sub = dir.join("subfolder");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let file_before = dir.join("1_before.pdf");
+    let folder_file = sub.join("2_inside.pdf");
+    let file_after = dir.join("3_after.pdf");
+    let unreadable = dir.join("nonexistent.pdf");
+
+    std::fs::write(&file_before, fixture(1)).unwrap();
+    std::fs::write(&folder_file, fixture(1)).unwrap();
+    std::fs::write(&file_after, fixture(1)).unwrap();
+
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+
+    let drop_before: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: file_before });
+    let drop_folder: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: sub });
+    let drop_bad: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: unreadable });
+    let drop_after: egui::DroppedFileHandle = std::sync::Arc::new(DroppedUri { path: file_after });
+
+    h.input_mut().dropped_files.extend([drop_before, drop_folder, drop_bad, drop_after]);
+    h.run_steps(4);
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        names(&h),
+        ["1_before.pdf", "2_inside.pdf", "3_after.pdf"],
+        "mixed drop preserves order and unreadable path does not block readable files"
+    );
+}
