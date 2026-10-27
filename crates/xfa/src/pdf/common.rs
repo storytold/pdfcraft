@@ -104,6 +104,18 @@ pub(super) fn standard_font(base: &str) -> Object {
     Object::Dict(f)
 }
 
+/// Whether `font` is a non-embedded standard-14 `base` in plain WinAnsiEncoding, as forms bring
+/// in their `/DR`: [`standard_font`] replaces it without changing how any code already drawn in
+/// it looks (the `LATIN_EXTRA` codes are undefined in WinAnsi), and adds the letters it lacks.
+/// Embedded, measured (`/Widths`) or differently encoded fonts are left as they are.
+pub(super) fn is_plain_standard_font(font: &Dict, base: &str) -> bool {
+    font.name(b"Subtype") == Some(&b"Type1"[..])
+        && font.name(b"BaseFont") == Some(base.as_bytes())
+        && font.name(b"Encoding") == Some(&b"WinAnsiEncoding"[..])
+        && !font.contains(b"FontDescriptor")
+        && !font.contains(b"Widths")
+}
+
 /// Every face the content streams or `/DA` strings may name.
 pub(super) fn all_faces() -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();

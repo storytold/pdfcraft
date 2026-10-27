@@ -17,7 +17,10 @@ mod strip;
 
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
-use common::{all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font, state_name};
+use common::{
+    all_faces, content_hash, empty_form, hex32, is_plain_standard_font, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font,
+    state_name,
+};
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
 pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
@@ -897,7 +900,10 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     let mut dr = acro.get(b"DR").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
     let mut dr_fonts = dr.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, base) in all_faces() {
-        if !dr_fonts.contains(name.as_bytes()) {
+        // The form's own font under one of these names is kept unless it is the plain WinAnsi
+        // standard font, whose field values would otherwise draw ă or ș as `?`.
+        let plain = dr_fonts.get(name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().map(|f| is_plain_standard_font(f, base)));
+        if plain.unwrap_or(true) {
             dr_fonts.set(name.as_bytes().to_vec(), standard_font(base));
         }
     }
@@ -963,6 +969,29 @@ mod tests {
         // ţ (cedilla) must not sit on tab or line feed, where viewers draw nothing
         let tcedilla = diffs.chunks(2).find(|p| p[1].as_name() == Some(&b"tcedilla"[..])).and_then(|p| p[0].as_int());
         assert!(tcedilla.is_some_and(|c| ![9, 10, 12, 13].contains(&c)));
+    }
+
+    #[test]
+    fn only_plain_standard_dr_fonts_take_the_extra_latin_encoding() {
+        use pdfcraft_cos::{Dict, Object};
+        let plain = |base: &str| {
+            let mut f = Dict::new();
+            f.set(b"Type".to_vec(), Object::name("Font"));
+            f.set(b"Subtype".to_vec(), Object::name("Type1"));
+            f.set(b"BaseFont".to_vec(), Object::name(base));
+            f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            f
+        };
+        assert!(super::is_plain_standard_font(&plain("Helvetica"), "Helvetica"));
+        assert!(!super::is_plain_standard_font(&plain("ArialMT"), "Helvetica"), "another font under our name");
+        let mut embedded = plain("Helvetica");
+        embedded.set(b"FontDescriptor".to_vec(), Object::Dict(Dict::new()));
+        assert!(!super::is_plain_standard_font(&embedded, "Helvetica"));
+        let mut measured = plain("Helvetica");
+        measured.set(b"Widths".to_vec(), Object::Array(Vec::new()));
+        assert!(!super::is_plain_standard_font(&measured, "Helvetica"));
+        let ours = super::standard_font("Helvetica");
+        assert!(!super::is_plain_standard_font(ours.as_dict().unwrap(), "Helvetica"), "already carries the extra letters");
     }
 
     #[test]

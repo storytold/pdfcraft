@@ -833,13 +833,20 @@ impl Metrics {
 
     /// Where the standard-14 table, indexed by WinAnsi, holds the glyph `code` draws in this font:
     /// its encoding (base and `/Differences`) names the glyph, so a remapped code is measured as
-    /// the glyph it now shows (#2894). Symbol and ZapfDingbats are indexed by their own encodings,
-    /// and a glyph WinAnsi has no code for keeps the code itself.
+    /// the glyph it now shows (#2894). A [`crate::LATIN_EXTRA`] letter is measured as its base
+    /// letter, as [`crate::Std14::text_width_extra`] lays it out. Symbol and ZapfDingbats are
+    /// indexed by their own encodings, and a glyph WinAnsi has no code for keeps the code itself.
     fn std14_code(&self, face: crate::Std14, code: u32) -> u32 {
         if matches!(face, crate::Std14::Symbol | crate::Std14::ZapfDingbats) {
             return code;
         }
-        self.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(crate::win_ansi_byte).map_or(code, u32::from)
+        self.unicode
+            .encoding
+            .get(&code)
+            .and_then(|t| only_char(t))
+            .map(|c| crate::extra_base_letter(c).unwrap_or(c))
+            .and_then(crate::win_ansi_byte)
+            .map_or(code, u32::from)
     }
 
     /// Word spacing applies to the single-byte code 32 (§9.3.3).
@@ -1206,6 +1213,11 @@ pub fn glyph_text(name: &str) -> Option<String> {
 fn glyph_component(part: &str) -> Option<String> {
     if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)) {
         return char::from_u32(crate::encodings::NAMES[i].1).map(String::from);
+    }
+    // The Romanian and Polish letters PdfCraft's XFA output names in its `/Differences`
+    // (`abreve`, `scommaaccent`, …), which no table above holds.
+    if let Some(e) = crate::LATIN_EXTRA.iter().find(|e| e.2 == part) {
+        return Some(e.0.to_string());
     }
     // `from_str_radix` accepts a leading `+`, which is not a glyph name, so the digits are checked.
     let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
