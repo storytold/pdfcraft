@@ -12,6 +12,28 @@ use crate::{Args, Automation, Result, ToolError};
 const MODES: &str = "off, black-on-white, white-on-black, yellow-on-black, green-on-black, custom";
 
 impl Automation {
+    /// Turn dark pages on or off for the document, with their palette and what happens to
+    /// raster images (both keep their current values when not given).
+    pub(crate) fn view_dark_pages(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let enabled = a.opt_bool("enabled")?.ok_or_else(|| ToolError::InvalidArgs("enabled is required (true or false)".into()))?;
+        let mut style = self.session.dark_style(id).unwrap_or_default();
+        if let Some(name) = a.opt_str("palette")? {
+            style.palette = pdfcraft_render::DarkPalette::parse(name).map_err(ToolError::InvalidArgs)?;
+        }
+        if let Some(name) = a.opt_str("images")? {
+            style.images = pdfcraft_render::DarkImages::parse(name).map_err(ToolError::InvalidArgs)?;
+        }
+        let before = self.session.render_config(id).map(|c| c.dark_reading);
+        self.session.set_dark_style(id, style);
+        self.session.set_dark_pages(id, enabled);
+        if self.session.render_config(id).map(|c| c.dark_reading) != before {
+            // Images kept: the renderer draws the dark page, so cached renderers are out of date.
+            self.renderers.remove(&id);
+        }
+        Ok(json!({ "enabled": enabled, "palette": style.palette.name(), "images": style.images.name() }))
+    }
+
     /// Set the document's reading colours. Colours are only meaningful with `mode: "custom"`;
     /// `parse` enforces the rest and its errors are actionable.
     pub(crate) fn view_reading_colors(&mut self, a: &Args) -> Result<Value> {

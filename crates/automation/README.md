@@ -304,3 +304,13 @@ updates the same one-word-per-UTF-8-line format OCR Verify uses. Omit add/remove
 The explicit path honors `--root`, including symlink confinement; choose the appropriate
 per-language file used by the UI. Entries are case-insensitive and duplicate-free. Invalid
 or oversized inputs fail before writing (65,536 words, 4 MiB, at most 1,024 bytes per word).
+
+## Dark PDF page previews
+
+`view_dark_pages {doc, enabled}` applies the desktop dark-page filter to `page_render`
+(including textless editor backgrounds), using the same colour function as the GUI.
+This is a per-open-document view preference: it leaves PDF bytes, history, exports and
+printing unchanged, and reopening starts with the filter off. Explicit `view_reading_colors`
+presets take precedence; turning them off restores the dark-page choice. The desktop app
+separately persists its default for newly opened documents. `command_run` can invoke this
+tool as `view.dark_pages` with `doc` and `enabled` in `params`.

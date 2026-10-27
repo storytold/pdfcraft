@@ -256,6 +256,7 @@ fn tool_input(
         by_line,
         can_crop,
         can_modify,
+        colors,
         custom_stamp,
         date_text,
         doc,
@@ -302,6 +303,7 @@ fn tool_input(
             preview: frame.signature_preview,
             author,
             date_text,
+            colors,
         };
         match crate::fill_sign::page_input(cx, input, free, view) {
             Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
@@ -720,6 +722,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         allowed,
         calc_order,
         can_modify,
+        colors,
         comments_hidden,
         doc,
         doc_links,
@@ -755,7 +758,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     if input.area_tool {
         crate::redact_ui::paint(painter, i, view, pointer);
     }
-    comments::paint_page(ui, painter, &pcx, view, input.hover.as_ref());
+    comments::paint_page(ui, painter, &pcx, view, input.hover.as_ref(), colors);
     if editing_content {
         crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
     }
@@ -780,7 +783,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
             }
         }
     } else {
-        crate::forms_ui::paint_page(painter, &xf, i, info, form, view, input.hover.as_ref());
+        crate::forms_ui::paint_page(painter, &xf, i, info, form, view, input.hover.as_ref(), colors);
         crate::forms_ui::tooltip(resp, form, input.hover.as_ref());
     }
 

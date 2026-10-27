@@ -36,6 +36,7 @@ mod compare;
 mod content;
 mod control;
 mod create;
+mod dark_page_editors;
 mod date_format;
 mod dialog_chrome;
 mod document_links;

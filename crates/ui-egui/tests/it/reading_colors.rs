@@ -1,5 +1,6 @@
 //! Preferences ▸ Reading colours: the app-wide preference (Acrobat's Replace Document Colors),
-//! how it survives a restart, and how documents open with it.
+//! how it survives a restart, and how documents open with it. The Dark PDF pages preference
+//! follows the same rules.
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -227,4 +228,38 @@ fn reading_colours_seed_on_open() {
     for view in &h.state().views {
         assert_eq!(h.state().session.reading_colors(view.id), Some(ReadingColors::default()));
     }
+}
+
+#[test]
+fn dark_pages_preference_restores_and_new_documents_inherit_the_choice() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.set_option("theme", "dark").unwrap();
+    assert!(!app.dark_pages_enabled());
+    assert!(app.execute("view.dark_pages"));
+    assert!(app.dark_pages_enabled(), "the preference can be set on Home");
+    app.open_bytes("first.pdf", None, pdf()).unwrap();
+    assert!(app.views[0].dark_pages);
+    app.open_bytes("second.pdf", None, pdf()).unwrap();
+    assert!(app.views[1].dark_pages);
+    assert!(app.execute("view.dark_pages"));
+    assert!(!app.dark_pages_enabled());
+    assert!(app.views[0].dark_pages, "existing tabs retain their own display choice");
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    restored.open_bytes("restored-off.pdf", None, pdf()).unwrap();
+    assert!(!restored.dark_pages_enabled());
+    app.active = Some(0);
+    assert!(app.dark_pages_enabled(), "toolbar and commands resolve the current tab");
+    app.active = None;
+    assert!(!app.dark_pages_enabled(), "Home resolves the next-document preference");
+    assert!(app.execute("view.dark_pages"));
+    restored.restore(&app.persist());
+    restored.open_bytes("restored-on.pdf", None, pdf()).unwrap();
+    assert!(restored.dark_pages_enabled());
+    assert_eq!(restored.theme_preference, pdfcraft_ui_egui::theme::ThemePreference::Dark);
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore(r#"{"theme":"Dark"}"#);
+    legacy.open_bytes("legacy.pdf", None, pdf()).unwrap();
+    assert!(!legacy.dark_pages_enabled(), "old settings keep the default off");
 }
