@@ -1,5 +1,5 @@
 use super::draw::draw_appearance;
-use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annots, change_annots, fill_sign_shape, page_ref};
 use super::modify::{n, rich_text};
 use super::types::{FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, Rgb, Shape, StampGroup, Style};
 use super::*;
@@ -438,7 +438,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
         doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pref)))?;
         list.push(Object::Ref(pref));
     }
-    set_annots(doc, page, list)?;
+    change_annots(doc, page, list)?;
     Ok(index)
 }
 

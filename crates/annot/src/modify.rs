@@ -3,7 +3,7 @@ use super::create::{
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, change_annots, page_ref};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
 };
@@ -80,7 +80,7 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
     let seed = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
     let doomed = with_replies_and_popups(doc, &list, seed);
     let kept: Vec<Object> = list.into_iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e).collect();
-    Ok(set_annots(doc, p, kept)?)
+    change_annots(doc, p, kept)
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
@@ -239,7 +239,7 @@ fn reply(
     let mut list = annots(doc, p);
     list.push(Object::Ref(r));
     let i = list.len() - 1;
-    set_annots(doc, p, list)?;
+    change_annots(doc, p, list)?;
     Ok(i)
 }
 
@@ -281,7 +281,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let mut list = annots(doc, p);
     list.push(Object::Ref(r));
     let i = list.len() - 1;
-    set_annots(doc, p, list)?;
+    change_annots(doc, p, list)?;
     Ok(i)
 }
 
