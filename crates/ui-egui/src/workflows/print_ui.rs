@@ -222,6 +222,7 @@ impl PdfCraftApp {
         self.print_draft.crop_pages = Some(pages);
     }
 
+    /// Dispatches a background thread to discover available printers from `source` (#5020).
     #[cfg(not(target_arch = "wasm32"))]
     fn list_printers_in_background(&mut self, source: PrinterSource) {
         // A list already being read is as fresh as a new one would be.
