@@ -2266,6 +2266,8 @@ key	Space	스페이스
 	Reload documents when their files change on disk	파일이 디스크에서 변경되면 문서 다시 불러오기
 	Don't show again	다시 표시 안 함
 	Show a notice when a document is secured	문서가 보호되어 있으면 알림 표시
+	Ask before a document opens in Full Screen mode	문서를 전체 화면 모드로 열기 전에 확인
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	끄면 문서의 전체 화면 모드로 열기 요청이 무시됩니다. 보기 메뉴에서는 여전히 전체 화면 모드로 전환할 수 있습니다.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	이 파일이 디스크에서 변경되었습니다. 새 버전을 보려면 다시 불러오세요. 저장하지 않은 변경 내용은 손실됩니다.
 	Reload	다시 불러오기
 	Couldn't reload {name}: {e}	{name}을(를) 다시 불러올 수 없습니다: {e}

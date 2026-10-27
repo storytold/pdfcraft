@@ -143,6 +143,8 @@
 	Reload documents when their files change on disk	Znovu načítat dokumenty při změně jejich souborů na disku
 	Don't show again	Znovu nezobrazovat
 	Show a notice when a document is secured	Zobrazit upozornění, když je dokument zabezpečený
+	Ask before a document opens in Full Screen mode	Zeptat se, než se dokument otevře v režimu celé obrazovky
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Když je vypnuto, žádost dokumentu o otevření v režimu celé obrazovky se ignoruje. Do tohoto režimu lze stále přejít z nabídky Zobrazení.
 	Always use my default zoom and page layout	Vždy používat mé výchozí zvětšení a rozvržení stránky
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tento soubor se na disku změnil. Znovu načíst zobrazí novou verzi a zahodí neuložené změny; Uložit ji nahradí touto verzí.
 	Reload	Znovu načíst

@@ -2357,6 +2357,8 @@ key	Space	مسافة
 	Reload documents when their files change on disk	إعادة تحميل المستندات عند تغيّر ملفاتها على القرص
 	Don't show again	عدم الإظهار مرة أخرى
 	Show a notice when a document is secured	إظهار إشعار عندما يكون المستند مؤمَّنًا
+	Ask before a document opens in Full Screen mode	السؤال قبل فتح المستند في وضع ملء الشاشة
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	عند إيقافه، يتم تجاهل طلب المستند الفتح في وضع ملء الشاشة. ما زال بإمكانك الدخول إليه من قائمة عرض.
 	Always use my default zoom and page layout	استخدام التكبير وتخطيط الصفحة الافتراضيين دائمًا
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	تغيّر هذا الملف على القرص. «إعادة التحميل» تعرض النسخة الجديدة وتُسقط تغييراتك غير المحفوظة؛ و«حفظ» يستبدلها بهذه النسخة.
 	Reload	إعادة تحميل

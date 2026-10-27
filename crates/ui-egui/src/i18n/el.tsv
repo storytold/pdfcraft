@@ -2345,6 +2345,8 @@ comment menu	Edit	Επεξεργασία
 	Reload documents when their files change on disk	Επαναφόρτωση εγγράφων όταν αλλάζουν τα αρχεία τους στον δίσκο
 	Don't show again	Να μην εμφανιστεί ξανά
 	Show a notice when a document is secured	Εμφάνιση ειδοποίησης όταν ένα έγγραφο προστατεύεται
+	Ask before a document opens in Full Screen mode	Ερώτηση πριν ένα έγγραφο ανοίξει σε λειτουργία πλήρους οθόνης
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Όταν είναι απενεργοποιημένο, το αίτημα ενός εγγράφου να ανοίξει σε λειτουργία πλήρους οθόνης αγνοείται. Μπορείτε και πάλι να την ενεργοποιήσετε από το μενού Προβολή.
 	Always use my default zoom and page layout	Να χρησιμοποιείται πάντα η προεπιλεγμένη μεγέθυνση και διάταξη σελίδας μου
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Αυτό το αρχείο άλλαξε στον δίσκο. Η επαναφόρτωση δείχνει τη νέα έκδοση και απορρίπτει τις μη αποθηκευμένες αλλαγές σας· η αποθήκευση την αντικαθιστά με αυτή την έκδοση.
 	Reload	Επαναφόρτωση

@@ -935,6 +935,8 @@
 	Reload documents when their files change on disk	Reîncarcă documentele când fișierele lor se modifică pe disc
 	Don't show again	Nu mai afișa
 	Show a notice when a document is secured	Afișează o notificare când un document este securizat
+	Ask before a document opens in Full Screen mode	Întreabă înainte ca un document să se deschidă în modul Ecran complet
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Când este dezactivată, cererea unui document de a se deschide în modul Ecran complet este ignorată. Îl puteți activa în continuare din meniul Vizualizare.
 	Remove checkmark	Eliminare bifă
 	Remove invalid links and bookmarks	Eliminare linkuri și semne de carte nevalide
 	Remove page	Eliminare pagină

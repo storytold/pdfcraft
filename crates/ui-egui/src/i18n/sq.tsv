@@ -2279,6 +2279,8 @@ key	Space	Hapësirë
 	Reload documents when their files change on disk	Ringarko dokumentet kur skedarët e tyre ndryshojnë në disk
 	Don't show again	Mos e shfaq më
 	Show a notice when a document is secured	Shfaq një njoftim kur një dokument është i siguruar
+	Ask before a document opens in Full Screen mode	Pyet përpara se një dokument të hapet në modalitetin e ekranit të plotë
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Kur është çaktivizuar, kërkesa e një dokumenti për t'u hapur në modalitetin e ekranit të plotë shpërfillet. Mund ta hapni prapë nga menyja Pamja.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ky skedar ndryshoi në disk. Ringarkojeni për të parë versionin e ri; ndryshimet tuaja të paruajtura do të humbasin.
 	Reload	Ringarko
 	Couldn't reload {name}: {e}	Nuk u ringarkua {name}: {e}

@@ -2299,6 +2299,8 @@ key	Space	Интервал
 	Reload documents when their files change on disk	Презареждай документите, когато файловете им се променят на диска
 	Don't show again	Не показвай отново
 	Show a notice when a document is secured	Показвай известие, когато документът е защитен
+	Ask before a document opens in Full Screen mode	Питане, преди документ да се отвори в режим на цял екран
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Когато е изключено, заявката на документа да се отвори в режим на цял екран се пренебрегва. Пак можете да влезете в него от менюто Изглед.
 	Always use my default zoom and page layout	Винаги използвай моя мащаб и оформление на страниците по подразбиране
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Този файл беше променен на диска. „Презареждане“ показва новата версия и отхвърля незаписаните ви промени; „Запис“ я заменя с тази версия.
 	Reload	Презареди

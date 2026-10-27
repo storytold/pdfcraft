@@ -971,6 +971,8 @@ theme	Appearance	Giao diện
 	Reload documents when their files change on disk	Tải lại tài liệu khi tệp của chúng thay đổi trên đĩa
 	Don't show again	Không hiển thị lại
 	Show a notice when a document is secured	Hiển thị thông báo khi tài liệu được bảo mật
+	Ask before a document opens in Full Screen mode	Hỏi trước khi tài liệu mở ở chế độ toàn màn hình
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Khi tắt, yêu cầu mở ở chế độ toàn màn hình của tài liệu sẽ bị bỏ qua. Bạn vẫn có thể vào chế độ này từ menu Xem.
 	Always use my default zoom and page layout	Luôn dùng thu phóng và bố cục trang mặc định của tôi
 	Remove checkmark	Bỏ dấu kiểm
 	Remove invalid links and bookmarks	Gỡ các liên kết và dấu trang không hợp lệ

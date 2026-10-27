@@ -2319,6 +2319,8 @@ key	Space	بۆشایی
 	Reload documents when their files change on disk	دووبارە بارکردنی بەڵگەنامەکان کاتێک فایلەکانیان لەسەر دیسک دەگۆڕێن
 	Don't show again	جارێکی تر پیشان مەدە
 	Show a notice when a document is secured	پیشاندانی ئاگادارکردنەوە کاتێک بەڵگەنامەیەک پارێزراوە
+	Ask before a document opens in Full Screen mode	پرسیار بکە پێش ئەوەی بەڵگەنامەیەک لە دۆخی شاشەی پڕدا بکرێتەوە
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	ئەگەر کوژێنرابێتەوە، داواکاری بەڵگەنامە بۆ کرانەوە لە دۆخی شاشەی پڕدا پشتگوێ دەخرێت. هێشتا دەتوانیت لە مێنووی بینین بچیتە ناوی.
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	ئەم فایلە لەسەر دیسک گۆڕاوە. «دووبارە بارکردن» وەشانی نوێ پیشان دەدات و گۆڕانکارییە پاشەکەوتنەکراوەکانت فڕێدەدات؛ «پاشەکەوتکردن» بەم وەشانە جێگەی دەگرێتەوە.
 	Reload	دووبارە بارکردن
 	Couldn't reload {name}: {e}	دووبارە بارکردنی {name} نەکرا: {e}

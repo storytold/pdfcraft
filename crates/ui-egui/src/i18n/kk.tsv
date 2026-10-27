@@ -2335,6 +2335,8 @@ key	Space	Бос орын
 	Reload documents when their files change on disk	Дискідегі файлдары өзгергенде құжаттарды қайта жүктеу
 	Don't show again	Қайта көрсетпеу
 	Show a notice when a document is secured	Құжат қорғалған кезде хабарландыру көрсету
+	Ask before a document opens in Full Screen mode	Құжат толық экран режимінде ашылар алдында сұрау
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	Өшірулі болғанда, құжаттың толық экран режимінде ашылу сұрауы еленбейді. Оған әлі де Көрініс мәзірінен кіруге болады.
 	Always use my default zoom and page layout	Әрқашан әдепкі масштаб пен бет орналасуын пайдалану
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Бұл файл дискіде өзгертілді. «Қайта жүктеу» жаңа нұсқаны көрсетіп, сақталмаған өзгерістеріңізді тастайды; «Сақтау» оны осы нұсқамен алмастырады.
 	Reload	Қайта жүктеу
