@@ -39,6 +39,7 @@ pub use model::{
     Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
     PageTransition, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
 };
+pub use navigation::named_destination;
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
 pub use resources::attachment_data;

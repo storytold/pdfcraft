@@ -179,6 +179,52 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     assert_eq!(h.state().last_opened_url, None, "no URL or external launcher is involved");
 }
 
+/// Three 300×400 pages whose catalog /Dests names `there` (page 3) and `here` (page 2).
+fn named_pages() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Dests << /there [5 0 R /Fit] /here [4 0 R /Fit] >> >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_gotor_link_to_a_named_destination_opens_at_its_page() {
+    let _gpu = gpu();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-gotor-named-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("target.pdf"), named_pages()).unwrap();
+    for (destination, page) in [("/there", 2), ("(here)", 1)] {
+        let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", destination);
+        click_remote_link(&mut h);
+        support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
+        assert_eq!(h.state().views[1].current, page, "{destination}");
+        assert_eq!(h.state().toast, None, "{destination}: applied, so nothing to warn about");
+    }
+    // A name the target doesn't define opens it at its first page, with the warning.
+    let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "/elsewhere");
+    click_remote_link(&mut h);
+    support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
+    assert_eq!(h.state().views[1].current, 0);
+    assert!(h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("named destination was not applied")), "{:?}", h.state().toast);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {

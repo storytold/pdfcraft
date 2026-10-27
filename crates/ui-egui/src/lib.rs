@@ -125,6 +125,8 @@ pub use platform::file_watch;
 use platform::macos_association;
 pub use platform::motion;
 #[cfg(not(target_arch = "wasm32"))]
+use platform::open_parameters;
+#[cfg(not(target_arch = "wasm32"))]
 use platform::open_worker;
 #[cfg(not(target_arch = "wasm32"))]
 use platform::pickers;
