@@ -307,6 +307,9 @@ pub struct DocView {
     /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
     /// from the viewport's top-left corner.
     goto_point: Option<(usize, Option<f32>, Option<f32>, Vec2)>,
+    /// Active destination flash indicator after following an internal link:
+    /// `(page, normalized_rect [x0, y0, x1, y1], start_time)`.
+    pub dest_flash: Option<(usize, [f32; 4], f64)>,
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
@@ -619,6 +622,7 @@ impl DocView {
             forward: Vec::new(),
             goto: None,
             goto_point: None,
+            dest_flash: None,
             key_scroll: 0.0,
             single_edges: None,
             flash: None,
@@ -744,6 +748,7 @@ impl DocView {
         }
         self.goto = None;
         self.goto_point = None;
+        self.dest_flash = None;
         self.zoom_anchor = None;
         self.flash = None;
         // Thumbnail drags hold page indexes from before the change.
@@ -805,6 +810,60 @@ impl DocView {
         self.wheel.clear_motion();
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
+    }
+
+    /// Computes the normalized destination indicator rectangle `[x0, y0, x1, y1]` (as fractions
+    /// `0.0..=1.0` of the displayed page) for `dest` on `page`, to flash after following a link.
+    pub(crate) fn dest_indicator_rect(&self, page: usize, dest: DestView, info: &DocInfo) -> Option<[f32; 4]> {
+        let p = info.pages.get(page)?;
+        let (dw, dh) = self.display_size(p);
+        let (dw, dh) = (dw.max(1.0), dh.max(1.0));
+        let band_x = (24.0 / dw).clamp(0.02, 0.3);
+        let band_y = (24.0 / dh).clamp(0.02, 0.3);
+        let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, self.rotation);
+        // The destination coordinate lands on one displayed axis only; a quarter turn swaps it.
+        let band = |[fx, fy]: [Option<f32>; 2], default_vertical: bool| match (fx, fy) {
+            (Some(x), _) => {
+                let x1 = (x + band_x).min(1.0);
+                [(x1 - band_x).max(0.0), 0.0, x1, 1.0]
+            }
+            (None, Some(y)) => {
+                let y1 = (y + band_y).min(1.0);
+                [0.0, (y1 - band_y).max(0.0), 1.0, y1]
+            }
+            (None, None) if default_vertical => [0.0, 0.0, band_x, 1.0],
+            (None, None) => [0.0, 0.0, 1.0, band_y],
+        };
+        let rect = match dest {
+            DestView::Top | DestView::Fit => [0.0, 0.0, 1.0, band_y],
+            DestView::FitH { top } => band(point(None, top), (u32::from(p.rotation) + u32::from(self.rotation)) % 180 == 90),
+            DestView::FitV { left } => band(point(left, None), (u32::from(p.rotation) + u32::from(self.rotation)).is_multiple_of(180)),
+            DestView::Xyz { left, top, .. } => {
+                let [fx, fy] = point(left, top);
+                let (x0, x1) = match fx {
+                    Some(x) => {
+                        let x1 = (x + (120.0 / dw).clamp(0.1, 0.5)).min(1.0);
+                        ((x1 - band_x).min(x).max(0.0), x1)
+                    }
+                    None => (0.0, 1.0),
+                };
+                let (y0, y1) = match fy {
+                    Some(y) => {
+                        let y1 = (y + band_y).min(1.0);
+                        ((y1 - band_y).max(0.0), y1)
+                    }
+                    None => (0.0, band_y),
+                };
+                [x0, y0, x1, y1]
+            }
+            DestView::FitR { rect } => {
+                let ([Some(ax), Some(ay)], [Some(bx), Some(by)]) = (point(Some(rect[0]), Some(rect[3])), point(Some(rect[2]), Some(rect[1]))) else {
+                    return None;
+                };
+                [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)]
+            }
+        };
+        Some(rect)
     }
 }
 
@@ -2071,6 +2130,28 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     view.flash = None;
                 }
             }
+            if let Some((fp, [x0, y0, x1, y1], t0)) = view.dest_flash
+                && fp == i
+            {
+                let now = ui.input(|inp| inp.time);
+                let t0 = if t0 == 0.0 { now } else { t0 };
+                view.dest_flash = Some((fp, [x0, y0, x1, y1], t0));
+                let age = (now - t0).max(0.0);
+                if age < 1.5 {
+                    let step = (age / 0.25) as usize;
+                    if step.is_multiple_of(2) {
+                        let sr = Rect::from_min_max(
+                            pos2(r.left() + x0 * r.width(), r.top() + y0 * r.height()),
+                            pos2(r.left() + x1 * r.width(), r.top() + y1 * r.height()),
+                        );
+                        painter.rect_stroke(sr, CornerRadius::ZERO, Stroke::new(2.0, Color32::BLACK), egui::StrokeKind::Inside);
+                    }
+                    let next = ((step + 1) as f64 * 0.25).min(1.5);
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((next - age).max(0.01)));
+                } else {
+                    view.dest_flash = None;
+                }
+            }
             // Validation is viewer chrome over the signer's original artwork, which
             // may still say "Signature Not Verified". These badges never enter document
             // streams, image/text exports, vector printing or Print as Image.
@@ -2519,7 +2600,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     match clicked_link {
-        Some(LinkTarget::Page(p, dest)) => view.go_to_dest(p, dest, info),
+        Some(LinkTarget::Page(p, dest)) => {
+            view.go_to_dest(p, dest, info);
+            let target = view.current;
+            view.dest_flash = view.dest_indicator_rect(target, dest, info).map(|r| (target, r, now));
+        }
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
         Some(LinkTarget::RemoteGoTo { file, destination, .. }) => remote_open = Some((view.id, file, destination)),
