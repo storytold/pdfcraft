@@ -1194,15 +1194,21 @@ fn combine_takes_images_and_text_files() {
     }
 }
 
-/// A one-page PDF whose content is `content`, with the standard font as /F1.
-fn page_with_content(content: &str) -> Vec<u8> {
-    let objs = [
+/// A PDF with one page per entry of `contents`, the standard font as /F1 on each.
+fn pages_with_content(contents: &[&str]) -> Vec<u8> {
+    let n = contents.len();
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + i)).collect();
+    let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 300] >>", kids.join(" ")),
     ];
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 {} 0 R >> >> >>", 3 + n + i, 3 + 2 * n));
+    }
+    for content in contents {
+        objs.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+    }
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string());
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -1218,12 +1224,17 @@ fn page_with_content(content: &str) -> Vec<u8> {
     out
 }
 
+/// A one-page PDF whose content is `content`, with the standard font as /F1.
+fn page_with_content(content: &str) -> Vec<u8> {
+    pages_with_content(&[content])
+}
+
 /// #4957: Remove watermark takes out a watermark another editor marked as an artifact, leaves the
 /// page's own text, and says so when there is none.
 #[test]
 fn remove_marks_takes_out_watermarks_other_editors_marked_as_artifacts() {
     let dir = workdir("foreign-watermark");
-    let content = "BT /F1 18 Tf 20 250 Td (Body text) Tj ET\n/Artifact <</Subtype /Watermark /Type /Pagination>> BDC BT /F1 40 Tf 20 100 Td (CONFIDENTIAL) Tj ET EMC\nBT /F1 12 Tf 20 20 Td (Footer) Tj ET";
+    let content = "BT /F1 18 Tf 20 250 Td (Body text) Tj ET\n/Artifact <</Subtype /Watermark /Type /Pagination>> BDC q BT /F1 40 Tf 20 100 Td (CONFIDENTIAL) Tj ET Q EMC\nBT /F1 12 Tf 20 20 Td (Footer) Tj ET";
     std::fs::write(dir.join("marked.pdf"), page_with_content(content)).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
@@ -1244,6 +1255,20 @@ fn remove_marks_takes_out_watermarks_other_editors_marked_as_artifacts() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "header.pdf" }))["doc"].as_u64().unwrap();
     assert!(matches!(a.call("doc_remove_marks", &json!({ "doc": doc, "kind": "watermark" })), Err(ToolError::Failed(_))));
     assert!(page_text(&mut a, doc)[0].contains("Running header"));
+
+    // A watermark that can't be cut out cleanly on one page stops the whole removal, naming the
+    // page and why, and changes nothing: the page that could have been cleaned is left as it was.
+    let clean = "BT /F1 12 Tf 20 20 Td (Page one body) Tj ET /Artifact <</Subtype /Watermark>> BDC q BT /F1 40 Tf 20 100 Td (STAMP) Tj ET Q EMC";
+    let leaking = "0 g /Artifact <</Subtype /Watermark>> BDC 1 0 0 rg BT /F1 40 Tf 20 100 Td (LEAKY) Tj ET EMC BT /F1 12 Tf (Body two) Tj ET";
+    std::fs::write(dir.join("mixed.pdf"), pages_with_content(&[clean, leaking])).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "mixed.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_remove_marks", &json!({ "doc": doc, "kind": "watermark" }));
+    assert!(
+        matches!(&refused, Err(ToolError::Failed(e)) if e.contains("page 2") && e.contains("nothing was changed") && !e.contains("page 1")),
+        "{refused:?}"
+    );
+    let text = page_text(&mut a, doc);
+    assert!(text[0].contains("STAMP") && text[1].contains("LEAKY"), "nothing changed: {text:?}");
 }
 
 #[test]
