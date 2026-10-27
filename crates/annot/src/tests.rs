@@ -2135,3 +2135,61 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+#[test]
+fn adding_to_an_apple_markup_page_drops_apples_stale_copy() {
+    // As iOS Markup saves a signature: its private copy on the page and on the stamp, which
+    // also carries a normal appearance.
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /AAPL:PPK 5 0 R /AAPL:PPKHash 5 0 R >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /F 644 /AP << /N 6 0 R >> /AAPL:AKExtras << /PPKType (draw) >> >>",
+        b"<< /Length 0 >>
+stream
+
+endstream",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 22 >>
+stream
+0 0 1 RG 1 1 m 9 9 l S
+endstream",
+    ]);
+    add_annotation(&mut doc, &new(0, Shape::Note { at: [300.0, 300.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    // The drop is recorded (fidelity: never silent).
+    assert!(doc.repair_log().iter().any(|l| l.contains("Apple Markup")), "{:?}", doc.repair_log());
+
+    let doc = reopen(&doc);
+    let page = doc.get(page_refs(&doc).unwrap()[0]);
+    let page = page.as_dict().unwrap();
+    assert!(!page.contains(b"AAPL:PPK") && !page.contains(b"AAPL:PPKHash"));
+    let all = list(&doc, 0);
+    assert!(all.iter().all(|d| !d.contains(b"AAPL:AKExtras")));
+    // The Markup stamp itself stays, with its flags and its appearance, byte for byte.
+    assert_eq!(all[0].name(b"Subtype"), Some(&b"Stamp"[..]));
+    assert_eq!(all[0].get(b"F").and_then(Object::as_int), Some(644));
+    assert_eq!(ap_content(&doc, &all[0]), "0 0 1 RG 1 1 m 9 9 l S");
+}
+
+#[test]
+fn a_refused_edit_on_an_apple_markup_page_drops_nothing() {
+    // An inline, locked Markup stamp: restyling it is refused, so Apple's copy must stay put
+    // (promoting the inline dictionary to an object is not a change to the markup).
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /F 644 /AAPL:AKExtras << /PPKType (draw) >> >>] /AAPL:PPK 4 0 R /AAPL:PPKHash 4 0 R >>",
+        b"<< /Length 0 >>
+stream
+
+endstream",
+    ]);
+    assert_eq!(
+        set_style(&mut doc, 0, 0, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")),
+        Err(AnnotError::Invalid("the comment is locked".into()))
+    );
+    let page = doc.get(page_refs(&doc).unwrap()[0]);
+    let page = page.as_dict().unwrap();
+    assert!(page.contains(b"AAPL:PPK") && page.contains(b"AAPL:PPKHash"));
+    assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+}
