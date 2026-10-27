@@ -1620,6 +1620,12 @@ fn thai_free_text_stacked_marks_headroom_and_no_clip() {
     let latin_fitted = fitted_box(&doc, reference, "Latin").unwrap();
     let latin_h = latin_fitted[3] - latin_fitted[1];
     assert!(thai_h > latin_h, "Thai text box height ({thai_h}) must be larger than Latin ({latin_h}) to accommodate stacked marks");
+
+    // Thai FreeText annotations must be restylable and support style and fill updates
+    let p = props(&doc, 0, index).expect("props");
+    assert!(p.restylable, "Thai FreeText must be restylable");
+    set_style(&mut doc, 0, index, Some([0.1, 0.2, 0.3]), None, Some(2.0), None, &meta("author")).expect("set_style");
+    set_fill(&mut doc, 0, index, Some([0.9, 0.9, 0.9]), &meta("author")).expect("set_fill");
 }
 
 /// A line's ends and the corners of connected lines and polygons can be moved after drawing:

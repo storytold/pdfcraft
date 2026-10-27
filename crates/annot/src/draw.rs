@@ -188,9 +188,6 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            if appearance::build_with_doc(None, &d).is_none() && other_stamp().is_none() {
-                continue;
-            }
             let doc_copy = copy.get_or_insert_with(|| doc.clone());
             let Some(stream) = build_appearance(doc_copy, &d).or_else(other_stamp) else { continue };
             let has_t3 = stream
