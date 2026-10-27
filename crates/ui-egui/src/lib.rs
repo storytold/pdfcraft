@@ -290,6 +290,9 @@ pub struct PdfCraftApp {
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
+    /// When E went down for the Eraser, and the tool it left, so that holding it gives the tool
+    /// back on release while a tap keeps the Eraser (#3900).
+    eraser_key: Option<(f64, QuickTool)>,
     /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
     full_screen_tool: Option<QuickTool>,
     /// Comment author, per-tool colours and widths, pin.

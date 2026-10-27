@@ -644,6 +644,73 @@ fn pen_strokes_stay_unselected_so_writing_continues() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
 }
 
+/// #3900: E and B swap the Draw tool and the Eraser. A tap of E stays on the Eraser until E or B
+/// is tapped again; holding E is the Eraser only while it is held.
+#[test]
+fn the_e_key_toggles_the_eraser_when_tapped_and_borrows_it_when_held() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let draw = QuickTool::Comment(CommentTool::Ink);
+    let eraser = QuickTool::Comment(CommentTool::Eraser);
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, draw);
+
+    // A tap goes to the Eraser and stays; the next tap of E goes back.
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, eraser, "a tap of E stays on the Eraser");
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, draw, "tapping E again goes back to Draw");
+
+    // B also goes back.
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, eraser);
+    h.key_press(egui::Key::B);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, draw, "B goes back to Draw");
+
+    // Held: the Eraser while the key is down, Draw again the moment it is let go.
+    h.key_down(egui::Key::E);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, eraser, "held E is the Eraser");
+    h.run_steps(6);
+    assert_eq!(h.state().quick_tool, eraser, "and stays while it is held, key repeat or not");
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, draw, "letting go gives the Draw tool back");
+
+    // Held after a toggle on: B first goes back to Draw, and a late release does nothing more.
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    h.key_press(egui::Key::B);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, draw);
+
+    // No other tool reads E.
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(CommentTool::Rectangle), "E leaves other tools alone");
+}
+
+/// #3900: with a dialog open E does not change the tool.
+#[test]
+fn the_e_key_is_left_alone_under_a_dialog() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let draw = QuickTool::Comment(CommentTool::Ink);
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    h.run_steps(2);
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.run_steps(3);
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, draw, "a dialog has the keyboard");
+}
+
 #[test]
 fn sticky_note_composer_posts_and_returns_to_select() {
     let mut h = harness(|app| app.set_option("quick", "note").unwrap());

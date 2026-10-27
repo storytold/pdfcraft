@@ -83,6 +83,11 @@ impl PdfCraftApp {
     }
 }
 
+/// How long E must be held for the Eraser to be only temporary (#3900).
+const ERASER_HOLD_SECS: f64 = 0.35;
+const DRAW: QuickTool = QuickTool::Comment(crate::comments::CommentTool::Ink);
+const ERASER: QuickTool = QuickTool::Comment(crate::comments::CommentTool::Eraser);
+
 impl PdfCraftApp {
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog or the
@@ -99,8 +104,36 @@ impl PdfCraftApp {
                 self.quick_tool = previous;
             }
         }
+        // E, held for the Eraser, gives the Draw tool back when it is let go; a tap keeps the Eraser.
+        if let Some((since, from)) = self.eraser_key
+            && !ctx.input(|input| input.key_down(Key::E))
+        {
+            self.eraser_key = None;
+            if ctx.input(|input| input.time) - since >= ERASER_HOLD_SECS && self.quick_tool == ERASER {
+                self.quick_tool = from;
+            }
+        }
         if !free || !plain {
             return;
+        }
+        // E and B swap the Draw tool and the Eraser (#3900): a tap of E switches to the Eraser and
+        // stays, another tap of E or a tap of B goes back; holding E is the Eraser only while held.
+        // Only from one of the two, so E means nothing to any other tool.
+        let first_press = |key: Key| {
+            ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key)))
+        };
+        if first_press(Key::E) {
+            if self.quick_tool == ERASER {
+                self.quick_tool = DRAW;
+                self.eraser_key = None;
+            } else if self.quick_tool == DRAW {
+                self.quick_tool = ERASER;
+                self.eraser_key = Some((ctx.input(|input| input.time), DRAW));
+            }
+        }
+        if first_press(Key::B) && self.quick_tool == ERASER {
+            self.quick_tool = DRAW;
+            self.eraser_key = None;
         }
         if ctx.input(|input| input.key_pressed(Key::V)) {
             self.quick_tool = QuickTool::Select;
