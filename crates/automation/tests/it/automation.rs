@@ -7851,6 +7851,8 @@ fn command_batch_tells_a_tool_name_from_an_unknown_or_toolless_command() {
     );
 }
 
+/// Thai added through the tools survives save and reopen, extracts as typed, renders and can be
+/// updated; with no document Thai face, Add Text refuses it and adds nothing.
 #[test]
 fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
     let dir = workdir("thai-content");
@@ -7873,6 +7875,31 @@ fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
     ok(&mut a, "content_update", json!({"doc": reopened, "page": 1, "index": 1, "text": "แก้ไข น้ำ"}));
     assert!(page_text(&mut a, reopened)[0].contains("แก้ไข น้ำ"));
+}
+
+/// #1384: after Edit text reshapes a line, Find (and so selection and copy) still reaches a single
+/// word of it, before and after saving: the line isn't one `/ActualText` unit.
+#[test]
+fn a_word_in_an_edited_shaped_line_is_found_on_its_own() {
+    let dir = workdir("shaped-word");
+    std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let resource = ok(&mut a, "text_font_import", json!({"doc":id,"page":1,"path":"inter.ttf"}))["resource"].as_str().unwrap().to_owned();
+    let line = "q\u{301}x\u{323} first middle last";
+    // Wide enough to stay one row, so the whole line's match is one rectangle.
+    ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":line,"font_resource":resource,"width":400}));
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
+    for doc in [id, reopened] {
+        let width = |query: &str, a: &mut _| {
+            let found = ok(a, "text_find", json!({"doc":doc,"query":query}));
+            let r = &found["matches"][0]["rects"][0];
+            r[2].as_f64().unwrap() - r[0].as_f64().unwrap()
+        };
+        let (word, whole) = (width("middle", &mut a), width(line, &mut a));
+        assert!(word > 0.0 && word < whole / 2.0, "middle is {word} of {whole}");
+    }
 }
 
 #[test]

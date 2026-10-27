@@ -68,6 +68,12 @@ rules, preserves marks and ligatures, and applies Unicode bidi ordering for a si
 Each shaped run is one text object: its glyphs are shown in one `TJ` array whose adjustments
 place each glyph where shaping put it, and a mark set above or below its letter is raised
 with the text rise. Logical text remains available after save/reopen through ToUnicode and ActualText.
+A right-to-left run, drawn in visual order, has one ActualText span in typing order. A
+left-to-right run has a span per cluster of several glyphs instead (a Thai letter with its
+vowel and tone marks, `q́`), as Chrome writes them, so a single word can still be selected,
+found and copied in Acrobat, Poppler and PdfCraft; each glyph also carries its own character in
+ToUnicode where the cluster has as many glyphs as characters, for readers that ignore
+ActualText (Foxit).
 Added Arabic text records ActualText per shaped line for copying and searching in typing order.
 ActualText already supplies typing order, so the editor preserves it without applying
 a second bidi reversal; adjacent visual glyph runs still recover their own reading order.

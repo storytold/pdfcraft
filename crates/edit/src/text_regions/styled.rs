@@ -674,9 +674,17 @@ pub(crate) fn rewrite_styled_block(
             block_ops.extend(state.paint_ops(after));
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
-                let mut properties = Dict::new();
-                properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&string)));
-                block_ops.push(Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
+                let actual_text = |text: &str| {
+                    let mut properties = Dict::new();
+                    properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(text)));
+                    Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)])
+                };
+                // A right-to-left run is drawn in visual order, so it reads back in typing order
+                // only as one span. A left-to-right run gets a span per cluster of several glyphs
+                // instead, so a single word of it can still be selected and copied.
+                if shaped.rtl {
+                    block_ops.push(actual_text(&string));
+                }
                 state.font = Some((resource.clone(), size_of(source, item.1)));
                 // One text object for the run: each glyph is placed where shaping put it by a TJ
                 // adjustment from where the glyph before it ends (its advance in the embedded
@@ -703,7 +711,17 @@ pub(crate) fn rewrite_styled_block(
                 // `pen`: where the next glyph would start, in thousandths of the font size.
                 let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
                 let mut shown_glyphs: Vec<Object> = Vec::new();
+                // Glyphs left in the open cluster span (marked-content operators may stand in a
+                // text object, ISO 32000-1 §14.6, but not inside a TJ array).
+                let mut in_span = 0usize;
                 for (i, glyph) in shaped.glyphs.iter().enumerate() {
+                    if let Some((text, count)) = glyph.span.as_ref().filter(|_| !shaped.rtl && in_span == 0) {
+                        if !shown_glyphs.is_empty() {
+                            block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
+                        }
+                        block_ops.push(actual_text(text));
+                        in_span = *count;
+                    }
                     let target = (glyph.position[0] * size + extra) * per_unit;
                     let glyph_rise = rise + glyph.position[1] * size;
                     if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
@@ -722,16 +740,37 @@ pub(crate) fn rewrite_styled_block(
                     shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
                     pen = target + shown.width(u32::from(code)) * 1000.0;
                     extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
+                    if in_span > 0 {
+                        in_span -= 1;
+                        if in_span == 0 {
+                            // Inside the span, move on to where the next glyph starts: a mark set
+                            // back over its letter otherwise leaves the move to the next cluster,
+                            // which reads as a word space.
+                            let next = shaped.glyphs.get(i + 1).map_or(shaped.advance, |g| g.position[0]);
+                            let next_target = (next * size + extra) * per_unit;
+                            if next_target.is_finite() && (next_target - pen).abs() > 1e-6 {
+                                shown_glyphs.push(n(pen - next_target));
+                                pen = next_target;
+                            }
+                            block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
+                            block_ops.push(Op::new("EMC", vec![]));
+                        }
+                    }
                 }
                 if !shown_glyphs.is_empty() {
                     block_ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
+                }
+                if in_span > 0 {
+                    block_ops.push(Op::new("EMC", vec![]));
                 }
                 if (raised - rise).abs() > 1e-9 {
                     block_ops.push(Op::new("Ts", vec![n(rise)]));
                 }
                 block_ops.push(Op::new("ET", vec![]));
                 (state.char_spacing, state.word_spacing) = (char_spacing, word_spacing);
-                block_ops.push(Op::new("EMC", vec![]));
+                if shaped.rtl {
+                    block_ops.push(Op::new("EMC", vec![]));
+                }
                 segment_width = (shaped.advance * size + extra) * state.scale * source.origin.k;
             } else {
                 block_ops.push(Op::new("BT", vec![]));

@@ -5708,6 +5708,8 @@ fn a_new_character_comes_from_the_source_fonts_own_embedded_program() {
     }
 }
 
+/// An edited shaped run (Latin with marks, by Inter) is one text object, one `Tm` and `TJ`s only,
+/// and each glyph is drawn where shaping put it, raised marks included.
 #[test]
 fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
     let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
@@ -5718,9 +5720,11 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
     let style = text::BlockStyle { width: Some(400.0), resource: Some(resource), ..Default::default() };
     text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, typed);
+    // The run's text object: the one whose font is the shaped program (`PCFull…`).
     let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
-    let start = ops.iter().position(|o| o.is("BDC")).unwrap();
-    let end = start + ops[start..].iter().position(|o| o.is("EMC")).unwrap();
+    let shaped_font = ops.iter().position(|o| o.is("Tf") && o.operands[0].as_name().is_some_and(|n| n.starts_with(b"PCFull"))).unwrap();
+    let start = ops[..shaped_font].iter().rposition(|o| o.is("BT")).unwrap();
+    let end = start + ops[start..].iter().position(|o| o.is("ET")).unwrap() + 1;
     let run = &ops[start..end];
     let count = |name: &str| run.iter().filter(|o| o.is(name)).count();
     assert_eq!((count("BT"), count("Tm"), count("Tj")), (1, 1, 0), "{run:?}");
@@ -5760,6 +5764,95 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
         assert!((glyph.position[0] * size - x).abs() < 1e-3 && (glyph.position[1] * size - y).abs() < 1e-3, "{glyph:?} at {x}, {y}");
     }
     assert_eq!(rise, 0.0, "the rise is reset after the run");
+}
+
+/// The `/ToUnicode` destination of every glyph the first page shows in a shaped-run font
+/// (`PCFull…`), in drawing order: what a reader that ignores `/ActualText` copies.
+fn shaped_glyph_destinations(doc: &Document) -> Vec<String> {
+    let page = pdfcraft_model::pages(doc).remove(0);
+    let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let fonts = resources.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap_or_default();
+    let map_of = |name: &[u8]| -> std::collections::HashMap<u16, String> {
+        let font = doc.resolve(fonts.get(name).unwrap()).as_dict().unwrap().clone();
+        let Object::Stream(cmap) = &*doc.resolve(font.get(b"ToUnicode").unwrap()) else { panic!("no ToUnicode") };
+        let text = String::from_utf8(cmap.decoded().unwrap()).unwrap();
+        text.lines()
+            .filter_map(|line| {
+                let (code, dest) = line.strip_prefix('<')?.split_once("> <")?;
+                let units: Vec<u16> = dest
+                    .trim_end_matches('>')
+                    .as_bytes()
+                    .chunks(4)
+                    .map(|h| u16::from_str_radix(std::str::from_utf8(h).unwrap(), 16).unwrap())
+                    .collect();
+                Some((u16::from_str_radix(code, 16).ok()?, String::from_utf16(&units).unwrap()))
+            })
+            .collect()
+    };
+    let (mut map, mut out) = (None, Vec::new());
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        if op.is("Tf") {
+            let name = op.operands[0].as_name().unwrap().to_vec();
+            map = name.starts_with(b"PCFull").then(|| map_of(&name));
+            continue;
+        }
+        let Some(map) = &map else { continue };
+        let strings: Vec<Vec<u8>> = match op.op.as_slice() {
+            b"TJ" => op.operands[0].as_array().unwrap().iter().filter_map(|o| o.as_string().map(|s| s.bytes.clone())).collect(),
+            b"Tj" => vec![op.operands[0].as_string().unwrap().bytes.clone()],
+            _ => continue,
+        };
+        for code in strings.iter().flat_map(|s| s.chunks(2)) {
+            out.push(map.get(&u16::from_be_bytes([code[0], code[1]])).cloned().unwrap_or_default());
+        }
+    }
+    out
+}
+
+/// #1384: an edited left-to-right shaped run is not wrapped in one `/ActualText`, which made
+/// Acrobat and PdfCraft select only the whole line; each cluster of several glyphs gets its own
+/// span instead (as Chrome writes them), and each glyph carries its own characters in
+/// `/ToUnicode` for readers that ignore `/ActualText` (Foxit), except where a cluster has more
+/// glyphs than characters (Sara Am drawn as two glyphs).
+#[test]
+fn an_edited_shaped_run_maps_each_glyph_to_its_own_characters() {
+    let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").as_slice();
+    // A static Thai face: the build's, or Sarabun from the craft-fonts checkout (the variable
+    // Noto Sans Thai can't be embedded). Without one, only the Latin case runs. A relative
+    // `CRAFT_FONTS_DIR` is resolved as the fonts build script reads it, from that crate's folder.
+    let fonts_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fonts");
+    let sarabun = option_env!("CRAFT_FONTS_DIR").and_then(|dir| std::fs::read(fonts_crate.join(dir).join("fonts/sarabun/Sarabun-Regular.ttf")).ok());
+    let thai = pdfcraft_fonts::document_thai_font()
+        .map(|f| f.bytes.to_vec())
+        .filter(|b| pdfcraft_fonts::embedding::validate(b).is_ok())
+        .or(sarabun)
+        .filter(|b| pdfcraft_fonts::embedding::validate(b).is_ok());
+    let hex = |s: &str| s.encode_utf16().map(|u| format!("{u:04X}")).collect::<String>();
+    // A leading vowel (ใ) is a cluster of one glyph, so it needs no span.
+    let cases = [
+        (Some(inter), "q\u{301}x\u{323} words", ["q\u{301}", "x\u{323}"].as_slice(), true),
+        (thai.as_deref(), "ที่ดิน กิ่ ผู้ใช้ ปู่", ["ที่", "ดิ", "กิ่", "ผู้", "ช้", "ปู่"].as_slice(), true),
+        (thai.as_deref(), "ที่ดิน น้ำ ปู่", ["ที่", "ดิ", "น้ำ", "ปู่"].as_slice(), false),
+    ];
+    for (bytes, typed, clusters, every_glyph_mapped) in cases {
+        let Some(bytes) = bytes else { continue };
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+        let resource = text::register_text_font(&mut doc, 0, bytes).unwrap();
+        let style = text::BlockStyle { width: Some(400.0), resource: Some(resource), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, typed);
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        let spans: Vec<String> = content.split("/ActualText <FEFF").skip(1).filter_map(|s| s.split('>').next()).map(str::to_owned).collect();
+        assert_eq!(spans, clusters.iter().map(|c| hex(c)).collect::<Vec<_>>(), "{typed}: {content}");
+        // What a reader ignoring ActualText copies: every glyph's own character, in drawing order,
+        // so two glyphs given each other's characters fail, not only empty entries.
+        let destinations = shaped_glyph_destinations(&doc);
+        assert_eq!(destinations.concat(), typed, "{typed}: {destinations:?}");
+        if every_glyph_mapped {
+            assert_eq!(destinations, typed.chars().map(String::from).collect::<Vec<_>>(), "{typed}");
+        }
+    }
 }
 
 #[test]
