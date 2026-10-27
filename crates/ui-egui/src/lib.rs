@@ -2280,6 +2280,15 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// A native file picker couldn't show and the prompt about it is open
+    /// (`dialogs::picker_failed_prompt`). The web has no native pickers.
+    pub(crate) fn picker_failed_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.pickers.failed.is_some();
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
@@ -2289,6 +2298,7 @@ impl PdfCraftApp {
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
+            || self.picker_failed_open()
             || self.updates.open
     }
 
@@ -3280,6 +3290,7 @@ impl PdfCraftApp {
             let covered = self.pending_link.is_some()
                 || self.pending_remote_link.is_some()
                 || self.pending_full_screen.is_some()
+                || self.picker_failed_open()
                 || self.updates.open
                 || self.dialog.is_some()
                 || self.unlock_prompt.is_some();

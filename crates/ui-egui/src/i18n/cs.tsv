@@ -2512,6 +2512,11 @@ animation effects	Off	Vypnuto
 # Absolute local GoToR confirmation (#1364).
 	Allow	Povolit
 	Only allow this if you trust the source document.	Povolte tuto akci pouze v případě, že důvěřujete zdrojovému dokumentu.
+	No file dialog could open	Nepodařilo se otevřít žádné dialogové okno souborů
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft uchovává rozpracovanou práci. Až bude výběr souborů fungovat, zvolte Zkusit znovu.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Výběr souborů portálu pracovní plochy neběží ({packages}). Zkontrolujte jej příkazem systemctl --user status {first}, nebo se odhlaste a znovu přihlaste.
+	Try again	Zkusit znovu
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Žádný portál pracovní plochy nenabízí výběr souborů a zenity není nainstalováno. Nainstalujte xdg-desktop-portal s backendem, například xdg-desktop-portal-gtk, -kde nebo -gnome, nebo nainstalujte zenity.
 	Open in Full Screen mode?	Otevřít v režimu celé obrazovky?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Tento dokument žádá o otevření v režimu celé obrazovky: stránka vyplní obrazovku a nic jiného se nezobrazí. Stisknutím Esc jej kdykoli opustíte.
 	Full Screen	Celá obrazovka

@@ -2364,6 +2364,11 @@ animation effects	Off	Joaktiv
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Shfaq një shirit bazë titulli për butonat e dritares në vend të shiritit të skedave. GNOME nuk vizaton shirita titulli për aplikacionet, prandaj ky nuk e ndjek temën e tij.
 	Allow	Lejo
 	Only allow this if you trust the source document.	Lejoje vetëm nëse i beson dokumentit burimor.
+	No file dialog could open	Asnjë dritare skedarësh nuk mundi të hapet
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft po ruan atë që po bëje. Sapo zgjedhësi i skedarëve të funksionojë, zgjidh Provo përsëri.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Zgjedhësi i skedarëve i portalit të desktopit nuk po punon ({packages}). Kontrolloje me systemctl --user status {first}, ose dil nga llogaria dhe hyr përsëri.
+	Try again	Provo përsëri
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Asnjë portal desktopi nuk ofron zgjedhës skedarësh dhe zenity nuk është i instaluar. Instalo xdg-desktop-portal me një backend si xdg-desktop-portal-gtk, -kde ose -gnome, ose instalo zenity.
 	Open this local PDF?	Të hapet ky PDF lokal?
 	This document is trying to open a local file:	Ky dokument po përpiqet të hapë një skedar lokal:
 	Move tag earlier	Zhvendose etiketën më herët

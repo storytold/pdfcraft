@@ -2459,6 +2459,11 @@ animation effects	Off	معطّلة
 # Absolute local GoToR confirmation (#1364).
 	Allow	السماح
 	Only allow this if you trust the source document.	لا تسمح بذلك إلا إذا كنت تثق بالمستند المصدر.
+	No file dialog could open	تعذّر فتح أي نافذة لاختيار الملفات
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	يحتفظ PdfCraft بما كنت تعمل عليه. عندما يعمل منتقي الملفات، اختر حاول مجددًا.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	منتقي الملفات في بوابة سطح المكتب لا يعمل ({packages}). تحقّق منه باستخدام systemctl --user status {first}، أو سجّل الخروج ثم ادخل مجددًا.
+	Try again	حاول مجددًا
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	لا توجد بوابة سطح مكتب توفر منتقي ملفات، وzenity غير مثبّت. ثبّت xdg-desktop-portal مع واجهة خلفية مثل xdg-desktop-portal-gtk, -kde أو -gnome، أو ثبّت zenity.
 	Open in Full Screen mode?	فتح في وضع ملء الشاشة؟
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	يطلب هذا المستند أن يُفتح في وضع ملء الشاشة: تملأ الصفحة الشاشة ولا يظهر شيء آخر. اضغط Esc في أي وقت للخروج منه.
 	Full Screen	ملء الشاشة

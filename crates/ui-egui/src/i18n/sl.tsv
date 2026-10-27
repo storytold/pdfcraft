@@ -2443,6 +2443,11 @@ animation effects	Off	Izklopljeni
 # Absolute local GoToR confirmation (#1364).
 	Allow	Dovoli
 	Only allow this if you trust the source document.	To dovolite le, če zaupate izvornemu dokumentu.
+	No file dialog could open	Nobenega pogovornega okna za datoteke ni bilo mogoče odpreti
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft hrani, kar ste delali. Ko bo izbirnik datotek deloval, izberite Poskusi znova.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Izbirnik datotek namiznega portala ne deluje ({packages}). Preverite ga z ukazom systemctl --user status {first} ali se odjavite in znova prijavite.
+	Try again	Poskusi znova
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Noben namizni portal ne ponuja izbirnika datotek, zenity pa ni nameščen. Namestite xdg-desktop-portal z zaledjem, kot je xdg-desktop-portal-gtk, -kde ali -gnome, ali namestite zenity.
 	Open in Full Screen mode?	Odpri v celozaslonskem načinu?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Ta dokument želi, da se odpre v celozaslonskem načinu: stran zapolni zaslon in nič drugega ni prikazano. Za izhod kadar koli pritisnite Esc.
 	Full Screen	Celoten zaslon

@@ -28,6 +28,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     link_prompt(app, ctx);
     remote_link_prompt(app, ctx);
     full_screen_prompt(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    picker_failed_prompt(app, ctx);
     crate::updates::dialog(app, ctx);
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
@@ -1896,6 +1898,59 @@ fn full_screen_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if let Some(allow) = choice {
         app.resolve_full_screen_prompt(ctx, allow);
+    }
+}
+
+/// "No file dialog could open" when a native picker couldn't show (#3988): says why, and keeps
+/// what asked (a finished Reduce File Size copy, say) until the user tries again or discards it.
+/// Escape and clicks outside don't close it, since closing it would drop that work unasked.
+#[cfg(not(target_arch = "wasm32"))]
+fn picker_failed_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(why) = app.picker_failed().cloned() else { return };
+    let t = Tokens::get(ctx);
+    let mut retry = None;
+    widgets::show_modal(ctx, "picker_failed_prompt", |ui| {
+        ui.set_width(460.0);
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("triangle-alert", 22.0, crate::combine_ui::ERROR));
+            ui.label(egui::RichText::new(tl!("No file dialog could open")).font(theme::semibold(16.0)));
+        });
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(picker_problem_text(&why)).wrap().selectable(true));
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(tl!("PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again."))
+                .color(t.text_muted)
+                .small(),
+        );
+        ui.add_space(14.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, tl!("Try again"), true).clicked() {
+                retry = Some(true);
+            }
+            if widgets::pill_button(ui, tl!("Discard"), false).clicked() {
+                retry = Some(false);
+            }
+        });
+    });
+    if let Some(retry) = retry {
+        app.resolve_picker_failed(retry);
+    }
+}
+
+/// What kept the file dialog from showing, and what to do about it.
+#[cfg(not(target_arch = "wasm32"))]
+fn picker_problem_text(why: &pdfcraft_platform::file_dialog_probe::Problem) -> String {
+    use pdfcraft_platform::file_dialog_probe::Problem;
+    match why {
+        Problem::NoChooser => tl!(
+            "No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity."
+        )
+        .to_string(),
+        Problem::BackendDown(packages) => crate::i18n::fmt(
+            tl!("The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in."),
+            &[("packages", &packages.join(", ")), ("first", packages.first().map_or("xdg-desktop-portal", String::as_str))],
+        ),
     }
 }
 

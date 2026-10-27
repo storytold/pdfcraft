@@ -2460,6 +2460,11 @@ animation effects	Off	Вимкнено
 # Absolute local GoToR confirmation (#1364).
 	Allow	Дозволити
 	Only allow this if you trust the source document.	Дозволяйте це лише тоді, коли довіряєте вихідному документу.
+	No file dialog could open	Не вдалося відкрити вікно вибору файлів
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft зберігає те, над чим ви працювали. Коли вибір файлів запрацює, виберіть «Спробувати ще раз».
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Вибір файлів порталу робочого столу не запущено ({packages}). Перевірте його командою systemctl --user status {first} або вийдіть із системи й увійдіть знову.
+	Try again	Спробувати ще раз
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Жоден портал робочого столу не надає вибору файлів, а zenity не встановлено. Установіть xdg-desktop-portal із бекендом, наприклад xdg-desktop-portal-gtk, -kde або -gnome, або встановіть zenity.
 	Open in Full Screen mode?	Відкрити в повноекранному режимі?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Цей документ просить відкрити його в повноекранному режимі: сторінка заповнює екран, і більше нічого не показано. Натисніть Esc будь-коли, щоб вийти.
 	Full Screen	Повний екран

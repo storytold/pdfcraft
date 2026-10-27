@@ -2470,6 +2470,11 @@ animation effects	Off	Desactivats
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostra una barra de títol bàsica per als botons de la finestra en lloc de la tira de pestanyes. GNOME no dibuixa barres de títol per a les aplicacions, de manera que aquesta no segueix el seu tema.
 	Allow	Permet
 	Only allow this if you trust the source document.	Permet-ho només si confies en el document d'origen.
+	No file dialog could open	No s'ha pogut obrir cap diàleg de fitxers
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	El PdfCraft conserva el que estaves fent. Quan el selector de fitxers funcioni, tria Torna-ho a provar.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	El selector de fitxers del portal d'escriptori no s'està executant ({packages}). Comprova-ho amb systemctl --user status {first}, o tanca la sessió i torna a entrar.
+	Try again	Torna-ho a provar
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Cap portal d'escriptori ofereix un selector de fitxers i el zenity no està instal·lat. Instal·la xdg-desktop-portal amb un rerefons com xdg-desktop-portal-gtk, -kde o -gnome, o instal·la el zenity.
 	Open this local PDF?	Vols obrir aquest PDF local?
 	This document is trying to open a local file:	Aquest document intenta obrir un fitxer local:
 	Move tag earlier	Mou l'etiqueta cap amunt

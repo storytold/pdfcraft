@@ -2402,6 +2402,11 @@ animation effects	Off	关
 # Absolute local GoToR confirmation (#1364).
 	Allow	允许
 	Only allow this if you trust the source document.	仅在您信任源文档时才允许此操作。
+	No file dialog could open	无法打开文件对话框
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft 正在保留你刚才的操作。文件选择器恢复正常后，请选择“重试”。
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	桌面门户的文件选择器未在运行（{packages}）。请使用 systemctl --user status {first} 检查，或注销后重新登录。
+	Try again	重试
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	没有桌面门户提供文件选择器，且未安装 zenity。请安装 xdg-desktop-portal 及其后端（如 xdg-desktop-portal-gtk, -kde 或 -gnome），或安装 zenity。
 	Open in Full Screen mode?	以全屏模式打开？
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	此文档要求以全屏模式打开：页面充满屏幕，不显示其他内容。随时按 Esc 即可退出。
 	Full Screen	全屏

@@ -2434,6 +2434,11 @@ animation effects	Off	Kapalı
 # Absolute local GoToR confirmation (#1364).
 	Allow	İzin ver
 	Only allow this if you trust the source document.	Buna yalnızca kaynak belgeye güveniyorsanız izin verin.
+	No file dialog could open	Hiçbir dosya penceresi açılamadı
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft yaptığınız işi saklıyor. Dosya seçici çalıştığında Tekrar dene'yi seçin.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Masaüstü portalının dosya seçicisi çalışmıyor ({packages}). systemctl --user status {first} ile kontrol edin veya oturumu kapatıp yeniden açın.
+	Try again	Tekrar dene
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Hiçbir masaüstü portalı dosya seçici sunmuyor ve zenity kurulu değil. xdg-desktop-portal paketini xdg-desktop-portal-gtk, -kde veya -gnome gibi bir arka uçla kurun ya da zenity kurun.
 	Open in Full Screen mode?	Tam ekran modunda açılsın mı?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Bu belge tam ekran modunda açılmak istiyor: sayfa ekranı doldurur ve başka hiçbir şey görünmez. Çıkmak için istediğiniz zaman Esc tuşuna basın.
 	Full Screen	Tam ekran

@@ -2438,6 +2438,11 @@ animation effects	Off	オフ
 # Absolute local GoToR confirmation (#1364).
 	Allow	許可
 	Only allow this if you trust the source document.	元の文書を信頼できる場合にのみ許可してください。
+	No file dialog could open	ファイルダイアログを開けませんでした
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft は作業中の内容を保持しています。ファイル選択が使えるようになったら、再試行を選んでください。
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	デスクトップポータルのファイル選択が動作していません（{packages}）。systemctl --user status {first} で確認するか、ログアウトしてもう一度ログインしてください。
+	Try again	再試行
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	ファイル選択を提供するデスクトップポータルがなく、zenity もインストールされていません。xdg-desktop-portal-gtk, -kde、-gnome などのバックエンドと一緒に xdg-desktop-portal をインストールするか、zenity をインストールしてください。
 	Open in Full Screen mode?	フルスクリーンモードで開きますか？
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	この文書はフルスクリーンモードで開くよう求めています。ページが画面全体を占め、他には何も表示されません。Esc キーでいつでも終了できます。
 	Full Screen	フルスクリーン

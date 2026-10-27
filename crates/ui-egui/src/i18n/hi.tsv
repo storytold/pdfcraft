@@ -2607,6 +2607,11 @@ certificate	SHA-256 digest	SHA-256 डाइजेस्ट
 	Move tag earlier	टैग पहले ले जाएँ
 	Move tag later	टैग बाद में ले जाएँ
 	Only allow this if you trust the source document.	इसे केवल तभी अनुमति दें जब आप स्रोत दस्तावेज़ पर भरोसा करें।
+	No file dialog could open	कोई फ़ाइल डायलॉग नहीं खुल सका
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft आपका चल रहा काम सुरक्षित रख रहा है। फ़ाइल चयनकर्ता काम करने लगे, तो पुनः प्रयास करें चुनें।
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	डेस्कटॉप पोर्टल का फ़ाइल चयनकर्ता नहीं चल रहा है ({packages})। इसे systemctl --user status {first} से जाँचें, या लॉग आउट करके फिर से लॉग इन करें।
+	Try again	पुनः प्रयास करें
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	कोई भी डेस्कटॉप पोर्टल फ़ाइल चयनकर्ता नहीं देता, और zenity इंस्टॉल नहीं है। xdg-desktop-portal को xdg-desktop-portal-gtk, -kde या -gnome जैसे बैकएंड के साथ इंस्टॉल करें, या zenity इंस्टॉल करें।
 	Open this local PDF?	यह स्थानीय पीडीएफ़ खोलें?
 	Remove "{name}" from this list? The file itself is not deleted.	"{name}" को इस सूची से हटाएँ? फ़ाइल स्वयं नहीं मिटती।
 	Restore	पुनर्स्थापित करें

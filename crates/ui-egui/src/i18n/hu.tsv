@@ -2437,6 +2437,11 @@ animation effects	Off	Ki
 # Absolute local GoToR confirmation (#1364).
 	Allow	Engedélyezés
 	Only allow this if you trust the source document.	Csak akkor engedélyezze ezt, ha megbízik a forrásdokumentumban.
+	No file dialog could open	Nem sikerült megnyitni fájlpárbeszédet
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	A PdfCraft megőrzi, amin éppen dolgozott. Ha a fájlválasztó már működik, válassza az Újrapróbálás lehetőséget.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Az asztali portál fájlválasztója nem fut ({packages}). Ellenőrizze ezzel: systemctl --user status {first}, vagy jelentkezzen ki, majd be.
+	Try again	Újrapróbálás
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Egyik asztali portál sem kínál fájlválasztót, és a zenity nincs telepítve. Telepítse a(z) xdg-desktop-portal csomagot egy háttérprogrammal, például xdg-desktop-portal-gtk, -kde vagy -gnome, vagy telepítse a zenity-t.
 	Open in Full Screen mode?	Megnyitás teljes képernyős módban?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Ez a dokumentum teljes képernyős módban kér megnyitást: az oldal kitölti a képernyőt, és semmi más nem látszik. Az Esc billentyűvel bármikor kiléphet.
 	Full Screen	Teljes képernyő
