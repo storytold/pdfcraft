@@ -245,7 +245,7 @@ impl PdfCraftApp {
         let name =
             if let Some((name, _)) = images.first().filter(|_| images.len() == 1) { format!("{}.pdf", stem(name)) } else { "Images.pdf".to_string() };
         let created = self.session.create_from_images_with_resolution(&images, resolution).map_err(|e| e.to_string());
-        if let Err(e) = self.open_created_bytes(&name, created, true) {
+        if let Err(e) = self.open_created_bytes(&name, created, false) {
             self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
         }
     }
