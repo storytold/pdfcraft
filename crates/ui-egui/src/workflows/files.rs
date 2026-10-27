@@ -460,8 +460,7 @@ impl PdfCraftApp {
         if dropped.is_empty() {
             return;
         }
-        let mut paths = Vec::new();
-        let mut in_memory = Vec::new();
+        let mut incoming = Vec::new();
         for f in dropped {
             if let Some(clean_path) = clean_dropped_path(f.path()) {
                 if clean_path.is_dir() {
@@ -471,7 +470,18 @@ impl PdfCraftApp {
                     if folder_paths.is_empty() {
                         self.notify_fmt("No PDFs, images or text files found in {folder}", &[("folder", &folder)]);
                     } else {
-                        paths.extend(folder_paths);
+                        for p in folder_paths {
+                            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
+                            match std::fs::read(&p) {
+                                Ok(bytes) => {
+                                    let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                                    incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
+                                }
+                                Err(e) => {
+                                    self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                                }
+                            }
+                        }
                         if more {
                             self.notify_fmt(
                                 "Added the first {n} files in {folder}",
@@ -480,42 +490,55 @@ impl PdfCraftApp {
                         }
                     }
                 } else {
-                    paths.push(clean_path);
+                    let name = clean_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
+                    match std::fs::read(&clean_path) {
+                        Ok(bytes) => {
+                            let modified = std::fs::metadata(&clean_path).and_then(|m| m.modified()).ok();
+                            incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
+                        }
+                        Err(e) => {
+                            self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                        }
+                    }
                 }
                 continue;
             }
             let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
             match f.bytes() {
-                Ok(bytes) => in_memory.push((name, bytes)),
+                Ok(bytes) => incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }),
                 Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
             }
         }
-        if !paths.is_empty() {
-            self.use_paths(FilePurpose::Combine, &paths);
-        }
-        if !in_memory.is_empty() {
-            self.use_files(FilePurpose::Combine, in_memory);
+        if !incoming.is_empty() {
+            self.stage_combine_with(incoming);
         }
     }
 
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn drop_into_combine(&mut self, dropped: &[egui::DroppedFileHandle], ctx: &egui::Context) {
-        for f in dropped {
-            let f = f.clone();
-            let requests = self.requests.clone();
-            let request = self.file_request(FilePurpose::Combine, Vec::new());
-            let ctx = ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-                if let Ok(bytes) = f.bytes_async().await
-                    && let Ok(mut q) = requests.lock()
-                {
-                    q.push(FileRequest { files: vec![(name, bytes)], ..request });
-                    ctx.request_repaint();
-                }
-            });
+        if dropped.is_empty() {
+            return;
         }
+        let dropped = dropped.to_vec();
+        let requests = self.requests.clone();
+        let request = self.file_request(FilePurpose::Combine, Vec::new());
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut files = Vec::with_capacity(dropped.len());
+            for f in dropped {
+                let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+                if let Ok(bytes) = f.bytes_async().await {
+                    files.push((name, bytes));
+                }
+            }
+            if !files.is_empty()
+                && let Ok(mut q) = requests.lock()
+            {
+                q.push(FileRequest { files, ..request });
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// A request to use `files` for `purpose`, bound to the document it will edit: the active
