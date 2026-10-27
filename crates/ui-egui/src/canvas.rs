@@ -1273,6 +1273,7 @@ struct PageEnv<'a> {
     selects_text: bool,
     signature: &'a Option<crate::fill_sign::SavedSig>,
     single_paging: bool,
+    stamp_lang: pdfcraft_engine::StampLang,
     t: &'a Tokens,
     table_preview: &'a Option<crate::field_table_ui::Preview>,
     tag: u64,
@@ -3126,7 +3127,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let today = app.session.today();
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
     let date_text = crate::date_text_for_pdf(&app.session);
-    let by_line = app.session.stamp_by_line(&author);
+    // Stamps are written in the interface language where a translation exists and this build
+    // has the faces to draw it.
+    let stamp_lang = pdfcraft_engine::StampLang::for_interface(crate::i18n::current().code());
+    let by_line = app.session.stamp_by_line_in(&author, stamp_lang);
     let custom_stamp = match tool {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
@@ -3202,6 +3206,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         selects_text,
         signature: &signature,
         single_paging,
+        stamp_lang,
         t: &t,
         table_preview: &table_preview,
         tag,

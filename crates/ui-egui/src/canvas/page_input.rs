@@ -304,6 +304,7 @@ fn tool_input(
         info,
         initials,
         signature,
+        stamp_lang,
         tool,
         units,
         fill_text_size,
@@ -320,7 +321,7 @@ fn tool_input(
     }
     if let QuickTool::Stamp(kind) = tool
         && allowed
-        && crate::stamps_ui::place(cx, kind, by_line, author, free, view)
+        && crate::stamps_ui::place(cx, kind, stamp_lang, by_line, author, free, view)
     {
         frame.out.stamp_placed = true;
     }
