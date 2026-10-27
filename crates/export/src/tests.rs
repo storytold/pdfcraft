@@ -1025,7 +1025,7 @@ fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
         (format!("{arabic} 12 {more}"), vec![(arabic.into(), true), (" 12 ".into(), false), (more.into(), true)]),
         // Marks and joiners stay with their letter; a mark after Latin stays with the Latin.
         (
-            format!("\u{0645}\u{064e}\u{0631}\u{200c}\u{0628} x"),
+            "\u{0645}\u{064e}\u{0631}\u{200c}\u{0628} x".to_string(),
             vec![("\u{0645}\u{064e}\u{0631}\u{200c}\u{0628}".into(), true), (" x".into(), false)],
         ),
         ("e\u{0301} \u{0645}".into(), vec![("e\u{0301} ".into(), false), ("\u{0645}".into(), true)]),
