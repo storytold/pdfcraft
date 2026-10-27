@@ -75,7 +75,7 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
   the bootstrap renderer.
 - PDF out: incremental or full saves, object streams, re-encryption, resource de-duplication when
   combining.
-- Other formats: images and text in (`create`); PNG/JPEG/TIFF, text, RTF, Word and HTML out
+- Other formats: images and text in (`create`); PNG/JPEG/TIFF/SVG, text, RTF, Word and HTML out
   (`export`, `render`); FDF/XFDF/XML/CSV/TXT form and comment data (`xfdf`); PKCS #12, X.509,
   PEM/DER certificates (`sign`). Full matrix: [file-format-parity.md](file-format-parity.md).
 
@@ -113,6 +113,7 @@ built by `.github/workflows/release.yml` ([releasing.md](releasing.md)).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | File I/O: SVG added to the output formats (one SVG per page, drawn with `hayro-svg` by `pdfcraft-render`) |
 | 2026-10-23 | minor | `xtask ci` prints the translation gaps (`xtask i18n-report`); a missing translation never fails it |
 | 2026-10-23 | minor | `xtask ci` runs nextest and doctests, checks the CLI without default features, and checks wasm in one call |
 | 2026-10-10 | major | Created from the code on main (crate list, `xtask/src/layers.rs`, crate READMEs, `vendor/README.md`) |

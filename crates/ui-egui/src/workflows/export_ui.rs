@@ -1,4 +1,4 @@
-//! Export a PDF ▸ Image (PNG, JPEG, TIFF) and Text (Acrobat's Export a PDF tool, first formats).
+//! Export a PDF ▸ Image (PNG, JPEG, TIFF, SVG) and Text (Acrobat's Export a PDF tool, first formats).
 //!
 //! On the desktop the export runs on a worker thread and reports progress in the notice bar;
 //! on the web it runs in place and downloads the files.
@@ -51,16 +51,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
     );
     ui.add_space(8.0);
     if kind == ExportKind::Image {
-        ui.horizontal(|ui| {
-            ui.label(tl!("Resolution"));
-            egui::ComboBox::from_id_salt("export-dpi")
-                .selected_text(crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &d.dpi.to_string())]))
-                .show_ui(ui, |ui| {
-                    for dpi in [72.0, 96.0, 150.0, 300.0, 600.0] {
-                        ui.selectable_value(&mut d.dpi, dpi, crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &dpi.to_string())]));
-                    }
-                });
-        });
+        // SVG is vector: there is no resolution to choose.
+        if d.format != ImageFormat::Svg {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Resolution"));
+                egui::ComboBox::from_id_salt("export-dpi")
+                    .selected_text(crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &d.dpi.to_string())]))
+                    .show_ui(ui, |ui| {
+                        for dpi in [72.0, 96.0, 150.0, 300.0, 600.0] {
+                            ui.selectable_value(&mut d.dpi, dpi, crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &dpi.to_string())]));
+                        }
+                    });
+            });
+        }
         ui.horizontal(|ui| {
             ui.label(tl!("Format"));
             let mut quality = match d.format {
@@ -68,7 +71,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 _ => 85,
             };
             egui::ComboBox::from_id_salt("export-format").selected_text(d.format.label()).show_ui(ui, |ui| {
-                for f in [ImageFormat::Png, ImageFormat::Jpeg { quality }, ImageFormat::Tiff] {
+                for f in [ImageFormat::Png, ImageFormat::Jpeg { quality }, ImageFormat::Tiff, ImageFormat::Svg] {
                     let on = std::mem::discriminant(&d.format) == std::mem::discriminant(&f);
                     if ui.selectable_label(on, f.label()).clicked() {
                         d.format = f;
@@ -189,8 +192,12 @@ fn run(
                 crate::i18n::fmt(tl!("Exported {n} images"), &[("n", &total.to_string())])
             };
             // Pages too large for the renderer at the chosen resolution are drawn at the most it
-            // allows: say so, rather than leave a smaller image unexplained.
-            let lowered: Vec<f64> = pages.iter().map(|p| ex.dpi_used(*p, dpi)).filter(|used| *used < dpi.clamp(18.0, 1200.0) - 0.5).collect();
+            // allows: say so, rather than leave a smaller image unexplained. SVG has no resolution.
+            let lowered: Vec<f64> = pages
+                .iter()
+                .map(|p| ex.dpi_used(*p, dpi))
+                .filter(|used| format != ImageFormat::Svg && *used < dpi.clamp(18.0, 1200.0) - 0.5)
+                .collect();
             if let Some(lowest) = lowered.iter().copied().reduce(f64::min) {
                 msg.push_str(&crate::i18n::fmt(
                     tl!(" ({n} at {dpi} dpi, the largest size they can be drawn at)"),

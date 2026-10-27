@@ -2691,6 +2691,18 @@ name = "hayro-postscript"
 version = "0.1.0"
 
 [[package]]
+name = "hayro-svg"
+version = "0.7.0"
+dependencies = [
+ "base64 0.22.1",
+ "hayro-interpret",
+ "image",
+ "kurbo 0.13.1",
+ "siphasher",
+ "xmlwriter",
+]
+
+[[package]]
 name = "hayro-syntax"
 version = "0.7.2"
 dependencies = [
@@ -4430,6 +4442,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "hayro",
+ "hayro-svg",
  "hayro-syntax",
  "kurbo 0.13.1",
  "log",

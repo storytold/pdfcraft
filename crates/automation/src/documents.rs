@@ -535,7 +535,8 @@ impl Automation {
             "png" => pdfcraft_engine::export::ImageFormat::Png,
             "jpeg" | "jpg" => pdfcraft_engine::export::ImageFormat::Jpeg { quality },
             "tiff" | "tif" => pdfcraft_engine::export::ImageFormat::Tiff,
-            f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
+            "svg" => pdfcraft_engine::export::ImageFormat::Svg,
+            f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff, svg)"))),
         };
         let mut files = Vec::new();
         let mut lowered = Vec::new();
@@ -544,9 +545,9 @@ impl Automation {
             let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
-            // A page too large for the renderer at `dpi` is drawn at the most it allows.
+            // A page too large for the renderer at `dpi` is drawn at the most it allows. SVG has no dpi.
             let used = ex.dpi_used(p, dpi);
-            if used < dpi.clamp(18.0, 1200.0) - 0.5 {
+            if format != pdfcraft_engine::export::ImageFormat::Svg && used < dpi.clamp(18.0, 1200.0) - 0.5 {
                 lowered.push(json!({ "page": p + 1, "dpi": used.floor() }));
             }
         }

@@ -1,7 +1,7 @@
 //! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
 //!
-//! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
-//! text, from a
+//! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution, or draws them as SVG, and
+//! extracts reading-order text, from a
 //! document's working file (so unsaved edits and hidden layers are respected, as on screen).
 
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
@@ -93,9 +93,13 @@ impl Exporter {
         encode_png(r.width, r.height, &r.rgba)
     }
 
-    /// Page `page` as an image file of `format`, which says the resolution it was drawn at.
+    /// Page `page` as an image file of `format`. A JPEG or TIFF says the resolution it was drawn
+    /// at (see [`encode_image`]); SVG is vector, so it ignores `dpi`.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
+        if format == ImageFormat::Svg {
+            return self.renderer.svg(page).map(String::into_bytes).map_err(|e| format!("page {}: {e}", page + 1));
+        }
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
         if let Some(e) = r.error {
             return Err(format!("page {}: {e}", page + 1));
@@ -135,6 +139,7 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
         ImageFormat::Png => encode_png(width, height, premultiplied),
         ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality, dpi),
         ImageFormat::Tiff => encode_tiff(width, height, premultiplied, dpi),
+        ImageFormat::Svg => Err("SVG is drawn from the page, not encoded from pixels".into()),
     }
 }
 
@@ -185,6 +190,8 @@ pub enum ImageFormat {
         quality: u8,
     },
     Tiff,
+    /// Vector, one file per page; resolution and quality do not apply.
+    Svg,
 }
 
 impl ImageFormat {
@@ -193,6 +200,7 @@ impl ImageFormat {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg { .. } => "jpg",
             ImageFormat::Tiff => "tif",
+            ImageFormat::Svg => "svg",
         }
     }
 
@@ -201,6 +209,7 @@ impl ImageFormat {
             ImageFormat::Png => "PNG",
             ImageFormat::Jpeg { .. } => "JPEG",
             ImageFormat::Tiff => "TIFF",
+            ImageFormat::Svg => "SVG",
         }
     }
 }

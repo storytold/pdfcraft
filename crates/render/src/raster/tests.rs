@@ -1512,6 +1512,188 @@ fn missing_page_and_garbage_input_fail_gracefully() {
     assert!(g.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }).error.is_some());
 }
 
+/// A one-page document with the page attributes `page` (boxes, rotation), the content stream
+/// `content` and Helvetica as `/F1`.
+fn svg_page(page: &str, content: &str) -> PageRenderer {
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R {page} /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default())
+}
+
+#[test]
+fn svg_export_sizes_the_page_from_its_crop_box_and_rotation() {
+    let mut r = svg_page("/MediaBox [0 0 200 100]", "");
+    let svg = r.svg(0).expect("an SVG");
+    assert!(svg.starts_with("<svg viewBox=\"0 0 200 100\" width=\"200\" height=\"100\" "), "{svg}");
+    assert!(svg.contains("xmlns=\"http://www.w3.org/2000/svg\"") && svg.contains("background-color: rgba(255, 255, 255, 255)"), "{svg}");
+    // One pass sizes the SVG, one writes it.
+    assert_eq!(r.stats().page_interpretations, 2);
+    let rotated = svg_page("/MediaBox [0 0 200 100] /Rotate 90", "").svg(0).expect("an SVG");
+    assert!(rotated.starts_with("<svg viewBox=\"0 0 100 200\" width=\"100\" height=\"200\" "), "{rotated}");
+    let cropped = svg_page("/MediaBox [0 0 200 100] /CropBox [10 10 110 60]", "").svg(0).expect("an SVG");
+    assert!(cropped.starts_with("<svg viewBox=\"0 0 100 50\" width=\"100\" height=\"50\" "), "{cropped}");
+}
+
+#[test]
+fn svg_export_draws_shapes_as_paths_and_text_as_outlines() {
+    let svg = svg_page("/MediaBox [0 0 200 100]", "0 0 1 rg 10 10 30 20 re f BT /F1 12 Tf 20 70 Td (Hello) Tj ET").svg(0).expect("an SVG");
+    assert!(svg.lines().any(|l| l.trim_start().starts_with("<path d=\"M") && l.contains("fill=\"#0000ff\"")), "the blue rectangle: {svg}");
+    // Each glyph is a `<use>` of its outline path, never SVG text.
+    assert!(svg.contains("<use ") && !svg.contains("<text"), "{svg}");
+}
+
+#[test]
+fn svg_export_of_clipping_text_paints_no_glyphs() {
+    // `7 Tr` text only shapes the clip of what follows it (the vendored hayro-svg patch).
+    let svg = svg_page("/MediaBox [0 0 200 100]", "BT /F1 48 Tf 7 Tr 20 30 Td (Hi) Tj ET 0 0 1 rg 0 0 200 100 re f").svg(0).expect("an SVG");
+    assert!(!svg.contains("<use "), "no glyph is painted: {svg}");
+    assert!(svg.contains("fill=\"#0000ff\"") && svg.contains("clip-path=\"url(#"), "the fill is clipped by the text: {svg}");
+}
+
+/// A 200×100 page drawing `content`, with a tiling pattern `/P1` whose cell (its BBox from
+/// 10,10) fills with the axial shading pattern `/S1`, `/S1` itself, a Type 3 font `/T3` whose
+/// `a` is a filled square, `/GS1`, a luminosity soft mask that fills the page, `/GS2`, the
+/// Multiply blend mode, and `/Im1`, a 100×50 image mask.
+fn paint_page(content: &str) -> PageRenderer {
+    let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >> stream\n{data}\nendstream", data.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R /S1 6 0 R >> \
+         /Font << /T3 7 0 R >> /XObject << /Im1 10 0 R >>              /ExtGState << /GS1 << /SMask << /S /Luminosity /G 9 0 R >> >> /GS2 << /BM /Multiply >> >> >> >>"
+            .to_string(),
+        stream("", content),
+        stream(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [10 10 30 30] /XStep 20 /YStep 20 /Resources << /Pattern << /S1 6 0 R >> >>",
+            "/Pattern cs /S1 scn 10 10 20 20 re f",
+        ),
+        "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 30 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> >>"
+            .to_string(),
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> \
+         /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+            .to_string(),
+        stream("", "1000 0 0 0 1000 1000 d1 0 0 1000 1000 re f"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 200 100] /Group << /S /Transparency /CS /DeviceRGB >>", "1 g 0 0 200 100 re f"),
+        stream("/Type /XObject /Subtype /Image /ImageMask true /Width 100 /Height 50 /BitsPerComponent 1", &" ".repeat(13 * 50)),
+    ];
+    let mut pdf = String::from("%PDF-1.7\n");
+    for (i, o) in objects.iter().enumerate() {
+        pdf += &format!("{} 0 obj {o} endobj\n", i + 1);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default())
+}
+
+#[test]
+fn svg_export_defines_every_paint_a_tiling_cell_uses() {
+    // The cell's shading is keyed by its box where the cell is drawn (the vendored hayro-svg
+    // patch): registered elsewhere, the cell's fill named a definition that was never written.
+    let svg = paint_page("/Pattern cs /P1 scn 0 0 200 100 re f").svg(0).expect("an SVG");
+    let ids =
+        |open: &str, close: char| -> Vec<String> { svg.split(open).skip(1).map(|s| s.split(close).next().unwrap_or_default().to_string()).collect() };
+    let refs = [ids("url(#", ')'), ids("href=\"#", '"')].concat();
+    assert!(refs.len() >= 3, "the page's pattern, the cell's shading pattern and its raster: {svg}");
+    for id in refs {
+        assert!(svg.contains(&format!("id=\"{id}\"")), "#{id} has no definition: {svg}");
+    }
+}
+
+/// [`svg_size`]'s estimate for [`paint_page`] drawing `content`.
+fn size(content: &str) -> u64 {
+    let r = paint_page(content);
+    let (p, w, h) = drawable_page(r.pdf.as_ref().expect("parsed"), 0).expect("a page");
+    svg_size(p, w, h, &r.settings)
+}
+
+#[test]
+fn svg_size_counts_what_hayro_svg_writes_beyond_the_page_draws() {
+    let square = 128 + 5 * 64; // `re f`: one element, its m, three l and the close
+    // A shading fill adds its unclipped raster, 100 × 50 pixels of 4 bytes, once per box.
+    let shaded = size("/Pattern cs /S1 scn 0 0 100 50 re f");
+    assert!(shaded >= square + 128 + 100 * 50 * 4, "{shaded}");
+    assert_eq!(size("/Pattern cs /S1 scn 0 0 100 50 re f 0 0 100 50 re f") - shaded, square);
+    // A tiling cell is written once for each transform it is drawn under.
+    let same = size("/Pattern cs /P1 scn 0 0 10 10 re f 20 0 10 10 re f 40 0 10 10 re f");
+    let moved = size("/Pattern cs /P1 scn 0 0 10 10 re f 1 0 0 1 20 0 cm 0 0 10 10 re f 1 0 0 1 20 0 cm 0 0 10 10 re f");
+    assert!(moved >= same + 2 * square, "{same} {moved}");
+    // So is each Type 3 glyph, with its procedure, and each soft mask with its content.
+    let (one, three) = (size("BT /T3 10 Tf (a) Tj ET"), size("BT /T3 10 Tf (aaa) Tj ET"));
+    assert!(three >= one + 2 * (128 + square), "{one} {three}");
+    let (plain, masked) = (size("0 0 10 10 re f"), size("/GS1 gs 0 0 10 10 re f"));
+    assert!(masked >= plain + square, "{plain} {masked}");
+    // A shading over a box 10 000 pt square would be a 400 MB raster: refused before it's made.
+    let huge = paint_page("100 0 0 100 0 0 cm /Pattern cs /S1 scn 0 0 100 100 re f").svg(0);
+    assert!(huge.is_err_and(|e| e.contains("too complex")));
+}
+
+#[test]
+fn svg_size_counts_groups_and_pixels_as_hayro_svg_writes_them() {
+    let square = 128 + 5 * 64;
+    // While a soft mask or a blend mode is set, hayro-svg wraps each draw in a group of its own.
+    let masked = size("/GS1 gs 0 0 10 10 re f");
+    assert_eq!(size("/GS1 gs 0 0 10 10 re f 0 0 10 10 re f") - masked, 128 + square);
+    let blended = size("/GS2 gs 0 0 10 10 re f");
+    assert_eq!(size("/GS2 gs 0 0 10 10 re f 0 0 10 10 re f") - blended, 128 + square);
+    // An image is a PNG in base64: up to 6⅔ bytes a pixel, not 4.
+    let plain = size("q 100 0 0 50 0 0 cm /Im1 Do Q");
+    assert!(plain >= 128 + 100 * 50 * 7, "{plain}");
+    // An image mask filled with a pattern adds that paint over its box, once, and each draw
+    // adds the masked group and the box path it is drawn as.
+    let shaded = size("q 100 0 0 50 0 0 cm /Pattern cs /S1 scn /Im1 Do Q");
+    assert!(shaded >= plain + 128 + 100 * 50 * PIXEL_BYTES, "{plain} {shaded}");
+    let twice = size("q 100 0 0 50 0 0 cm /Pattern cs /S1 scn /Im1 Do /Im1 Do Q");
+    assert_eq!(twice - shaded, plain + 128 + square, "{plain} {shaded} {twice}");
+}
+
+#[test]
+fn svg_export_of_a_missing_page_garbage_or_an_infinite_page_box_is_an_error() {
+    assert!(svg_page("/MediaBox [0 0 200 100]", "").svg(9).is_err_and(|e| e.contains("page 10 does not exist")));
+    let mut garbage = PageRenderer::new(Arc::new(b"not a pdf at all".to_vec()), RenderConfig::default());
+    assert!(garbage.svg(0).is_err());
+    // A width past f32 range. (A zero-size box is no error: hayro draws it at A4 size.)
+    let infinite = svg_page(&format!("/MediaBox [0 0 1{} 100]", "0".repeat(45)), "").svg(0);
+    assert!(infinite.is_err_and(|e| e.contains("empty or invalid page box")));
+}
+
+/// A page drawing a form of a 70,000-segment path 100 times is about 450 MB of SVG text by
+/// `SvgSize`'s estimate. That is an error, not a String that grows until memory runs out.
+#[test]
+fn svg_export_of_a_page_too_big_for_svg_is_an_error() {
+    let path: String = (0..70_000).map(|i| format!("{} {} l ", i % 200, i % 97)).collect();
+    let form = format!("0 0 m {path}S");
+    let content = "/Fm0 Do\n".repeat(100);
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /XObject << /Fm0 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length {} >> stream
+{form}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        form.len()
+    );
+    let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    assert!(r.svg(0).is_err_and(|e| e.contains("too complex to export as SVG")));
+}
+
 #[test]
 fn scale_is_clamped_for_huge_pages() {
     // A 200-inch-square page at 4x would be 57,600 px per side.

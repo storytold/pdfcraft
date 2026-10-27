@@ -7209,11 +7209,11 @@ title = "Export to SVG"
 area = "J"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["export.image"]
+tools = ["doc_export_images"]
+evidence = ["crates/render/src/raster/tests.rs::svg_export_sizes_the_page_from_its_crop_box_and_rotation", "crates/render/src/raster/tests.rs::svg_export_draws_shapes_as_paths_and_text_as_outlines", "crates/render/src/raster/tests.rs::svg_export_of_a_missing_page_garbage_or_an_infinite_page_box_is_an_error", "crates/render/src/raster/tests.rs::svg_export_of_a_page_too_big_for_svg_is_an_error", "crates/engine/src/tests.rs::svg_export_follows_the_working_file_at_any_resolution", "crates/automation/tests/it/automation.rs::exporting_pages_as_svg_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialog_writes_svg_pages"]
+notes = "One standalone SVG per page, page ranges, drawn with hayro-svg through the patched hayro-interpret and sized from the crop box and rotation: paths, fills, strokes, clips and shadings as SVG, images embedded as base64 PNG, text as glyph outlines (<use> of outline paths) so a page looks right without its fonts; includes unsaved edits (draws the working file). A page whose SVG would pass about 256 MiB (sized by a counting pass first, since hayro-svg writes every draw into one string) is refused with a message pointing to PNG or JPEG. Export to Image… lists SVG with the resolution hidden, the web build downloads the files; doc_export_images takes format \"svg\" (dpi and quality ignored, lower_dpi never reported), output confined to --root, copy permission required. Missing: text is outlines, so it is not selectable or searchable; the white page background is a CSS background-color on the root, which some editors (Inkscape) ignore and show the page transparent; no layers or optional-content groups as SVG groups; no multi-page single file; no `pdfcraft-cli render --out x.svg` (use `run` with doc_export_images); no SVG import. The tests check the file's structure (size, paths, outlines, errors, confinement), not the picture against the raster render or an external SVG renderer. Acrobat has dropped SVG export, so there is no Acrobat behaviour to match."
 
 [[feature]]
 id = "create.export-ps"

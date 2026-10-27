@@ -123,6 +123,7 @@ hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
+hayro-svg = { path = "vendor/hayro-svg" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
 # The egui and winit crates below are pinned to immutable storytold git revisions (egui

@@ -2720,6 +2720,27 @@ fn exporting_images_and_text_through_tools() {
 }
 
 #[test]
+fn exporting_pages_as_svg_through_tools() {
+    let dir = workdir("export-svg");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "out", "format": "svg", "pages": [1, 2] }));
+    assert_eq!(r["count"], 2);
+    for n in [1, 2] {
+        let svg = std::fs::read_to_string(dir.join(format!("out/b_page_{n}.svg"))).unwrap();
+        assert!(svg.starts_with("<svg viewBox=\"0 0 200 300\" width=\"200\" height=\"300\" "), "page {n}: {svg}");
+    }
+    // A page too large to raster at 150 dpi is still drawn whole: SVG has no resolution to lower.
+    let big = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 5000, "height": 5000 }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_images", json!({ "doc": big, "folder": "out", "format": "svg" }));
+    assert!(r.get("lower_dpi").is_none(), "{r}");
+    let svg = std::fs::read_to_string(r["files"][0].as_str().unwrap()).unwrap();
+    assert!(svg.starts_with("<svg viewBox=\"0 0 5000 5000\" "), "{svg}");
+    let outside = a.call("doc_export_images", &json!({ "doc": doc, "folder": "../svg-outside", "format": "svg" }));
+    assert!(matches!(outside, Err(ToolError::Failed(m)) if m.contains("outside the allowed directory")), "confined to the root");
+}
+
+#[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};
     use std::sync::Arc;
