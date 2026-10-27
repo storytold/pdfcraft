@@ -163,6 +163,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             password_retry: None,
             #[cfg(not(target_arch = "wasm32"))]
+            pending_destinations: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(not(target_arch = "wasm32"))]
             launch_layout: None,
@@ -536,6 +538,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.poll_pending_destinations();
         }
         self.check_restored_recent();
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
