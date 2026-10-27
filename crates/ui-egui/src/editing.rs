@@ -817,10 +817,11 @@ impl PdfCraftApp {
     }
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
-    pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
+    pub fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty
+        let dirty = if v.imported_image { doc.dirty && doc.can_undo().is_some() } else { doc.dirty };
+        dirty
             || v.pending_edit.is_some()
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())

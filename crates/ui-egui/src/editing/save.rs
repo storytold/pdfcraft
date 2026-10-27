@@ -198,6 +198,7 @@ impl PdfCraftApp {
                     view.document_changed(&doc.info);
                     // Saving over a version that changed on disk keeps this one: nothing to ask.
                     view.disk_changed = false;
+                    view.imported_image = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]
