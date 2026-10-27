@@ -892,6 +892,49 @@ fn arrange_keys_move_the_selected_item_in_the_drawing_order() {
     assert!(h.state_mut().execute("edit.undo"));
     h.run_steps(3);
     assert_eq!(order(&h), ["TWO", "ONE", "THREE"]);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 1)), "ONE is still the selected item after the undo");
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    assert_eq!(order(&h), ["ONE", "TWO", "THREE"]);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "and after the redo");
+    // Undoing past the item's own creation leaves nothing selected rather than another item.
+    for _ in 0..8 {
+        h.state_mut().execute("edit.undo");
+        h.run_steps(2);
+    }
+    assert!(added(&h).is_empty());
+    assert_eq!(h.state().views[0].content.selected, None);
+}
+
+/// #3798: the arrange keys leave a dialog's keyboard alone.
+#[test]
+fn arrange_keys_do_nothing_under_a_dialog() {
+    let mut h = harness();
+    for (i, word) in ["ONE", "TWO"].into_iter().enumerate() {
+        let text = pdfcraft_engine::AddedText {
+            rect: [20.0, 300.0 - 40.0 * i as f64, 180.0, 314.0 - 40.0 * i as f64],
+            text: word.into(),
+            ..Default::default()
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    }
+    assert!(h.state_mut().execute("edit.text"));
+    crate::support::settle(&mut h);
+    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_some());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowUp);
+    h.run_steps(3);
+    let texts: Vec<String> = added(&h)
+        .iter()
+        .map(|a| match &a.content {
+            pdfcraft_engine::AddedContent::Text(t) => t.text.clone(),
+            pdfcraft_engine::AddedContent::Image(_) => "image".into(),
+        })
+        .collect();
+    assert_eq!(texts, ["ONE", "TWO"], "the shortcut did not reach the page under the dialog");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
 }
 
 /// Where a mode bar tab is, by its label.

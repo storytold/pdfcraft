@@ -284,7 +284,9 @@ impl Arrange {
 /// page's contents hold stays put.
 pub fn arrange_content(doc: &mut Document, page: usize, index: usize, to: Arrange) -> Result<usize, EditError> {
     let items: Vec<ObjRef> = list_added(doc).into_iter().filter(|a| a.page == page).map(|a| a.obj).collect();
-    let item = *items.get(index).ok_or_else(|| EditError::Invalid(format!("page {} has no added item {}", page + 1, index + 1)))?;
+    let item = *items
+        .get(index)
+        .ok_or_else(|| EditError::Invalid(format!("page {} has no added item {}", page.saturating_add(1), index.saturating_add(1))))?;
     let target = to.target(index, items.len());
     if target == index {
         let side = if matches!(to, Arrange::Front | Arrange::Forward) { "front" } else { "back" };
@@ -293,7 +295,8 @@ pub fn arrange_content(doc: &mut Document, page: usize, index: usize, to: Arrang
     let p = page_list(doc).swap_remove(page);
     let mut list = contents(doc, &p)?;
     // The places in the page's contents the items occupy, in drawing order: items trade these.
-    let slots: Vec<usize> = items.iter().filter_map(|o| list.iter().position(|e| e.as_ref() == Some(*o))).collect();
+    // Counted entry by entry, so a stream the contents name twice holds two places, not one.
+    let slots: Vec<usize> = list.iter().enumerate().filter(|(_, e)| e.as_ref().is_some_and(|r| items.contains(&r))).map(|(i, _)| i).collect();
     if slots.len() != items.len() {
         return Err(EditError::Invalid("the page's added items can't be found in its contents".into()));
     }

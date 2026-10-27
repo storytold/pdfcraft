@@ -325,6 +325,12 @@ impl PdfCraftApp {
             Some((s.page, target, ambiguous))
         });
         let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
+        // The selected added item, by its place in the page's content: the undo may reorder them.
+        let selected = self.views[i].content.selected.and_then(|(page, index)| {
+            let doc = self.session.get(id)?;
+            let item = doc.added().iter().filter(|a| a.page == page).nth(index)?;
+            Some((page, item.obj))
+        });
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
@@ -332,6 +338,10 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.get_mut(i)
                 {
                     view.document_changed(&doc.info);
+                    // Keep the same added item selected across reorders and history steps.
+                    if let Some((page, obj)) = selected {
+                        view.content.selected = doc.added().iter().filter(|a| a.page == page).position(|a| a.obj == obj).map(|index| (page, index));
+                    }
                     view.picked_image = None;
                     if let Some((page, target, ambiguous_before)) = target_image {
                         let page_images = doc.page_images(page);

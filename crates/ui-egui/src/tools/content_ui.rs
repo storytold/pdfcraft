@@ -583,25 +583,30 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
 /// Delete removes the selected item; Escape clears the selection. Ctrl/Cmd+Up and Down move it one
 /// step over or under the next added item, and with Shift all the way to the front or the back
 /// (#3798).
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, added: &[Added], image_controller_active: bool) {
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, added: &[Added], unobstructed: bool, image_controller_active: bool) {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none() || view.content.draft.is_some() || ctx.egui_wants_keyboard_input() {
         return;
     }
-    let to = ctx.input_mut(|i| {
-        use egui::{Key, KeyboardShortcut as Shortcut, Modifiers};
-        let both = Modifiers::COMMAND | Modifiers::SHIFT;
-        // With Shift first: a shortcut without it would match these too.
-        [
-            (Shortcut::new(both, Key::ArrowUp), ArrangeContent::Front),
-            (Shortcut::new(both, Key::ArrowDown), ArrangeContent::Back),
-            (Shortcut::new(Modifiers::COMMAND, Key::ArrowUp), ArrangeContent::Forward),
-            (Shortcut::new(Modifiers::COMMAND, Key::ArrowDown), ArrangeContent::Backward),
-        ]
-        .into_iter()
-        .find_map(|(shortcut, to)| i.consume_shortcut(&shortcut).then_some(to))
-    });
+    // Not under a dialog or the palette: the shortcut is left alone there.
+    let to = unobstructed
+        .then(|| {
+            ctx.input_mut(|i| {
+                use egui::{Key, KeyboardShortcut as Shortcut, Modifiers};
+                let both = Modifiers::COMMAND | Modifiers::SHIFT;
+                // With Shift first: a shortcut without it would match these too.
+                [
+                    (Shortcut::new(both, Key::ArrowUp), ArrangeContent::Front),
+                    (Shortcut::new(both, Key::ArrowDown), ArrangeContent::Back),
+                    (Shortcut::new(Modifiers::COMMAND, Key::ArrowUp), ArrangeContent::Forward),
+                    (Shortcut::new(Modifiers::COMMAND, Key::ArrowDown), ArrangeContent::Backward),
+                ]
+                .into_iter()
+                .find_map(|(shortcut, to)| i.consume_shortcut(&shortcut).then_some(to))
+            })
+        })
+        .flatten();
     if let Some(to) = to
         && let Some((page, index)) = view.content.selected
     {
