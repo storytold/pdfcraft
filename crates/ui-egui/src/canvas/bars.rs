@@ -55,7 +55,7 @@ pub(super) fn page_indicator(view: &DocView, total: usize, area: Rect, ui: &mut 
         .order(egui::Order::Foreground)
         .interactable(false)
         .pivot(egui::Align2::CENTER_BOTTOM)
-        .fixed_pos(pos2(area.center().x, area.bottom() - 14.0))
+        .fixed_pos(egui::pos2(area.center().x, area.bottom() - 14.0))
         .show(ui.ctx(), |ui| {
             egui::Frame::NONE
                 .fill(fill)
