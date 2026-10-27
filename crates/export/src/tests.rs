@@ -1010,7 +1010,7 @@ fn direction_follows_the_unicode_bidi_class_of_the_first_strong_character() {
 fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
     let arabic = "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}";
     let more = "\u{0628}\u{0643}";
-    let cases: [(String, Vec<(String, bool)>); 11] = [
+    let cases: [(String, Vec<(String, bool)>); 17] = [
         // Arabic and then a number: the number is not in the right-to-left run.
         (format!("{arabic} 123"), vec![(arabic.into(), true), (" 123".into(), false)]),
         // A number before the Arabic.
@@ -1034,6 +1034,15 @@ fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
             format!("  {arabic} ABC 123 {arabic}  "),
             vec![("  ".into(), false), (arabic.into(), true), (" ABC 123 ".into(), false), (arabic.into(), true), ("  ".into(), false)],
         ),
+        // A mark or joiner after pending neutrals is no second strong character: they stay out.
+        ("abc \u{0645} \u{200c}x".into(), vec![("abc ".into(), false), ("\u{0645}".into(), true), (" \u{200c}x".into(), false)]),
+        ("abc \u{0645} (\u{0301}x".into(), vec![("abc ".into(), false), ("\u{0645}".into(), true), (" (\u{0301}x".into(), false)]),
+        ("\u{0645} \u{0301}".into(), vec![("\u{0645}".into(), true), (" \u{0301}".into(), false)]),
+        // A real strong character after them commits them, marks and joiners included.
+        ("\u{0645} \u{200c} \u{0628}".into(), vec![("\u{0645} \u{200c} \u{0628}".into(), true)]),
+        ("\u{0645} \u{0301}\u{0628}".into(), vec![("\u{0645} \u{0301}\u{0628}".into(), true)]),
+        // A mark attached to the committed stretch joins it.
+        ("\u{0645}\u{0301} x".into(), vec![("\u{0645}\u{0301}".into(), true), (" x".into(), false)]),
         // No strong right-to-left character: one run, not marked.
         ("12, 34 (x)".into(), vec![("12, 34 (x)".into(), false)]),
         ("".into(), vec![("".into(), false)]),
@@ -1059,7 +1068,8 @@ fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
     let with = |needle: &str| *runs.iter().find(|r| r.contains(needle)).unwrap_or_else(|| panic!("no run with {needle}: {xml}"));
     assert!(with(arabic).contains("<w:rtl/>"));
     let latin = with("ABC 123");
-    assert!(!latin.contains("<w:rtl/>") && !latin.contains("<w:szCs"), "{latin}");
+    assert!(!latin.contains("<w:rtl/>"), "{latin}");
+    assert!(latin.contains("<w:szCs w:val=\"24\"/>"), "the complex-script size is on every run: {latin}");
     assert!(xml.contains("<w:p><w:pPr><w:bidi/></w:pPr>"), "the paragraph is right to left: {xml}");
     // A number after Arabic, and brackets around Arabic, are in runs without w:rtl.
     for (text, plain) in [(format!("{arabic} 123"), " 123"), (format!("abc ({arabic})"), ")")] {
@@ -1074,5 +1084,16 @@ fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
     let q = Page { width: 612.0, height: 792.0, blocks: vec![bold], images: Vec::new(), background: None };
     let xml = part(&docx(&[q], "Bold"), "word/document.xml");
     assert!(xml.contains("<w:b/><w:bCs/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/><w:rtl/>"), "{xml}");
-    assert!(xml.contains("<w:b/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\"> ABC</w:t>"), "{xml}");
+    assert!(xml.contains("<w:b/><w:bCs/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\"> ABC</w:t>"), "{xml}");
+
+    // Styled Arabic with Arabic-Indic digits: the digits are not marked right to left, but they
+    // keep the block's complex-script bold and size like the letters, so they do not fall back to
+    // Word's default for complex script.
+    let mut styled = block(&format!("{arabic} \u{0661}\u{0662}"), 72.0, 600.0, 500.0, 612.0);
+    (styled.bold, styled.italic, styled.size) = (true, true, 24.0);
+    let q = Page { width: 612.0, height: 792.0, blocks: vec![styled], images: Vec::new(), background: None };
+    let xml = part(&docx(&[q], "Digits"), "word/document.xml");
+    let cs = "<w:b/><w:bCs/><w:i/><w:iCs/><w:sz w:val=\"48\"/><w:szCs w:val=\"48\"/>";
+    assert!(xml.contains(&format!("{cs}<w:rtl/></w:rPr><w:t xml:space=\"preserve\">{arabic}</w:t>")), "{xml}");
+    assert!(xml.contains(&format!("{cs}</w:rPr><w:t xml:space=\"preserve\"> \u{0661}\u{0662}</w:t>")), "{xml}");
 }

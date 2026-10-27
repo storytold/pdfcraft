@@ -62,9 +62,18 @@ pub(crate) fn directional_runs(text: &str) -> Vec<(&str, bool)> {
         let mut at = i + 1;
         while let Some((_, c)) = chars.get(at) {
             match kind(*c) {
-                Kind::R | Kind::Follows => {
+                // A strong character commits the neutrals skipped since the last one.
+                Kind::R => {
                     at += 1;
                     end = at;
+                }
+                // A mark or joiner joins the run only when it is attached to it directly: after
+                // pending neutrals it is no second strong character, so it stays pending with them.
+                Kind::Follows => {
+                    if at == end {
+                        end = at + 1;
+                    }
+                    at += 1;
                 }
                 Kind::Neutral => at += 1,
                 Kind::Other => break,

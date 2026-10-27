@@ -23,20 +23,24 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> 
 }
 
 fn run_part(text: &str, rtl: bool, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
+    // The complex-script counterparts (`bCs`, `iCs`, `szCs`) go on every run, whatever its
+    // direction: Word treats Arabic-script digits and punctuation as complex-script text even
+    // where they are not marked right to left, and Latin text ignores them. Only the direction,
+    // `w:rtl`, is limited to the text that is right to left for certain.
     let mut rpr = String::new();
     if bold {
-        rpr.push_str(if rtl { "<w:b/><w:bCs/>" } else { "<w:b/>" });
+        rpr.push_str("<w:b/><w:bCs/>");
     }
     if italic {
-        rpr.push_str(if rtl { "<w:i/><w:iCs/>" } else { "<w:i/>" });
+        rpr.push_str("<w:i/><w:iCs/>");
     }
     if let Some(h) = hex(color) {
         rpr.push_str(&format!("<w:color w:val=\"{h}\"/>"));
     }
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) as i64 } else { 24 };
-    rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/>"));
+    rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/><w:szCs w:val=\"{half_points}\"/>"));
     if rtl {
-        rpr.push_str(&format!("<w:szCs w:val=\"{half_points}\"/><w:rtl/>"));
+        rpr.push_str("<w:rtl/>");
     }
     format!("<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>", esc(text))
 }
