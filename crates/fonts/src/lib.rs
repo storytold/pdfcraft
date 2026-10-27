@@ -214,6 +214,12 @@ pub fn extra_base_letter(c: char) -> Option<char> {
     LATIN_EXTRA.iter().find(|e| e.0 == c).map(|e| e.3)
 }
 
+/// [`first_undrawable`] for text written with [`win_ansi_extra`]: a [`LATIN_EXTRA`] letter is
+/// drawn, so only what that encoding still writes as `?` is reported.
+pub fn first_undrawable_extra(s: &str) -> Option<char> {
+    s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c) && extra_base_letter(*c).is_none())
+}
+
 /// The character encoding of a predefined Unicode CMap (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, …;
 /// ISO 32000-2 §9.7.5.2), which maps Unicode text straight to codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,6 +383,14 @@ mod tests {
             assert!(win_ansi_byte(e.0).is_none(), "{:?} is already WinAnsi", e.0);
             assert_eq!(extra_base_letter(e.0), Some(e.3));
         }
+    }
+
+    #[test]
+    fn first_undrawable_extra_skips_latin_extra_letters_only() {
+        assert_eq!(first_undrawable_extra("Declarație ș Łódź\r\n"), None);
+        assert_eq!(first_undrawable_extra("Obligații Ω"), Some('Ω'), "the first truly undrawable, not 'ț'");
+        assert_eq!(first_undrawable("Obligații Ω"), Some('ț'));
+        assert_eq!(first_undrawable_extra("签名"), Some('签'));
     }
 
     #[test]
