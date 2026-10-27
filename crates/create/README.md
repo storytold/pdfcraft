@@ -31,3 +31,8 @@ Soft-mask Decode intervals map samples to opacity before the mask is resized, in
 The existing 16-bit path still uses each sample's high byte.
 JPEG image Decode handling remains limited.
 ICC transforms and calibrated color conversion remain outside this export path.
+
+Image export resolves indirect Width, Height and BitsPerComponent values for images and their soft/stencil masks.
+ICC profile component counts are also resolved when indirect.
+Save Image As uses the same reader.
+Decoded images still obey the existing pixel cap, and unsupported sample depths remain refused.

@@ -623,6 +623,127 @@ fn image_dict(w: i64, h: i64, space: &str, bpc: i64) -> Dict {
     d
 }
 
+/// Export and Save Image As resolve dimension and sample-depth integers independently.
+#[test]
+fn image_exports_resolve_indirect_dimensions_and_sample_depth() {
+    for indirect in 0..8 {
+        for (bpc, data) in [(1, vec![0b0100_0000]), (2, vec![0b0011_0000]), (4, vec![0x0f]), (8, vec![0, 255]), (16, vec![0, 0, 255, 255])] {
+            let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+            with_image(&mut doc, |doc| {
+                let mut dict = image_dict(2, 1, "DeviceGray", bpc);
+                for (bit, key) in [b"Width".as_slice(), b"Height", b"BitsPerComponent"].into_iter().enumerate() {
+                    if indirect & (1 << bit) != 0 {
+                        let value = dict.get(key).unwrap().clone();
+                        let object = doc.add(value);
+                        dict.set(key.to_vec(), Object::Ref(object));
+                    }
+                }
+                Stream::from_raw(dict, data)
+            });
+            let doc = reopen(&doc);
+            let result = extract_images(&doc, &[0], 1);
+            assert!(result.skipped.is_empty(), "indirect={indirect}, bpc={bpc}: {:?}", result.skipped);
+            assert_eq!(result.images.len(), 1, "indirect={indirect}, bpc={bpc}");
+            let image = &result.images[0];
+            assert_eq!((image.width, image.height, image.extension), (2, 1, "png"));
+            let expected = vec![0, 0, 0, 255, 255, 255];
+            assert_eq!(exported_png_pixels(&image.data), expected, "indirect={indirect}, bpc={bpc}");
+            let (extension, single) = image_file(&doc, image.object).unwrap();
+            assert_eq!(extension, "png");
+            assert_eq!(exported_png_pixels(&single), expected);
+            assert!(extract_images(&doc, &[0], 2).images.is_empty(), "minimum side uses resolved dimensions");
+        }
+    }
+}
+
+/// Indirect mask dimensions and packed sample depth preserve exported transparency.
+#[test]
+fn image_exports_resolve_indirect_mask_metadata() {
+    for stencil in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut mask = image_dict(2, 1, "DeviceGray", 1);
+            for key in [b"Width".as_slice(), b"Height", b"BitsPerComponent"] {
+                let value = doc.add(mask.get(key).unwrap().clone());
+                mask.set(key.to_vec(), Object::Ref(value));
+            }
+            if stencil {
+                mask.set(b"ImageMask".to_vec(), Object::Bool(true));
+            }
+            let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0b0100_0000])));
+            let mut image = image_dict(2, 1, "DeviceRGB", 8);
+            image.set(if stencil { b"Mask".to_vec() } else { b"SMask".to_vec() }, Object::Ref(mask));
+            Stream::from_raw(image, [255, 0, 0].repeat(2))
+        });
+        let doc = reopen(&doc);
+        let result = extract_images(&doc, &[0], 0);
+        assert_eq!(result.images.len(), 1);
+        let expected = if stencil { [255, 0] } else { [0, 255] };
+        assert_eq!(alphas(&exported_png_pixels(&result.images[0].data)), expected, "stencil={stencil}");
+        let (_, single) = image_file(&doc, result.images[0].object).unwrap();
+        assert_eq!(alphas(&exported_png_pixels(&single)), expected);
+    }
+}
+
+/// Resolving metadata must retain the existing size and sample-depth refusal paths.
+#[test]
+fn indirect_image_metadata_keeps_export_limits() {
+    for (key, value) in [(b"Width".as_slice(), 0), (b"Height", -1), (b"Width", i64::MAX), (b"Height", 100_000_001), (b"BitsPerComponent", 32)] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut image = image_dict(2, 1, "DeviceGray", 8);
+            image.set(key.to_vec(), Object::Ref(doc.add(Object::Int(value))));
+            Stream::from_raw(image, vec![0, 255])
+        });
+        let doc = reopen(&doc);
+        let image = extract_images(&doc, &[0], 0);
+        assert!(image.images.is_empty(), "{key:?}={value}");
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let resources = doc.resolve(page.dict.get(b"Resources").unwrap());
+        let objects = doc.resolve(resources.as_dict().unwrap().get(b"XObject").unwrap());
+        let object = objects.as_dict().unwrap().iter().next().unwrap().1.as_ref().unwrap();
+        assert!(image_file(&doc, object).is_err(), "{key:?}={value}");
+    }
+}
+
+/// An ICC profile's indirect component count selects the same export mapping as a direct one.
+#[test]
+fn icc_component_counts_resolve_indirect_integers() {
+    for (components, space, samples) in [
+        (1, b"GRAY", vec![0, 255]),
+        (3, b"RGB ", vec![0, 0, 0, 255, 255, 255]),
+        (4, b"CMYK", vec![0, 0, 0, 255, 0, 0, 0, 0]),
+        (2, b"RGB ", vec![0, 0, 0, 255, 255, 255]),
+    ] {
+        let make = |indirect| {
+            let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+            with_image(&mut doc, |doc| {
+                let n = Object::Int(components);
+                let n = if indirect { Object::Ref(doc.add(n)) } else { n };
+                let profile = doc.add(Object::Stream(Stream::from_raw(Dict::from_iter([(b"N".to_vec(), n)]), icc_profile(space))));
+                let mut image = image_dict(2, 1, "DeviceRGB", 8);
+                image.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("ICCBased"), Object::Ref(profile)]));
+                Stream::from_raw(image, samples.clone())
+            });
+            reopen(&doc)
+        };
+        let direct = extract_images(&make(false), &[0], 0);
+        let indirect_doc = make(true);
+        let indirect = extract_images(&indirect_doc, &[0], 0);
+        if components == 2 {
+            assert!(direct.images.is_empty() && indirect.images.is_empty(), "unsupported ICC component counts stay refused");
+            assert_eq!(indirect.skipped.len(), 1);
+            continue;
+        }
+        assert!(indirect.skipped.is_empty(), "components={components}: {:?}", indirect.skipped);
+        assert_eq!(indirect.images.len(), 1);
+        assert_eq!(indirect.images[0].data, direct.images[0].data, "components={components}");
+        let (ext, bytes) = image_file(&indirect_doc, indirect.images[0].object).unwrap();
+        assert_eq!(ext, "png");
+        assert_eq!(bytes, direct.images[0].data);
+    }
+}
+
 /// The exported file's extension and its pixels as RGBA.
 fn exported_rgba(doc: &Document) -> (&'static str, Vec<u8>) {
     let out = extract_images(doc, &[0], 0);

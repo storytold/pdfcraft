@@ -31,6 +31,11 @@ pub struct ImageExport {
 /// Images larger than this many pixels are skipped (memory).
 const MAX_PIXELS: u64 = 100_000_000;
 
+/// An image or mask integer entry, resolving an indirect value before checking its type.
+fn integer(doc: &Document, dict: &Dict, key: &[u8]) -> Option<i64> {
+    doc.resolve(dict.get(key)?).as_int()
+}
+
 /// The images of `pages` (0-based; each image once, on the first page using it), skipping
 /// those with fewer than `min_side` pixels on their shorter side.
 pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageExport {
@@ -49,7 +54,7 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
             }
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
+            let (w, h) = (integer(doc, &s.dict, b"Width").unwrap_or(0), integer(doc, &s.dict, b"Height").unwrap_or(0));
             if w <= 0 || h <= 0 || (w.min(h) as u64) < min_side as u64 {
                 continue;
             }
@@ -114,7 +119,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         _ => {}
     }
     let as_is = || Ok(("jpg", s.raw.to_vec()));
-    let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
+    let (w, h) = (integer(doc, &s.dict, b"Width").unwrap_or(0), integer(doc, &s.dict, b"Height").unwrap_or(0));
     let Some((w, h)) = size(w, h) else {
         return match () {
             _ if jpeg => as_is(),
@@ -149,7 +154,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         (samples, 8)
     } else {
         let data = s.decoded().map_err(|e| e.to_string())?;
-        let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
+        let bpc = if mask { 1 } else { integer(doc, &s.dict, b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
             2 => 2,
@@ -362,6 +367,7 @@ impl Space {
 /// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
 const MAX_LOOKUP: usize = 64 << 10;
 
+/// Read the export component layout without applying ICC or calibrated color transforms.
 fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
@@ -375,7 +381,7 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
         },
         Object::Array(a) => match a.first().and_then(Object::as_name) {
             Some(b"ICCBased") => match a.get(1).map(|s| doc.resolve(s)).as_deref() {
-                Some(Object::Stream(icc)) => match icc.dict.int(b"N") {
+                Some(Object::Stream(icc)) => match integer(doc, &icc.dict, b"N") {
                     Some(1) => Ok(Space::Gray),
                     Some(3) => Ok(Space::Rgb),
                     Some(4) => Ok(Space::Cmyk),
@@ -468,7 +474,7 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
-    let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
+    let (mw, mh) = size(integer(doc, &m.dict, b"Width")?, integer(doc, &m.dict, b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
     let f = filters(m);
     let mut px = match f.last().map(Vec::as_slice) {
@@ -478,7 +484,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
         }
         Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode" | b"CCF") => return None,
         _ => {
-            let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
+            let bpc = if stencil { 1 } else { integer(doc, &m.dict, b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
                 1 => 1,
                 2 => 2,
