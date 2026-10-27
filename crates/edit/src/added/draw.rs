@@ -4,7 +4,7 @@ use super::layout::{
 use super::types::{AddedText, Align, Family};
 use super::{
     Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
-    align_code, literal, matrix_number, n, shaped_glyph, win_ansi,
+    align_code, literal, matrix_number, n, page_list, shaped_glyph, win_ansi,
 };
 
 fn font_name(base: &str) -> String {
@@ -252,11 +252,53 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     doc.add(Object::Dict(font))
 }
 
+/// Wraps text into lines using character advances measured from the selected font's `metrics`.
+fn wrap_with_metrics(t: &AddedText, metrics: &pdfcraft_fonts::pdf::Metrics) -> Vec<String> {
+    let width = (t.rect[2] - t.rect[0]).abs().max(t.size);
+    let measure = |s: &str| -> f64 {
+        if let Some(encoded) = metrics.encode(s) {
+            let glyph_w: f64 = metrics.codes(&encoded).iter().map(|(c, _)| metrics.width(*c) * t.size).sum();
+            glyph_w + t.char_spacing * s.chars().count() as f64
+        } else {
+            latin_width(t, s)
+        }
+    };
+    let space = measure(" ");
+    let mut out = Vec::new();
+    for para in t.text.split('\n') {
+        let (mut line, mut line_w) = (String::new(), 0.0);
+        for word in para.split(' ') {
+            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            let candidate_w = if line.is_empty() { measure(word) } else { line_w + space + measure(word) };
+            if !line.is_empty() && candidate_w > width {
+                out.push(std::mem::take(&mut line));
+                line = word.to_string();
+                line_w = measure(word);
+            } else {
+                line = candidate;
+                line_w = candidate_w;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+/// Content and resources produced by drawing an added item.
+pub(super) struct DrawnItem {
+    /// Content stream operations.
+    pub stream: Vec<u8>,
+    /// Added resources for fonts or images.
+    pub resources: Dict,
+    /// Adjusted bounding box if drawn with custom font metrics.
+    pub custom_rect: Option<[f64; 4]>,
+}
+
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
 /// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to
 /// move it.
-pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing: bool) -> Result<(Vec<u8>, Dict), EditError> {
+pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing: bool) -> Result<DrawnItem, EditError> {
     let mut res = Dict::new();
     let mut out = format!(
         "q {} {} {} {} {} {} cm\n",
@@ -299,13 +341,15 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 let mut fonts = Dict::new();
                 fonts.set(resource.as_bytes().to_vec(), font_obj);
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
-                let r = text_rect(t);
+                let all = wrap_with_metrics(t, &metrics);
+                let norm_r = norm(t.rect);
+                let h = all.len().max(1) as f64 * t.size * 1.2;
+                let r = [norm_r[0], norm_r[3] - h, norm_r[2], norm_r[3]];
                 let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
                 out.extend(format!("BT /{resource} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
                 if t.char_spacing != 0.0 {
                     out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
                 }
-                let all = lines(t);
                 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
                 for (i, line) in all.iter().enumerate() {
                     let encoded = metrics.encode(line).ok_or_else(|| {
@@ -335,7 +379,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 }
                 out.extend_from_slice(b"ET\n");
                 out.extend_from_slice(b"Q\n");
-                return Ok((out, res));
+                return Ok(DrawnItem { stream: out, resources: res, custom_rect: Some(r) });
             }
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
@@ -356,7 +400,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
                 out.extend_from_slice(b"Q\n");
-                return Ok((out, res));
+                return Ok(DrawnItem { stream: out, resources: res, custom_rect: None });
             }
             res.set(b"Font".to_vec(), Object::Dict(fonts));
             let r = text_rect(t);
@@ -409,7 +453,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
         }
     }
     out.extend_from_slice(b"Q\n");
-    Ok((out, res))
+    Ok(DrawnItem { stream: out, resources: res, custom_rect: None })
 }
 
 /// Extracts the parameters of an added item into a `/PCAdded` dictionary.
