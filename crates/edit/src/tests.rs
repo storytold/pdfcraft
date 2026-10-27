@@ -463,6 +463,28 @@ fn a_watermark_offset_that_is_not_finite_is_refused() {
 }
 
 #[test]
+fn watermarks_support_font_selection() {
+    let mut doc = fixture();
+    let wm_times = Watermark { text: "TIMES WATERMARK".into(), font: added::Family::Times, font_size: 24.0, rotation: 0.0, ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm_times, false).unwrap();
+    let s = streams(&doc, 0);
+    let mark = s.iter().find(|c| c.contains("/PCMark /Watermark")).expect("the watermark stream");
+    assert!(mark.contains("/PCTimes 24 Tf"), "uses Times font: {mark}");
+    let res = page_fonts(&doc, &page_list(&doc)[0]);
+    assert!(res.contains(b"PCTimes"), "page resources include PCTimes");
+
+    let mut doc = fixture();
+    let wm_cour =
+        Watermark { text: "COURIER WATERMARK".into(), font: added::Family::Courier, font_size: 24.0, rotation: 0.0, ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm_cour, false).unwrap();
+    let s = streams(&doc, 0);
+    let mark = s.iter().find(|c| c.contains("/PCMark /Watermark")).expect("the watermark stream");
+    assert!(mark.contains("/PCCour 24 Tf"), "uses Courier font: {mark}");
+    let res = page_fonts(&doc, &page_list(&doc)[0]);
+    assert!(res.contains(b"PCCour"), "page resources include PCCour");
+}
+
+#[test]
 fn invalid_requests_change_nothing() {
     let mut doc = fixture();
     assert!(matches!(add_header_footer(&mut doc, &[0], &HeaderFooter::default(), false, &cx()), Err(EditError::Invalid(_))));

@@ -2842,6 +2842,11 @@ fn watermarks_move_from_the_page_centre_through_tools() {
     // Huge offsets are clamped, and a value that isn't a number is refused.
     ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "DRAFT", "offset_y": 1e300, "replace": true }));
     assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "offset_x": "left" })), Err(ToolError::InvalidArgs(_))));
+    ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "COURIER", "font": "Courier", "replace": true }));
+    ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "LOWER", "font": "courier", "replace": true }));
+    ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "TIMES", "font": "Times New Roman", "replace": true }));
+    ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "HELV", "font": "HELVETICA", "replace": true }));
+    assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "font": "ComicSans" })), Err(ToolError::InvalidArgs(_))));
 }
 
 #[test]
