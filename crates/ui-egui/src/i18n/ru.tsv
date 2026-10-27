@@ -2496,3 +2496,368 @@ animation effects	Off	Выкл
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
+# Rows the other catalogs had and Russian lacked: certificates and signature validation, the
+# accessibility checker, print imposition, the calendar and the credits dialog.
+	 on page {label}	 на странице {label}
+	% of all commits	% всех коммитов
+	+Bin	+двоич.
+	+LOC	+строк
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: PR: {prs}, коммитов: {commits}, строк: +{added} / −{deleted} (Δ {delta}), двоичных ресурсов: +{bin_added} / −{bin_deleted}, с {first} по {last}
+	A button	Кнопка
+	A font isn't embedded	Шрифт не встроен
+	A link	Ссылка
+	A script	Сценарий
+	A {} action isn't allowed	Действие {} не допускается
+	A {} annotation has additional actions	У аннотации {} есть дополнительные действия
+	A {} annotation has no appearance stream	У аннотации {} нет потока внешнего вида
+	A {} annotation isn't set to print, or is hidden	Аннотация {} не выводится на печать или скрыта
+	About	О программе
+	Accessibility Report	Отчёт о доступности
+	Add the PDFs to combine	Добавьте PDF-файлы для объединения
+	Add {what}	Добавить: {what}
+	Added the first {n} PDFs in {folder}	Добавлены первые PDF-файлы из {folder}: {n}
+	Align fields	Выровнять поля
+	Always	Всегда
+	Another file dialog is still open. Finish with it first.	Ещё открыто другое окно выбора файла. Сначала завершите работу с ним.
+	Automatically	Автоматически
+	Basic constraints	Основные ограничения
+	Binary assets added	Добавлено двоичных ресурсов
+	Binary assets removed	Удалено двоичных ресурсов
+	CRL Signing	Подписание списков отзыва
+	Certificate Signing	Подписание сертификатов
+	Certificate authority	Центр сертификации
+	Change Author	Изменить автора
+	Change Keywords	Изменить ключевые слова
+	Change Subject	Изменить тему
+	Change Title	Изменить заголовок
+	Change document properties	Изменить свойства документа
+	Choose a digital ID.	Выберите цифровой идентификатор.
+	Choose a file…	Выбрать файл…
+	Choose a folder…	Выбрать папку…
+	Choose…	Выбрать…
+	Color	Цвет
+	Comment	Комментарий
+	Comment and review	Комментирование и рецензирование
+	Commits	Коммиты
+	Company	Организация
+	Contributors	Участники
+	Copied to clipboard	Скопировано в буфер обмена
+	Copy to clipboard	Копировать в буфер обмена
+	Couldn't optimize the file	Не удалось оптимизировать файл
+	Couldn't show the file picker. Please try again.	Не удалось показать окно выбора файла. Попробуйте ещё раз.
+	Create folder	Создать папку
+	Create links	Создать ссылки
+	Creator	Создатель
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Для режима «Вырезать и наложить» нужно «Двусторонняя: Выкл». Печатайте на одной стороне листа.
+	Data Encipherment	Шифрование данных
+	Decipher Only	Только расшифрование
+	Detailed Report	Подробный отчёт
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Используется DeviceCMYK, но целевой профиль вывода PDF/A не является профилем CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Используется DeviceRGB, но целевой профиль вывода PDF/A не является профилем RGB
+	Digital Signature	Цифровая подпись
+	Disabled	Отключено
+	Display name	Отображаемое имя
+	Distribute fields	Распределить поля
+	Document properties (⌘D)	Свойства документа (⌘D)
+	Drop PDFs or folders here, or choose them.	Перетащите сюда PDF-файлы или папки либо выберите их.
+	Duplicate	Дублировать
+	Enabled	Включено
+	Encipher Only	Только шифрование
+	End entity	Конечный субъект
+	Enter a URL	Введите URL-адрес
+	Enter a name.	Введите имя.
+	Enter a page number	Введите номер страницы
+	Enter the field names	Введите имена полей
+	Error	Ошибка
+	Every PDF in the folder	Все PDF-файлы в папке
+	Every PDF in the folder and the folders inside it	Все PDF-файлы в папке и во вложенных папках
+	Field "{}" on page {p} has no description (tooltip)	У поля «{}» на странице {p} нет описания (подсказки)
+	Filename	Имя файла
+	Files are combined in this order. Leave Pages empty to take every page.	Файлы объединяются в этом порядке. Оставьте поле «Страницы» пустым, чтобы взять все страницы.
+	First	Первая
+	First commit	Первый коммит
+	Flatten Fill & Sign	Расплющить «Заполнить и подписать»
+	Folder	Папка
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Шрифт (без имени) на странице {p} не сопоставляет символы с Юникодом
+	Font {} on page {p} doesn't map its characters to Unicode	Шрифт {} на странице {p} не сопоставляет символы с Юникодом
+	Form field on page {p} isn't tagged	Поле формы на странице {p} не размечено тегами
+	Grab bag	Вперемешку
+	H / Space (hold)	H / Пробел (удерживать)
+	Help…	Справка…
+	H{n} follows an H{d}; headings should not skip levels	H{n} идёт после H{d}; уровни заголовков не следует пропускать
+	Import	Импорт
+	Information	Сведения
+	Inserted text	Вставленный текст
+	Key Agreement	Согласование ключей
+	Key Encipherment	Шифрование ключей
+	Last	Последняя
+	Last commit	Последний коммит
+	Line delta	Разница строк
+	Lines +/−	Строки +/−
+	Lines added	Добавлено строк
+	Lines deleted	Удалено строк
+	Loading…	Загрузка…
+	Margins (in)	Поля (дюймы)
+	Mark differences	Отметить различия
+	Mark for redaction	Отметить для сокрытия
+	Mark pages for redaction	Отметить страницы для сокрытия
+	Match field sizes	Выровнять размеры полей
+	Merged PRs	Принятые PR
+	Model	Модель
+	Models	Модели
+	Mouse wheel scroll speed	Скорость прокрутки колесом мыши
+	Move	Переместить
+	Name (A–Z)	Имя (А-Я)
+	Never	Никогда
+	New bookmark (⌘B)	Новая закладка (⌘B)
+	Next	Далее
+	Next (⌘G)	Следующее (⌘G)
+	No PDFs found in {folder}	В {folder} нет PDF-файлов
+	No contributor data was built into this copy.	В эту сборку не включены данные об участниках.
+	No document language is set	Язык документа не задан
+	No model credits were built into this copy.	В эту сборку не включены сведения об авторах моделей.
+	No page has text: the document appears to be images of pages	Ни на одной странице нет текста: похоже, документ состоит из изображений страниц
+	No results	Ничего не найдено
+	Non-Repudiation	Неотрекаемость
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Ни из одного из этих файлов нельзя сделать PDF; используйте PDF, изображения или файлы .txt
+	On	Вкл
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Продолжайте, только если доверяете этому документу. Адрес может передать сведения из документа, например то, что вы ввели в его форму.
+	Only the document's owner can change its security (open it with the permissions password)	Изменить защиту документа может только его владелец (откройте документ с паролем разрешений)
+	Open a PDF (⌘O)	Открыть PDF (⌘O)
+	Open folder	Открыть папку
+	Optimization cancelled	Оптимизация отменена
+	Optimization is already running	Оптимизация уже выполняется
+	Organize	Организовать
+	PRs	PR
+	Page {n}	Страница {n}
+	Page {n} of {total}	Страница {n} из {total}
+	Page {p} doesn't tab in structure order	На странице {p} порядок перехода по Tab не следует структуре
+	Page {p}: {n} untagged content item	Страница {p}: элементов содержимого без тегов: {n}
+	Page {p}: {n} untagged content items	Страница {p}: элементов содержимого без тегов: {n}
+	Page {} has additional actions	У страницы {} есть дополнительные действия
+	Panel layout could not be restored: {error}	Не удалось восстановить расположение панелей: {error}
+	Panel move was not applied: {error}	Перемещение панели не применено: {error}
+	Paste	Вставить
+	PdfCraft can't check this signature yet: {}.	PdfCraft пока не может проверить эту подпись: {}.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft рисует без графического процессора, поэтому может работать медленно. Может помочь обновление графического драйвера.
+	Place saved {what}	Разместить сохранённое: {what}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Переносной режим выключен: запись в {folder} невозможна ({error}). Настройки хранятся в папке пользователя.
+	Previous	Назад
+	Previous (⇧⌘G)	Предыдущее (⇧⌘G)
+	Print (⌘P)	Печать (⌘P)
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Печатайте на одной стороне. Сохраняйте порядок листов, разрежьте по меткам, затем сложите стопки слева направо и сверху вниз.
+	Producer	Производитель
+	Real name	Настоящее имя
+	Redo {action}	Повторить: {action}
+	Refresh	Обновить
+	Remove saved {what}	Удалить сохранённое: {what}
+	Remove {standard} identification	Удалить идентификацию {standard}
+	Rendering…	Отрисовка…
+	Report created	Отчёт создан
+	Rev. {rev}: Certified by an unknown signer	Ред. {rev}: заверено неизвестным подписантом
+	Rev. {rev}: Certified by {name}	Ред. {rev}: заверено: {name}
+	Rev. {rev}: Signed by an unknown signer	Ред. {rev}: подписано неизвестным подписантом
+	Rev. {rev}: Signed by {name}	Ред. {rev}: подписано: {name}
+	Reverse the order	Обратить порядок
+	Rotate view clockwise (⇧⌘+)	Повернуть вид по часовой стрелке (⇧⌘+)
+	Rule Name	Имя правила
+	Run form script	Выполнить сценарий формы
+	SHA-1 digest	Хэш SHA-1
+	SHA-256 digest	Хэш SHA-256
+	Save (M4)	Сохранить (M4)
+	Save as {level}	Сохранить как {level}
+	Save changes?	Сохранить изменения?
+	Save file	Сохранить файл
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Содержимое со сценариями должно быть доступно с клавиатуры и через вспомогательные технологии. Проверьте сценарии документа.
+	Search results	Результаты поиска
+	Select all	Выбрать все
+	Show	Показать
+	Signature is invalid	Подпись недействительна
+	Signature is valid	Подпись действительна
+	Signature validity is unknown	Действительность подписи неизвестна
+	Signing time is from the clock on the signer's computer.	Время подписания взято из часов компьютера подписанта.
+	Sort	Сортировка
+	Squiggly	Волнистое подчеркивание
+	Still rendering — this page is unusually complex…	Отрисовка продолжается: эта страница необычно сложная…
+	Success	Готово
+	Table	Таблица
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Строки таблицы должны находиться прямо в таблице или в её заголовке, теле или итоговой части. Исправьте теги таблицы.
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Распознавание текста не установлено: нет его моделей (выполните `cargo xtask models` или задайте PDFCRAFT_MODELS).
+	That didn't work: an internal error stopped it ({m}).	Не получилось: помешала внутренняя ошибка ({m}).
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	Подпись ECDSA не в каноническом DER (лишние байты в конце, заполнение или нет байта знака); она всё равно прочитана.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	Подпись ECDSA записана как необработанные значения r и s, а не как последовательность DER; она всё равно прочитана.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	Длина значения подписи RSA не совпадает с длиной модуля ключа (начальные нулевые байты отброшены или добавлены); подпись всё равно прочитана.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	В DigestInfo подписи RSA нет параметра NULL (так пишут старые программы подписи); подпись всё равно прочитана.
+	The Windows store's digital IDs couldn't be listed: {e}	Не удалось получить список цифровых идентификаторов из хранилища Windows: {e}
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Сертификат {} не допускает столько сертификатов ЦС под собой (длина пути), поэтому он не используется для подтверждения {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Сертификат {} содержит критические расширения, которые PdfCraft не распознаёт, поэтому он не используется для подтверждения {}.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Сертификат {} не является сертификатом ЦС с правом выпуска сертификатов, поэтому он не используется для подтверждения {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Сертификат {} не был действителен на момент подписания, поэтому он не используется для подтверждения {}.
+	The checker found problems which may prevent the document from being fully accessible.	Проверка нашла проблемы, которые могут помешать полной доступности документа.
+	The document changed while you were choosing a file, so nothing was changed.	Документ изменился, пока вы выбирали файл, поэтому ничего не изменено.
+	The document has been altered or corrupted since the signature was applied.	Документ был изменён или повреждён после подписания.
+	The document has been altered or corrupted since the timestamp was applied.	Документ был изменён или повреждён после установки метки времени.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	После этой подписи документ был изменён способами, которые она не разрешает ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	После этой метки времени документ был изменён способами, которые она не разрешает ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	После этой подписи документ изменялся, но эти изменения разрешены ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	После этой метки времени документ изменялся, но эти изменения разрешены ({}).
+	The document has no tags (structure tree)	В документе нет тегов (дерева структуры)
+	The document has no title	У документа нет заголовка
+	The document isn't marked as tagged (MarkInfo Marked)	Документ не помечен как размеченный тегами (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	В документе нет тегов, поэтому всё его содержимое не размечено
+	The document was closed before it could be saved.	Документ был закрыт до сохранения.
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	Встроенные в документ сведения об отзыве показывают, что сертификат подписанта не отозван.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Встроенный маркер метки времени действителен, и его службе доверяют; доверенное время: {}.
+	The font {} isn't embedded	Шрифт {} не встроен
+	The metadata doesn't identify the file as {}	Метаданные не определяют файл как {}
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Страницы извлечены, но не удалены: документ изменился, пока вы выбирали папку.
+	The password is incorrect.	Неверный пароль.
+	The password must have at least 6 characters.	Пароль должен содержать не менее 6 символов.
+	The password must have at least 8 characters.	Пароль должен содержать не менее 8 символов.
+	The passwords do not match.	Пароли не совпадают.
+	The security settings don't allow screen readers to read the text	Настройки защиты не позволяют программам чтения с экрана читать текст
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Алгоритм подписи и алгоритм хэширования в SignerInfo указывают разные хэш-функции; подпись создана с хэш-функцией из SignerInfo.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	Подпись содержит непроверенную метку времени ({}): службы меток времени нет в вашем списке доверенных сертификатов, поэтому используется время подписания, заявленное подписантом.
+	The signature contents are not hexadecimal.	Содержимое подписи не в шестнадцатеричном виде.
+	The signature could not be checked ({}).	Не удалось проверить подпись ({}).
+	The signature could not be read ({}).	Не удалось прочитать подпись ({}).
+	The signature could not be verified ({}).	Не удалось подтвердить подпись ({}).
+	The signature has no valid byte range.	У подписи нет допустимого диапазона байтов.
+	The signature includes an embedded timestamp.	Подпись содержит встроенную метку времени.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	Подпись закодирована в BER (неопределённые длины), а не в DER; она прочитана в нестрогом режиме.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	Подпись использует устаревший формат adbe.x509.rsa_sha1.
+	The signature value does not match the signer's certificate: the signature is corrupt.	Значение подписи не соответствует сертификату подписанта: подпись повреждена.
+	The signature's byte range does not exclude exactly its contents.	Диапазон байтов подписи не исключает в точности её содержимое.
+	The signature's byte range does not match the file.	Диапазон байтов подписи не соответствует файлу.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	В подписанных атрибутах подписи нет типа содержимого, которого требует CMS; подпись всё равно прочитана.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	В подписанных атрибутах подписи нет хэша сообщения, поэтому подпись не охватывает документ.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Подписанные атрибуты подписи указывают тип содержимого, отличный от data, поэтому это не подпись документа.
+	The signature's timestamp token could not be verified ({}).	Не удалось проверить маркер метки времени подписи ({}).
+	The signature's timestamp token does not cover the signature value.	Маркер метки времени подписи не охватывает значение подписи.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Подписанное содержимое является составной (сегментированной) OCTET STRING, как допускает BER; оно всё равно прочитано.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	Сертификат подписанта не разрешает цифровые подписи (в назначении его ключа нет ни цифровой подписи, ни неотрекаемости).
+	The signer's certificate has been revoked ({}).	Сертификат подписанта отозван ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Сертификат подписанта содержит критические расширения, которые PdfCraft не распознаёт ({}).
+	The signer's certificate is not in the signature.	Сертификата подписанта нет в подписи.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Сертификат подписанта выпущен не для подписания документов (в его расширенном назначении ключа нет подписания документов).
+	The signer's certificate was not valid at the time of signing.	Сертификат подписанта не был действителен на момент подписания.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Личность подписанта неизвестна: его сертификата нет в вашем списке доверенных сертификатов, и ни один из родительских сертификатов не является доверенным.
+	The signer's identity is valid.	Личность подписанта подтверждена.
+	The timestamp authority's certificate is not issued for time stamping.	Сертификат службы меток времени выпущен не для проставления меток времени.
+	The timestamp authority's certificate was not valid at the time of timestamping.	Сертификат службы меток времени не был действителен на момент проставления метки.
+	The timestamp contents are not hexadecimal.	Содержимое метки времени не в шестнадцатеричном виде.
+	The timestamp has no valid byte range.	У метки времени нет допустимого диапазона байтов.
+	The timestamp token could not be read ({}).	Не удалось прочитать маркер метки времени ({}).
+	The timestamp token is valid and its authority is trusted.	Маркер метки времени действителен, и его службе доверяют.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Маркер метки времени действителен, но службы меток времени нет в вашем списке доверенных сертификатов.
+	The timestamp's byte range does not exclude exactly its contents.	Диапазон байтов метки времени не исключает в точности её содержимое.
+	The timestamp's byte range does not match the file.	Диапазон байтов метки времени не соответствует файлу.
+	The window shows the file name, not the title (Initial View > Show)	Окно показывает имя файла, а не заголовок (Начальный вид > Показать)
+	Theme	Тема
+	There is no folder to save the digital ID in.	Нет папки для сохранения цифрового идентификатора.
+	This document has not been modified since this signature was applied.	Документ не изменялся после этой подписи.
+	This document has not been modified since this timestamp was applied.	Документ не изменялся после этой метки времени.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Файл изменился на диске. Перезагрузите его, чтобы увидеть новую версию; несохранённые изменения будут потеряны.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Эта подпись использует RIPEMD-160, устаревший 160-битный алгоритм хэширования, который больше не рекомендуется для подписей. Проверку она проходит, но полагаться на неё не стоит.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Эта подпись использует SHA-1, слабый алгоритм хэширования: для него показаны коллизии. Проверку она проходит, потому что им подписано много старых документов, но полагаться на неё не стоит.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Эта подпись использует ключ RSA короче 2048 бит, который больше не считается достаточно стойким для подписей. Проверку она проходит, но полагаться на неё не стоит.
+	Undo {action}	Отменить: {action}
+	Unsigned signature field	Неподписанное поле подписи
+	Unsigned signature field: {name}	Неподписанное поле подписи: {name}
+	Use {what}	Использовать: {what}
+	Username	Имя пользователя
+	Warning	Предупреждение
+	Zoom in (⌘+)	Увеличить (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Увеличить / уменьшить (также щипком или ⌘ с прокруткой)
+	Zoom out (⌘−)	Уменьшить (⌘−)
+	a table has 1 to {max} columns	в таблице от 1 до {max} столбцов
+	a table has 1 to {max} rows	в таблице от 1 до {max} строк
+	alternate text hides an annotation inside it	альтернативный текст скрывает аннотацию внутри элемента
+	alternate text on an element with no page content	альтернативный текст у элемента без содержимого страницы
+	comments	комментарии
+	document security store	хранилище безопасности документа
+	document structure	структура документа
+	form fill	заполнение форм
+	its alternate text is inside another element's and will never be read	его альтернативный текст находится внутри альтернативного текста другого элемента и никогда не будет прочитан
+	links	ссылки
+	metadata	метаданные
+	no alternate text	нет альтернативного текста
+	no header cells (TH)	нет ячеек заголовка (TH)
+	no summary	нет сводки
+	not in a TR	не внутри TR
+	not in a Table, THead, TBody or TFoot	не внутри Table, THead, TBody или TFoot
+	not in an L (list)	не внутри L (списка)
+	not in an LI (list item)	не внутри LI (элемента списка)
+	of	из
+	other changes	прочие изменения
+	page content	содержимое страницы
+	page {n} is out of range (1–{count})	страница {n} вне диапазона (1-{count})
+	pages added or removed	добавлены или удалены страницы
+	rows have between {min} and {max} columns	в строках от {min} до {max} столбцов
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	область, интервал и ширины столбцов должны быть числами, интервал не меньше 0, а каждая ширина больше 0
+	the first heading is an H{n}; headings should not skip levels	первый заголовок имеет уровень H{n}; уровни заголовков не следует пропускать
+	the first row number can be at most {max}	номер первой строки не может быть больше {max}
+	the signed version could not be read	не удалось прочитать подписанную версию
+	{n} contributors · {c} commits	участников: {n} · коммитов: {c}
+	{n} pages and no bookmarks	страниц: {n}, закладок нет
+	{page} is not a page number or label	{page} не является номером или меткой страницы
+	{ty} element on page {p}: {what}	Элемент {ty} на странице {p}: {what}
+	{ty} element: {what}	Элемент {ty}: {what}
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} в этом документе пытается открыть адрес, который PdfCraft не открывает: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} в этом документе пытается открыть адрес, который PdfCraft не открывает: {e}. Из документов открываются только веб-ссылки (http, https) и ссылки на почту (mailto).
+	{who}, certificate issued by an unknown issuer.	{who}, сертификат выпущен неизвестным издателем.
+	{who}, certificate issued by {issuer}.	{who}, сертификат выпущен: {issuer}.
+	{} annotation on page {p} isn't tagged	Аннотация {} на странице {p} не размечена тегами
+	{} annotations aren't allowed	Аннотации {} не допускаются
+	ΔLOC	Δстрок
+	… and {n} more	… и ещё {n}
+	−Bin	−двоич.
+	−LOC	−строк
+@plural	Delete {n} field|Delete {n} fields	Удалить {n} поле|Удалить {n} поля|Удалить {n} полей
+@plural	{n} byte|{n} bytes	{n} байт|{n} байта|{n} байт
+@plural	{n} comment|{n} comments	{n} комментарий|{n} комментария|{n} комментариев
+@plural	{n} file|{n} files	{n} файл|{n} файла|{n} файлов
+@plural	{n} image optimized|{n} images optimized	Оптимизировано {n} изображение|Оптимизировано {n} изображения|Оптимизировано {n} изображений
+@plural	{n} item discarded|{n} items discarded	Отброшен {n} элемент|Отброшено {n} элемента|Отброшено {n} элементов
+@plural	{n} pixel|{n} pixels	{n} пиксель|{n} пикселя|{n} пикселей
+@plural	{n} result|{n} results	{n} результат|{n} результата|{n} результатов
+action wizard	Start	Начать
+calendar date	April	Апрель
+calendar date	August	Август
+calendar date	December	Декабрь
+calendar date	February	Февраль
+calendar date	January	Январь
+calendar date	July	Июль
+calendar date	June	Июнь
+calendar date	March	Март
+calendar date	May	Май
+calendar date	November	Ноябрь
+calendar date	October	Октябрь
+calendar date	September	Сентябрь
+calendar weekday	Fr	Пт
+calendar weekday	Mo	Пн
+calendar weekday	Sa	Сб
+calendar weekday	Su	Вс
+calendar weekday	Th	Чт
+calendar weekday	Tu	Вт
+calendar weekday	We	Ср
+certificate	Basic constraints	Основные ограничения
+certificate	Intended usage	Назначение
+certificate	Issued by	Кем выдан
+certificate	Issued to	Кому выдан
+certificate	Issuer	Издатель
+certificate	Key usage	Назначение ключа
+certificate	Public key	Открытый ключ
+certificate	SHA-1 digest	Хэш SHA-1
+certificate	SHA-256 digest	Хэш SHA-256
+certificate	Self-signed	Самозаверенный
+certificate	Serial number	Серийный номер
+certificate	Subject	Субъект
+certificate	Valid from	Действителен с
+certificate	Valid to	Действителен до
+certificate	Validity ends	Окончание срока действия
+certificate	Validity starts	Начало срока действия
+certificate	Version	Версия
+comment menu	Edit	Изменить
+signature pad	Type	Ввести
+theme	Appearance	Оформление
