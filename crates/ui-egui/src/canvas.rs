@@ -805,6 +805,8 @@ impl DocView {
         self.wheel.clear_motion();
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
+        self.fling.stop();
+        self.fling.reset_gesture();
     }
 }
 
@@ -1104,14 +1106,17 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Touchpad momentum (#531): a swipe over the page lifted at speed glides on and slows to a
     // stop, through the same un-eased path. Never while the pager owns the wheel, a gesture or
     // dialog has the input, or animations are off; any click, key, zoom or other scrolling ends it.
+    // Discrete mouse wheel scrolling stops any active fling and never glides (#4917).
     // Asked of the preference, not of egui's animation time, which test harnesses zero.
+    let has_discrete_wheel = line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || input.line != Vec2::ZERO || has_page;
     let animates = app.animation_effects.animates(app.motion.reduced);
-    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
+    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates && !has_discrete_wheel;
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
     let interrupted = glide_interrupted(ui);
-    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+    if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 || has_discrete_wheel {
         view.fling.stop();
+        view.fling.reset_gesture();
     }
     let glide = view.fling.step(now);
     if view.fling.gliding() {
