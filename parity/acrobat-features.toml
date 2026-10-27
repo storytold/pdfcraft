@@ -6977,11 +6977,25 @@ title = "Create PDF from Office documents (LibreOffice sidecar)"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["file.open"]
+tools = ["doc_create_multiple", "doc_combine"]
+evidence = [
+    "crates/create/src/office.rs::office_files_are_recognised_by_extension_and_signature",
+    "crates/create/src/office.rs::other_files_are_not_office_documents",
+    "crates/create/src/office.rs::a_converter_that_hangs_is_stopped",
+    "crates/create/src/office.rs::a_converter_that_makes_no_pdf_is_reported",
+    "crates/create/src/office.rs::libreoffice_converts_a_document_when_installed",
+    "crates/create/src/office.rs::the_profile_turns_off_macros_and_never_updates_links",
+    "crates/create/src/office.rs::a_timeout_stops_the_processes_the_converter_started",
+    "crates/automation/tests/it/office.rs::office_documents_convert_separately_with_their_text",
+    "crates/automation/tests/it/office.rs::office_documents_combine_in_order_with_a_bookmark_each",
+    "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",
+    "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",
+    "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker",
+    "crates/ui-egui/src/platform/open_worker/tests.rs::the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files",
+]
+notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s. Found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders; without it the user is told LibreOffice is needed. The automation tools that convert files (doc_create_multiple, doc_combine, batch convert) take Office documents too. Not yet: Insert pages, Combine files and Create ▸ Multiple files in the app refuse Office documents (they convert on the frame thread) and point to File ▸ Open; no Create ▸ From Office command or conversion settings; Visio and Publisher; the web build; layout fidelity is LibreOffice's, not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real-conversion tests skip where LibreOffice isn't installed, CI included."
 
 [[feature]]
 id = "create.create-multiple"

@@ -20,7 +20,12 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
-    Prepared { bytes: Arc<Vec<u8>>, result: Box<Result<PreparedDocument, OpenError>> },
+    /// An Office document LibreOffice converted here, off the frame thread, or why it couldn't.
+    Converted(Result<Arc<Vec<u8>>, String>),
+    Prepared {
+        bytes: Arc<Vec<u8>>,
+        result: Box<Result<PreparedDocument, OpenError>>,
+    },
     ReadFailed(String),
     RemoteFailed(String),
     RecoveryFailed(String),
@@ -175,8 +180,11 @@ fn prepare(job: Job) -> ResultKind {
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
-    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
-        return ResultKind::Conversion(bytes);
+    match pdfcraft_engine::source_kind(&job.name, &bytes) {
+        Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
+        // LibreOffice takes seconds: it runs here, and the frame thread only opens the result.
+        Some(SourceKind::Office) => return ResultKind::Converted(pdfcraft_engine::office_to_pdf(&job.name, &bytes).map_err(|e| e.to_string())),
+        Some(SourceKind::Pdf) | None => {}
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
     ResultKind::Prepared { bytes, result: Box::new(result) }

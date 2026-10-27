@@ -265,7 +265,7 @@ impl PdfCraftApp {
                 notes: Vec::new(),
             };
             let source = bytes.clone();
-            let (bytes, assessed) = match self.session.as_pdf(&name, &bytes) {
+            let (bytes, assessed) = match self.session.as_pdf_inline(&name, &bytes) {
                 Ok(pdf) => {
                     let assessed = assess(&pdf, None);
                     (pdf, assessed)

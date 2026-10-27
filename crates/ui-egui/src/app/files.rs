@@ -173,6 +173,14 @@ impl PdfCraftApp {
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 None => {}
             },
+            open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created) {
+                Ok(()) => {
+                    if let Some(command) = pending.then {
+                        self.execute(command);
+                    }
+                }
+                Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
+            },
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
                 Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
@@ -604,32 +612,36 @@ impl PdfCraftApp {
         }
     }
 
-    /// The File ▸ Open picker: PDFs, and images and text that become PDFs.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The File ▸ Open picker's file types, in order; the first, PDF, is the default. Images, text
+    /// and (on the desktop, through LibreOffice) Office documents open as new, unsaved PDFs.
+    /// No "All files" in the browser or on macOS, whose panel merges every type into one list
+    /// rather than offering a choice.
+    pub(crate) fn open_filters() -> Vec<(String, Vec<&'static str>)> {
+        let mut filters = vec![("PDF".to_string(), vec!["pdf"]), (tl!("Images").to_string(), pdfcraft_engine::IMAGE_EXTENSIONS.to_vec())];
+        #[cfg(not(target_arch = "wasm32"))]
+        filters.push((tl!("Office documents").to_string(), pdfcraft_engine::OFFICE_EXTENSIONS.to_vec()));
+        filters.push((tl!("Text").to_string(), pdfcraft_engine::TEXT_EXTENSIONS.to_vec()));
+        #[cfg(not(any(target_arch = "wasm32", target_os = "macos")))]
+        filters.push((tl!("All files").to_string(), vec!["*"]));
+        filters
+    }
+
+    /// The File ▸ Open picker ([`Self::open_filters`]).
     pub(super) fn open_picker() -> rfd::AsyncFileDialog {
-        rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
+        Self::open_filters().into_iter().fold(rfd::AsyncFileDialog::new(), |dialog, (name, extensions)| dialog.add_filter(name, &extensions))
     }
 
     pub fn open_dialog(&mut self) {
         self.startup_superseded = true;
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick(
-            pickers::PickFor::Open,
-            rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
-            true,
-        );
+        self.pick(pickers::PickFor::Open, Self::open_picker(), true);
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
         #[cfg(target_arch = "wasm32")]
         {
             let inbox = self.inbox.clone();
             let ctx = self.ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                if let Some(h) = rfd::AsyncFileDialog::new()
-                    .add_filter("PDF", &["pdf"])
-                    .add_filter(tl!("Images and text"), &create_ui::CONVERTIBLE)
-                    .pick_file()
-                    .await
-                {
+                if let Some(h) = Self::open_picker().pick_file().await {
                     let bytes = h.read().await;
                     if let Ok(mut q) = inbox.lock() {
                         q.push((h.file_name(), bytes));

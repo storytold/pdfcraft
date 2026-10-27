@@ -1355,8 +1355,13 @@ fn a_page_with_a_form_field_shown_twice_keeps_one_field() {
 #[test]
 fn files_that_cannot_be_converted_are_refused_clearly() {
     let s = Session::new();
-    let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
-    assert_eq!(err, EditError::Source("report.docx: this file type can't be converted; use a PDF, an image or a .txt file".into()));
+    let err = s.convert_to_pdf("archive.zip", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert_eq!(
+        err,
+        EditError::Source(
+            "archive.zip: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file".into()
+        )
+    );
     assert!(matches!(s.convert_to_pdf("empty", &Arc::new(Vec::new())), Err(EditError::Source(_))));
     // Damaged inputs of a known type fail with an error, not a panic.
     assert!(s.convert_to_pdf("bad.png", &Arc::new(b"\x89PNG\r\n\x1a\nnope".to_vec())).is_err());
@@ -1377,8 +1382,8 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
     assert!(Arc::ptr_eq(&s.as_pdf("old.PDF", &headless).unwrap(), &headless));
     assert!(s.as_pdf("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
     assert!(s.as_pdf("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().starts_with(b"%PDF-"));
-    let err = s.as_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
-    assert!(matches!(err, EditError::Source(m) if m.starts_with("report.docx: this file type can't be converted")));
+    let err = s.as_pdf("archive.zip", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert!(matches!(err, EditError::Source(m) if m.starts_with("archive.zip: this file type can't be converted")));
 }
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
@@ -8721,4 +8726,49 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     for x in [20, 100, 180] {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
+}
+
+/// A Word document converts through LibreOffice when it is installed; without it, the error
+/// says what is missing rather than calling the file a broken PDF.
+#[test]
+fn office_documents_convert_through_libreoffice_or_explain_why_not() {
+    let mut s = Session::new();
+    let text = s.create_from_text("t", "Quarterly report").unwrap();
+    let id = s.open("t.pdf", None, text, None).unwrap();
+    let docx = Arc::new(s.get(id).unwrap().export_office(compare::OfficeFormat::Docx));
+    assert_eq!(source_kind("Report.docx", &docx), Some(SourceKind::Office));
+    match s.convert_to_pdf("Report.docx", &docx) {
+        Ok((kind, pdf)) => {
+            assert_eq!(kind, SourceKind::Office);
+            let converted = s.open_new("Report.pdf", pdf).unwrap();
+            assert!(page_texts(&s, converted).concat().contains("Quarterly report"));
+        }
+        // Only "not installed" is an acceptable failure: a conversion that fails, times out or
+        // makes no PDF must fail this test.
+        Err(e) => assert!(e.to_string().contains("LibreOffice, which isn't installed"), "{e}"),
+    }
+    // Combine treats it as a file to convert, not as a PDF to pass through.
+    assert!(
+        s.as_pdf("Report.docx", &docx).map_or_else(|e| e.to_string().contains("LibreOffice, which isn't installed"), |pdf| pdf.starts_with(b"%PDF-"))
+    );
+}
+
+/// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple refuse an
+/// Office document and point to File ▸ Open, while images and text still convert there.
+#[test]
+fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
+    let s = Session::new();
+    let docx = Arc::new(b"PK\x03\x04\x14\x00".to_vec());
+    for err in
+        [s.convert_to_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err(), s.as_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err()]
+    {
+        assert_eq!(
+            err,
+            EditError::Source(
+                "Report.docx: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF".into()
+            )
+        );
+    }
+    assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
+    assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }

@@ -130,10 +130,15 @@ impl HeldToolOpen {
         self.started.recv_timeout(Duration::from_secs(5)).expect("the native open reached its preparation barrier");
     }
 
-    #[allow(clippy::expect_used)]
     fn complete(&self, harness: &mut Harness<'static, PdfCraftApp>) {
+        self.complete_within(harness, Duration::from_secs(5));
+    }
+
+    /// [`Self::complete`] for a preparation that may take up to `timeout`.
+    #[allow(clippy::expect_used)]
+    fn complete_within(&self, harness: &mut Harness<'static, PdfCraftApp>, timeout: Duration) {
         self.release.send(()).expect("release the native preparation");
-        self.finished.recv_timeout(Duration::from_secs(5)).expect("the native open returned its result");
+        self.finished.recv_timeout(timeout).expect("the native open returned its result");
         harness.run_steps(2);
     }
 }
@@ -701,4 +706,56 @@ fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
     assert_eq!(doc.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the new file is the selected tab");
     assert_eq!(doc.info.pages.len(), 2);
     let _ = std::fs::remove_file(path);
+}
+
+/// A Word document built from the synthetic fixture (PdfCraft's own Word export).
+#[allow(clippy::expect_used)]
+fn synthetic_docx() -> Vec<u8> {
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("source.pdf", None, Arc::new(fixture(1)), None).expect("open the fixture");
+    session.get(id).expect("the fixture").export_office(pdfcraft_engine::compare::OfficeFormat::Docx)
+}
+
+/// File ▸ Open of a Word document: LibreOffice runs on the open worker, never on the frame
+/// thread, and the result opens as a new, unsaved PDF. Without LibreOffice the user is
+/// told it is needed, rather than that the file is a broken PDF.
+#[test]
+#[allow(clippy::expect_used)]
+fn file_open_converts_an_office_document_on_the_worker() {
+    let mut harness = tool_open_harness();
+    let held = HeldToolOpen::install(&mut harness);
+    let file = tool_open_file("office", "docx", &synthetic_docx());
+    harness.state_mut().pick_override = Some(vec![file.0.to_string_lossy().into_owned()]);
+    harness.state_mut().run_command("file.open");
+    harness.run_steps(2);
+    held.wait_started();
+    assert!(harness.state().views.is_empty(), "nothing opens before the conversion finishes");
+    // An installed LibreOffice takes seconds; it is stopped after 120 s.
+    held.complete_within(&mut harness, Duration::from_secs(150));
+    let app = harness.state();
+    assert!(app.pending_opens.is_empty());
+    if let Some(view) = app.views.first() {
+        let doc = app.session.get(view.id).expect("the converted document");
+        // Named after the Word file: `<stem>.docx` opens as `<stem>.pdf`.
+        assert_eq!(doc.name, format!("pdfcraft-open-tool-{}-office.pdf", std::process::id()));
+        assert!(doc.path.is_none(), "the converted PDF is new and unsaved, not the .docx on disk");
+    } else {
+        let message = app.toast.as_ref().map(|(message, _)| message.clone()).unwrap_or_default();
+        assert!(message.contains("LibreOffice, which isn't installed"), "the failure names the missing dependency: {message}");
+    }
+}
+
+#[test]
+fn the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files() {
+    let filters = PdfCraftApp::open_filters();
+    let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(names, ["PDF", "Images", "Office documents", "Text", "All files"]);
+    #[cfg(target_os = "macos")]
+    assert_eq!(names, ["PDF", "Images", "Office documents", "Text"]);
+    let extensions = |name: &str| filters.iter().find(|(n, _)| n == name).map(|(_, e)| e.clone()).unwrap_or_default();
+    assert_eq!(extensions("PDF"), ["pdf"]);
+    assert_eq!(extensions("Images"), pdfcraft_engine::IMAGE_EXTENSIONS);
+    assert!(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "rtf"].iter().all(|e| extensions("Office documents").contains(e)));
+    assert_eq!(extensions("Text"), pdfcraft_engine::TEXT_EXTENSIONS);
 }

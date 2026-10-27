@@ -76,7 +76,9 @@ pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
+pub use pdfcraft_create::{
+    CONVERTIBLE, CreateError, IMAGE_EXTENSIONS, ImageResolution, OFFICE_EXTENSIONS, SourceKind, TEXT_EXTENSIONS, decode_text, source_kind,
+};
 pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
     text_width as added_text_width,
@@ -138,7 +140,7 @@ use pictures::{embed_image, fit_picture, mark_source};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
 pub use session::Session;
-pub use sources::{CombineSource, Combined, combine_source_check, source_page_count};
+pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
 use test_hooks::{check_refresh_panic, panic_on_refresh, record_link_scan, record_marker_scan, reset_secondary_scan_counts, secondary_scan_counts};

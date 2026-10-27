@@ -1106,7 +1106,7 @@ fn combine_takes_images_and_text_files() {
     std::fs::write(dir.join("scan.png"), png).unwrap();
     std::fs::write(dir.join("notes.txt"), "Some notes").unwrap();
     std::fs::write(dir.join("broken.png"), b"\x89PNG\r\n\x1a\nbroken").unwrap();
-    std::fs::write(dir.join("report.docx"), b"PK\x03\x04").unwrap();
+    std::fs::write(dir.join("archive.zip"), b"PK\x03\x04").unwrap();
     let mut a = auto(&dir);
     let combined = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "scan.png", "notes.txt"], "pages": [null, null, "1"], "open": true }));
     let doc = combined["document"]["doc"].as_u64().unwrap();
@@ -1116,7 +1116,7 @@ fn combine_takes_images_and_text_files() {
     let titles: Vec<&str> = marks.as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
     assert_eq!(titles, ["a", "scan", "notes"]);
     // A file that can't be made into a PDF stops the combine, and says which.
-    for bad in ["broken.png", "report.docx"] {
+    for bad in ["broken.png", "archive.zip"] {
         let refused = a.call("doc_combine", &json!({ "paths": ["a.pdf", bad] }));
         assert!(matches!(&refused, Err(ToolError::Failed(e)) if e.contains(bad)), "{bad}: {refused:?}");
     }
@@ -3788,7 +3788,7 @@ fn creating_from_multiple_files_through_tools() {
     }
     std::fs::write(dir.join("scan.png"), png).unwrap();
     std::fs::write(dir.join("notes.txt"), "hello").unwrap();
-    std::fs::write(dir.join("report.docx"), b"PK\x03\x04").unwrap();
+    std::fs::write(dir.join("archive.zip"), b"PK\x03\x04").unwrap();
     let mut a = auto(&dir);
 
     // Combine: every file converted, in the order given, with a bookmark per file.
@@ -3808,8 +3808,8 @@ fn creating_from_multiple_files_through_tools() {
     assert_eq!(titles, ["notes", "a", "scan"]);
     assert!(dir.join("all.pdf").is_file());
     // A file that can't be converted fails the whole combine, naming it.
-    let err = a.call("doc_create_multiple", &json!({ "paths": ["a.pdf", "report.docx"] })).unwrap_err();
-    assert!(matches!(&err, ToolError::Failed(m) if m.contains("report.docx") && m.contains("can't be converted")), "{err}");
+    let err = a.call("doc_create_multiple", &json!({ "paths": ["a.pdf", "archive.zip"] })).unwrap_err();
+    assert!(matches!(&err, ToolError::Failed(m) if m.contains("archive.zip") && m.contains("can't be converted")), "{err}");
     assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": [] })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": ["a.pdf"], "mode": "zip" })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": ["a.pdf"], "mode": "separate" })), Err(ToolError::InvalidArgs(_))));
@@ -3818,7 +3818,7 @@ fn creating_from_multiple_files_through_tools() {
     // existing file is never overwritten.
     std::fs::create_dir_all(dir.join("out")).unwrap();
     std::fs::write(dir.join("out/notes.pdf"), b"mine").unwrap();
-    let args = json!({ "paths": ["notes.txt", "report.docx", "a.pdf", "scan.png", "missing.txt"], "mode": "separate", "out_dir": "out" });
+    let args = json!({ "paths": ["notes.txt", "archive.zip", "a.pdf", "scan.png", "missing.txt"], "mode": "separate", "out_dir": "out" });
     let made = ok(&mut a, "doc_create_multiple", args);
     let files = made["files"].as_array().unwrap();
     assert!(files[0]["output"].as_str().unwrap().ends_with("notes (2).pdf"), "{files:?}");

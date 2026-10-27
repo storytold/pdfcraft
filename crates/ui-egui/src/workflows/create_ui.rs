@@ -41,9 +41,6 @@ pub(crate) fn image_import_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bo
     (go, cancel)
 }
 
-/// File types Open accepts besides PDF (converted on open).
-pub use pdfcraft_engine::CONVERTIBLE;
-
 /// What Create ▸ Clipboard found on the clipboard.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Clip {
@@ -86,15 +83,23 @@ fn stem(name: &str) -> &str {
 }
 
 impl PdfCraftApp {
-    /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
-    /// something Create understands (the caller then tries to open it as a PDF).
+    /// Convert a non-PDF file (image, text, Office document) into a new tab. Returns `None` when
+    /// `bytes` is not something Create understands (the caller then tries to open it as a PDF).
+    /// An Office document blocks while LibreOffice runs: File ▸ Open converts it on the open
+    /// worker instead ([`Self::open_converted_pdf`]), leaving this for startup and inline opens.
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;
-        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text)) {
+        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
             return None;
         }
         let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
+        Some(self.open_converted_pdf(name, created.map_err(|e| e.to_string())))
+    }
+
+    /// Open `created`, the PDF converted from the file `name`, as a new, unsaved tab named after
+    /// it (`Report.docx` → `Report.pdf`).
+    pub(crate) fn open_converted_pdf(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
+        self.open_created_bytes(&format!("{}.pdf", stem(name)), created)
     }
 
     fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {

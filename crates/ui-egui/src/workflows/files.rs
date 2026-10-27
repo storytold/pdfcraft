@@ -604,7 +604,7 @@ impl PdfCraftApp {
                 }
             };
             let converted =
-                self.session.convert_to_pdf(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
+                self.session.convert_to_pdf_inline(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
             match converted {
                 Ok((pages, bytes)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {
