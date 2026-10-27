@@ -776,7 +776,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     h.get_by_label("A4").click();
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, a4);
-    // Only paper should be added to persistence; these choices still belong to this session.
+    // Only paper and the booklet binding are persisted; these choices still belong to this session.
     let draft = &mut h.state_mut().print_draft;
     draft.copies = 5;
     draft.which = pdfcraft_ui_egui::PrintWhich::Range;
@@ -795,6 +795,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     app.restore(&saved);
     let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
     assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
+    assert_eq!(json["print_binding"], "left", "the default binding is stored by name too");
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));
     restarted.run_steps(3);
@@ -912,4 +913,72 @@ fn a_booklet_decides_two_sided_itself() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
+}
+
+/// #5046: the side a booklet is bound on is remembered: after choosing Right, Cancel, and a restart,
+/// the Binding box still says Right (a right-to-left reader's booklet), and it is the one used.
+#[test]
+fn the_booklet_binding_is_remembered_across_restarts() {
+    use pdfcraft_engine::print::Binding;
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Booklet").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.binding, Binding::Left, "left by default");
+    h.get_by_role_and_label(Role::ComboBox, "Binding:").click();
+    h.run_steps(2);
+    h.get_by_label("Right").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.binding, Binding::Right);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let saved = h.state().persist();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap()["print_binding"], "right");
+
+    // A new run of the app: Booklet again, and the box says Right; the job uses it.
+    let mut restarted = harness_with_settings(Some(saved));
+    assert!(restarted.state_mut().execute("print.dialog"));
+    restarted.run_steps(3);
+    restarted.get_by_label("Booklet").click();
+    restarted.run_steps(2);
+    assert_eq!(restarted.state().print_draft.binding, Binding::Right);
+    assert_eq!(restarted.get_by_role_and_label(Role::ComboBox, "Binding:").value().as_deref(), Some("Right"));
+    let settings = restarted.state().print_draft.settings(4, &[]).expect("a booklet of four pages");
+    assert!(matches!(settings.layout, pdfcraft_engine::print::Layout::Booklet { binding: Binding::Right, .. }), "{:?}", settings.layout);
+    // Going back to Left is remembered too.
+    restarted.get_by_role_and_label(Role::ComboBox, "Binding:").click();
+    restarted.run_steps(2);
+    restarted.get_by_label("Left").click();
+    restarted.run_steps(2);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&restarted.state().persist()).unwrap()["print_binding"], "left");
+}
+
+#[test]
+fn the_booklet_binding_restore_accepts_left_and_right_and_ignores_anything_else() {
+    use pdfcraft_engine::print::Binding;
+    for (text, want) in [("left", Binding::Left), ("right", Binding::Right)] {
+        let mut app = PdfCraftApp::new();
+        app.restore(&serde_json::json!({"print_binding": text}).to_string());
+        assert_eq!(app.print_draft.binding, want);
+    }
+    for invalid in [
+        "not JSON",
+        "{}",
+        r#"{"print_binding":null}"#,
+        r#"{"print_binding":true}"#,
+        r#"{"print_binding":1}"#,
+        r#"{"print_binding":[]}"#,
+        r#"{"print_binding":"Right"}"#,
+        r#"{"print_binding":"both"}"#,
+        r#"{"print_binding":""}"#,
+    ] {
+        let mut app = PdfCraftApp::new();
+        assert_eq!(app.print_draft.binding, Binding::Left);
+        app.restore(invalid);
+        assert_eq!(app.print_draft.binding, Binding::Left, "{invalid}");
+        app.restore(r#"{"print_binding":"right"}"#);
+        app.restore(invalid);
+        assert_eq!(app.print_draft.binding, Binding::Right, "an invalid value does not replace a good choice: {invalid}");
+    }
 }
