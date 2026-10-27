@@ -29,5 +29,11 @@ Indexed Decode values select palette entries after rounding and clipping. Color-
 Missing, null or malformed Decode arrays keep the default mapping.
 Soft-mask Decode intervals map samples to opacity before the mask is resized, including reversed ranges and indirect entries.
 The existing 16-bit path still uses each sample's high byte.
-JPEG image Decode handling remains limited.
+
+JPEGs keep their original bytes for default or identity Decode when transparency or existing CMYK normalization does not already require PNG output.
+For named DeviceGray and DeviceRGB JPEGs, valid nonidentity per-component Decode intervals produce PNG with the mapped colors and supported masks preserved.
+The color-space name, Decode array and its endpoints may be indirect.
+An explicit DCT ColorTransform parameter refuses this required conversion.
+Corrupt JPEG data, mismatched dimensions or component counts, and excessive pixel counts also fail the required conversion, returning an error from Save Image As or a skipped-image reason from Export all images.
+Arbitrary JPEG Decode for ICC, calibrated and CMYK color spaces remains outside this change.
 ICC transforms and calibrated color conversion remain outside this export path.

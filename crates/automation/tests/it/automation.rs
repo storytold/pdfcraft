@@ -3460,6 +3460,121 @@ fn exporting_all_images_through_tools() {
     assert_eq!(ok(&mut a, "doc_export_all_images", json!({ "doc": made, "folder": "imgs3", "min_size": 10000 }))["count"], 0);
 }
 
+/// A source-generated JPEG in a drawn image, with optional Decode and a configurable PDF width.
+fn jpeg_decode_tool_pdf(decode: Option<&[f64]>, width: i64) -> (Vec<u8>, Vec<u8>) {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode(&[64; 8], 4, 2, image::ExtendedColorType::L8).unwrap();
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let mut dict = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("XObject")),
+        (b"Subtype".to_vec(), Object::name("Image")),
+        (b"Width".to_vec(), Object::Int(width)),
+        (b"Height".to_vec(), Object::Int(2)),
+        (b"BitsPerComponent".to_vec(), Object::Int(8)),
+        (b"ColorSpace".to_vec(), Object::name("DeviceGray")),
+        (b"Filter".to_vec(), Object::name("DCTDecode")),
+    ]);
+    if let Some(values) = decode {
+        dict.set(b"Decode".to_vec(), Object::Array(values.iter().copied().map(Object::Real).collect()));
+    }
+    let image = cos.add(Object::Stream(Stream::from_raw(dict, jpeg.clone())));
+    let content = cos.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 40 0 0 20 20 30 cm /Im Do Q".to_vec())));
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    cos.update_dict(page, |dict| {
+        dict.set(b"Contents".to_vec(), Object::Ref(content));
+        dict.set(
+            b"Resources".to_vec(),
+            Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Im".to_vec(), Object::Ref(image))])))])),
+        );
+    })
+    .unwrap();
+    (pdfcraft_cos::write_full(&cos, &Default::default()).unwrap(), jpeg)
+}
+
+/// The original encoded JPEG and Decode entry, independently of object renumbering on save.
+fn jpeg_decode_tool_snapshot(bytes: Vec<u8>) -> (Vec<u8>, Option<pdfcraft_cos::Object>) {
+    use pdfcraft_cos::{Document, Object};
+    let cos = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    let res = cos.resolve(page.dict.get(b"Resources").unwrap());
+    let xo = cos.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let image = cos.resolve(xo.as_dict().unwrap().get(b"Im").unwrap());
+    let Object::Stream(image) = &*image else { panic!("fixture image") };
+    (image.raw.to_vec(), image.dict.get(b"Decode").cloned())
+}
+
+/// Export All Images and Save Image As keep decoded JPEG appearance without modifying source data.
+#[test]
+fn jpeg_decode_exports_and_image_save_follow_page_colors() {
+    let dir = workdir("jpeg-decode-export");
+    let mut a = auto(&dir);
+    for (name, decode) in [("default", None), ("inverted", Some([1., 0.])), ("scaled", Some([0.25, 0.75]))] {
+        let (source, jpeg) = jpeg_decode_tool_pdf(decode.as_ref().map(|values| values.as_slice()), 4);
+        let input = format!("{name}.pdf");
+        std::fs::write(dir.join(&input), &source).unwrap();
+        let doc = ok(&mut a, "doc_open", json!({"path":input}))["doc"].as_u64().unwrap();
+        let snapshot = jpeg_decode_tool_snapshot(source.clone());
+        let saved_path = format!("{name}-reopened.pdf");
+        for pass in ["before", "reopened"] {
+            let current = if pass == "before" {
+                doc
+            } else {
+                ok(&mut a, "doc_save", json!({"doc":doc,"path":saved_path}));
+                ok(&mut a, "doc_open", json!({"path":saved_path}))["doc"].as_u64().unwrap()
+            };
+            let before = ok(&mut a, "doc_list", json!({}));
+            let bulk = ok(&mut a, "doc_export_all_images", json!({"doc":current,"folder":format!("{name}-{pass}-all")}));
+            assert_eq!(bulk["count"], 1);
+            assert!(bulk["skipped"].as_array().unwrap().is_empty());
+            let exported = std::fs::read(bulk["files"][0]["path"].as_str().unwrap()).unwrap();
+            let path = format!("{name}-{pass}-single");
+            let one = ok(&mut a, "image_save", json!({"doc":current,"page":1,"image":1,"path":path}));
+            let extension = if decode.is_some() { "png" } else { "jpg" };
+            assert_eq!(one["format"], extension);
+            assert_eq!(std::fs::read(dir.join(format!("{path}.{extension}"))).unwrap(), exported);
+            if let Some([lo, hi]) = decode {
+                let sample = image::load_from_memory(&jpeg).unwrap().into_luma8().get_pixel(0, 0)[0];
+                let expected = (lo * f64::from(255 - sample) + hi * f64::from(sample)).round() as u8;
+                let mut reader = png::Decoder::new(std::io::Cursor::new(exported)).read_info().unwrap();
+                let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+                let frame = reader.next_frame(&mut pixels).unwrap();
+                assert_eq!(frame.color_type, png::ColorType::Rgb);
+                assert_eq!(&pixels[..frame.buffer_size()], &[expected; 24]);
+            } else {
+                assert_eq!(exported, jpeg, "default JPEG remains byte-for-byte unchanged");
+            }
+            assert_eq!(ok(&mut a, "doc_list", json!({})), before, "exports create no edit or history entry");
+            assert_eq!(std::fs::read(dir.join(&input)).unwrap(), source);
+        }
+        assert_eq!(jpeg_decode_tool_snapshot(std::fs::read(dir.join(saved_path)).unwrap()), snapshot);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A required conversion that cannot match the declared dimensions must not overwrite a file.
+#[test]
+fn jpeg_decode_failed_transforms_preserve_destination() {
+    let dir = workdir("jpeg-decode-refusal");
+    let (source, _) = jpeg_decode_tool_pdf(Some(&[1., 0.]), 5);
+    std::fs::write(dir.join("mismatch.pdf"), &source).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"mismatch.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_list", json!({}));
+    let destination = b"existing destination must survive a refused transform";
+    std::fs::write(dir.join("existing.png"), destination).unwrap();
+    let error = a.call("image_save", &json!({"doc":doc,"page":1,"image":1,"path":"existing.png"})).unwrap_err();
+    assert!(!error.to_string().is_empty());
+    assert_eq!(std::fs::read(dir.join("existing.png")).unwrap(), destination);
+    let bulk = ok(&mut a, "doc_export_all_images", json!({"doc":doc,"folder":"refused"}));
+    assert_eq!(bulk["count"], 0);
+    assert_eq!(bulk["skipped"].as_array().unwrap().len(), 1);
+    assert!(std::fs::read_dir(dir.join("refused")).unwrap().next().is_none());
+    assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+    assert_eq!(std::fs::read(dir.join("mismatch.pdf")).unwrap(), source);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn fill_and_sign_through_tools() {
     let dir = workdir("fill");

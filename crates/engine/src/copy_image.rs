@@ -30,7 +30,7 @@ impl Document {
     }
 
     /// Copy Image in Original Format: picture `index` on `page` as a file (extension, bytes):
-    /// a JPEG as stored in the PDF, otherwise a lossless PNG.
+    /// a JPEG as stored in the PDF when its appearance permits, otherwise a lossless PNG.
     pub fn page_image_copy_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let img = self.page_images(page).into_iter().nth(index).ok_or_else(|| format!("page {} has no image {}", page + 1, index + 1))?;

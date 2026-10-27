@@ -1151,6 +1151,391 @@ fn lossless_decode_falls_back_to_the_default_mapping_when_malformed() {
     }
 }
 
+/// A JPEG's PDF Decode mapping changes the exported pixels through both image-export APIs.
+#[test]
+fn jpeg_decode_inversion_changes_exported_pixels() {
+    let jpeg = real_jpeg();
+    let samples = image::load_from_memory(&jpeg).unwrap().into_luma8().into_raw();
+    let expected: Vec<u8> = samples.into_iter().flat_map(|sample| [255 - sample; 3]).collect();
+    let mut dict = image_dict(4, 2, "DeviceGray", 8);
+    dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    dict.set(b"Decode".to_vec(), decode_array(&[1., 0.]));
+    let (doc, image) = decode_fixture(dict, jpeg);
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(out.images.len(), 1);
+    assert_eq!(out.images[0].extension, "png", "an inverted JPEG cannot be exported unchanged");
+    assert_eq!(exported_png_pixels(&out.images[0].data), expected);
+    let (extension, bytes) = image_file(&doc, image).unwrap();
+    assert_eq!(extension, "png");
+    assert_eq!(exported_png_pixels(&bytes), expected);
+}
+
+/// Source-generated flat JPEGs keep expected colours independent of lossy encoder rounding.
+fn jpeg_decode_fixture(space: &str, decode: Option<Object>) -> (Document, pdfcraft_cos::ObjRef, Vec<u8>) {
+    let (samples, color) =
+        if space == "DeviceGray" { (vec![64; 8], image::ExtendedColorType::L8) } else { ([32, 64, 96].repeat(8), image::ExtendedColorType::Rgb8) };
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode(&samples, 4, 2, color).unwrap();
+    let mut dict = image_dict(4, 2, space, 8);
+    dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    if let Some(decode) = decode {
+        dict.set(b"Decode".to_vec(), decode);
+    }
+    let (doc, image) = decode_fixture(dict, jpeg.clone());
+    (doc, image, jpeg)
+}
+
+/// Mutate only the synthetic image dictionary, allowing indirect test objects to be added first.
+fn jpeg_decode_update(doc: &mut Document, image: pdfcraft_cos::ObjRef, edit: impl FnOnce(&mut Document, &mut Dict)) {
+    let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!("fixture image") };
+    edit(doc, &mut stream.dict);
+    doc.set(image, Object::Stream(stream));
+}
+
+/// Apply the PDF component intervals to the JPEG decoder's actual samples, expressed as RGBA.
+fn jpeg_decode_expected(jpeg: &[u8], pairs: &[[f64; 2]]) -> Vec<u8> {
+    let decoded = image::load_from_memory(jpeg).unwrap();
+    let samples = if pairs.len() == 1 { decoded.into_luma8().into_raw() } else { decoded.into_rgb8().into_raw() };
+    samples
+        .chunks_exact(pairs.len())
+        .flat_map(|pixel| {
+            let values: Vec<u8> = pixel
+                .iter()
+                .zip(pairs)
+                .map(|(&sample, &[lo, hi])| (lo * f64::from(255 - sample) + hi * f64::from(sample)).round().clamp(0., 255.) as u8)
+                .collect();
+            if values.len() == 1 { [values[0], values[0], values[0], 255] } else { [values[0], values[1], values[2], 255] }
+        })
+        .collect()
+}
+
+/// Both public export entry points must produce the same appearance-correct PNG.
+fn assert_jpeg_decode_rgba(doc: &Document, image: pdfcraft_cos::ObjRef, expected: &[u8]) {
+    let out = extract_images(doc, &[0], 0);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(out.images.len(), 1);
+    assert_eq!(out.images[0].extension, "png");
+    let (extension, bytes) = image_file(doc, image).unwrap();
+    assert_eq!(extension, "png");
+    assert_eq!(bytes, out.images[0].data);
+    assert_eq!(exported_rgba(doc).1, expected);
+}
+
+/// Missing, null and exact identity maps preserve original JPEG bytes, including indirect maps.
+#[test]
+fn jpeg_decode_default_and_identity_preserve_exact_bytes() {
+    for space in ["DeviceGray", "DeviceRGB"] {
+        let n = if space == "DeviceGray" { 1 } else { 3 };
+        for kind in ["missing", "null", "identity", "indirect"] {
+            let (mut doc, image, jpeg) = jpeg_decode_fixture(space, None);
+            jpeg_decode_update(&mut doc, image, |doc, dict| {
+                let value = match kind {
+                    "missing" => return,
+                    "null" => Object::Null,
+                    "identity" => decode_array(&[0., 1.].repeat(n)),
+                    _ => {
+                        let zero = doc.add(Object::Int(0));
+                        let one = doc.add(Object::Int(1));
+                        let map = doc.add(Object::Array((0..n).flat_map(|_| [Object::Ref(zero), Object::Ref(one)]).collect()));
+                        let cs = doc.add(Object::name(space));
+                        dict.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+                        Object::Ref(map)
+                    }
+                };
+                dict.set(b"Decode".to_vec(), value);
+            });
+            let out = extract_images(&doc, &[0], 0);
+            assert!(out.skipped.is_empty());
+            assert_eq!(out.images.len(), 1);
+            assert_eq!((out.images[0].extension, &out.images[0].data), ("jpg", &jpeg), "{space}, {kind}");
+            assert_eq!(image_file(&doc, image).unwrap(), ("jpg", jpeg));
+        }
+    }
+}
+
+/// Each Gray/RGB interval applies once, including scaled, clipped and indirect component maps.
+#[test]
+fn jpeg_decode_maps_device_components_and_indirect_intervals() {
+    for (space, pairs) in [
+        ("DeviceGray", vec![[1., 0.]]),
+        ("DeviceGray", vec![[0.25, 0.75]]),
+        ("DeviceGray", vec![[-0.25, 1.25]]),
+        ("DeviceRGB", vec![[1., 0.]; 3]),
+        ("DeviceRGB", vec![[1., 0.], [0.2, 0.8], [0.25, 0.75]]),
+    ] {
+        for indirect in [false, true] {
+            let (mut doc, image, jpeg) = jpeg_decode_fixture(space, None);
+            jpeg_decode_update(&mut doc, image, |doc, dict| {
+                let endpoints: Vec<Object> = pairs.iter().flatten().map(|&v| Object::Real(v)).collect();
+                let value = if indirect {
+                    let endpoints = endpoints.into_iter().map(|v| Object::Ref(doc.add(v))).collect();
+                    let map = doc.add(Object::Array(endpoints));
+                    Object::Ref(map)
+                } else {
+                    Object::Array(endpoints)
+                };
+                dict.set(b"Decode".to_vec(), value);
+                if indirect {
+                    dict.set(b"DecodeParms".to_vec(), Object::Null);
+                    let cs = doc.add(Object::name(if space == "DeviceGray" { "G" } else { "RGB" }));
+                    dict.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+                }
+            });
+            assert_jpeg_decode_rgba(&doc, image, &jpeg_decode_expected(&jpeg, &pairs));
+        }
+    }
+}
+
+/// Malformed maps default as a whole even when a mask forces PNG conversion.
+#[test]
+fn jpeg_decode_malformed_maps_with_masks_do_not_invert_the_first_pair() {
+    for space in ["DeviceGray", "DeviceRGB"] {
+        let n = if space == "DeviceGray" { 1 } else { 3 };
+        let mut bad = vec![Object::Null, Object::name("bad"), decode_array(&[]), decode_array(&[1.]), decode_array(&[1., 0.].repeat(n + 1))];
+        for value in [Object::Null, Object::name("bad"), Object::Real(f64::NAN), Object::Real(f64::INFINITY), Object::Real(f64::NEG_INFINITY)] {
+            let mut endpoints: Vec<Object> = (0..n).flat_map(|_| [Object::Int(1), Object::Int(0)]).collect();
+            endpoints[2 * n - 1] = value;
+            bad.push(Object::Array(endpoints));
+        }
+        for decode in bad {
+            let (mut doc, image, jpeg) = jpeg_decode_fixture(space, None);
+            jpeg_decode_update(&mut doc, image, |doc, dict| {
+                let mask = doc.add(Object::Stream(Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![128; 8])));
+                dict.set(b"SMask".to_vec(), Object::Ref(mask));
+                dict.set(b"Decode".to_vec(), decode);
+            });
+            let mut expected = jpeg_decode_expected(&jpeg, &vec![[0., 1.]; n]);
+            for pixel in expected.as_chunks_mut::<4>().0 {
+                pixel[3] = 128;
+            }
+            assert_jpeg_decode_rgba(&doc, image, &expected);
+        }
+    }
+}
+
+/// Transparency stays independent of the color map, and color keys compare raw JPEG samples.
+#[test]
+fn jpeg_decode_keeps_mask_alpha_and_raw_colour_key_order() {
+    for kind in ["soft", "stencil", "raw-key", "mapped-key"] {
+        let (mut doc, image, jpeg) = jpeg_decode_fixture("DeviceGray", Some(decode_array(&[1., 0.])));
+        let samples = image::load_from_memory(&jpeg).unwrap().into_luma8().into_raw();
+        jpeg_decode_update(&mut doc, image, |doc, dict| match kind {
+            "soft" => {
+                let mask = doc.add(Object::Stream(Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![0, 64, 128, 255, 255, 128, 64, 0])));
+                dict.set(b"SMask".to_vec(), Object::Ref(mask));
+            }
+            "stencil" => {
+                let mut mask_dict = image_dict(4, 2, "DeviceGray", 1);
+                mask_dict.set(b"ImageMask".to_vec(), Object::Bool(true));
+                let mask = doc.add(Object::Stream(Stream::from_raw(mask_dict, vec![0b1100_0000, 0b0011_0000])));
+                dict.set(b"Mask".to_vec(), Object::Ref(mask));
+            }
+            _ => {
+                let key = if kind == "raw-key" { samples[0] } else { 255 - samples[0] };
+                dict.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(i64::from(key)); 2]));
+            }
+        });
+        let alpha = match kind {
+            "soft" => vec![0, 64, 128, 255, 255, 128, 64, 0],
+            "stencil" => vec![0, 0, 255, 255, 255, 255, 0, 0],
+            "raw-key" => vec![0; 8],
+            _ => vec![255; 8],
+        };
+        let mut expected = jpeg_decode_expected(&jpeg, &[[1., 0.]]);
+        for (pixel, alpha) in expected.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
+            pixel[3] = alpha;
+        }
+        assert_jpeg_decode_rgba(&doc, image, &expected);
+    }
+}
+
+/// Decode precedes undoing a white matte: inverted gray 64 becomes 191, then about 128 at half alpha.
+#[test]
+fn jpeg_decode_is_applied_before_matte_unpremultiplication() {
+    let (mut doc, image, jpeg) = jpeg_decode_fixture("DeviceGray", Some(decode_array(&[1., 0.])));
+    assert!(image::load_from_memory(&jpeg).unwrap().into_luma8().pixels().all(|pixel| pixel[0] == 64));
+    jpeg_decode_update(&mut doc, image, |doc, dict| {
+        let mut mask = image_dict(4, 2, "DeviceGray", 8);
+        mask.set(b"Matte".to_vec(), Object::Array(vec![Object::Int(1)]));
+        let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![128; 8])));
+        dict.set(b"SMask".to_vec(), Object::Ref(mask));
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.skipped.is_empty());
+    assert_eq!(out.images[0].extension, "png");
+    assert_eq!(image_file(&doc, image).unwrap().1, out.images[0].data);
+    let rgba = exported_rgba(&doc).1;
+    assert!(rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[..3].iter().all(|v| v.abs_diff(128) <= 1) && pixel[3] == 128), "{rgba:?}");
+}
+
+/// A required color transform must report damaged, mismatched or oversized JPEGs, never copy them.
+#[test]
+fn jpeg_decode_required_conversion_failures_are_reported() {
+    for kind in ["corrupt", "dimensions", "oversized", "rgb-as-gray", "gray-as-rgb", "cmyk-as-rgb"] {
+        let space = if kind == "gray-as-rgb" { "DeviceGray" } else { "DeviceRGB" };
+        let (mut doc, image, _) = jpeg_decode_fixture(space, None);
+        let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!("fixture image") };
+        let target = if kind == "rgb-as-gray" { "DeviceGray" } else { "DeviceRGB" };
+        stream.dict.set(b"ColorSpace".to_vec(), Object::name(target));
+        stream.dict.set(b"Decode".to_vec(), decode_array(&[1., 0.].repeat(if target == "DeviceGray" { 1 } else { 3 })));
+        match kind {
+            "corrupt" => stream.raw = b"not a decodable JPEG".to_vec().into(),
+            "dimensions" => {
+                stream.dict.set(b"Width".to_vec(), Object::Int(5));
+            }
+            "oversized" => {
+                stream.dict.set(b"Width".to_vec(), Object::Int(10_001));
+                stream.dict.set(b"Height".to_vec(), Object::Int(10_001));
+            }
+            "cmyk-as-rgb" => {
+                stream.raw = flat_four_component_jpeg([0, 255, 255, 255], 0).into();
+                stream.dict.set(b"Width".to_vec(), Object::Int(8));
+                stream.dict.set(b"Height".to_vec(), Object::Int(8));
+            }
+            _ => {}
+        }
+        doc.set(image, Object::Stream(stream));
+        let reason = image_file(&doc, image).expect_err(kind);
+        assert!(!reason.is_empty(), "{kind}");
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.images.is_empty(), "{kind}: a wrong JPEG must not be exported");
+        assert_eq!(out.skipped.len(), 1, "{kind}");
+        assert_eq!(out.skipped[0].2, reason, "{kind}");
+    }
+}
+
+/// Explicit DCT ColorTransform overrides cannot silently use image-rs's own color interpretation.
+#[test]
+fn jpeg_decode_required_conversion_refuses_explicit_color_transform() {
+    for value in [Object::Int(0), Object::Int(1), Object::Null] {
+        for representation in ["dict", "indirect", "array"] {
+            let (mut doc, image, _) = jpeg_decode_fixture("DeviceRGB", Some(decode_array(&[1., 0.].repeat(3))));
+            jpeg_decode_update(&mut doc, image, |doc, dict| {
+                let transform = if representation == "dict" { value.clone() } else { Object::Ref(doc.add(value.clone())) };
+                let parameters = Object::Dict(Dict::from_iter([(b"ColorTransform".to_vec(), transform)]));
+                let parameters = match representation {
+                    "indirect" => Object::Ref(doc.add(parameters)),
+                    "array" => {
+                        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("DCTDecode")]));
+                        Object::Array(vec![parameters])
+                    }
+                    _ => parameters,
+                };
+                dict.set(b"DecodeParms".to_vec(), parameters);
+            });
+            let reason = image_file(&doc, image).unwrap_err();
+            assert!(reason.contains("ColorTransform"), "{reason}");
+            let out = extract_images(&doc, &[0], 0);
+            assert!(out.images.is_empty());
+            assert_eq!(out.skipped.len(), 1);
+        }
+    }
+}
+
+/// This device-only fix retains the existing ICC, calibrated and inverted-CMYK JPEG paths.
+#[test]
+fn jpeg_decode_keeps_other_colour_spaces_outside_device_mapping() {
+    for kind in ["ICC", "CalRGB", "CMYK"] {
+        let (mut doc, image, mut jpeg) = jpeg_decode_fixture("DeviceRGB", Some(decode_array(&[1., 0.].repeat(3))));
+        jpeg_decode_update(&mut doc, image, |doc, dict| {
+            let cs = match kind {
+                "ICC" => {
+                    let profile = doc.add(Object::Stream(Stream::from_raw(Dict::from_iter([(b"N".to_vec(), Object::Int(3))]), icc_profile(b"RGB "))));
+                    Object::Array(vec![Object::name("ICCBased"), Object::Ref(profile)])
+                }
+                "CalRGB" => Object::Array(vec![Object::name("CalRGB"), Object::Dict(Dict::new())]),
+                _ => {
+                    dict.set(b"Decode".to_vec(), decode_array(&[1., 0.].repeat(4)));
+                    Object::name("DeviceCMYK")
+                }
+            };
+            dict.set(b"ColorSpace".to_vec(), cs);
+        });
+        if kind == "CMYK" {
+            jpeg = flat_four_component_jpeg([0, 255, 255, 255], 0);
+            let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!("fixture image") };
+            stream.raw = jpeg.clone().into();
+            stream.dict.set(b"Width".to_vec(), Object::Int(8));
+            stream.dict.set(b"Height".to_vec(), Object::Int(8));
+            doc.set(image, Object::Stream(stream));
+        }
+        assert_eq!(image_file(&doc, image).unwrap(), ("jpg", jpeg.clone()), "{kind}");
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty());
+        assert_eq!((out.images[0].extension, &out.images[0].data), ("jpg", &jpeg), "{kind}");
+    }
+}
+
+/// Finite opposite-sign endpoints must not overflow the interpolation or lose its sign.
+#[test]
+fn jpeg_decode_interpolation_avoids_finite_endpoint_overflow() {
+    for (interval, expected) in [([-f64::MAX, f64::MAX], 0), ([f64::MAX, -f64::MAX], 255)] {
+        let (doc, image, jpeg) = jpeg_decode_fixture("DeviceGray", Some(decode_array(&interval)));
+        assert!(image::load_from_memory(&jpeg).unwrap().into_luma8().pixels().all(|p| p[0] < 128));
+        assert_jpeg_decode_rgba(&doc, image, &[expected, expected, expected, 255].repeat(8));
+    }
+}
+
+/// A null or empty DCT parameter dictionary has no explicit ColorTransform override.
+#[test]
+fn jpeg_decode_null_and_empty_parameters_still_allow_conversion() {
+    for parameters in [Object::Null, Object::Dict(Dict::new()), Object::Array(vec![Object::Null])] {
+        let (mut doc, image, jpeg) = jpeg_decode_fixture("DeviceGray", Some(decode_array(&[1., 0.])));
+        jpeg_decode_update(&mut doc, image, |_, dict| {
+            if matches!(parameters, Object::Array(_)) {
+                dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("DCTDecode")]));
+            }
+            dict.set(b"DecodeParms".to_vec(), parameters);
+        });
+        assert_jpeg_decode_rgba(&doc, image, &jpeg_decode_expected(&jpeg, &[[1., 0.]]));
+    }
+}
+
+/// APP14 transform 0 also describes three-component RGB, before zune initializes components.
+#[test]
+fn jpeg_decode_accepts_three_component_app14_rgb() {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace};
+    let (mut doc, image, mut jpeg) = jpeg_decode_fixture("DeviceRGB", Some(decode_array(&[1., 0.].repeat(3))));
+    let frame = jpeg.windows(2).position(|marker| marker == [0xff, 0xc0]).unwrap();
+    jpeg.splice(frame..frame, [0xff, 0xee, 0, 14, b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, 0]);
+    let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(jpeg.as_slice()));
+    decoder.decode_headers().unwrap();
+    assert_eq!(decoder.info().unwrap().components, 3);
+    assert_eq!(decoder.input_colorspace(), Some(ColorSpace::CMYK), "the header alone does not determine the final RGB layout");
+    let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!("fixture image") };
+    stream.raw = jpeg.clone().into();
+    doc.set(image, Object::Stream(stream));
+    assert_jpeg_decode_rgba(&doc, image, &jpeg_decode_expected(&jpeg, &[[1., 0.]; 3]));
+}
+
+/// A parameter container that cannot be inspected must not hide a PDF color-transform override.
+#[test]
+fn jpeg_decode_refuses_unresolved_and_malformed_dct_parameters() {
+    for kind in ["chain", "cycle", "slot-chain", "long-array", "number"] {
+        let (mut doc, image, _) = jpeg_decode_fixture("DeviceRGB", Some(decode_array(&[1., 0.].repeat(3))));
+        jpeg_decode_update(&mut doc, image, |doc, dict| {
+            let parameters = doc.add(Object::Dict(Dict::from_iter([(b"ColorTransform".to_vec(), Object::Int(0))])));
+            let value = match kind {
+                "chain" => Object::Ref(doc.add(Object::Ref(parameters))),
+                "cycle" => {
+                    let cycle = doc.add(Object::Null);
+                    doc.set(cycle, Object::Ref(cycle));
+                    Object::Ref(cycle)
+                }
+                "slot-chain" => Object::Array(vec![Object::Ref(doc.add(Object::Ref(parameters)))]),
+                "long-array" => Object::Array(vec![Object::Null, Object::Null]),
+                _ => Object::Int(1),
+            };
+            dict.set(b"DecodeParms".to_vec(), value);
+        });
+        assert!(image_file(&doc, image).is_err(), "{kind}");
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.images.is_empty(), "{kind}");
+        assert_eq!(out.skipped.len(), 1, "{kind}");
+    }
+}
+
 /// An 8×8 baseline JPEG of one flat colour with four components, stored as `samples`, and an
 /// Adobe APP14 segment with `transform` (0: CMYK, 2: YCCK).
 fn flat_four_component_jpeg(samples: [u8; 4], transform: u8) -> Vec<u8> {

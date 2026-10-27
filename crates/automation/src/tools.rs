@@ -1241,7 +1241,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
-        t("doc_export_all_images", "Export all images", "Write the images that pages use into a folder (`<name>_Page_<n>_Image_<k>.jpg|png`, n zero-padded to the page count's digits), each once: JPEG images unchanged, others as PNG with their soft mask as alpha. min_size skips images with fewer pixels on their shorter side. Images that can't be decoded yet (JPEG 2000, JBIG2, CCITT, separations) are listed under skipped. Includes unsaved edits.")
+        t("doc_export_all_images", "Export all images", "Write the images that pages use into a folder (`<name>_Page_<n>_Image_<k>.jpg|png`, n zero-padded to the page count's digits), each once: JPEG images retain their original bytes for default/identity Decode when no other conversion is needed; valid nonidentity Decode on named DeviceGray/DeviceRGB JPEGs produces PNG with mapped colors. Supported transparency stays as PNG alpha. Required Decode conversion refuses explicit DCT ColorTransform parameters, corrupt JPEG data, mismatched dimensions or component counts, and excessive pixel counts, reporting those images under skipped. Arbitrary ICC, calibrated and CMYK JPEG Decode remains limited. min_size skips images with fewer pixels on their shorter side. Images that can't be decoded yet (JPEG 2000, JBIG2, CCITT, separations) are listed under skipped. Includes unsaved edits.")
             .cmd("export.all_images")
             .with(schema(
                 json!({
@@ -1352,7 +1352,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "image", "action"],
             )),
-        t("image_save", "Save image as", "Write one of a page's raster images (number from page_images; forms are refused) to path: JPEG images unchanged, others as PNG (the extension is added when missing).")
+        t("image_save", "Save image as", "Write one of a page's raster images (number from page_images; forms are refused) to path: JPEG images retain their original bytes for default/identity Decode when no other conversion is needed; valid nonidentity Decode on named DeviceGray/DeviceRGB JPEGs produces PNG with mapped colors and supported transparency. Required Decode conversion refuses explicit DCT ColorTransform parameters, corrupt JPEG data, mismatched dimensions or component counts, and excessive pixel counts. Arbitrary ICC, calibrated and CMYK JPEG Decode remains limited. Other images are PNG; the extension is added when missing.")
             .destructive()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "image": { "type": "integer", "minimum": 1 }, "path": { "type": "string" } }), &["doc", "page", "image", "path"])),

@@ -1,6 +1,6 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
-//! use, as files. JPEG images are written unchanged; other images, and JPEG images with
-//! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
+//! use, as files. JPEG images are written unchanged unless DeviceGray/RGB Decode intervals,
+//! transparency or CMYK sample polarity require a PNG. Other images are also written as PNG with their soft mask, stencil mask or colour
 //! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, CCITT, separations) are
 //! reported, never silently left out.
 
@@ -62,7 +62,7 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
     out
 }
 
-/// One image XObject as a file: JPEG as is, else PNG ("Save image as").
+/// One image XObject as a file: JPEG as is when its appearance permits, else PNG ("Save image as").
 pub fn image_file(doc: &Document, image: ObjRef) -> Result<(&'static str, Vec<u8>), String> {
     match &*doc.get(image) {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s),
@@ -114,10 +114,26 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         _ => {}
     }
     let as_is = || Ok(("jpg", s.raw.to_vec()));
+    // Only device spaces have the unit component ranges this path can reproduce. Calibrated
+    // and ICCBased JPEGs retain their existing handling rather than being mistaken for devices.
+    let device_components = if jpeg {
+        s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs)).and_then(|cs| match cs.as_name() {
+            Some(b"DeviceGray" | b"G") => Some(1),
+            Some(b"DeviceRGB" | b"RGB") => Some(3),
+            _ => None,
+        })
+    } else {
+        None
+    };
+    let jpeg_decode = device_components.and_then(|n| decode(doc, s, n));
+    let mapped_jpeg = jpeg_decode.as_ref().is_some_and(|pairs| pairs.iter().any(|pair| *pair != [0.0, 1.0]));
+    if mapped_jpeg && unsupported_dct_parameters(doc, s) {
+        return Err("JPEG Decode with ColorTransform or unresolved DCT parameters can't be exported yet".into());
+    }
     let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
     let Some((w, h)) = size(w, h) else {
         return match () {
-            _ if jpeg => as_is(),
+            _ if jpeg && !mapped_jpeg => as_is(),
             _ if w <= 0 || h <= 0 => Err("the image has no size".into()),
             _ => Err(format!("{w} × {h} is too large to export")),
         };
@@ -126,8 +142,9 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
     let key = if mask { None } else { colour_key(doc, s) };
-    // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
-    let inverted = (jpeg || mask)
+    // Device JPEGs use complete, validated Decode pairs below. Do not apply a malformed
+    // array's first pair as a second, blanket inversion when transparency requires a PNG.
+    let inverted = ((jpeg && device_components.is_none()) || mask)
         && s.dict
             .get(b"Decode")
             .map(|d| doc.resolve(d))
@@ -137,14 +154,19 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
     // a negative.
     let as_is_negative = jpeg && !inverted && matches!(space(doc, s.dict.get(b"ColorSpace")), Ok(Space::Cmyk));
-    if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
+    if jpeg && alpha.is_none() && key.is_none() && !as_is_negative && !mapped_jpeg {
         return as_is();
     }
     let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
     let (samples, bpc) = if jpeg {
+        if mapped_jpeg && !device_jpeg_components(&s.raw, &space, w, h) {
+            return Err("the JPEG can't be decoded at its declared size and device colour space for Decode mapping".into());
+        }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
         // indexed one (not valid), is written as is, without its transparency.
-        let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else { return as_is() };
+        let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else {
+            return if mapped_jpeg { Err("the JPEG can't be decoded at its declared size for Decode mapping".into()) } else { as_is() };
+        };
         space = decoded;
         (samples, 8)
     } else {
@@ -161,11 +183,17 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         (unpack(&data, w, h, space.components(), bpc).ok_or("the image data is shorter than its size says")?, bpc)
     };
     let n = space.components();
-    let decode = if jpeg || mask { None } else { decode(doc, s, n) };
+    let decode = if jpeg {
+        jpeg_decode
+    } else if mask {
+        None
+    } else {
+        decode(doc, s, n)
+    };
     if alpha.is_none() {
         alpha = key.and_then(|k| keyed_alpha(&samples, n, bpc, &k));
     }
-    if jpeg && alpha.is_none() && !as_is_negative {
+    if jpeg && alpha.is_none() && !as_is_negative && !mapped_jpeg {
         return as_is();
     }
     let invert = inverted ^ mask; // a stencil mask paints its 0 samples
@@ -214,7 +242,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     png(w as u32, h as u32, &rgb, alpha.as_deref()).map(|p| ("png", p))
 }
 
-/// The explicit Decode intervals for a lossless colour image (8.9.5.2, Table 90).
+/// The explicit Decode intervals for an image's colour components (8.9.5.2, Table 90).
 ///
 /// A malformed array (not an array, the wrong length, a non-number or non-finite entry) gives
 /// the default mapping, so the image still exports.
@@ -232,6 +260,34 @@ fn decode(doc: &Document, s: &Stream, n: usize) -> Option<Vec<[f64; 2]>> {
     Some(pairs)
 }
 
+/// The generic JPEG decoder cannot promise a PDF-level DCT override. Accept only parameters
+/// we can inspect, so unresolved references and malformed containers cannot hide an override.
+fn unsupported_dct_parameters(doc: &Document, s: &Stream) -> bool {
+    let Some(value) = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)) else { return false };
+    let supported = |p: &Object| match p {
+        Object::Null => true,
+        Object::Dict(dict) => dict.get(b"ColorTransform").is_none(),
+        _ => false,
+    };
+    match &*value {
+        Object::Array(values) if values.len() == 1 => !values.first().is_some_and(|p| supported(&doc.resolve(p))),
+        _ => !supported(&value),
+    }
+}
+
+/// Reject inconsistent device declarations before applying component-specific intervals.
+fn device_jpeg_components(data: &[u8], space: &Space, w: usize, h: usize) -> bool {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
+    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(w).set_max_height(h);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    if decoder.decode_headers().is_err() || decoder.dimensions() != Some((w, h)) {
+        return false;
+    }
+    // APP14 can label a three-component RGB JPEG as CMYK until the decoder initializes
+    // its components. The header's component count is authoritative at this stage.
+    matches!((space, decoder.info().map(|info| info.components)), (Space::Gray, Some(1)) | (Space::Rgb, Some(3)))
+}
+
 /// Width and height as sizes, when both are positive and the image is at most `MAX_PIXELS`.
 fn size(w: i64, h: i64) -> Option<(usize, usize)> {
     let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
@@ -242,15 +298,20 @@ fn size(w: i64, h: i64) -> Option<(usize, usize)> {
 /// A JPEG's samples (8 bits): grey for a grey image, CMYK as stored for a CMYK one, else RGB,
 /// with the space they are in.
 fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u8>, Space)> {
+    use image::ImageDecoder;
     match space {
         Space::Indexed(..) => return None,
         Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
-    let img = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok()?;
-    if img.width() as usize != w || img.height() as usize != h {
+    let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(data)).ok()?;
+    let (width, height) = decoder.dimensions();
+    if width as usize != w || height as usize != h {
         return None;
     }
+    // Check the JPEG's own dimensions before allocating its decoded raster. PDF dimensions
+    // have already passed size(), but an inconsistent JPEG header is untrusted too.
+    let img = image::DynamicImage::from_decoder(decoder).ok()?;
     Some(match space {
         Space::Gray => (img.into_luma8().into_raw(), Space::Gray),
         _ => (img.into_rgb8().into_raw(), Space::Rgb),
