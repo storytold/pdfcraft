@@ -95,7 +95,14 @@ pub(crate) fn body(
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
-    ui.horizontal_top(|ui| {
+    let max_h = (ui.ctx().content_rect().height() - 120.0).max(180.0);
+    egui::ScrollArea::vertical()
+        .id_salt("print-body-scroll")
+        .auto_shrink([false, true])
+        .max_height(max_h)
+        .min_scrolled_height(max_h)
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
             ui.set_width(470.0);
@@ -531,6 +538,7 @@ pub(crate) fn body(
                 }
             }
         });
+    });
     });
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
