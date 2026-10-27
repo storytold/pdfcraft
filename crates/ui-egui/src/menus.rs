@@ -18,6 +18,8 @@ use crate::canvas::{Fit, PageLayout};
 use crate::theme::ThemePreference;
 use crate::{PdfCraftApp, RightPanel};
 
+pub(super) mod tab_context;
+
 /// The app's name in the menus the layouts write (About, Hide, Quit).
 pub(crate) const APP_NAME: &str = "PdfCraft";
 
