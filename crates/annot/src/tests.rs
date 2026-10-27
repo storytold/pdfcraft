@@ -454,6 +454,15 @@ fn right_to_left_rich_text_paragraphs_align_as_the_appearance_draws_them() {
         let rc = rc(Some(q));
         assert!(rc.contains(&format!("text-align:{align}")) && rc.contains("<p dir=\"rtl\">שלום</p><p dir=\"ltr\">Hello</p>"), "{rc}");
     }
+    // A lone CR and a CRLF pair break a paragraph as they break the appearance's lines.
+    for contents in ["שלום\rHello", "שלום\r\nHello"] {
+        let mut d = Dict::new();
+        d.set(b"Contents".to_vec(), PdfString::text(contents));
+        d.set(b"DA".to_vec(), PdfString::literal(b"0 0 0 rg /Helv 12 Tf".to_vec()));
+        modify::rich_text(&mut d);
+        let rc = text(&d, b"RC");
+        assert!(rc.contains("<p dir=\"rtl\" style=\"text-align:right\">שלום</p><p dir=\"ltr\">Hello</p>"), "{contents:?}: {rc}");
+    }
 }
 
 /// Hebrew in Fill & Sign text and text boxes is laid out right to left and drawn with the

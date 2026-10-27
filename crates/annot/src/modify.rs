@@ -51,10 +51,12 @@ pub(crate) fn rich_text(d: &mut Dict) {
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+    // Paragraphs break where the appearance breaks them: a CRLF pair once, a lone CR or LF each
+    // (CodeRabbit on #4153).
     let body: String = text
-        .split('\n')
+        .replace("\r\n", "\n")
+        .split(['\n', '\r'])
         .map(|line| {
-            let line = line.trim_end_matches('\r');
             if !shaped::paragraph_rtl(line) {
                 return format!("<p dir=\"ltr\">{}</p>", esc(line));
             }
