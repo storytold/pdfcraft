@@ -10422,6 +10422,10 @@ fn a_foreign_watermark_that_changes_state_for_what_follows_is_reported_not_remov
         "/Artifact <</Subtype /Watermark>> BDC 0 0 50 50 re W n EMC 0 0 100 100 re f",
         "/Artifact <</Subtype /Watermark>> BDC BT /F1 40 Tf (x) Tj ET EMC BT (y) Tj ET",
         "/Artifact <</Subtype /Watermark>> BDC 8 w EMC 0 0 m 9 9 l S",
+        // Operators that set state as a side effect: `"` sets the word and character spacing, `TD`
+        // the leading, and both outlast the text object they are in.
+        "BT /F1 12 Tf ET /Artifact <</Subtype /Watermark>> BDC BT 4 2 (WM) \" ET EMC BT 20 100 Td (A B) Tj ET",
+        "BT /F1 12 Tf ET /Artifact <</Subtype /Watermark>> BDC BT 0 -14 TD (WM) Tj ET EMC BT (a) ' ET",
         // A text object or a path that begins or ends inside it.
         "BT /Artifact <</Subtype /Watermark>> BDC (x) Tj ET EMC",
         "0 0 m /Artifact <</Subtype /Watermark>> BDC 5 5 l S EMC",
@@ -10437,6 +10441,7 @@ fn a_foreign_watermark_that_changes_state_for_what_follows_is_reported_not_remov
         "0 g /Artifact <</Subtype /Watermark>> BDC q 1 0 0 rg 1 0 0 1 5 5 cm 0 0 10 10 re f Q EMC 20 20 10 10 re f",
         "/Artifact <</Subtype /Watermark>> BDC q BT /F1 40 Tf 0.7 g (x) Tj ET Q EMC BT (y) Tj ET",
         "/Artifact <</Subtype /Watermark>> BDC q 0 0 50 50 re W n q 8 w 0 0 m 9 9 l S Q Q EMC",
+        "BT /F1 12 Tf ET /Artifact <</Subtype /Watermark>> BDC q BT 4 2 (WM) \" 0 -14 TD (x) Tj ET Q EMC BT 20 100 Td (A B) Tj ET",
     ];
     for content in scoped {
         let mut doc = page_of_streams(&[content], "");

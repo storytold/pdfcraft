@@ -100,6 +100,9 @@ fn changes_state(op: &[u8]) -> bool {
             | b"Tw"
             | b"Tz"
             | b"TL"
+            // `"` sets the word and character spacing and then shows text; `TD` sets the leading.
+            | b"\""
+            | b"TD"
             | b"Tf"
             | b"Tr"
             | b"Ts"
