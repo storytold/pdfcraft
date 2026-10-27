@@ -29,6 +29,8 @@ const STALE: f64 = 0.1;
 pub(crate) struct Fling {
     /// Whether a lift glides on this platform (see the module docs).
     pub(crate) enabled: bool,
+    /// Whether an active touchpad gesture is currently in progress (#4917).
+    touch_active: bool,
     /// The gesture in progress: when each pass's motion arrived, and how far it went.
     samples: Vec<(f64, Vec2)>,
     /// The glide's speed in points per second (positive moves the content down), or zero.
@@ -47,7 +49,7 @@ impl Default for Fling {
 
 impl Fling {
     pub(crate) fn new(enabled: bool) -> Self {
-        Self { enabled, samples: Vec::new(), velocity: Vec2::ZERO, at: 0.0, stalled: 0 }
+        Self { enabled, touch_active: false, samples: Vec::new(), velocity: Vec2::ZERO, at: 0.0, stalled: 0 }
     }
 
     pub(crate) fn gliding(&self) -> bool {
@@ -59,6 +61,12 @@ impl Fling {
         self.stalled = 0;
     }
 
+    /// Resets active touchpad gesture tracking and clears accumulated samples (#4917).
+    pub(crate) fn reset_gesture(&mut self) {
+        self.touch_active = false;
+        self.samples.clear();
+    }
+
     /// Reads one pass's wheel events, at time `now`. Any wheel input stops a glide; a touchpad
     /// gesture's `End` may start one. `glide` is false where the view must not glide this pass
     /// (animations off, single-page paging, a zoom, a dialog).
@@ -68,23 +76,28 @@ impl Fling {
             self.stop();
             // Zooming, a mouse wheel and sideways Shift scrolling never glide.
             if *unit != MouseWheelUnit::Point || modifiers.command || modifiers.ctrl || modifiers.shift {
-                self.samples.clear();
+                self.reset_gesture();
                 continue;
             }
             match phase {
                 TouchPhase::Start => {
+                    self.touch_active = true;
                     self.samples.clear();
                     self.push(now, *delta);
                 }
-                TouchPhase::Move => self.push(now, *delta),
+                TouchPhase::Move => {
+                    if self.touch_active {
+                        self.push(now, *delta);
+                    }
+                }
                 TouchPhase::End => {
-                    if glide && self.enabled {
+                    if self.touch_active && glide && self.enabled {
                         self.velocity = self.lift_velocity(now);
                         self.at = now;
                     }
-                    self.samples.clear();
+                    self.reset_gesture();
                 }
-                TouchPhase::Cancel => self.samples.clear(),
+                TouchPhase::Cancel => self.reset_gesture(),
             }
         }
     }
@@ -292,5 +305,49 @@ mod tests {
         let mut fling = Fling::new(true);
         swipe(&mut fling, f32::NAN, 6);
         assert!(!fling.gliding(), "a speed that isn't a number");
+    }
+
+    /// Discrete wheel events (Line deltas) must never trigger a kinetic glide (#4917).
+    #[test]
+    fn discrete_wheel_events_never_trigger_glide() {
+        let mut fling = Fling::new(true);
+        let dt = 1.0 / 60.0;
+        let mut now = 0.0;
+        for _ in 0..10 {
+            now += dt;
+            let notch = Event::MouseWheel {
+                unit: MouseWheelUnit::Line,
+                delta: vec2(0.0, -1.0),
+                phase: TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            };
+            fling.read(&[notch], now, true);
+        }
+        now += dt;
+        let end_notch = Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, 0.0),
+            phase: TouchPhase::End,
+            modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        fling.read(&[end_notch], now, true);
+        assert!(!fling.gliding(), "discrete wheel steps never trigger glide");
+    }
+
+    /// Movement without a preceding TouchPhase::Start must never trigger a kinetic glide (#4917).
+    #[test]
+    fn move_without_touch_start_never_triggers_glide() {
+        let mut fling = Fling::new(true);
+        let dt = 1.0 / 60.0;
+        let mut now = 0.0;
+        for _ in 0..6 {
+            now += dt;
+            fling.read(&[wheel(-25.0, TouchPhase::Move)], now, true);
+        }
+        now += dt;
+        fling.read(&[wheel(0.0, TouchPhase::End)], now, true);
+        assert!(!fling.gliding(), "no TouchPhase::Start means not a touchpad gesture");
     }
 }
