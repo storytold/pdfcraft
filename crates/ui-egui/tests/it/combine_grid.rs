@@ -584,6 +584,17 @@ fn interleave_pages_takes_the_pages_the_list_gives_each_file() {
     h.run_steps(3);
     // Round one: front 4, back 1; round two: front 1, back 2; then front 2, 3, 4.
     assert_eq!(texts_of(h.state(), 0), ["Page 4", "Page 1", "Page 1", "Page 2", "Page 2", "Page 3", "Page 4"]);
+
+    // Two parts, both cleared: the whole file twice, as Combine places them.
+    let mut h = grid_of_pages(&[("front.pdf", 3), ("back.pdf", 1)]);
+    let mut again = h.state().combine_draft[0].clone();
+    again.id += 1000;
+    h.state_mut().combine_draft.push(again);
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // Round one: front 1, back 1; then the rest of front's six pages: 2, 3, 1, 2, 3.
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 2", "Page 3", "Page 1", "Page 2", "Page 3"]);
 }
 
 /// #4922: Interleave pages waits for two readable files, like Combine.
