@@ -761,6 +761,17 @@ fn choosing_a_tool_while_e_is_held_ends_the_hold() {
     h.key_up(egui::Key::E);
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, ERASER, "and a late release does not take it away");
+
+    // Choosing the Eraser itself, with nothing between: it was the Eraser already, but the
+    // choice still ends the hold, whether the bar, a menu or a command made it.
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(6);
+    assert!(h.state_mut().execute("comment.eraser"));
+    h.run_steps(1);
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "choosing the Eraser while E is held keeps it");
 }
 
 /// #3900: Space's temporary Hand on top of a held E returns to Draw, whichever key comes up first.
