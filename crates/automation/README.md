@@ -68,6 +68,14 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## HTML export line breaks
+
+`doc_export_office` with an `.html` destination preserves explicit text line endings in paragraphs, headings and table cells as `<br>` elements.
+LF and CR each produce a break, and adjacent CRLF produces one, including when the pair crosses an inline style boundary.
+Consecutive breaks remain distinct, with bold, italic, color and markup escaping preserved.
+The source PDF remains unchanged.
+Paragraph/table detection and text extraction retain their existing limits, and this does not change HTML's handling of tabs or repeated spaces.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:

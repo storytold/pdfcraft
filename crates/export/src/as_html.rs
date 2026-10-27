@@ -8,15 +8,40 @@ pub(crate) fn allowed(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r') || !(c.is_ascii_control() || c == '\u{FFFE}' || c == '\u{FFFF}')
 }
 
+/// Append one allowed character with the same escaping in HTML text and XML/attribute values.
+fn escaped_char(out: &mut String, c: char) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        c => out.push(c),
+    }
+}
+
+/// Escape XML/title/attribute values, dropping illegal characters and keeping literal whitespace.
 pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars().filter(|c| allowed(*c)) {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            c => o.push(c),
+        escaped_char(&mut o, c);
+    }
+    o
+}
+
+/// Escape visible HTML text, retaining CR/LF/CRLF as breaks within its paragraph or cell.
+/// The CR state spans styled runs, but only adjacent source characters form a CRLF pair.
+fn text_html(s: &str, after_cr: &mut bool) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        let crlf = c == '\n' && *after_cr;
+        *after_cr = c == '\r';
+        if crlf || !allowed(c) {
+            continue;
+        }
+        if matches!(c, '\r' | '\n') {
+            o.push_str("<br>");
+        } else {
+            escaped_char(&mut o, c);
         }
     }
     o
@@ -36,7 +61,7 @@ pub(crate) fn base64(data: &[u8]) -> String {
 }
 
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
-/// rule between pages.
+/// rule between pages. Explicit text line endings become breaks within paragraphs and cells.
 pub fn html(pages: &[Page], title: &str) -> String {
     let mut s = format!(
         "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
@@ -49,8 +74,9 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
             Item::Para(runs, lvl) => {
                 let Some(first) = runs.first().map(|r| r.block) else { continue };
                 let mut t = String::new();
+                let mut after_cr = false;
                 for r in &runs {
-                    let mut run = esc(&r.text);
+                    let mut run = text_html(&r.text, &mut after_cr);
                     if r.block.italic {
                         run = format!("<em>{run}</em>");
                     }
@@ -76,7 +102,8 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                 for row in &t.rows {
                     s.push_str("<tr>");
                     for c in row {
-                        let mut body = esc(&c.text);
+                        let mut after_cr = false;
+                        let mut body = text_html(&c.text, &mut after_cr);
                         if c.italic {
                             body = format!("<em>{body}</em>");
                         }

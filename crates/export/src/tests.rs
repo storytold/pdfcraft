@@ -85,6 +85,50 @@ fn html_has_headings_paragraphs_and_images_in_order() {
     assert_eq!(base64(b"Ma"), "TWE=");
 }
 
+/// Explicit text line endings become HTML breaks while markup escaping and styles survive.
+#[test]
+fn html_hard_breaks_preserve_paragraphs_headings_and_escaping() {
+    let mut p = page();
+    p.blocks[0].text =
+        "\r\nFirst & <line> \"quoted\" with enough words to remain ordinary paragraph text despite its bold style\n\nSecond\rThird\r\n".into();
+    p.blocks[0].bold = true;
+    p.blocks[0].italic = true;
+    p.blocks[0].color = [1.0, 0.0, 0.0];
+    p.blocks[1].text = "Heading one\r\nHeading two".into();
+    let h = html(&[p], "Title\r\n<&\"");
+    assert!(h.contains("<p style=\"color:#FF0000\"><strong><em><br>First &amp; &lt;line&gt; &quot;quoted&quot; with enough words to remain ordinary paragraph text despite its bold style<br><br>Second<br>Third<br></em></strong></p>"), "{h}");
+    assert!(h.contains("<h1>Heading one<br>Heading two</h1>"), "{h}");
+    assert!(h.contains("<title>Title\r\n&lt;&amp;&quot;</title>"), "title escaping has no injected markup: {h}");
+    assert_eq!(esc("attribute\r\n<&\""), "attribute\r\n&lt;&amp;&quot;", "shared XML/attribute escaping retains its existing behavior");
+}
+
+/// A detected table cell has the same hard-break and escaping rules as paragraph text.
+#[test]
+fn html_hard_breaks_preserve_table_cell_text_and_style() {
+    let mut p = table_page();
+    p.blocks[0].text = "Cell A\r\nCell B\nCell C\rCell & <D>".into();
+    p.blocks[0].bold = true;
+    p.blocks[0].italic = true;
+    p.blocks[0].color = [1.0, 0.0, 0.0];
+    let h = html(&[p], "Table");
+    assert!(h.contains("<table>"), "the fixture reaches the table writer: {h}");
+    assert!(h.contains("<td style=\"color:#FF0000\"><strong><em>Cell A<br>Cell B<br>Cell C<br>Cell &amp; &lt;D&gt;</em></strong></td>"), "{h}");
+}
+
+/// A CRLF split by inline styling is still one break; a following LF remains a second break.
+#[test]
+fn html_hard_breaks_coalesce_crlf_across_styled_runs() {
+    for (second, expected) in [("\nSecond", "Second"), ("\n\nSecond", "<br>Second"), ("\0\nSecond", "<br>Second")] {
+        let mut blocks = italic_sentence();
+        blocks.truncate(2);
+        blocks[0].text = "First\r".into();
+        blocks[1].text = second.into();
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+        let h = html(&[p], "Runs");
+        assert!(h.contains(&format!("<p>First<br><em>{expected}</em></p>")), "{second:?}: {h}");
+    }
+}
+
 #[test]
 fn docx_is_a_word_package() {
     let d = docx(&[page()], "Report");

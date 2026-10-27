@@ -6778,6 +6778,32 @@ fn exporting_to_word_html_and_rtf() {
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
 
+/// Original ActualText line endings reach HTML export as explicit breaks, not collapsed spaces.
+#[test]
+fn exporting_html_preserves_hard_breaks_from_actual_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "First & <line>\nSecond line\r\nThird line\rFourth line";
+    let hex: String = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect();
+    let content = format!("/Span <</ActualText <FEFF{hex}>>> BDC BT /F1 12 Tf 30 100 Td (Source) Tj ET EMC");
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &stream,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    std::fs::write(dir.path().join("breaks.pdf"), &bytes).unwrap();
+    let mut a = auto(dir.path());
+    let doc = ok(&mut a, "doc_open", json!({"path": "breaks.pdf"}))["doc"].as_u64().unwrap();
+    let result = ok(&mut a, "doc_export_office", json!({"doc": doc, "path": "breaks.html"}));
+    assert_eq!(result["format"], "html");
+    let html = std::fs::read_to_string(dir.path().join("breaks.html")).unwrap();
+    assert!(html.contains("First &amp; &lt;line&gt;<br>Second line<br>Third line<br>Fourth line"), "{html}");
+    assert_eq!(html.matches("<br>").count(), 3, "CRLF is one hard break: {html}");
+    assert_eq!(std::fs::read(dir.path().join("breaks.pdf")).unwrap(), bytes, "export preserves the source PDF");
+}
+
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose
 /// innermost writes "TAIL".
 fn nested_forms_pdf(depths: &[usize]) -> Vec<u8> {
