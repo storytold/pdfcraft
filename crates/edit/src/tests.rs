@@ -1683,6 +1683,41 @@ fn arabic_font_names(doc: &Document, page: usize) -> Vec<String> {
     fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).filter(|k| k.starts_with("PCAr")).collect()
 }
 
+/// The `/FontDescriptor /FontFamily` of each shaped-text (Type 3) font on `page`.
+fn shaped_font_families(doc: &Document, page: usize) -> Vec<String> {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    arabic_font_names(doc, page)
+        .iter()
+        .map(|name| {
+            let font = doc.resolve(fonts.get(name.as_bytes()).unwrap());
+            let descriptor = doc.resolve(font.as_dict().unwrap().get(b"FontDescriptor").unwrap());
+            descriptor.as_dict().unwrap().get(b"FontFamily").unwrap().as_string().unwrap().to_text()
+        })
+        .collect()
+}
+
+/// Thai Add Text is drawn from the document Thai face: Sarabun when the build has craft-fonts'
+/// Thai document manifest, else the interface face (Noto Sans Thai), as before.
+#[test]
+fn added_thai_text_is_drawn_from_the_document_thai_face() {
+    let Some(face) = pdfcraft_fonts::document_thai_font() else { return };
+    let mut doc = fixture();
+    let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "สวัสดี น้ำ".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let families = shaped_font_families(&doc, 0);
+    assert!(!families.is_empty());
+    assert!(families.iter().all(|f| f == face.family), "{families:?}, expected {}", face.family);
+    // Built against a checkout with the Thai document manifest (the fonts build script reads the
+    // same variable): its face, not the interface one.
+    let manifest = option_env!("CRAFT_FONTS_DIR").map(|d| std::path::Path::new(d).join("fonts/thai-manifest.txt"));
+    if cfg!(not(target_arch = "wasm32")) && manifest.is_some_and(|m| m.exists()) {
+        assert!(!pdfcraft_fonts::ui_thai_fonts().iter().any(|f| std::ptr::eq(*f, face)), "{} is an interface face", face.family);
+    }
+}
+
 #[test]
 fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
     let mut doc = fixture();
