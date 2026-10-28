@@ -438,6 +438,28 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
 fn inline_text_changes_are_what_keeping_it_changes() {
     let info = DocInfo {
         pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        // The box the drafts with an index edit: it still has the text they started from.
+        annotations: vec![Annotation {
+            page: 0,
+            subtype: "FreeText".into(),
+            author: None,
+            contents: Some("Box".into()),
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [10.0, 10.0, 80.0, 30.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            points: Vec::new(),
+            no_rotate: false,
+        }],
         ..Default::default()
     };
     let prefs = CommentPrefs::default();
@@ -448,6 +470,7 @@ fn inline_text_changes_are_what_keeping_it_changes() {
         size: None,
         text: text.into(),
         original: original.into(),
+        name: None,
         focus: false,
     };
     for (t, changed) in [
@@ -460,6 +483,55 @@ fn inline_text_changes_are_what_keeping_it_changes() {
         assert_eq!(t.has_changes(), changed, "{:?} after {:?}", t.text, t.original);
         assert_eq!(inline_edit(&t, &info, &prefs).is_some(), changed, "{:?} after {:?}", t.text, t.original);
     }
+}
+
+/// A draft finds its comment again by `/NM` when the page's comments shift under it, and a
+/// draft of a comment without one goes nowhere once another comment sits at its index.
+#[test]
+fn an_inline_draft_keeps_to_its_comment() {
+    let freetext = |index: usize, name: Option<&str>, contents: &str| Annotation {
+        page: 0,
+        subtype: "FreeText".into(),
+        author: None,
+        contents: Some(contents.into()),
+        modified: None,
+        name: name.map(str::to_owned),
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [10.0, 10.0, 80.0, 30.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        points: Vec::new(),
+        no_rotate: false,
+    };
+    let page = PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let draft = |name: Option<&str>| InlineText {
+        page: 0,
+        index: Some(0),
+        at: [0.0; 2],
+        size: None,
+        text: "Edited".into(),
+        original: "Mine".into(),
+        name: name.map(str::to_owned),
+        focus: false,
+    };
+    // A comment added before it moved it from index 0 to 1.
+    let info = DocInfo {
+        pages: vec![page.clone()],
+        annotations: vec![freetext(0, Some("other"), "Other"), freetext(1, Some("mine"), "Mine")],
+        ..Default::default()
+    };
+    let prefs = CommentPrefs::default();
+    assert!(matches!(inline_edit(&draft(Some("mine")), &info, &prefs), Some(Edit::SetAnnotationContents { index: 1, .. })));
+    // Without a name, the comment now at index 0 is another one: nothing is overwritten.
+    let unnamed = DocInfo { pages: vec![page], annotations: vec![freetext(0, None, "Other"), freetext(1, None, "Mine")], ..Default::default() };
+    assert!(inline_edit(&draft(None), &unnamed, &prefs).is_none());
 }
 
 /// "Edit text…" from the menu, with no page drawn (the Comments panel's menu for a page that

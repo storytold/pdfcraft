@@ -81,10 +81,26 @@ pub struct InlineText {
     pub text: String,
     /// The text it had (empty for a new box): nothing to do when it is unchanged.
     pub original: String,
+    /// The comment's `/NM`, to find it again however the page's comments shift while it is typed
+    /// into (`None` for a new box, or a comment without one).
+    pub name: Option<String>,
     pub focus: bool,
 }
 
 impl InlineText {
+    /// The comment this edits as the document lists it now: by its `/NM` wherever the page's
+    /// comments have moved it (the nearest one, as `/NM` need not be unique), else the one at
+    /// `index` while it still has the text it had. `None` for a new box, or when the comment is
+    /// gone or another has taken its place: then the text goes nowhere.
+    pub(crate) fn target<'a>(&self, info: &'a DocInfo) -> Option<&'a Annotation> {
+        let index = self.index?;
+        let mut on_page = info.annotations.iter().filter(|a| a.page == self.page && !a.is_reply());
+        match &self.name {
+            Some(name) => on_page.filter(|a| a.name.as_ref() == Some(name)).min_by_key(|a| a.index.abs_diff(index)),
+            None => on_page.find(|a| a.index == index && a.contents.as_deref().unwrap_or_default() == self.original),
+        }
+    }
+
     /// Whether keeping the text would change anything, as [`inline_edit`] decides: trailing
     /// spaces and line breaks don't count, and a new box needs some text.
     pub(crate) fn has_changes(&self) -> bool {
@@ -111,7 +127,16 @@ pub(crate) fn edits_in_place(a: &Annotation, info: &DocInfo, view_rotation: u16)
 pub(crate) fn start_editing(cv: &mut CommentView, a: &Annotation, info: &DocInfo, view_rotation: u16) {
     let text = a.contents.clone().unwrap_or_default();
     if edits_in_place(a, info, view_rotation) {
-        cv.inline = Some(InlineText { page: a.page, index: Some(a.index), at: [0.0; 2], size: None, original: text.clone(), text, focus: true });
+        cv.inline = Some(InlineText {
+            page: a.page,
+            index: Some(a.index),
+            at: [0.0; 2],
+            size: None,
+            original: text.clone(),
+            text,
+            name: a.name.clone(),
+            focus: true,
+        });
     } else {
         cv.composer = Some(Composer { page: a.page, at: edit_anchor(info, a), kind: ComposerKind::Edit(a.index), text, focus: true });
     }
@@ -225,6 +250,10 @@ pub struct CommentView {
     pub context_at: Option<(usize, [f64; 2])>,
     /// A one-shot tool just finished; the app returns to the Select tool unless pinned.
     pub tool_done: bool,
+    /// The text box being typed into was kept because it lost the keyboard: the press that took
+    /// it away only ends that, and its click must not start another box at once (the page sees
+    /// the click on the frame of the release, after the editor has gone).
+    pub inline_left: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
 }

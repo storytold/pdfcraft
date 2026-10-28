@@ -175,7 +175,7 @@ pub(crate) fn inline_edit(it: &InlineText, info: &DocInfo, prefs: &CommentPrefs)
     }
     let text = it.text.trim_end().to_string();
     match it.index {
-        Some(index) => Some(Edit::SetAnnotationContents { page: it.page, index, text }),
+        Some(_) => Some(Edit::SetAnnotationContents { page: it.page, index: it.target(info)?.index, text }),
         None => {
             let style = prefs.style(CommentTool::TextBox);
             let rect = match (it.size, info.pages.get(it.page)) {
@@ -217,14 +217,13 @@ pub(crate) fn inline_text(
     let zoom = xf.rect.width() / xf.pw.max(1.0);
     // The box's look: its own, or the text box tool's for a new one.
     let look = match it.index {
-        Some(index) => {
-            let a = info.annotations.iter().find(|a| a.page == it.page && a.index == index && a.in_reply_to.is_none());
-            match (a, doc.comment_props(it.page, index)) {
-                (Some(a), Some(p)) => {
-                    Some((p.color.unwrap_or([0.0; 3]), p.font_size.unwrap_or(12.0), p.fill, Some(xf.user_rect(info, it.page, a.rect))))
-                }
-                _ => None,
+        Some(_) => {
+            // The comment where the page lists it now; the editor follows it there.
+            let target = it.target(info).and_then(|a| Some((a, doc.comment_props(it.page, a.index)?)));
+            if let (Some((a, _)), Some(t)) = (target, view.comments.inline.as_mut()) {
+                t.index = Some(a.index);
             }
+            target.map(|(a, p)| (p.color.unwrap_or([0.0; 3]), p.font_size.unwrap_or(12.0), p.fill, Some(xf.user_rect(info, it.page, a.rect))))
         }
         None => {
             let style = prefs.style(CommentTool::TextBox);
@@ -259,7 +258,7 @@ pub(crate) fn inline_text(
     let floor = old.map_or(size as f32 * zoom, |r| (r.width() - 2.0 * pad).max(1.0));
     let ceiling = if it.size.is_some() { floor } else { (pdfcraft_engine::annot_text::TEXT_BOX_MAX_WIDTH as f32 * zoom - 2.0 * pad).max(floor) };
     let width = (longest + font.size * 0.5).clamp(floor, ceiling);
-    let (mut keep, mut cancel) = (false, false);
+    let (mut keep, mut cancel, mut left) = (false, false, false);
     egui::Area::new(egui::Id::unique(("comment-inline-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
         let Some(t) = view.comments.inline.as_mut() else { return };
         ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(back);
@@ -287,8 +286,10 @@ pub(crate) fn inline_text(
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             cancel = true;
-        } else if submit_key(ui, &r, false) || r.lost_focus() {
+        } else if submit_key(ui, &r, false) {
             keep = true;
+        } else if r.lost_focus() {
+            (keep, left) = (true, true);
         }
     });
     if cancel {
@@ -299,6 +300,7 @@ pub(crate) fn inline_text(
         return None;
     }
     let it = view.comments.inline.take()?;
+    view.comments.inline_left = left;
     if it.index.is_none() {
         // A one-shot tool, as with the composer: back to Select unless pinned.
         view.comments.tool_done = true;

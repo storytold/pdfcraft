@@ -961,6 +961,25 @@ fn a_text_box_being_typed_has_the_keyboard_again_when_its_page_scrolls_back() {
     assert_eq!(c[0].contents.as_deref(), Some("Abnahme ok"));
 }
 
+/// With the Text box tool pinned, the click that ends typing only ends it: its release, which
+/// the page sees after the editor has gone, does not open another box.
+#[test]
+fn a_click_away_from_a_text_box_with_the_tool_pinned_only_keeps_the_text() {
+    let mut h = harness_with_step_dt(1.0 / 60.0, |app| {
+        app.set_option("quick", "freetext").unwrap();
+        app.comment_prefs.pinned = true;
+    });
+    click_pt(&mut h, (40.0, 120.0));
+    field(&h, "Type text").type_text("Abnahme ok");
+    h.run_steps(2);
+    click_pt(&mut h, (250.0, 20.0));
+    assert_eq!(comments(&h).len(), 1);
+    assert!(h.state().views[0].comments.inline.is_none(), "no empty box from the same click");
+    assert_ne!(h.state().quick_tool, QuickTool::Select, "the pinned tool stays");
+    click_pt(&mut h, (250.0, 200.0));
+    assert!(h.state().views[0].comments.inline.is_some(), "the next click starts another box");
+}
+
 #[test]
 fn text_boxes_are_typed_into_on_the_page() {
     let mut h = harness_with_step_dt(1.0 / 60.0, |app| app.set_option("quick", "freetext").unwrap());

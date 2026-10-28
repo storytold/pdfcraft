@@ -556,6 +556,7 @@ impl Gestures<'_> {
             if resp.drag_started()
                 && pressed_here
                 && cv.inline.is_none()
+                && !cv.inline_left
                 && let Some(o) = origin
             {
                 cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
@@ -580,7 +581,8 @@ impl Gestures<'_> {
                         (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
                     let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
                     if upright {
-                        cv.inline = Some(InlineText { page, index: None, at, size, text: String::new(), original: String::new(), focus: true });
+                        cv.inline =
+                            Some(InlineText { page, index: None, at, size, text: String::new(), original: String::new(), name: None, focus: true });
                     } else {
                         cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
                     }
@@ -588,16 +590,28 @@ impl Gestures<'_> {
             }
         }
         // A click while a text box is being typed into only ends that (its editor loses the
-        // focus and keeps the text); the next click starts another.
-        if self.clicked()
+        // focus and keeps the text); the next click starts another. The editor goes on the
+        // press, so its release still has to be let go here; once nothing is pressed, no click
+        // is coming for it.
+        if cv.inline_left && (resp.clicked() || !cx.ptr.primary_down && cx.ptr.edges.is_empty()) {
+            cv.inline_left = false;
+        } else if self.clicked()
             && over_page
             && cv.inline.is_none()
             && let Some(p) = pointer
         {
             if tool == CommentTool::TextBox && upright {
                 let at = cx.to_user(p);
-                cv.inline =
-                    Some(InlineText { page: cx.page, index: None, at, size: None, text: String::new(), original: String::new(), focus: true });
+                cv.inline = Some(InlineText {
+                    page: cx.page,
+                    index: None,
+                    at,
+                    size: None,
+                    text: String::new(),
+                    original: String::new(),
+                    name: None,
+                    focus: true,
+                });
             } else {
                 let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
                 cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
