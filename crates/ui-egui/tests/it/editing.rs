@@ -3032,9 +3032,11 @@ fn a_snapshot_click_copies_the_whole_page() {
     h.drop_at(r.center());
     h.run_steps(4);
     let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a click copies the page");
-    // The 200 × 300 pt page, whole, at the view's scale.
-    let scale = *w as f32 / 200.0;
-    assert!(scale > 0.0 && (*hgt as f32 - 300.0 * scale).abs() <= 2.0, "{w} × {hgt} is the whole page");
+    // The 200 × 300 pt page, whole, at the scale the snapshot renders at (the view's zoom on this
+    // display, as `snapshot` works it out), not a part of it in the same shape.
+    let scale = (h.state().views[0].zoom * h.ctx.pixels_per_point()).clamp(0.5, 8.0);
+    let (want_w, want_h) = (200.0 * scale, 300.0 * scale);
+    assert!((*w as f32 - want_w).abs() <= 2.0 && (*hgt as f32 - want_h).abs() <= 2.0, "{w} × {hgt} is the whole {want_w} × {want_h} page");
     let page = (*w, *hgt);
 
     // A drag over part of the page copies just that part.
