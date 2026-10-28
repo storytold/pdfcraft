@@ -17,6 +17,10 @@
 //! The ocrs models read the Latin alphabet (English and other languages written without
 //! accents); Tesseract (the `tesseract` module, off the web build) reads whatever its installed
 //! language packs cover.
+//!
+//! When the layout model is installed too (PP-DocLayoutV3, Apache-2.0, fetched the same way),
+//! the recognised lines are read region by region in the order it gives, and each region is a
+//! paragraph.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -26,6 +30,7 @@ pub mod merge;
 mod ocrs;
 mod pitch;
 pub mod preprocess;
+mod regions;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 mod tiles;
@@ -33,7 +38,8 @@ mod tiles;
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
-    ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
+    ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, LAYOUT_MODEL, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL,
+    RECOGNITION_MODEL_SHA256,
 };
 
 pub use pdfcraft_fonts::TextPlan;
@@ -181,6 +187,12 @@ pub struct Line {
     pub words: Vec<Word>,
 }
 
+/// Recognised lines read as one block of text: a paragraph, a heading, a caption.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Paragraph {
+    pub lines: Vec<Line>,
+}
+
 impl Line {
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
@@ -215,6 +227,11 @@ pub trait Recognizer: Send + Sync {
     fn languages(&self) -> Vec<(String, String)>;
     /// Read the words in `image`, in reading order.
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError>;
+    /// Read `image` as paragraphs. The default is one paragraph: only an engine with a layout
+    /// model splits a page into them, and its [`Self::recognize`] is those paragraphs' lines.
+    fn paragraphs(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Paragraph>, OcrError> {
+        Ok(vec![Paragraph { lines: self.recognize(image, options)? }])
+    }
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the
@@ -854,6 +871,24 @@ mod tests {
         assert!(!message.contains("cargo") && message.contains("PDFCRAFT_MODELS"), "{message}");
     }
 
+    /// A picture whose bytes match neither 1, 3 nor 4 bytes a pixel is an error, not a slice
+    /// past the buffer: ocrs multiplies the sides itself and reads the pixels by that product.
+    #[test]
+    fn a_size_that_does_not_match_the_pixels_is_an_error() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        for (len, w, h) in [(5, 2, 2), (13, 2, 2), (8, 2, 2)] {
+            assert!(matches!(ocr.recognize(&vec![255; len], w, h), Err(OcrError::Recognize(_))), "{len} bytes, {w} × {h}");
+        }
+        // Sizes over the crate's caps are refused before the pixels are looked at, so the sides
+        // can never wrap round onto the buffer's length.
+        assert!(matches!(ocr.recognize(&vec![255; 3], u32::MAX, u32::MAX), Err(OcrError::ImageTooLarge)));
+        assert!(matches!(ocr.recognize(&vec![255; 3], MAX_SIDE + 1, 1), Err(OcrError::ImageTooLarge)));
+    }
+
     /// End to end on rendered text, when the models are installed (`cargo xtask models`).
     #[test]
     fn reads_rendered_text() {
@@ -863,7 +898,7 @@ mod tests {
         };
         let ocr = Ocr::load(&models).unwrap();
         let (w, h, px) = test_image::hello();
-        let lines = ocr.recognize(&px, w, h).unwrap();
+        let lines: Vec<Line> = ocr.recognize(&px, w, h).unwrap().into_iter().flat_map(|p| p.lines).collect();
         let text: Vec<String> = lines.iter().map(Line::text).collect();
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
@@ -887,7 +922,7 @@ mod tests {
         // half in the overlap left of it; across the horizontal cut.
         let at = [(300, 400), (1170, 1000), (1100, 2500), (300, 1748)];
         let px = test_image::hello_on(w, h, dot, &at);
-        let lines = ocr.recognize(&px, w, h).unwrap();
+        let lines: Vec<Line> = ocr.recognize(&px, w, h).unwrap().into_iter().flat_map(|p| p.lines).collect();
         let words: Vec<&Word> = lines.iter().flat_map(|l| &l.words).collect();
         // Two words per line, each once: none lost, none doubled where tiles overlap. The letters
         // are tiny and blocky, so the text itself may be a letter off ("HFLLO").

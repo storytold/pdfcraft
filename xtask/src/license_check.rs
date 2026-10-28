@@ -405,28 +405,41 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// The two model files `ocrs.rs` names as required; a branch may ship further models
+    /// (layout, tables, flattening) that the required-metadata check does not cover.
+    fn required_model_files(source: &str) -> Vec<String> {
+        ["DETECTION_MODEL", "RECOGNITION_MODEL"]
+            .iter()
+            .filter_map(|name| {
+                let prefix = format!("pub const {name}: &str = \"");
+                source.lines().map(str::trim).find_map(|line| line.strip_prefix(&prefix)?.strip_suffix("\";")).map(str::to_string)
+            })
+            .collect()
+    }
+
     #[test]
     fn required_ocr_models_cannot_be_missing() {
         let source = include_str!("../../crates/ocr/src/ocrs.rs");
         let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 2);
+        let required = required_model_files(source);
+        assert_eq!(required.len(), 2);
         assert!(check_required_ocr_metadata(source, &original).unwrap().is_empty());
-        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+        for file in &required {
             let mut m = assets::load(&assets::root()).unwrap();
-            m.fetched.retain(|f| f.file != model.file);
-            assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(&model.file) && p.contains("missing")));
+            m.fetched.retain(|f| &f.file != file);
+            assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(file.as_str()) && p.contains("missing")));
         }
     }
 
     #[test]
     fn required_ocr_models_cannot_be_misclassified() {
         let source = include_str!("../../crates/ocr/src/ocrs.rs");
-        let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 2);
-        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+        let required = required_model_files(source);
+        assert_eq!(required.len(), 2);
+        for file in &required {
             let mut m = assets::load(&assets::root()).unwrap();
-            m.fetched.iter_mut().find(|f| f.file == model.file).unwrap().kind = "font".into();
-            assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(&model.file) && p.contains("kind")));
+            m.fetched.iter_mut().find(|f| &f.file == file).unwrap().kind = "font".into();
+            assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(file.as_str()) && p.contains("kind")));
         }
     }
 

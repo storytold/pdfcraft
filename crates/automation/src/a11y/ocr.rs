@@ -519,6 +519,9 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "count": words.len(), "words": words }))
     }
 
+    /// Whether text recognition's models are installed, whether the layout model is too, the
+    /// directories searched for them (in order), the languages it reads, each as a code and a
+    /// name, and the engines it can use.
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
@@ -539,7 +542,7 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
+        Ok(json!({ "available": ocr::available(), "layout": ocr::layout_available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
     }
 }
 
