@@ -16,6 +16,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
+mod type1;
+
 /// How the bytes of a string map to codes.
 #[derive(Clone, Debug, PartialEq)]
 enum Codes {
@@ -67,6 +69,8 @@ pub struct Metrics {
     /// Subset CIDFontType2 only: one bit per CID (below 65 536) whose glyph has an outline in the
     /// embedded program. See [`cids_with_outlines`].
     outlined_cids: Vec<u64>,
+    /// Simple Type 1 codes whose encoding names are absent from the subset's `/CharSet`.
+    absent_type1_codes: [u64; 4],
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -628,6 +632,7 @@ impl Metrics {
             code_len: 1,
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
             outlined_cids: Vec::new(),
+            absent_type1_codes: [0; 4],
         }
     }
 
@@ -657,6 +662,9 @@ impl Metrics {
             Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
         };
         m.unicode = unicode_map(doc, font, m.composite);
+        if m.subset {
+            m.absent_type1_codes = type1::absent_codes(doc, font);
+        }
         if m.std14.is_some() {
             embedded_widths(doc, font, &mut m);
         }
@@ -864,6 +872,9 @@ impl Metrics {
     /// Only asked for codes the font's Unicode mapping gives: a subset's `ToUnicode` lists the
     /// glyphs it kept, while its `/W` leaves out those of the default width (#1443).
     fn has_glyph(&self, code: u32) -> bool {
+        if self.absent_type1_codes.get(code as usize / 64).is_some_and(|word| (word >> (code % 64)) & 1 != 0) {
+            return false;
+        }
         if self.composite {
             let cid = self.cid(code);
             // CID 0 is `.notdef` (an unmapped code lands there too), whatever ToUnicode says: Word
