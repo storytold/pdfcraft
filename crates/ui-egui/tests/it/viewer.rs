@@ -2211,6 +2211,105 @@ fn selection_control_wheel_still_zooms() {
     }
 }
 
+/// One wheel step at `at` (the page's centre when `None`), with Preferences ▸ Make the Hand tool
+/// zoom with the mouse wheel set to `pref`, and the Hand tool held or not. Frames run as in the
+/// app, raw input hook first (kittest doesn't call it). The page's width before and after.
+fn hand_wheel(pref: bool, hand: bool, unit: egui::MouseWheelUnit, modifiers: egui::Modifiers, at: Option<egui::Pos2>) -> (f32, f32) {
+    let mut h = harness();
+    h.state_mut().set_option("zoom", "100").unwrap();
+    h.state_mut().set_option("left", "closed").unwrap();
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.state_mut().set_option("hand-wheel-zoom", if pref { "true" } else { "false" }).unwrap();
+    h.state_mut().animation_effects = pdfcraft_ui_egui::motion::AnimationEffects::Off;
+    if hand {
+        h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    }
+    let step = |h: &mut Harness<'static, PdfCraftApp>| {
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+    };
+    for _ in 0..8 {
+        step(&mut h);
+    }
+    let view = h.state().active.unwrap();
+    let page = h.state().views[view].page_screen_rect(0).unwrap();
+    h.hover_at(at.unwrap_or(page.center()));
+    step(&mut h);
+    let delta = if unit == egui::MouseWheelUnit::Point { egui::vec2(0.0, 40.0) } else { egui::vec2(0.0, 1.0) };
+    // Straight into the next frame's input: `h.event` queues it past the raw input hook.
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit,
+        delta,
+        phase: egui::TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    (page.width(), h.state().views[view].page_screen_rect(0).unwrap().width())
+}
+
+/// #1399: Acrobat's "Make Hand tool use mouse-wheel zooming". Turned on, a plain notch with the
+/// Hand tool over the pages zooms as ⌘/Ctrl with the wheel does; off, or another tool, a key
+/// held, a trackpad's point deltas or the pointer off the pages, it doesn't.
+#[test]
+fn the_hand_tool_zooms_with_the_wheel_when_the_preference_says_so() {
+    use egui::{
+        Modifiers,
+        MouseWheelUnit::{Line, Point},
+    };
+    let (before, after) = hand_wheel(true, true, Line, Modifiers::NONE, None);
+    assert!(after > before * 1.05, "the notch zoomed in: {before} -> {after}");
+    // At ⌘/Ctrl-wheel's own rate.
+    let (_, ctrl) = hand_wheel(false, true, Line, Modifiers::COMMAND, None);
+    assert!((after - ctrl).abs() < 0.5, "hand wheel {after}, ⌘/Ctrl wheel {ctrl}");
+    for (what, pref, hand, unit, modifiers, at) in [
+        ("preference off", false, true, Line, Modifiers::NONE, None),
+        ("Select tool", true, false, Line, Modifiers::NONE, None),
+        ("Shift held", true, true, Line, Modifiers::SHIFT, None),
+        ("trackpad", true, true, Point, Modifiers::NONE, None),
+    ] {
+        let (before, after) = hand_wheel(pref, hand, unit, modifiers, at);
+        assert!((after - before).abs() < 0.5, "{what}: no zoom ({before} -> {after})");
+    }
+}
+
+/// #1399: off the pages (a panel, the tab strip) the wheel keeps scrolling whatever is under it:
+/// only a notch over the pages is turned into ⌘/Ctrl-wheel.
+#[test]
+fn the_hand_tool_wheel_zooms_only_over_the_pages() {
+    let mut h = harness();
+    h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    h.run_steps(8);
+    let view = h.state().active.unwrap();
+    let pages = h.state().views[view].viewport_rect();
+    let notch = |h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2| {
+        let ctx = h.ctx.clone();
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(at));
+        raw.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        raw.events.iter().find_map(|e| if let egui::Event::MouseWheel { modifiers, .. } = e { Some(*modifiers) } else { None }).unwrap()
+    };
+    assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::COMMAND, "over the pages it zooms");
+    assert_eq!(notch(&mut h, egui::pos2(pages.center().x, pages.top() - 20.0)), egui::Modifiers::NONE, "above them it scrolls");
+    assert_eq!(notch(&mut h, egui::pos2(pages.right() + 5.0, pages.center().y)), egui::Modifiers::NONE, "beside them it scrolls");
+    // Nor in the page grid, or with a dialog open.
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::NONE, "a dialog has the wheel");
+}
+
 #[test]
 fn selection_wheel_outside_document_does_not_scroll() {
     let (mut h, view, _) = selection_wheel_harness();

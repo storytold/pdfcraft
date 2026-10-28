@@ -82,7 +82,10 @@ impl PdfCraftApp {
         if let Some(control) = &self.control {
             control.set_epoch(self.input_epoch());
         }
-        // Before egui reads this frame's wheel input.
+        // Before egui reads this frame's wheel input, and before the scroll speed scales it.
+        if self.hand_wheel_zooms(ctx, raw) {
+            scroll_speed::wheel_zooms(raw);
+        }
         self.scroll_speed.apply(ctx, raw);
         // The native menu's key equivalents.
         if let Some(native) = self.native_menu.as_mut() {
@@ -92,6 +95,19 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Whether this frame's wheel zooms rather than scrolls ([`scroll_speed::wheel_zooms`]): the
+    /// preference is on, the Hand tool is held, no dialog is open, and the pointer is over the
+    /// pages of a document (not its page grid, a panel or a menu bar), as the last frame drew them.
+    fn hand_wheel_zooms(&self, ctx: &egui::Context, raw: &egui::RawInput) -> bool {
+        if !self.hand_wheel_zoom || self.quick_tool != QuickTool::Hand || self.modal_open() {
+            return false;
+        }
+        let Some(view) = self.active.and_then(|i| self.views.get(i)).filter(|v| !v.organize) else { return false };
+        let moved = raw.events.iter().rev().find_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None });
+        let pointer = moved.or_else(|| ctx.input(|i| i.pointer.latest_pos()));
+        pointer.is_some_and(|p| view.viewport_rect().contains(p))
+    }
+
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
