@@ -11,7 +11,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
+#[cfg(test)]
+use pdfcraft_cos::PdfString;
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, XrefEntry};
 
 mod attachments;
 mod boxes;
@@ -687,7 +689,7 @@ pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), Organi
         check_custom_key(key)?;
     }
     let value = value.trim();
-    let entry = (!value.is_empty()).then(|| Object::String(PdfString::text(value)));
+    let entry = (!value.is_empty()).then(|| Object::String(doc.text_string(value)));
     set_info_entry(doc, key.as_bytes(), entry)?;
     xmp::sync_info(doc, key, value)
 }

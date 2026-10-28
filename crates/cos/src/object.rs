@@ -50,6 +50,18 @@ impl PdfString {
         Self { bytes, hex: false }
     }
 
+    /// A text string as PDF 2.0 writes it (ISO 32000-2 §7.9.2.2): PDFDocEncoding when possible,
+    /// else UTF-8 with a BOM. Only for a document that is PDF 2.0; earlier readers do not know it.
+    pub fn text_utf8(s: &str) -> Self {
+        let plain = Self::text(s);
+        if plain.bytes.first() != Some(&0xFE) {
+            return plain;
+        }
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(s.as_bytes());
+        Self { bytes, hex: false }
+    }
+
     /// Decode a text string: UTF-16BE (BOM), UTF-8 (BOM, PDF 2.0) or PDFDocEncoding.
     ///
     /// Lenient beyond the spec, as readers are: invalid sequences after a BOM decode lossily
@@ -542,6 +554,15 @@ mod tests {
             assert_eq!(PdfString::text(s).to_text(), s);
         }
         assert!(!PdfString::text("abc").bytes.starts_with(&[0xFE, 0xFF]));
+    }
+
+    #[test]
+    fn utf8_text_strings_round_trip() {
+        let s = PdfString::text_utf8("Caf\u{e9} \u{4e2d}\u{1f600}");
+        assert_eq!(&s.bytes[..3], &[0xEF, 0xBB, 0xBF]);
+        assert_eq!(s.to_text(), "Caf\u{e9} \u{4e2d}\u{1f600}");
+        // Plain text needs no BOM in either form.
+        assert_eq!(PdfString::text_utf8("abc"), PdfString::text("abc"));
     }
 
     #[test]

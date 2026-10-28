@@ -131,14 +131,14 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
     Ok(r)
 }
 
-pub(crate) fn base_dict(subtype: &str, rect: [f64; 4], page: ObjRef, contents: &str, author: &str, meta: &Meta) -> Dict {
+pub(crate) fn base_dict(doc: &Document, subtype: &str, rect: [f64; 4], page: ObjRef, contents: &str, author: &str, meta: &Meta) -> Dict {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("Annot"));
     d.set(b"Subtype".to_vec(), Object::name(subtype));
     d.set(b"Rect".to_vec(), num_array(&rect));
-    d.set(b"Contents".to_vec(), PdfString::text(contents));
+    d.set(b"Contents".to_vec(), doc.text_string(contents));
     if !author.is_empty() {
-        d.set(b"T".to_vec(), PdfString::text(author));
+        d.set(b"T".to_vec(), doc.text_string(author));
     }
     if let Some(date) = &meta.date {
         d.set(b"M".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
@@ -207,8 +207,8 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     let style = &new.style;
     validate_style(style)?;
     let rect = rect_for(&new.shape, style)?;
-    let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
-    d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
+    let mut d = base_dict(doc, new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
+    d.set(b"Subj".to_vec(), doc.text_string(subject(&new.shape)));
     let opacity = style.opacity.clamp(0.0, 1.0);
     set_non_opaque_style(&mut d, opacity);
     let border = |d: &mut Dict| {

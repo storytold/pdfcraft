@@ -4620,3 +4620,16 @@ fn set_values_reads_the_form_once_not_per_value() {
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
 }
+
+#[test]
+fn text_values_follow_the_document_version() {
+    for (version, bom) in [("2.0", [0xEF, 0xBB, 0xBF]), ("1.7", [0xFE, 0xFF, 0x00])] {
+        let mut doc = fixture();
+        doc.set_version(version);
+        set_value(&mut doc, "name", &FieldValue::Text("Caf\u{e9}".into())).unwrap();
+        let f = fields(&doc).into_iter().find(|f| f.name == "name").unwrap();
+        let v = doc.get(f.obj).as_dict().and_then(|d| d.get(b"V").and_then(|v| v.as_string()).map(|s| s.bytes.clone())).unwrap();
+        assert_eq!(v[..3], bom, "V {version}");
+        assert_eq!(field(&fields(&reopen(&doc)), "name").value, ["Caf\u{e9}"]);
+    }
+}

@@ -2166,3 +2166,21 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+#[test]
+fn comment_text_and_author_follow_the_document_version() {
+    for (version, bom) in [("2.0", [0xEF, 0xBB, 0xBF]), ("1.7", [0xFE, 0xFF, 0x00])] {
+        let mut doc = fixture();
+        doc.set_version(version);
+        let mut n = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0]] });
+        n.contents = "Caf\u{e9}".into();
+        n.author = "Zo\u{eb}".into();
+        let i = add_annotation(&mut doc, &n, &meta("a")).unwrap();
+        set_contents(&mut doc, 0, i, "Na\u{ef}ve", &meta("b")).unwrap();
+        let d = list(&doc, 0).pop().unwrap();
+        let bytes = |k: &[u8]| d.get(k).and_then(|o| o.as_string()).unwrap().bytes.clone();
+        assert_eq!(bytes(b"Contents")[..3], bom, "Contents {version}");
+        assert_eq!(bytes(b"T")[..3], bom, "T {version}");
+        assert_eq!(text(&d, b"Contents"), "Na\u{ef}ve");
+    }
+}

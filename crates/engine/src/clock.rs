@@ -1,9 +1,19 @@
-/// Seconds to add to UTC for local time (0 where unknown).
-pub(crate) fn local_utc_offset() -> i64 {
+/// Seconds to add to UTC for local time at `at` (seconds since the epoch; now when `None`), which
+/// differs with daylight saving; 0 where unknown.
+pub(crate) fn local_utc_offset(at: Option<i64>) -> i64 {
     #[cfg(not(target_arch = "wasm32"))]
-    return i64::from(chrono::Local::now().offset().local_minus_utc());
+    {
+        use chrono::{Local, TimeZone};
+        match at.and_then(|t| Local.timestamp_opt(t, 0).single()) {
+            Some(t) => i64::from(t.offset().local_minus_utc()),
+            None => i64::from(Local::now().offset().local_minus_utc()),
+        }
+    }
     #[cfg(target_arch = "wasm32")]
-    return 0;
+    {
+        let _ = at;
+        0
+    }
 }
 
 /// (year, month, day) from a PDF date `D:YYYYMMDD…`.

@@ -26,7 +26,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §7.6.4 | Standard security handler R2–R6 (RC4 40/128, AES-128, AES-256), crypt filters, `/EncryptMetadata`, SASLprep | full | **own**, read and write | `crates/crypt`; written files open in Acrobat DC since #836 (#774: Acrobat needs the catalog outside object streams) |
 | §7.6.5 | Public-key security handler | full | none | `core.open-public-key`, `protect.certificate-encryption` planned |
 | §7.6.2 | Unencrypted signature `/Contents` | yes | yes | signing encrypted documents (#753) |
-| §7.9.2 | Text strings incl. PDF 2.0 UTF-8 | full | PDFDocEncoding and UTF-16; UTF-8 none | `core.pdf20-utf8-strings` planned |
+| §7.9.2 | Text strings incl. PDF 2.0 UTF-8 | full | PDFDocEncoding, UTF-16 and UTF-8 read; UTF-8 written by `Document::text_string` for 2.0 files: bookmark titles, Info, annotation text, form values, attachment descriptions | `core.pdf20-utf8-strings` partial |
 | §7.11 | File specifications, embedded files | full | read and save attachments; no add/delete/describe | `organize.attachments-*` planned |
 | §7.12 | Extensions dictionary | yes | preserved | |
 | §8 | Graphics: paths, colour spaces, patterns, shadings, images, XObjects | full | **borrowed** renderer; own content parser and serializer (`crates/content`) for editing and redaction | rendering P0s partial |
@@ -50,7 +50,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §14.10 | Web capture | yes | none | |
 | §14.11 | Prepress: page boxes, output intents, trapping, OPI | full | page boxes and crop; sRGB output intent | `print.*` production planned |
 | §14.12 | Document parts (DPart) | yes | none | `core.pdf20-dpart` planned |
-| §14.13 | Associated files (`/AF`) | yes | none | `core.pdf20-associated-files` planned |
+| §14.13 | Associated files (`/AF`) | yes | kept by every save; no listing or editing | `core.pdf20-associated-files` partial |
 | — | Structural validation (Arlington PDF model) | yes (Preflight syntax checks) | none | `core.arlington-validation` planned |
 | — | Optional content (layers) | full | **own** toggle and default state, reset to the default state; set-OCG-state actions; no layer editing | `view.layers-panel`, `view.layers-reset` |
 | — | Redaction (`/Redact` annotations, applying) | full | **own**: removes glyphs, image pixels, vectors, XObject content, annotations, fields and tags; verifies no residue | `protect.redact-*`, `protect.redaction-verification` |
@@ -130,6 +130,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | §7.9.2 UTF-8 writing for 2.0 files (bookmark titles) and §14.13 `/AF` kept across saves: both partial |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

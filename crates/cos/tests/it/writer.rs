@@ -513,3 +513,88 @@ fn incremental_saves_of_a_file_whose_offsets_count_from_its_first_byte_keep_coun
     // No qpdf check here: qpdf counts every offset from the header in a file with bytes before
     // it, so it already reconstructs this input before anything is appended.
 }
+
+/// A 2.0 file with an associated file on the catalog, the page and a hidden stream.
+fn af_fixture() -> Vec<u8> {
+    Pdf::new()
+        .version("2.0")
+        .obj("<< /Type /Catalog /Pages 2 0 R /AF [5 0 R] >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /AF [5 0 R] >>")
+        .obj("<< /Producer (x) >>")
+        .obj("<< /Type /Filespec /F (a.xml) /UF (a.xml) /AFRelationship /Data /EF << /F 6 0 R >> >>")
+        .stream("/Type /EmbeddedFile /Subtype /text#2Fxml", "<a/>")
+        .trailer_entry("/Info 4 0 R")
+        .build()
+}
+
+/// Whether `holder`'s `/AF` array still holds the fixture's file spec: relationship `Data` and
+/// an embedded stream of type text/xml that still holds `<a/>`.
+fn has_af(doc: &Document, holder: &Object) -> bool {
+    let Some(spec) = holder
+        .as_dict()
+        .and_then(|d| d.get(b"AF"))
+        .map(|o| doc.resolve(o))
+        .and_then(|a| a.as_array().and_then(|a| a.first().map(|o| doc.resolve(o))))
+    else {
+        return false;
+    };
+    let Some(spec) = spec.as_dict() else { return false };
+    let relationship = spec.get(b"AFRelationship").map(|o| doc.resolve(o));
+    let file = spec.get(b"EF").map(|o| doc.resolve(o)).and_then(|ef| ef.as_dict().and_then(|d| d.get(b"F")).map(|o| doc.resolve(o)));
+    matches!(relationship.as_deref().and_then(Object::as_name), Some(b"Data"))
+        && matches!(file.as_deref(), Some(Object::Stream(s)) if s.dict.get(b"Subtype").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)).as_deref() == Some(b"text/xml".as_slice())
+            && s.decoded().ok().map(|d| d.to_vec()).as_deref() == Some(&b"<a/>"[..]))
+}
+
+fn af_survives(bytes: Vec<u8>) -> bool {
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let root = doc.resolve(doc.trailer().get(b"Root").unwrap());
+    let pages = root.as_dict().and_then(|d| d.get(b"Pages")).map(|o| doc.resolve(o));
+    let page = pages
+        .as_deref()
+        .and_then(Object::as_dict)
+        .and_then(|d| d.get(b"Kids"))
+        .map(|o| doc.resolve(o))
+        .and_then(|k| k.as_array().and_then(|k| k.first().map(|o| doc.resolve(o))));
+    has_af(&doc, &root) && page.is_some_and(|p| has_af(&doc, &p))
+}
+
+#[test]
+fn saves_are_byte_identical_across_runs_and_keep_associated_files() {
+    for bytes in [af_fixture(), fixture()] {
+        for object_streams in [true, false] {
+            let opts = SaveOptions { object_streams, mod_date: Some("D:20260101000000Z".into()), ..SaveOptions::default() };
+            // Each open builds its own hash state, so an order that leaked from a map would differ.
+            let saved: Vec<Vec<u8>> = (0..4).map(|_| write_full(&Document::open(Arc::new(bytes.clone())).unwrap(), &opts).unwrap()).collect();
+            assert!(saved.windows(2).all(|w| w[0] == w[1]), "full save differs between runs");
+            let again = write_full(&Document::open(Arc::new(saved[0].clone())).unwrap(), &opts).unwrap();
+            assert_eq!(again, write_full(&Document::open(Arc::new(saved[0].clone())).unwrap(), &opts).unwrap());
+            let inc: Vec<Vec<u8>> = (0..4).map(|_| write_incremental(&Document::open(Arc::new(bytes.clone())).unwrap(), &opts).unwrap()).collect();
+            assert!(inc.windows(2).all(|w| w[0] == w[1]), "incremental save differs between runs");
+            if bytes == af_fixture() {
+                assert!(af_survives(saved[0].clone()) && af_survives(inc[0].clone()));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_2_0_document_writes_text_as_utf8() {
+    let mut doc = Document::open(Arc::new(af_fixture())).unwrap();
+    assert_eq!(doc.text_string("Caf\u{e9}").bytes, [&[0xEF, 0xBB, 0xBF][..], "Caf\u{e9}".as_bytes()].concat());
+    doc.set_version("1.7");
+    assert_eq!(doc.text_string("Caf\u{e9}").bytes[..2], [0xFE, 0xFF]);
+}
+
+#[test]
+fn raising_the_version_saves_the_header_with_it() {
+    let mut doc = Document::open(Arc::new(af_fixture())).unwrap();
+    doc.set_version("1.7");
+    let mut doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    doc.set_version("2.0");
+    assert!(doc.is_modified(), "a changed version is an unsaved edit");
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(saved.starts_with(b"%PDF-2.0"), "an incremental save must not keep the old header under UTF-8 strings");
+    assert_eq!(Document::open(Arc::new(saved)).unwrap().version(), "2.0");
+}

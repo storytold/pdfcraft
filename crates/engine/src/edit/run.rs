@@ -162,6 +162,8 @@ pub(crate) struct EditCtx {
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
     pub(crate) seed: u64,
+    /// The clock is fixed (`SOURCE_DATE_EPOCH`).
+    reproducible: bool,
     pub(crate) count: u64,
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
     /// log and the undo label.
@@ -172,13 +174,15 @@ pub(crate) struct EditCtx {
 }
 
 impl EditCtx {
-    pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
+    /// `reproducible`: the clock is fixed (`SOURCE_DATE_EPOCH`), so nothing outside the edit, the
+    /// document and the clock may reach the ids it makes.
+    pub(crate) fn new(now: Option<i64>, salt: u64, reproducible: bool) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
             seed ^= (t as u64).rotate_left(17);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if now.is_some() {
+        if now.is_some() && !reproducible {
             // Real clock: mix in sub-second time so ids from two sessions don't collide.
             seed ^= std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as u64).unwrap_or(0) << 32;
         }
@@ -194,10 +198,24 @@ impl EditCtx {
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
+            reproducible,
             count: 0,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
         }
+    }
+
+    /// Under a fixed clock, ties the ids to the state of the document the edit starts from (its
+    /// size, its unsaved objects and its `/Size`): the same edit of the same file makes the same
+    /// ids in any session, and a later edit of the saved result makes different ones, so a new
+    /// annotation never repeats an earlier annotation's `/NM`.
+    pub(crate) fn bind_to_document(&mut self, doc: &pdfcraft_cos::Document) {
+        if !self.reproducible {
+            return;
+        }
+        let size = doc.trailer().int(b"Size").unwrap_or(0) as u64;
+        let state = (doc.bytes().len() as u64) ^ ((doc.modified_objects().len() as u64) << 24) ^ (size << 44);
+        self.seed ^= state.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(23);
     }
 
     /// 32 bytes of entropy for new encryption keys and salts. `RandomState` is seeded by the
@@ -714,4 +732,32 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reproducible_tests {
+    use super::EditCtx;
+
+    #[test]
+    fn a_fixed_clock_makes_the_same_ids_whatever_the_wall_clock_says() {
+        let first = EditCtx::new(Some(1_700_000_000), 7, true);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = EditCtx::new(Some(1_700_000_000), 7, true);
+        assert_eq!(first.seed, second.seed);
+        // Bound to a document, a fixed clock still separates one state of it from the next.
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(
+            b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R /Size 2 >>\n%%EOF\n".to_vec(),
+        ))
+        .unwrap();
+        let (mut one, mut again) = (EditCtx::new(Some(1_700_000_000), 0, true), EditCtx::new(Some(1_700_000_000), 0, true));
+        one.bind_to_document(&doc);
+        again.bind_to_document(&doc);
+        assert_eq!(one.seed, again.seed, "the same state makes the same ids");
+        doc.add(pdfcraft_cos::Object::Null);
+        let mut later = EditCtx::new(Some(1_700_000_000), 0, true);
+        later.bind_to_document(&doc);
+        assert_ne!(one.seed, later.seed, "a changed document makes other ids");
+        // A real clock still separates sessions: its sub-second time is part of the seed.
+        assert_ne!(first.seed, EditCtx::new(Some(1_700_000_000), 7, false).seed);
+    }
 }

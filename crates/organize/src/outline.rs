@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::{OrganizeError, walk};
 
@@ -556,7 +556,7 @@ pub fn add_bookmark_at(
     let parent = container(doc, parent_path)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     let mut d = Dict::new();
-    d.set(b"Title".to_vec(), Object::String(PdfString::text(title)));
+    d.set(b"Title".to_vec(), Object::String(doc.text_string(title)));
     d.set(b"Dest".to_vec(), dest);
     let item = doc.add(Object::Dict(d));
     let at = index.min(kids.len());
@@ -593,14 +593,14 @@ pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[Outl
         .map(|e| pages.get(e.page).map(|p| p.0).ok_or(OrganizeError::NoSuchPage(e.page)))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut d = Dict::new();
-    d.set(b"Title".to_vec(), Object::String(PdfString::text(parent_title)));
+    d.set(b"Title".to_vec(), Object::String(doc.text_string(parent_title)));
     let parent = doc.add(Object::Dict(d));
     // (level, item, its children so far); the bottom is the new parent.
     let mut stack: Vec<(u8, ObjRef, Vec<ObjRef>)> = vec![(0, parent, Vec::new())];
     let mut done: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
     for (e, page) in entries.iter().zip(targets) {
         let mut d = Dict::new();
-        d.set(b"Title".to_vec(), Object::String(PdfString::text(&e.title)));
+        d.set(b"Title".to_vec(), Object::String(doc.text_string(&e.title)));
         d.set(b"Dest".to_vec(), go_to(page));
         if let Some(se) = e.element {
             d.set(b"SE".to_vec(), Object::Ref(se));
@@ -636,7 +636,7 @@ pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Resul
         return Err(OutlineError::EmptyTitle);
     }
     let (r, _) = resolve_path(doc, path)?;
-    put(doc, r, b"Title", Some(Object::String(PdfString::text(title))))
+    put(doc, r, b"Title", Some(Object::String(doc.text_string(title))))
 }
 
 /// Set the colour of a bookmark's title (`/C`, ISO 32000-2 §12.3.3, Table 151: "An array of three

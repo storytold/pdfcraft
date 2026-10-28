@@ -130,8 +130,9 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
+    let contents = doc.text_string(text);
     doc.update_dict(r, |d| {
-        d.set(b"Contents".to_vec(), PdfString::text(text));
+        d.set(b"Contents".to_vec(), contents);
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
         if free_text {
             rich_text(d);
@@ -214,7 +215,7 @@ fn reply(
         return Err(AnnotError::Invalid("pop-ups can't be replied to".into()));
     }
     let rect = pd.get(b"Rect").cloned().unwrap_or_else(|| num_array(&[0.0, 0.0, 0.0, 0.0]));
-    let mut d = base_dict("Text", [0.0; 4], p, text, author, meta);
+    let mut d = base_dict(doc, "Text", [0.0; 4], p, text, author, meta);
     d.set(b"Rect".to_vec(), rect);
     d.set(b"IRT".to_vec(), Object::Ref(parent));
     d.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
@@ -272,7 +273,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     }
     let state = if marked { "Marked" } else { "Unmarked" };
     let text = format!("{state} set by {}", if author.is_empty() { "unknown" } else { author });
-    let mut d = base_dict("Text", [0.0; 4], p, &text, author, meta);
+    let mut d = base_dict(doc, "Text", [0.0; 4], p, &text, author, meta);
     d.set(b"Rect".to_vec(), pd.get(b"Rect").cloned().unwrap_or_else(|| num_array(&[0.0; 4])));
     d.set(b"IRT".to_vec(), Object::Ref(parent));
     d.set(b"F".to_vec(), Object::Int(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
