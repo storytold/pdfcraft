@@ -3,6 +3,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod file_launch;
+
+/// Start the browser app and register URL, installed-file, unload, and optional host handling.
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use eframe::wasm_bindgen::JsCast;
@@ -51,6 +55,7 @@ fn main() {
                             ctx.request_repaint();
                         });
                     }
+                    file_launch::register(app.startup_inbox.clone(), app.failed_inbox.clone(), cc.egui_ctx.clone());
                     // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
                     // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
                     warn_before_unload(app.unsaved_flag.clone());

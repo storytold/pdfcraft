@@ -4693,6 +4693,7 @@ dependencies = [
  "egui",
  "js-sys",
  "pdfcraft-ui-egui",
+ "serde_json",
  "wasm-bindgen-futures",
  "web-sys",
 ]

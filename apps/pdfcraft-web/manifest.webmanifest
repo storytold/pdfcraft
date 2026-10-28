@@ -1,0 +1,31 @@
+{
+  "name": "PdfCraft",
+  "short_name": "PdfCraft",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1f1f3",
+  "theme_color": "#f1f1f3",
+  "icons": [
+    {
+      "src": "icons/256x256/ai.storyteller.pdfcraft.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/512x512/ai.storyteller.pdfcraft.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/pdf": [
+          ".pdf"
+        ]
+      }
+    }
+  ]
+}

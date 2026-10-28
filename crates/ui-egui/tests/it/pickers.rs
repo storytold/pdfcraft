@@ -756,6 +756,105 @@ fn a_startup_url_does_not_replace_another_documents_password_prompt() {
     }
 }
 
+/// A file launch can deliver several files before the next frame. Each encrypted file keeps
+/// its own prompt and the remaining bytes stay in FIFO order until it is answered.
+#[test]
+fn a_startup_batch_keeps_its_first_password_prompt_and_remaining_files() {
+    let first = encrypted_fixture();
+    let protected_second = encrypted_fixture();
+    for second_encrypted in [false, true] {
+        for cancel_first in [false, true] {
+            let mut h = harness(&[3]);
+            let active = h.state().active_ids().unwrap().1;
+            assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![1] }));
+            let edited = h.state().session.get(active).unwrap().bytes.clone();
+            let second = if second_encrypted { protected_second.clone() } else { fixture(2) };
+            let third = fixture(4);
+            deliver_startup(&h, "first-secret.pdf", first.clone());
+            deliver_startup(&h, "second.pdf", second.clone());
+            h.run_steps(2);
+
+            assert_eq!(
+                h.state().password_prompt.as_ref().map(|prompt| prompt.name.as_str()),
+                Some("first-secret.pdf"),
+                "the first file retains its prompt (encrypted second: {second_encrypted}, cancel first: {cancel_first})"
+            );
+            assert_eq!(h.state().password_prompt.as_ref().unwrap().bytes.as_slice(), first.as_slice());
+            assert_eq!(*h.state().startup_inbox.lock().unwrap(), vec![("second.pdf".into(), second.clone())]);
+            assert_eq!(h.state().views.len(), 1, "later files do not open behind the first password prompt");
+
+            // A subsequent launch joins the tail, including while a wrong-password retry runs.
+            deliver_startup(&h, "third.pdf", third.clone());
+            h.state_mut().submit_password(Some("wrong-password".into()));
+            support::wait_until(&mut h, "the first startup file's wrong-password reply", |app| {
+                app.password_prompt
+                    .as_ref()
+                    .is_some_and(|prompt| prompt.name == "first-secret.pdf" && prompt.error.as_deref() == Some("Incorrect password. Try again."))
+            });
+            assert_eq!(*h.state().startup_inbox.lock().unwrap(), vec![("second.pdf".into(), second.clone()), ("third.pdf".into(), third.clone())]);
+            assert_eq!(h.state().active_ids().unwrap().1, active);
+            assert_eq!(h.state().session.get(active).unwrap().bytes.as_slice(), edited.as_slice());
+            assert!(dirty(h.state(), 0));
+
+            h.state_mut().submit_password((!cancel_first).then(|| "test-password".into()));
+            if second_encrypted {
+                support::wait_until(&mut h, "the second startup file's password prompt", |app| {
+                    app.password_prompt.as_ref().is_some_and(|prompt| prompt.name == "second.pdf")
+                });
+                assert_eq!(h.state().password_prompt.as_ref().unwrap().bytes.as_slice(), second.as_slice());
+                assert_eq!(*h.state().startup_inbox.lock().unwrap(), vec![("third.pdf".into(), third.clone())]);
+                h.state_mut().submit_password(Some("test-password".into()));
+            }
+            let expected_views = if cancel_first { 3 } else { 4 };
+            support::wait_until(&mut h, "the remaining startup files", |app| {
+                app.password_prompt.is_none() && app.views.len() == expected_views && app.startup_inbox.lock().unwrap().is_empty()
+            });
+            let expected_names: Vec<&str> = if cancel_first {
+                vec!["doc0.pdf", "second.pdf", "third.pdf"]
+            } else {
+                vec!["doc0.pdf", "first-secret.pdf", "second.pdf", "third.pdf"]
+            };
+            assert_eq!(h.state().views.iter().map(|view| h.state().session.get(view.id).unwrap().name.as_str()).collect::<Vec<_>>(), expected_names);
+            for (name, expected) in [("second.pdf", &second), ("third.pdf", &third)] {
+                let doc = h.state().session.docs().iter().find(|doc| doc.name == name).unwrap();
+                assert_eq!(doc.bytes.as_slice(), expected.as_slice());
+                assert_eq!(doc.path, None, "launched bytes do not become a native save target");
+            }
+            if !cancel_first {
+                let doc = h.state().session.docs().iter().find(|doc| doc.name == "first-secret.pdf").unwrap();
+                assert_eq!(doc.bytes.as_slice(), first.as_slice());
+            }
+            assert_eq!(h.state().active_ids().unwrap().1, active, "the current document remains the Save target");
+            assert_eq!(h.state().session.get(active).unwrap().bytes.as_slice(), edited.as_slice());
+            assert!(dirty(h.state(), 0));
+            assert_eq!(h.state().session.get(active).unwrap().info.pages.len(), 2);
+            h.run_steps(3);
+            assert_eq!(h.state().views.len(), expected_views, "each queued file is consumed once");
+        }
+    }
+}
+
+/// Reports a malformed queued PDF and continues opening later valid files in FIFO order.
+#[test]
+fn a_broken_startup_file_does_not_block_or_reorder_later_files() {
+    let mut h = harness(&[]);
+    let first_good = fixture(2);
+    let second_good = fixture(4);
+    deliver_startup(&h, "broken.pdf", b"not a PDF".to_vec());
+    deliver_startup(&h, "first-good.pdf", first_good.clone());
+    deliver_startup(&h, "second-good.pdf", second_good.clone());
+    support::wait_until(&mut h, "valid files after a broken startup PDF", |app| app.views.len() == 2 && app.startup_inbox.lock().unwrap().is_empty());
+    let docs = h.state().session.docs();
+    assert_eq!(docs.iter().map(|doc| doc.name.as_str()).collect::<Vec<_>>(), vec!["first-good.pdf", "second-good.pdf"]);
+    assert_eq!(docs[0].bytes.as_slice(), first_good.as_slice());
+    assert_eq!(docs[1].bytes.as_slice(), second_good.as_slice());
+    assert!(h.state().password_prompt.is_none());
+    let notice = h.state().toast.as_ref().map(|(message, _)| message.as_str()).unwrap_or_default();
+    assert!(notice.contains("broken.pdf"), "the failed file is reported: {notice}");
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2, "no successful file is admitted twice");
+}
+
 #[test]
 fn unlocking_a_late_startup_url_keeps_it_in_the_background() {
     let mut h = harness(&[3]);

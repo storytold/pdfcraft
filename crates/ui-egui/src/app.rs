@@ -351,6 +351,8 @@ impl eframe::App for PdfCraftApp {
 
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
+    /// Admit one startup-inbox file per pass when its existing opening/modal guards permit it.
+    /// Request another frame after admission so a failed open does not stall the remaining queue.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -433,12 +435,23 @@ impl eframe::App for PdfCraftApp {
             && self.pending_link.is_none()
             && self.pending_remote_link.is_none()
         {
-            let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-            for (name, bytes) in startup {
+            // Admit one file per pass: opening it may create a password prompt. The next
+            // file stays queued until the guards above allow another admission.
+            let startup = self.startup_inbox.lock().ok().and_then(|mut q| {
+                if q.is_empty() {
+                    None
+                } else {
+                    // The nonempty check is under the same lock, so removing item zero is safe.
+                    Some(q.remove(0))
+                }
+            });
+            if let Some((name, bytes)) = startup {
                 let activate = !self.startup_superseded;
                 if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
                 }
+                // Continue the queue even when this opening failed and no document will repaint.
+                ctx.request_repaint();
             }
         }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();

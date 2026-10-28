@@ -3021,7 +3021,7 @@ source = "Contributor-original (see assets/app-icon/README.md)"
 licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE.txt"
 kind = "icon"
-usage = "Linux hicolor theme icon (packaging/linux/ai.storyteller.pdfcraft.desktop); runtime window icon on Windows and Linux (apps/pdfcraft/src/main.rs)"
+usage = "Linux hicolor theme icon (packaging/linux/ai.storyteller.pdfcraft.desktop); runtime window icon on Windows and Linux (apps/pdfcraft/src/main.rs); installed web app icon via the Trunk manifest (apps/pdfcraft-web/index.html)"
 sha256 = "cde7ee8c5ee38f9fc40a429fd9e6d99a035bcd321701fce331bb13bac126614d"
 
 [[asset]]
@@ -3032,7 +3032,7 @@ source = "Contributor-original (see assets/app-icon/README.md)"
 licence = "MIT OR Apache-2.0"
 licence_file = "assets/app-icon/LICENSE.txt"
 kind = "icon"
-usage = "Linux hicolor theme icon (packaging/linux/ai.storyteller.pdfcraft.desktop)"
+usage = "Linux hicolor theme icon (packaging/linux/ai.storyteller.pdfcraft.desktop); installed web app icon via the Trunk manifest (apps/pdfcraft-web/index.html)"
 sha256 = "5ede733e93b96f4eb8d94299232cf2f9605fa19b0d913f95fe9828c316a2d066"
 
 [[asset]]

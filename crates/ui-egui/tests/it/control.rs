@@ -1010,6 +1010,7 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
     assert_eq!(state["documents"][0]["name"], "doc.pdf");
 }
 
+/// Checks language changes through the platform-specific Settings/Preferences menu and keyboard shortcut.
 #[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     if crate::support::skip_without_glyphs("preferences_menu_and_shortcut_allow_switching_interface_languages", "ja", "") {
@@ -1017,16 +1018,18 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
-    // The menu bar's Edit menu holds Preferences. Titles and rows carry their mnemonic
-    // ("編集(E)", "環境設定(P)…"), so match by the start of the label.
+    // Platform layout puts Settings in the application menu on macOS and Preferences in
+    // Edit elsewhere. Match the localized source label, allowing a mnemonic suffix.
     let menu_row = |text: &'static str| {
         move |n: &egui_kittest::kittest::AccessKitNode<'_>| {
             n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(text))
         }
     };
-    h.get_by(menu_row("編集")).click();
+    let mac = cfg!(target_os = "macos");
+    h.get_by(menu_row(if mac { "PdfCraft" } else { "編集" })).click();
     h.run_steps(2);
-    h.get_by(menu_row("環境設定")).click();
+    let settings = pdfcraft_ui_egui::i18n::tr(pdfcraft_ui_egui::i18n::Lang::from_code("ja").unwrap(), if mac { "Settings…" } else { "Preferences…" });
+    h.get_by(menu_row(settings.trim_end_matches('…'))).click();
     h.run_steps(2);
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {
