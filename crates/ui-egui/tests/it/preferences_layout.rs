@@ -135,12 +135,15 @@ fn click_at(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2) {
 /// 200-point list it lay outside the list, and a click there closed it with nothing picked.
 #[test]
 fn the_interface_language_list_shows_every_language_the_window_has_room_for() {
-    let (mut h, rows) = open_language_list(1600.0);
-    let (lowest, rect) = rows.iter().copied().max_by(|a, b| a.1.top().total_cmp(&b.1.top())).unwrap();
-    assert!(rect.bottom() <= 1600.0, "{} is in the window: {rect:?}", lowest.code());
-    click_at(&mut h, rect.center());
-    h.run_steps(4);
-    assert_eq!(h.state().language, lowest.code(), "picked by its row");
+    // 1335 points leaves the list little more than its rows below the box.
+    for height in [1600.0, 1335.0] {
+        let (mut h, rows) = open_language_list(height);
+        let (lowest, rect) = rows.iter().copied().max_by(|a, b| a.1.top().total_cmp(&b.1.top())).unwrap();
+        assert!(rect.bottom() <= height, "{} is in the window: {rect:?}", lowest.code());
+        click_at(&mut h, rect.center());
+        h.run_steps(4);
+        assert_eq!(h.state().language, lowest.code(), "picked by its row in a window {height} tall");
+    }
 }
 
 /// #1842: a click in the list that misses its rows, such as on a row cut off at the list's edge,
