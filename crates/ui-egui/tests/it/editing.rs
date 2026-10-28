@@ -3125,8 +3125,21 @@ fn a_snapshot_copies_comments_the_viewer_draws() {
     h.drop_at(r.center());
     h.run_steps(4);
     let (_, _, rgba) = h.state().last_snapshot.as_ref().expect("a click copies the page");
-    let red = rgba.chunks_exact(4).filter(|p| p[0] > 200 && p[1] < 80 && p[2] < 80).count();
-    assert!(red > 100, "the square comment is in the copy ({red} red pixels)");
+    let red = |rgba: &[u8]| rgba.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[1] < 80 && p[2] < 80).count();
+    let shown = red(rgba);
+    assert!(shown > 100, "the square comment is in the copy ({shown} red pixels)");
+    // With Hide all comments, the copy leaves it out, as the page does.
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.state_mut().last_snapshot = None;
+    h.run_steps(3);
+    h.hover_at(r.center());
+    h.run_steps(2);
+    h.drag_at(r.center());
+    h.drop_at(r.center());
+    h.run_steps(4);
+    let (_, _, rgba) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    assert_eq!(red(rgba), 0, "hidden comments stay out of the copy");
 }
 
 #[test]

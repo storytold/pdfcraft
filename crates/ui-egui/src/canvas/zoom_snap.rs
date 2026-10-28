@@ -152,8 +152,9 @@ impl PdfCraftApp {
         if (tile.w as u64) * (tile.h as u64) > 64_000_000 {
             return Err("the area is too large at this zoom".into());
         }
-        let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
-        // What the page view shows: comments without an appearance of their own are drawn too.
+        // What the page view shows, with its settings (the password, Hide all comments): comments
+        // without an appearance of their own are drawn, unless comments are hidden.
+        let config = self.session.render_config(view.id).ok_or("no document")?;
         let mut r = pdfcraft_render::PageRenderer::new(doc.display.clone(), config);
         let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
         if let Some(e) = out.error {
