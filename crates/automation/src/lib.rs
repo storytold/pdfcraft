@@ -9,8 +9,8 @@
 //!   with the origin at the top-left of the displayed page.
 //! - An optional root directory confines every path a tool reads or writes. Separately,
 //!   [`file_access::AutomationRoots`] (`pdfcraft-cli mcp --automation-read-root` and
-//!   `--automation-write-root`) holds a read folder and a write folder, each left out meaning no
-//!   access of its kind.
+//!   `--automation-write-root`, each may be repeated) holds read folders and write folders; a kind
+//!   with no folder grants none of its access.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

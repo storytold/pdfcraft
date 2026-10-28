@@ -15,7 +15,6 @@
 //!   contact the host.
 //! - The result must lie inside one of the roots of its kind, compared by whole components
 //!   (`/work2` isn't inside `/work`), without regard to case on Windows.
-//!   `/work`), without regard to case on Windows.
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
 //!
 //! Without roots nothing is checked. A path is checked, then opened: a process that can change the
