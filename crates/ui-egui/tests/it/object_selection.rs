@@ -478,3 +478,105 @@ fn clicking_an_inline_vector_icon_selects_and_deletes_only_it() {
     h.run_steps(4);
     assert!(objects(&h).iter().any(|o| o.target == icon), "undo restores the icon");
 }
+
+/// Clicking a graphic selects it and the same press starts a move: dragging translates only its
+/// paths, the caption stays, and one undo puts it back.
+#[test]
+fn dragging_an_inline_vector_icon_moves_only_it() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").clone();
+    let caption = before.iter().find(|o| o.text.as_deref() == Some("Keep here")).unwrap().clone();
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    let (a, b) = (at(&h, 60.0, 150.0), at(&h, 90.0, 130.0));
+    drag(&mut h, a, b);
+    let after = objects(&h);
+    let moved = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for i in 0..4 {
+        assert!((moved.rect[i] - icon.rect[i] - [30.0, 20.0][i % 2]).abs() < 0.01, "{icon:?} -> {moved:?}");
+    }
+    assert_eq!(after.iter().find(|o| o.target == caption.target).unwrap().rect, caption.rect, "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Move object"));
+    h.get_by_label("1 object selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "undo puts the icon back");
+}
+
+/// A single selected graphic shows the same corner handles as a picture: dragging one resizes
+/// the paths about the opposite corner, keeps its aspect ratio, and is one undo step.
+#[test]
+fn dragging_a_corner_handle_of_an_inline_vector_icon_resizes_it() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").clone();
+    let caption = before.iter().find(|o| o.text.as_deref() == Some("Keep here")).unwrap().clone();
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    // The icon is [40, 340, 90, 360] in user space: its bottom-right handle is at view (90, 160).
+    let (grip, end) = (at(&h, 90.0, 160.0), at(&h, 100.0, 164.0));
+    drag(&mut h, grip, end);
+    let after = objects(&h);
+    let resized = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for (i, want) in [40.0, 336.0, 100.0, 360.0].into_iter().enumerate() {
+        assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
+    }
+    assert_eq!(after.iter().find(|o| o.target == caption.target).unwrap().rect, caption.rect, "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Resize graphic"));
+    h.get_by_label("1 object selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "undo restores the box");
+}
+
+/// The midpoints of the sides are extra handles: they stretch one dimension and leave the other
+/// alone (no aspect-ratio lock), unlike the corners.
+#[test]
+fn dragging_a_side_handle_of_an_inline_vector_icon_stretches_one_axis() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").clone();
+    let caption = before.iter().find(|o| o.text.as_deref() == Some("Keep here")).unwrap().clone();
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    // The icon is [40, 340, 90, 360] in user space; its right side's midpoint is at view (90, 150).
+    let (grip, end) = (at(&h, 90.0, 150.0), at(&h, 110.0, 150.0));
+    drag(&mut h, grip, end);
+    let after = objects(&h);
+    let resized = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for (i, want) in [40.0, 340.0, 110.0, 360.0].into_iter().enumerate() {
+        assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
+    }
+    assert_eq!(after.iter().find(|o| o.target == caption.target).unwrap().rect, caption.rect, "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Resize graphic"));
+    h.get_by_label("1 object selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "undo restores the box");
+
+    // The top side's midpoint at view (65, 140) grows the icon upwards only. Undo cleared the
+    // selection, so select the icon again first.
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    let (grip, end) = (at(&h, 65.0, 140.0), at(&h, 65.0, 120.0));
+    drag(&mut h, grip, end);
+    let after = objects(&h);
+    let resized = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for (i, want) in [40.0, 340.0, 90.0, 380.0].into_iter().enumerate() {
+        assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
+    }
+}

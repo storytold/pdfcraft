@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use pdfcraft_content::{Matrix, Pieces};
+use pdfcraft_content::{Matrix, Op, Pieces};
 use pdfcraft_cos::{Document, Object};
 
 use crate::EditError;
@@ -34,6 +34,12 @@ pub struct PageGraphic {
     end: usize,
     /// A whole `q … Q` scope (rather than a path painted in a shared scope).
     whole_scope: bool,
+    /// The painted paths it groups, as operator ranges (zero-based, end exclusive) and the
+    /// transform that maps their local coordinates to page user space.
+    runs: Vec<(usize, usize, Matrix)>,
+    /// The transform in effect just before `start`, so a whole scope can be wrapped by a `cm`
+    /// that acts in page user space (as an image's own scope is transformed).
+    matrix: Matrix,
 }
 
 fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
@@ -88,12 +94,16 @@ struct Run {
     end: usize,
     rect: [f64; 4],
     scope: usize,
+    /// The transform in effect when the path started (local coordinates to page user space).
+    matrix: Matrix,
 }
 
 /// A saved graphics state (`q`) and the purity of its contents.
 struct Scope {
     start: usize,
     end: usize,
+    /// The transform in effect just before its `q`.
+    matrix: Matrix,
     parent: Option<usize>,
     /// A `q`, not the page's implicit outer scope; only these can be deleted as a whole.
     real: bool,
@@ -199,8 +209,17 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
     if ops.len() > MAX_OPERATIONS {
         return Err(EditError::Invalid("this page has too many content operations for object selection".into()));
     }
-    let mut scopes =
-        vec![Scope { start: 0, end: ops.len(), parent: None, real: false, other: false, impure_child: false, painted: false, closed: false }];
+    let mut scopes = vec![Scope {
+        start: 0,
+        end: ops.len(),
+        matrix: Matrix::IDENTITY,
+        parent: None,
+        real: false,
+        other: false,
+        impure_child: false,
+        painted: false,
+        closed: false,
+    }];
     let mut stack = vec![0usize];
     let mut saved: Vec<Saved> = Vec::new();
     let mut matrix = Matrix::IDENTITY;
@@ -208,6 +227,7 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
     let mut clip = crop;
     let mut path = Bounds::new();
     let mut path_start: Option<usize> = None;
+    let mut path_matrix = Matrix::IDENTITY;
     let mut path_bad = false;
     let mut pending_clip = false;
     let mut in_text = false;
@@ -232,6 +252,7 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
                 scopes.push(Scope {
                     start: index,
                     end: ops.len(),
+                    matrix,
                     parent: Some(parent),
                     real: true,
                     other: false,
@@ -296,6 +317,7 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
         } else if path_operator(keyword) {
             if path_start.is_none() {
                 path_start = Some(index);
+                path_matrix = matrix;
             }
             let mut add = |x: f64, y: f64| {
                 if matrix_ok {
@@ -355,7 +377,7 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
                     }
                     let scope = current(&stack);
                     scopes[scope].painted = true;
-                    runs.push(Run { start: path_start.unwrap_or(index), end: index + 1, rect, scope });
+                    runs.push(Run { start: path_start.unwrap_or(index), end: index + 1, rect, scope, matrix: path_matrix });
                 }
                 if pending_clip {
                     clip = intersection(clip, bounds).unwrap_or([0.0; 4]);
@@ -409,17 +431,32 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
             // a full-page graphic can still be selected; the background path itself is skipped.
             for i in members {
                 if !background(runs[i].rect, crop) {
-                    out.push(PageGraphic { rect: runs[i].rect, start: runs[i].start, end: runs[i].end, whole_scope: false });
+                    out.push(PageGraphic {
+                        rect: runs[i].rect,
+                        start: runs[i].start,
+                        end: runs[i].end,
+                        whole_scope: false,
+                        runs: vec![(runs[i].start, runs[i].end, runs[i].matrix)],
+                        matrix: runs[i].matrix,
+                    });
                 }
             }
         } else {
             let s = &scopes[scope];
-            out.push(PageGraphic { rect, start: s.start, end: s.end, whole_scope: true });
+            let paths = members.iter().map(|i| (runs[*i].start, runs[*i].end, runs[*i].matrix)).collect();
+            out.push(PageGraphic { rect, start: s.start, end: s.end, whole_scope: true, runs: paths, matrix: s.matrix });
         }
     }
     for i in singles {
         if !background(runs[i].rect, crop) {
-            out.push(PageGraphic { rect: runs[i].rect, start: runs[i].start, end: runs[i].end, whole_scope: false });
+            out.push(PageGraphic {
+                rect: runs[i].rect,
+                start: runs[i].start,
+                end: runs[i].end,
+                whole_scope: false,
+                runs: vec![(runs[i].start, runs[i].end, runs[i].matrix)],
+                matrix: runs[i].matrix,
+            });
         }
     }
     out.sort_by_key(|g| (g.start, g.end));
@@ -463,5 +500,299 @@ pub fn delete_graphic(doc: &mut Document, page: usize, index: usize) -> Result<(
     });
     let contents = crate::text::rewritten_contents(doc, &all, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
+/// The transform in effect just before operation `at`, from the stream's `q`, `Q` and `cm`.
+fn ctm_at(ops: &[Op], at: usize) -> Option<Matrix> {
+    let mut stack = Vec::new();
+    let mut matrix = Matrix::IDENTITY;
+    for op in ops.iter().take(at) {
+        match op.op.as_slice() {
+            b"q" => stack.push(matrix),
+            b"Q" => {
+                if let Some(state) = stack.pop() {
+                    matrix = state;
+                }
+            }
+            b"cm" => {
+                let m = op.nums::<6>()?;
+                if !m.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) {
+                    return None;
+                }
+                matrix = Matrix(m).then(&matrix);
+            }
+            _ => {}
+        }
+    }
+    Some(matrix)
+}
+
+/// The box of a clip path in page space, with its curve control points (a close bound).
+fn path_bounds(ops: &[Op], matrix: &Matrix) -> Option<[f64; 4]> {
+    let mut b = Bounds::new();
+    for op in ops {
+        let mut add = |x: f64, y: f64| {
+            let (x, y) = matrix.apply(x, y);
+            b.add(x, y);
+        };
+        match op.op.as_slice() {
+            b"m" | b"l" => {
+                let [x, y] = op.nums::<2>()?;
+                add(x, y);
+            }
+            b"c" => {
+                let [x1, y1, x2, y2, x3, y3] = op.nums::<6>()?;
+                for (x, y) in [(x1, y1), (x2, y2), (x3, y3)] {
+                    add(x, y);
+                }
+            }
+            b"v" | b"y" => {
+                let [x1, y1, x2, y2] = op.nums::<4>()?;
+                for (x, y) in [(x1, y1), (x2, y2)] {
+                    add(x, y);
+                }
+            }
+            b"re" => {
+                let [x, y, w, h] = op.nums::<4>()?;
+                for (x, y) in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)] {
+                    add(x, y);
+                }
+            }
+            _ => {}
+        }
+    }
+    b.rect()
+}
+
+/// A graphic's own clip: the path clipped just before its `q … Q` scope, when that box is tight
+/// around the artwork. Pasted or exported artwork is often wrapped as `re W n q … Q` with the
+/// same box as the artwork; moving or scaling only the paths would leave that clip behind, so
+/// the object would be cut off, or vanish when moved out of it. A section or page clip is much
+/// larger than the graphic and is left alone.
+fn transformed_own_clip(ops: &[Op], start: usize, rect: [f64; 4], change: Matrix) -> Option<(usize, usize, Vec<Op>)> {
+    if !ops.get(start).is_some_and(|op| op.is("q")) {
+        return None;
+    }
+    if !ops.get(start.checked_sub(1)?).is_some_and(|op| op.is("n")) {
+        return None;
+    }
+    let end = start.checked_sub(2)?;
+    if !matches!(ops.get(end)?.op.as_slice(), b"W" | b"W*") {
+        return None;
+    }
+    let mut first = end;
+    while first > 0 && (path_operator(ops[first - 1].op.as_slice()) || ops[first - 1].is("h")) {
+        first -= 1;
+    }
+    if first == end {
+        return None;
+    }
+    let ctm = ctm_at(ops, first)?;
+    let clip = path_bounds(&ops[first..end], &ctm)?;
+    // The clip may be a little larger than the painted paths (a box with a margin), but not a
+    // section or page clip shared with other content.
+    if clip[0] > rect[0] + 0.5 || clip[1] > rect[1] + 0.5 || clip[2] < rect[2] - 0.5 || clip[3] < rect[3] - 0.5 {
+        return None;
+    }
+    let tolerance = (0.25 * (rect[2] - rect[0]).min(rect[3] - rect[1])).max(2.0);
+    if [rect[0] - clip[0], rect[1] - clip[1], clip[2] - rect[2], clip[3] - rect[3]].iter().any(|gap| *gap > tolerance) {
+        return None;
+    }
+    let local = ctm.then(&change).then(&ctm.invert()?);
+    if !local.0.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) {
+        return None;
+    }
+    let point = |x: f64, y: f64| {
+        let (x, y) = local.apply(x, y);
+        vec![Object::Real(x), Object::Real(y)]
+    };
+    let mut out = Vec::with_capacity(end - first + 1);
+    for op in &ops[first..end] {
+        match op.op.as_slice() {
+            b"m" | b"l" => {
+                let [x, y] = op.nums::<2>()?;
+                out.push(Op::new(if op.is("m") { "m" } else { "l" }, point(x, y)));
+            }
+            b"c" => {
+                let [x1, y1, x2, y2, x3, y3] = op.nums::<6>()?;
+                let mut operands = point(x1, y1);
+                operands.extend(point(x2, y2));
+                operands.extend(point(x3, y3));
+                out.push(Op::new("c", operands));
+            }
+            b"v" | b"y" => {
+                let [x1, y1, x2, y2] = op.nums::<4>()?;
+                let mut operands = point(x1, y1);
+                operands.extend(point(x2, y2));
+                out.push(Op::new(if op.is("v") { "v" } else { "y" }, operands));
+            }
+            b"re" => {
+                // A transformed rectangle is not necessarily axis-aligned: write its corners.
+                let [x, y, w, h] = op.nums::<4>()?;
+                out.push(Op::new("m", point(x, y)));
+                out.push(Op::new("l", point(x + w, y)));
+                out.push(Op::new("l", point(x + w, y + h)));
+                out.push(Op::new("l", point(x, y + h)));
+                out.push(Op::new("h", vec![]));
+            }
+            _ if op.is("h") => out.push(Op::new("h", vec![])),
+            _ => return None,
+        }
+    }
+    Some((first, end, out))
+}
+
+/// Apply the page-user-space affine `change` to the painted paths of `runs` (operator ranges and
+/// local-to-user transforms from [`page_graphics`]) as one content rewrite. A run's first
+/// operator gains the change expressed in its own coordinates (`local · change · local⁻¹`) and
+/// the operator after its paint gains its inverse: the newest `cm` composes last, so the change
+/// acts on the run's rendering in user space, and the inverse hands the graphics state back
+/// untouched — the page's own text, images, clips and neighbouring artwork keep their place.
+fn transform_runs(
+    doc: &mut Document,
+    page: usize,
+    runs: &[(usize, usize, Matrix)],
+    scopes: &[(usize, usize, Matrix, [f64; 4])],
+    change: Matrix,
+) -> Result<(), EditError> {
+    if change.0.iter().any(|v| !v.is_finite() || v.abs() > MAX_COORDINATE) {
+        return Err(EditError::Invalid("the graphic transform is out of range".into()));
+    }
+    let p = page_of(doc, page)?;
+    let all = content_streams(doc, &p.dict)?;
+    let pieces = joined(&all);
+    let ops = pieces.parse().ops;
+    // A whole graphics scope is transformed as one piece, `q cm <scope> Q`, the way an image's
+    // own scope is: its clip paths and any nested state scale and move with the artwork instead
+    // of cutting it off at its old box. A clip set just outside that scope (some producers wrap
+    // pasted artwork as `re W n q … Q`) is rewritten too.
+    let mut replaces: BTreeMap<usize, Vec<Op>> = BTreeMap::new();
+    let mut drops: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut wraps: BTreeMap<usize, Vec<Op>> = BTreeMap::new();
+    for &(start, end, matrix, rect) in scopes {
+        let inverse = matrix.invert().ok_or_else(|| EditError::Invalid("the graphic transform is degenerate".into()))?;
+        let local = matrix.then(&change).then(&inverse);
+        if !local.0.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) {
+            return Err(EditError::Invalid("the graphic transform is out of range".into()));
+        }
+        let open = wraps.entry(start).or_default();
+        open.push(Op::new("q", vec![]));
+        open.push(Op::new("cm", local.0.iter().copied().map(pdfcraft_content::num).collect()));
+        if end < ops.len() {
+            wraps.entry(end).or_default().push(Op::new("Q", vec![]));
+        }
+        if let Some((first, clip_end, path)) = transformed_own_clip(&ops, start, rect, change) {
+            replaces.insert(first, path);
+            drops.extend(first + 1..clip_end);
+        }
+    }
+    // Each run in its own coordinates: open at its start, close after its paint.
+    let mut prepared = Vec::with_capacity(runs.len());
+    for &(start, end, local) in runs {
+        if end > ops.len() || start >= end || !local.0.iter().all(|v| v.is_finite()) {
+            return Err(EditError::Invalid("the graphic operation could not be located".into()));
+        }
+        let inverse = local.invert().ok_or_else(|| EditError::Invalid("the graphic transform is degenerate".into()))?;
+        let open = local.then(&change).then(&inverse);
+        let close = open.invert().ok_or_else(|| EditError::Invalid("the graphic transform is degenerate".into()))?;
+        prepared.push((start, end, open, close));
+    }
+    let mut opens: BTreeMap<usize, Vec<Matrix>> = BTreeMap::new();
+    let mut closes: BTreeMap<usize, Vec<Matrix>> = BTreeMap::new();
+    for (start, end, open, close) in prepared {
+        opens.entry(start).or_default().push(open);
+        // A run ending with the stream itself has nothing after it to hand the state back to.
+        if end < ops.len() {
+            closes.entry(end).or_default().push(close);
+        }
+    }
+    // Where one run's close meets the next run's open of the same transform, the pair is
+    // `open⁻¹` then `open`: together they change nothing, so neither is written and an icon's
+    // separate bars keep one compact pair of `cm`s.
+    let mut inserts: BTreeMap<usize, Vec<Matrix>> = BTreeMap::new();
+    for (i, open) in opens {
+        let mut close = closes.remove(&i).unwrap_or_default();
+        if let ([was_open], [next]) = (close.as_slice(), open.as_slice())
+            && was_open.invert() == Some(*next)
+        {
+            continue;
+        }
+        close.extend(open);
+        inserts.insert(i, close);
+    }
+    inserts.extend(closes);
+    let cm = |m: Matrix| Op::new("cm", m.0.iter().copied().map(pdfcraft_content::num).collect());
+    let data = crate::text::splice(&pieces, &ops, |i| {
+        let mut out = Vec::new();
+        if let Some(path) = replaces.remove(&i) {
+            out = path;
+        } else if drops.contains(&i) {
+            return (Vec::new(), false);
+        }
+        if let Some(ops) = wraps.remove(&i) {
+            out.extend(ops);
+        }
+        if let Some(ms) = inserts.get(&i) {
+            out.extend(ms.iter().map(|m| cm(*m)));
+        }
+        (out, true)
+    });
+    let contents = crate::text::rewritten_contents(doc, &all, data);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
+/// Move the graphics `indexes` (from [`page_graphics`]) by the user-space `offset` as one
+/// content rewrite. Part of mixed-object group movement ([`crate::move_objects`]).
+pub(crate) fn translate_graphics(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
+    if indexes.is_empty() {
+        return Ok(());
+    }
+    if !offset.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) {
+        return Err(EditError::Invalid("the object move is out of range".into()));
+    }
+    let graphics = page_graphics(doc, page)?;
+    let mut runs = Vec::new();
+    let mut scopes = Vec::new();
+    for index in indexes {
+        let graphic = graphics.get(*index).ok_or_else(|| EditError::Invalid(format!("page {} has no graphic {}", page + 1, index + 1)))?;
+        if graphic.whole_scope {
+            scopes.push((graphic.start, graphic.end, graphic.matrix, graphic.rect));
+        } else {
+            runs.extend_from_slice(&graphic.runs);
+        }
+    }
+    transform_runs(doc, page, &runs, &scopes, Matrix::translate(offset[0], offset[1]))
+}
+
+/// Resize graphic `index` (from [`page_graphics`]) so its box becomes `rect` (user space): the
+/// paths scale about the box's top-left corner. Stroke widths, dashes and colours keep their
+/// size; only the drawn geometry scales. One content rewrite, one undo step in the caller.
+pub fn resize_graphic(doc: &mut Document, page: usize, index: usize, rect: [f64; 4]) -> Result<(), EditError> {
+    if !rect.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) || rect[2] <= rect[0] || rect[3] <= rect[1] {
+        return Err(EditError::Invalid("the graphic rectangle must be finite with positive width and height".into()));
+    }
+    let graphics = page_graphics(doc, page)?;
+    let graphic = graphics.get(index).ok_or_else(|| EditError::Invalid(format!("page {} has no graphic {}", page + 1, index + 1)))?;
+    let [x0, y0, x1, y1] = graphic.rect;
+    let (sx, sy) = ((rect[2] - rect[0]) / (x1 - x0), (rect[3] - rect[1]) / (y1 - y0));
+    if !sx.is_finite() || !sy.is_finite() || sx <= 0.0 || sy <= 0.0 || sx.abs() > MAX_COORDINATE || sy.abs() > MAX_COORDINATE {
+        return Err(EditError::Invalid("the graphic resize is out of range".into()));
+    }
+    if sx == 1.0 && sy == 1.0 && rect[0] == x0 && rect[1] == y0 {
+        return Err(EditError::Invalid("the graphic already has this size and place".into()));
+    }
+    // A point at the box's top-left corner must land on the new one: `(sx·x0 + e, sy·y0 + f)`.
+    let change = Matrix([sx, 0.0, 0.0, sy, rect[0] - sx * x0, rect[1] - sy * y0]);
+    let mut work = doc.clone();
+    if graphic.whole_scope {
+        transform_runs(&mut work, page, &[], &[(graphic.start, graphic.end, graphic.matrix, graphic.rect)], change)?;
+    } else {
+        transform_runs(&mut work, page, &graphic.runs, &[], change)?;
+    }
+    // A resize that leaves geometry the object inventory cannot use is refused before swapping.
+    crate::editable_objects(&work, page)?;
+    *doc = work;
     Ok(())
 }
