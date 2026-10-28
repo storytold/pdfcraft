@@ -42,9 +42,10 @@ pub(crate) enum Owner {
 pub(crate) enum PicturePart {
     /// The picture: a click selects it, a drag moves the selected one.
     Body,
-    /// A corner of the selected picture (left top, right top, left bottom, right bottom): a drag
-    /// resizes it.
-    Corner(usize),
+    /// A resize grip of the selected picture: 0–3 its corners (left top, right top, left bottom,
+    /// right bottom), 4–7 the midpoints of its top, right, bottom and left sides. A drag from a
+    /// corner keeps the aspect ratio; a side one stretches that axis.
+    Grip(usize),
     /// The selected picture's rotate knob: a drag turns it.
     Knob,
 }

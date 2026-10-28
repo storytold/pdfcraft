@@ -404,6 +404,13 @@ pub enum Edit {
         page: usize,
         index: usize,
     },
+    /// Resize one inline vector graphic on `page` (index from `Document::page_graphics`) so its
+    /// box becomes `rect` (user space). Stroke widths and colours keep their size.
+    ResizePageGraphic {
+        page: usize,
+        index: usize,
+        rect: [f64; 4],
+    },
     /// Move mixed existing and added objects together. References resolve before any change;
     /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
     MoveObjects {

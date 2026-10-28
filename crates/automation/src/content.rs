@@ -400,4 +400,38 @@ impl Automation {
         out["rect"] = json!(rect.map(|v| (f64::from(v) * 100.0).round() / 100.0));
         Ok(out)
     }
+
+    /// Resize one inline vector graphic (a kind "graphic" index from `object_list`) so its
+    /// displayed box becomes `rect` (points, top-left origin, as `object_list` reports it).
+    /// Its paths scale about the old box's top-left corner; stroke widths and colours keep
+    /// their size. One undo step.
+    pub(crate) fn graphic_resize(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let index = a
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+        let rect = a.nums::<4>("rect")?.ok_or_else(|| bad("a graphic resize needs `rect`"))?;
+        if rect[2] <= rect[0] || rect[3] <= rect[1] {
+            return Err(bad("rect must be [left, top, right, bottom] with positive width and height"));
+        }
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let Some(g) = g.as_u64() else {
+                return Err(bad("generation must be a non-negative integer from object_list"));
+            };
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before resizing"));
+            }
+        }
+        let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
+        let user = crate::comments::rect_to_user(info, rect);
+        let view = crate::comments::rect_to_view(info, user.map(|v| v as f32));
+        let mut out = self.apply(a, Edit::ResizePageGraphic { page, index, rect: user })?;
+        out["index"] = json!(index + 1);
+        out["rect"] = json!(view.map(|v| (f64::from(v) * 100.0).round() / 100.0));
+        Ok(out)
+    }
 }

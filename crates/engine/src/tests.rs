@@ -9587,3 +9587,56 @@ fn deleting_a_vector_graphic_is_one_undo_step_and_survives_save_reopen() {
     assert!(doc.editable_objects(0).unwrap().iter().any(|o| o.text.as_deref() == Some("Keep me")));
     assert_eq!(render_page(&reopened, id).rgba, saved_pixels);
 }
+
+/// Inline vector artwork resizes to an exact box through one undoable edit, and the box
+/// survives undo/redo, save and reopen without touching the caption.
+#[test]
+fn resizing_a_vector_graphic_is_one_undo_step_and_survives_save_reopen() {
+    fn graphics_page() -> Vec<u8> {
+        use pdfcraft_cos::{Dict, Object, Stream};
+        let content = "q 1 0 0 1 20 200 cm 0 0 0 rg 0 0 10 20 re f 20 0 10 20 re f Q \
+                       q 1 0 0 1 120 200 cm .5 .5 .5 rg 0 0 20 20 re f Q \
+                       BT /F1 12 Tf 20 100 Td (Keep me) Tj ET";
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+        let page = pdfcraft_model::pages(&cos)[0].clone();
+        let contents = cos.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+        cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(contents))).unwrap();
+        pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap()
+    }
+
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("graphics.pdf", None, Arc::new(graphics_page()), None).unwrap();
+    let before = s.get(id).unwrap().page_graphics(0);
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert_eq!(before[0].rect, [20.0, 200.0, 50.0, 220.0]);
+
+    let rect = [40.0, 160.0, 100.0, 200.0];
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    let edit = Edit::ResizePageGraphic { page: 0, index: 0, rect };
+    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("changes to the document")));
+    assert!(s.apply(id, Edit::ResizePageGraphic { page: 0, index: 9, rect }).is_err(), "a missing graphic is refused");
+    assert_eq!(s.get(id).unwrap().page_graphics(0), before, "and changes nothing");
+
+    let original_pixels = render_page(&s, id).rgba;
+    s.apply(id, edit).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.page_graphics(0)[0].rect, rect);
+    assert_eq!(doc.can_undo(), Some("Resize graphic"));
+    let resized_pixels = render_page(&s, id).rgba;
+    assert_ne!(resized_pixels, original_pixels, "the artwork is drawn at its new size");
+
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.page_graphics(0), before, "undo restores the box");
+    assert_eq!(render_page(&s, id).rgba, original_pixels);
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().page_graphics(0)[0].rect, rect);
+
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new().with_clock(|| 1_700_000_000);
+    let id = reopened.open("saved.pdf", None, saved, None).unwrap();
+    let doc = reopened.get(id).unwrap();
+    assert_eq!(doc.page_graphics(0)[0].rect, rect, "the new box stays after save and reopen");
+    assert!(doc.editable_objects(0).unwrap().iter().any(|o| o.text.as_deref() == Some("Keep me")));
+    assert_eq!(render_page(&reopened, id).rgba, resized_pixels);
+}

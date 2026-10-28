@@ -23,6 +23,8 @@ pub(crate) struct ObjectSelection {
     page: Option<usize>,
     selected: Vec<EditableObject>,
     gesture: Option<Gesture>,
+    /// A handle-resize drag of the one selected graphic (it has no single-object tool).
+    resize: Option<ResizeDrag>,
     /// Expected geometry after our own edit, for remapping indexes that grouping can change.
     pending: Option<Vec<EditableObject>>,
     pub notice: Option<String>,
@@ -42,10 +44,24 @@ struct Gesture {
     additive: bool,
 }
 
+/// A graphic's handle-resize drag: the grip (0–3 corners from the left-top clockwise, 4–7 the
+/// top, right, bottom and left side midpoints), the press and last pointer (screen), its box at
+/// the press (user space) and the box the release would give it (screen), updated every frame
+/// for the preview.
+#[derive(Clone, Copy)]
+struct ResizeDrag {
+    grip: usize,
+    start: Pos2,
+    now: Pos2,
+    rect: [f64; 4],
+    preview: Rect,
+}
+
 impl ObjectSelection {
     /// Clear any object-selection gesture and the page it was blocking.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.gesture = None;
+        self.resize = None;
         self.blocked_page = None;
     }
 
@@ -59,6 +75,7 @@ impl ObjectSelection {
         self.input_blocked = blocked;
         if blocked {
             self.gesture = None;
+            self.resize = None;
             self.blocked_page = None;
         }
     }
@@ -67,6 +84,7 @@ impl ObjectSelection {
         self.page = None;
         self.selected.clear();
         self.gesture = None;
+        self.resize = None;
         self.pending = None;
         self.blocked_page = None;
         self.select_paragraph = None;
@@ -89,6 +107,7 @@ impl ObjectSelection {
         if self.generation != Some(generation) {
             self.cache.clear();
             self.gesture = None;
+            self.resize = None;
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, expected)| {
                 let inventory = doc.editable_objects(page).ok()?;
@@ -156,6 +175,76 @@ fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> R
 
 fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) -> Rect {
     screen_rect(xf, info, page, object.rect)
+}
+
+/// The resize handles of a single selected graphic: the four corners, then the midpoints of the
+/// top, right, bottom and left sides.
+fn resized_grips(b: Rect) -> [Pos2; 8] {
+    [
+        b.left_top(),
+        b.right_top(),
+        b.left_bottom(),
+        b.right_bottom(),
+        Pos2::new(b.center().x, b.top()),
+        Pos2::new(b.right(), b.center().y),
+        Pos2::new(b.center().x, b.bottom()),
+        Pos2::new(b.left(), b.center().y),
+    ]
+}
+
+/// The smallest side a resize may leave (screen pixels), so a handle cannot turn the box inside
+/// out.
+const MIN_RESIZE: f32 = 2.0;
+
+/// The box a corner drag gives `b` (screen), keeping its aspect ratio, as `image_input` does:
+/// the axis with the larger relative pointer change wins and a handle grabbed off-centre cannot
+/// make the box jump. A side grip moves only its own edge, changing one dimension freely; the
+/// box may leave the page.
+fn resized_box(b: Rect, grip: usize, start: Pos2, p: Pos2) -> Rect {
+    let d = p - start;
+    match grip {
+        0..=3 => {
+            let fixed = resized_grips(b)[3 - grip];
+            let (w0, h0) = (b.width().max(1.0), b.height().max(1.0));
+            let horizontal = d.x * (start.x - fixed.x).signum() / w0;
+            let vertical = d.y * (start.y - fixed.y).signum() / h0;
+            let delta = if horizontal.abs() > vertical.abs() { horizontal } else { vertical };
+            let k = (1.0 + delta).max(0.05);
+            let (w, h) = (w0 * k, h0 * k);
+            let x = if start.x < fixed.x { fixed.x - w } else { fixed.x };
+            let y = if start.y < fixed.y { fixed.y - h } else { fixed.y };
+            Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
+        }
+        4 => Rect::from_min_max(Pos2::new(b.left(), (b.top() + d.y).min(b.bottom() - MIN_RESIZE)), b.max),
+        6 => Rect::from_min_max(b.min, Pos2::new(b.right(), (b.bottom() + d.y).max(b.top() + MIN_RESIZE))),
+        7 => Rect::from_min_max(Pos2::new((b.left() + d.x).min(b.right() - MIN_RESIZE), b.top()), b.max),
+        _ => Rect::from_min_max(b.min, Pos2::new((b.right() + d.x).max(b.left() + MIN_RESIZE), b.bottom())),
+    }
+}
+
+fn resize_cursor(grip: usize) -> egui::CursorIcon {
+    match grip {
+        0 | 3 => egui::CursorIcon::ResizeNwSe,
+        1 | 2 => egui::CursorIcon::ResizeNeSw,
+        4 | 6 => egui::CursorIcon::ResizeVertical,
+        _ => egui::CursorIcon::ResizeHorizontal,
+    }
+}
+
+/// White handles on a selected graphic's box: a picture's corners plus one at each side's middle.
+fn handles(painter: &egui::Painter, b: Rect) {
+    for c in resized_grips(b) {
+        painter.rect(Rect::from_center_size(c, egui::vec2(8.0, 8.0)), 0.0, Color32::WHITE, Stroke::new(1.0, BLUE), egui::StrokeKind::Middle);
+    }
+}
+
+/// A screen rectangle as a user-space box (the page's own axes; crop, rotation and UserUnit
+/// handled by the page info, as `edit_text_ui::user_box` does for pictures).
+fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
+    let p = &info.pages[page];
+    let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
+    let (u, v) = (p.view_to_user(a.0, a.1), p.view_to_user(b.0, b.1));
+    [f64::from(u[0].min(v[0])), f64::from(u[1].min(v[1])), f64::from(u[0].max(v[0])), f64::from(u[1].max(v[1]))]
 }
 
 fn modified(ui: &egui::Ui) -> bool {
@@ -305,11 +394,50 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         view.cursor.claim(Layer::Drag, if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
         return true;
     }
+    if s.page == Some(page)
+        && let Some(mut drag) = s.resize
+    {
+        if let Some(p) = pointer {
+            drag.now = p;
+        }
+        drag.preview = resized_box(screen_rect(xf, info, page, drag.rect), drag.grip, drag.start, drag.now);
+        if down {
+            s.resize = Some(drag);
+        } else {
+            s.resize = None;
+            let target = user_box(xf, info, page, drag.preview);
+            if drag.preview.is_positive()
+                && let [object] = s.selected.as_slice()
+                && target != object.rect
+            {
+                let index = object.target.index;
+                let mut expected = s.selected.clone();
+                expected[0].rect = target;
+                s.pending = Some(expected);
+                view.pending_edit = Some(Edit::ResizePageGraphic { page, index, rect: target });
+            }
+        }
+        ui.ctx().set_cursor_icon(resize_cursor(drag.grip));
+        return true;
+    }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
         return s.page == Some(page) && !s.selected.is_empty();
     };
     if !pressed {
-        return s.page == Some(page) && !s.selected.is_empty();
+        if s.page == Some(page) && !s.selected.is_empty() {
+            let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
+            if union.contains(p) {
+                let grip = match s.selected.as_slice() {
+                    [object] if object.target.kind == ObjectKind::Graphic => {
+                        resized_grips(screen(xf, info, page, object)).iter().position(|c| c.distance(p) < 8.0)
+                    }
+                    _ => None,
+                };
+                view.cursor.claim(Layer::Placed, grip.map_or(egui::CursorIcon::Move, resize_cursor));
+            }
+            return true;
+        }
+        return false;
     }
     let objects = match s.inventory(doc, page) {
         Ok(objects) => objects,
@@ -364,13 +492,26 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     // What the press was on ([`hit`]): the selection moves; the frame of the paragraph open for
     // typing selects its box (for the arrow keys) and moves it.
     let owner = view.router.owner(page);
-    // Vector graphics have no single-object tool of their own. An ordinary click selects one
-    // here (Delete or Backspace then removes it); dragging it does not move it, because moving
-    // paths is not supported yet.
+    // A press on a corner or side handle of the one selected graphic resizes it instead of
+    // moving it.
+    if s.page == Some(page)
+        && let [object] = s.selected.as_slice()
+        && object.target.kind == ObjectKind::Graphic
+        && let Some(grip) = resized_grips(screen(xf, info, page, object)).iter().position(|c| c.distance(p) < 8.0)
+    {
+        s.resize = Some(ResizeDrag { grip, start: p, now: p, rect: object.rect, preview: screen(xf, info, page, object) });
+        ui.ctx().set_cursor_icon(resize_cursor(grip));
+        return true;
+    }
+    // Vector graphics have no single-object tool of their own: an ordinary click selects one, a
+    // drag moves it (the same press starts the move, as on a picture), and Delete or Backspace
+    // removes it. The handles above resize the one selected graphic: corners keep its aspect
+    // ratio, side midpoints stretch one axis.
     if let Some(object) = hit.filter(|o| o.target.kind == ObjectKind::Graphic) {
         s.clear();
         s.page = Some(page);
         s.selected.push(object.clone());
+        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
         leave_single(view);
         view.current = page;
         return true;
@@ -424,7 +565,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
         return;
     }
     let image = view.image_selection.as_ref().filter(|s| !s.dragging()).map(|s| (s.page, s.index));
-    let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
+    let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none() && view.objects.resize.is_none());
     let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
     let Some(xf) = view.page_xform(page) else { return };
     use egui::Key;
@@ -477,7 +618,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
 /// frame, or everything an area selection took, goes at once instead of one typed character at a
 /// time.
 pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
-    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
+    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() || view.objects.resize.is_some() {
         return;
     }
     let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };
@@ -562,6 +703,10 @@ pub(crate) fn paint(
     let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
     let mut union = Rect::NOTHING;
     for object in &selection.selected {
+        // While a resize drag previews the box below, the old box is not drawn as well.
+        if selection.resize.is_some() && object.target.kind == ObjectKind::Graphic {
+            continue;
+        }
         let rect = screen(xf, info, page, object).translate(delta);
         painter.rect_filled(rect, 0.0, BLUE.gamma_multiply(0.05));
         painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
@@ -569,6 +714,21 @@ pub(crate) fn paint(
     }
     if selection.selected.len() > 1 {
         painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+    }
+    // The one selected graphic resizes by its corner handles, like a selected picture.
+    if let [object] = selection.selected.as_slice()
+        && object.target.kind == ObjectKind::Graphic
+    {
+        if let Some(drag) = selection.resize {
+            let preview = drag.preview.intersect(xf.rect);
+            if preview.is_positive() {
+                painter.rect_filled(preview, 0.0, BLUE.gamma_multiply(0.04));
+                painter.rect_stroke(preview, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
+                handles(painter, preview);
+            }
+        } else {
+            handles(painter, screen(xf, info, page, object).translate(delta));
+        }
     }
     if let Some(g) = selection.gesture.filter(|g| g.marquee) {
         let area = Rect::from_two_pos(g.start, g.now).intersect(xf.rect);
@@ -583,9 +743,6 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
     match detail.as_str() {
         "vertical text cannot be moved in a group" => tl!("Vertical text cannot be moved with this selection.").into(),
         "text used as a clipping path cannot be moved in a group" => tl!("Text used as a clipping path cannot be moved with this selection.").into(),
-        "graphics can be selected and deleted, but not moved or resized" => {
-            tl!("Vector graphics can be selected and deleted, but not moved or resized yet.").into()
-        }
         _ => tl!("These objects could not be moved. Select them again and try a smaller move.").into(),
     }
 }

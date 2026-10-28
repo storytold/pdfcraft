@@ -43,7 +43,7 @@ pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, ed
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod graphics;
-pub use graphics::{MAX_PAGE_GRAPHICS, PageGraphic, delete_graphic, page_graphics};
+pub use graphics::{MAX_PAGE_GRAPHICS, PageGraphic, delete_graphic, page_graphics, resize_graphic};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;

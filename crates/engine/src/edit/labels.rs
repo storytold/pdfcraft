@@ -262,6 +262,7 @@ impl Edit {
                 ImageEdit::Delete => "Delete image",
             }),
             Edit::DeletePageGraphic { .. } => Label::of("Delete graphic"),
+            Edit::ResizePageGraphic { .. } => Label::of("Resize graphic"),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
             Edit::AddWatermark { replace: false, .. } => Label::of("Add watermark"),
