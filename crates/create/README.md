@@ -24,6 +24,18 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 
+PNG pHYs, JPEG JFIF and TIFF ResolutionUnit=1 densities without a physical unit preserve the declared pixel aspect ratio.
+TIFF uses the paired positive XResolution/YResolution rationals from each directory, including fractions below one.
+A missing, zero or malformed unitless TIFF pair keeps square pixels at 72 dpi.
+Their denser axis uses a 72-dpi reference and the other axis expands, so proportional density values produce identical natural page sizes.
+Missing or zero densities keep the square-pixel 72-dpi fallback; absolute meter, inch and centimeter densities keep their existing interpretation.
+An explicit `ImageResolution::Dpi` still overrides both axes, including any embedded aspect ratio.
+Pixels are not resampled for aspect correction, and ordinary JPEG data stays byte-for-byte.
+Existing EXIF correction can re-encode a JPEG; it now retains valid unitless JFIF density and swaps the density axes on quarter turns.
+Its existing color-profile limitations remain a separate contribution (#4669).
+Page placement uses the same PDF real precision as the page box, including positive dimensions below 0.001 point after the existing page-side cap.
+Natural Add image fitting also keeps positive sub-point boxes, with precise clipping and placement transforms.
+
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.

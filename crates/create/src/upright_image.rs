@@ -96,25 +96,45 @@ fn extended_xmp_chunks(bytes: &[u8]) -> usize {
     chunks
 }
 
-/// The resolution in a JFIF header, if the file has one in inches or centimetres.
+/// JFIF density and its unit, including unitless pixel aspect ratios.
 fn jfif_density(bytes: &[u8]) -> Option<PixelDensity> {
     let mut i = 2usize;
-    while let Some(&[0xFF, marker, hi, lo]) = bytes.get(i..i.saturating_add(4)) {
+    while let Some(&byte) = bytes.get(i) {
+        if byte != 0xff {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        while bytes.get(i) == Some(&0xff) {
+            i += 1;
+        }
+        let marker = *bytes.get(i)?;
+        i += 1;
+        if matches!(marker, 0xda | 0xd9) {
+            return None;
+        }
+        if matches!(marker, 0x01 | 0xd0..=0xd8) {
+            continue;
+        }
+        let &[hi, lo] = bytes.get(i..i.saturating_add(2))? else { return None };
         let len = usize::from(u16::from_be_bytes([hi, lo]));
-        let seg = bytes.get(i + 4..i + 2 + len)?;
-        if marker == 0xE0 && seg.starts_with(b"JFIF\0") {
+        if len < 2 {
+            return None;
+        }
+        let end = i.checked_add(len)?;
+        let seg = bytes.get(i.saturating_add(2)..end)?;
+        if marker == 0xe0 && seg.starts_with(b"JFIF\0") {
             let &[unit, x0, x1, y0, y1] = seg.get(7..12)? else { return None };
             let unit = match unit {
+                0 => PixelDensityUnit::PixelAspectRatio,
                 1 => PixelDensityUnit::Inches,
                 2 => PixelDensityUnit::Centimeters,
                 _ => return None,
             };
-            return Some(PixelDensity { density: (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1])), unit });
+            let density = (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1]));
+            return (density.0 > 0 && density.1 > 0).then_some(PixelDensity { density, unit });
         }
-        if marker == 0xDA {
-            return None;
-        }
-        i += 2 + len;
+        i = end;
     }
     None
 }
@@ -123,6 +143,28 @@ fn jfif_density(bytes: &[u8]) -> Option<PixelDensity> {
 mod tests {
     use super::*;
     use crate::tests::phone_jpeg;
+
+    #[test]
+    fn jfif_density_handles_truncated_invalid_and_scan_headers() {
+        let photo = phone_jpeg(1, 72);
+        let jfif = photo.windows(5).position(|w| w == b"JFIF\0").unwrap();
+        for end in 0..jfif + 14 {
+            assert!(jfif_density(&photo[..end]).is_none(), "truncated at {end}");
+        }
+        for (unit, x, y) in [(255u8, 1u16, 1u16), (0, 0, 1), (1, 1, 0)] {
+            let mut invalid = photo.clone();
+            invalid[jfif + 7] = unit;
+            invalid[jfif + 8..jfif + 10].copy_from_slice(&x.to_be_bytes());
+            invalid[jfif + 10..jfif + 12].copy_from_slice(&y.to_be_bytes());
+            assert!(jfif_density(&invalid).is_none());
+        }
+        for header in [b"\xff\xd8\xff\xe0\0\x01".as_slice(), b"\xff\xd8\xff\xe0\xff\xff"] {
+            assert!(jfif_density(header).is_none());
+        }
+        let mut scan = b"\xff\xd8\xff\xda\0\x02".to_vec();
+        scan.extend_from_slice(&photo[jfif - 4..]);
+        assert!(jfif_density(&scan).is_none(), "scan data is not metadata");
+    }
 
     #[test]
     fn orientation_is_applied_and_plain_images_are_left_alone() {

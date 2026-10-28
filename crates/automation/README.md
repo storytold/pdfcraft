@@ -27,6 +27,7 @@ its undo/redo history.
 
 - Tool names are `snake_case` (`page_rotate`): MCP clients reject dots. `ToolDef::command` links a tool to the registry id it automates (`page.rotate`), and `command_list` reports the link.
 - Pages and positions are **1-based**. Rectangles are PDF points with the origin at the top-left of the displayed page.
+- Image bounds from `page_add_image`, `content_list` and `content_copy` retain full numeric precision so they can be reused as tool input.
 - Unknown arguments are rejected, so typos fail loudly.
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `comment_image_preview` returns JSON and a PNG: `layer: "background"` (the default) gives the page without the selected image signature/initials; `layer: "image"` gives its embedded image with alpha. The metadata supplies its displayed rectangle, document rotation, `image_rotation` (how far clockwise the image is shown turned: 0 for one placed by PdfCraft, which keeps it upright as displayed) and annotation opacity. Each result can be saved with the CLI's `--out`. Cache the background and transform the image for live movement/resizing; `comment_edit` commits the final geometry in one undo step. Previewing never changes the document.
@@ -229,3 +230,10 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+For PNG, JPEG and TIFF inputs, `doc_create` and `page_add_image` preserve unitless pixel-aspect metadata when deriving natural dimensions.
+Unitless density uses a 72-dpi reference on the denser axis, expanding the other without resampling pixels.
+TIFF ResolutionUnit=1 uses paired positive per-directory rationals, including fractions below one; unusable pairs keep square pixels.
+TIFF inch and centimeter sizing keeps its existing interpretation.
+Supplying `doc_create.dpi` overrides both axes, preserving the existing explicit-DPI behavior.
+Saving and reopening keep the resulting geometry, while the source image stays unchanged.

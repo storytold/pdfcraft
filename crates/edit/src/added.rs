@@ -7,6 +7,8 @@
 //! content. Boxes are in display space (points, origin at the bottom-left of the page as shown,
 //! after `/UserUnit` and `/Rotate`), so items stay upright on rotated pages; an item records the
 //! `/UserUnit` it was written for.
+//! Image boxes may have positive sub-point dimensions, with precise clipping and transform numbers.
+//! Zero or non-finite sizes and unrepresentable composed transforms are refused before writing content.
 
 use std::collections::{HashMap, HashSet};
 

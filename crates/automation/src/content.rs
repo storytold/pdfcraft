@@ -21,6 +21,14 @@ fn to_view(r: [f64; 4], ph: f64) -> [f64; 4] {
     [r[0], ph - r[3], r[2], ph - r[1]]
 }
 
+/// Image bounds must remain usable as tool input, including positive sub-point boxes.
+fn reported_rect(content: &AddedContent, rect: [f64; 4]) -> [f64; 4] {
+    match content {
+        AddedContent::Image(_) => rect,
+        AddedContent::Text(_) => rect.map(|x| (x * 100.0).round() / 100.0),
+    }
+}
+
 fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
     a.get(key)
         .map(|v| {
@@ -81,7 +89,7 @@ impl Automation {
                 let index = per_page.entry(it.page).or_default();
                 // Unchanged on a page the viewer could not read (#2660), like `crate::view_rect`.
                 let rect = doc.info.pages.get(it.page).map_or(it.content.rect(), |p| to_view(it.content.rect(), p.height as f64));
-                let mut v = json!({ "page": it.page + 1, "index": *index + 1, "rect": rect.map(|x| (x * 100.0).round() / 100.0) });
+                let mut v = json!({ "page": it.page + 1, "index": *index + 1, "rect": reported_rect(&it.content, rect) });
                 *index += 1;
                 match &it.content {
                     AddedContent::Text(t) => {
@@ -266,7 +274,7 @@ impl Automation {
         let mut out = self.apply(&Args(&target), Edit::PasteContent { page: to_page, content: content.with_rect(rect), file })?;
         out["page"] = json!(to_page + 1);
         out["index"] = json!(before + 1);
-        out["rect"] = json!(to_view(rect, ph).map(|x| (x * 100.0).round() / 100.0));
+        out["rect"] = json!(reported_rect(&content, to_view(rect, ph)));
         Ok(out)
     }
 }

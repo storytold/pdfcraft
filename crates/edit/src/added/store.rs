@@ -152,9 +152,10 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 return Err(crate::undrawable(c));
             }
         }
-        Content::Image(_) => {
-            if (r[2] - r[0]).abs() < 1.0 || (r[3] - r[1]).abs() < 1.0 {
-                return Err(EditError::Invalid("the image is too small".into()));
+        Content::Image(image) => {
+            let dimensions = [(r[2] - r[0]).abs(), (r[3] - r[1]).abs()];
+            if !dimensions.into_iter().all(|d| d.is_finite() && d > 0.0) || !image.matrix().0.into_iter().all(f64::is_finite) {
+                return Err(EditError::Invalid("the image size must be positive and finite".into()));
             }
         }
     }

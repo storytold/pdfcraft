@@ -318,19 +318,20 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             let [a, b, c, d, e, f] = i.matrix().0;
             // Clip to the box: the cropped-away parts stay hidden.
+            // Retain sub-point clip and transform geometry rather than rounding it to zero.
             out.extend(
                 format!(
                     "{} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do\n",
-                    n(r[0]),
-                    n(r[1]),
-                    n(r[2] - r[0]),
-                    n(r[3] - r[1]),
-                    n(a),
-                    n(b),
-                    n(c),
-                    n(d),
-                    n(e),
-                    n(f)
+                    matrix_number(r[0]),
+                    matrix_number(r[1]),
+                    matrix_number(r[2] - r[0]),
+                    matrix_number(r[3] - r[1]),
+                    matrix_number(a),
+                    matrix_number(b),
+                    matrix_number(c),
+                    matrix_number(d),
+                    matrix_number(e),
+                    matrix_number(f)
                 )
                 .bytes(),
             );

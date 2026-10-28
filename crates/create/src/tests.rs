@@ -206,6 +206,89 @@ fn bmp_gif_and_multi_page_tiff_images() {
     assert!(matches!(from_images(&[("x.webp".into(), b"RIFF0000WEBP".to_vec())]), Err(CreateError::Image(..))));
 }
 
+/// Contributor-original RGB PNG with pixel densities but no physical density unit.
+fn aspect_png(x: u32, y: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, 3, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_pixel_dims(Some(png::PixelDimensions { xppu: x, yppu: y, unit: png::Unit::Unspecified }));
+        encoder.write_header().unwrap().write_image_data(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255]).unwrap();
+    }
+    bytes
+}
+
+fn aspect_jpeg(x: u16, y: u16) -> Vec<u8> {
+    use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
+    let mut bytes = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 95);
+    encoder.set_pixel_density(PixelDensity { density: (x, y), unit: PixelDensityUnit::PixelAspectRatio });
+    encoder.encode(&[128; 18], 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+    bytes
+}
+
+#[test]
+fn unitless_densities_preserve_aspect_without_changing_samples_or_explicit_dpi() {
+    for (x, y, size) in [(1, 1, (3.0, 2.0)), (2, 1, (3.0, 4.0)), (2000, 1000, (3.0, 4.0)), (1, 2, (6.0, 2.0)), (0, 1, (3.0, 2.0)), (1, 0, (3.0, 2.0))]
+    {
+        for (name, bytes) in [("aspect.png", aspect_png(x, y)), ("aspect.jpg", aspect_jpeg(x as u16, y as u16))] {
+            let doc = reopen(&from_images(&[(name.into(), bytes.clone())]).unwrap());
+            assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, size.0, size.1], "{name}, density {x}:{y}");
+            assert_eq!((image_of(&doc, 0).int(b"Width"), image_of(&doc, 0).int(b"Height")), (Some(3), Some(2)));
+            let exported = extract_images(&doc, &[0], 0);
+            assert!(exported.skipped.is_empty());
+            if name.ends_with("jpg") {
+                assert_eq!(exported.images[0].data, bytes, "ordinary JPEG stays byte-for-byte");
+            } else {
+                assert_eq!(exported_png_pixels(&exported.images[0].data), [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255]);
+            }
+            let mut dest = Document::new_empty();
+            assert_eq!(image_xobject(&mut dest, name, &bytes).unwrap().1, size);
+            let explicit = from_images_with_resolution(&[(name.into(), bytes)], ImageResolution::Dpi(144.0)).unwrap();
+            assert_eq!(media(&pages(&explicit)[0]), [0.0, 0.0, 1.5, 1.0]);
+        }
+    }
+}
+
+#[test]
+fn jpeg_orientation_preserves_unitless_density_and_swaps_its_axes() {
+    for orientation in [6, 1, 2, 3, 4, 5, 7, 8] {
+        let mut bytes = phone_jpeg(orientation, 144);
+        let jfif = bytes.windows(5).position(|w| w == b"JFIF\0").unwrap();
+        bytes[jfif + 7] = 0;
+        bytes[jfif + 8..jfif + 12].copy_from_slice(&[0, 2, 0, 1]);
+        let doc = reopen(&from_images(&[("photo.jpg".into(), bytes)]).unwrap());
+        let expected = if orientation >= 5 { [0.0, 0.0, 40.0, 60.0] } else { [0.0, 0.0, 60.0, 40.0] };
+        assert_eq!(media(&pages(&doc)[0]), expected, "orientation {orientation}");
+    }
+}
+
+#[test]
+fn jpeg_unitless_density_survives_marker_fill_during_orientation() {
+    let mut bytes = phone_jpeg(6, 144);
+    let jfif = bytes.windows(5).position(|w| w == b"JFIF\0").unwrap();
+    bytes[jfif + 7] = 0;
+    bytes[jfif + 8..jfif + 12].copy_from_slice(&[0, 2, 0, 1]);
+    bytes.insert(jfif - 4, 0xff);
+    let doc = reopen(&from_images(&[("filled-marker.jpg".into(), bytes)]).unwrap());
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 60.0]);
+}
+
+#[test]
+fn extreme_unitless_aspect_keeps_positive_page_and_placement_dimensions() {
+    let doc = reopen(&from_images(&[("thin.png".into(), aspect_png(u32::MAX, 1))]).unwrap());
+    let page = &pages(&doc)[0];
+    let size = media(page);
+    assert!(size[2] > 0.0 && (size[3] - MAX_SIDE).abs() < 1e-9);
+    let contents = doc.resolve(page.get(b"Contents").unwrap());
+    let Object::Stream(contents) = &*contents else { panic!() };
+    let data = contents.decoded().unwrap();
+    let words: Vec<_> = std::str::from_utf8(&data).unwrap().split_ascii_whitespace().collect();
+    assert_eq!(words[1].parse::<f64>().unwrap(), size[2], "placement must not round the thin axis to zero");
+    assert_eq!(words[4].parse::<f64>().unwrap(), size[3]);
+}
+
 /// #665 lifted the tiff crate's 256 MiB decode limit; a few bytes claiming a 60000x60000 page
 /// (3.6 GB of gray pixels) must still be refused, not allocated.
 #[test]
@@ -1318,3 +1401,5 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }
+
+mod tiff_aspect;

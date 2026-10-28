@@ -610,7 +610,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_add_image",
             "Add an image to a page",
-            "Add an image file (PNG, JPEG, TIFF, GIF, BMP) as page content: in rect (points from the top-left of the page), or centred at its natural size (shrunk to fit). Undoable; movable with content_update.",
+            "Add an image file (PNG, JPEG, TIFF, GIF, BMP) as page content: in rect (points from the top-left of the page), or centred at its natural size from embedded resolution and pixel aspect (shrunk to fit). Undoable; movable with content_update.",
         )
         .cmd("edit.image")
         .with(schema(
@@ -1289,7 +1289,7 @@ pub fn tools() -> Vec<ToolDef> {
             json!({
                 "from": { "type": "string", "enum": ["blank", "images", "text"] },
                 "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-                "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override the embedded resolution without resampling. 72 gives one point per pixel; omit to use each image's resolution (72 when absent)." },
+                "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override both density axes without resampling. 72 gives one point per pixel; omit to honor embedded resolution and pixel aspect (72 when neither is supplied)." },
                 "text": { "type": "string" },
                 "path": { "type": "string" },
                 "pages": { "type": "integer", "minimum": 1, "maximum": 10000 },

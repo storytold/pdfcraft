@@ -2740,6 +2740,48 @@ fn exporting_images_and_text_through_tools() {
 }
 
 #[test]
+fn unitless_image_aspect_survives_create_add_save_reopen_and_explicit_dpi() {
+    use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
+    let colors = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255];
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 3, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_pixel_dims(Some(png::PixelDimensions { xppu: 2, yppu: 1, unit: png::Unit::Unspecified }));
+        encoder.write_header().unwrap().write_image_data(&colors).unwrap();
+    }
+    let mut jpeg = Vec::new();
+    {
+        let mut encoder = JpegEncoder::new_with_quality(&mut jpeg, 100);
+        encoder.set_pixel_density(PixelDensity { density: (2, 1), unit: PixelDensityUnit::PixelAspectRatio });
+        encoder.encode(&colors, 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+    }
+    let dir = workdir("unitless-image-aspect");
+    let mut a = auto(&dir);
+    for (name, bytes) in [("scan.png", png), ("scan.jpg", jpeg)] {
+        std::fs::write(dir.join(name), &bytes).unwrap();
+        let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":[name]}))["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({"doc":doc}));
+        assert_eq!((info["pages"][0]["width"].as_f64(), info["pages"][0]["height"].as_f64()), (Some(3.0), Some(4.0)));
+        let path = format!("{name}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":path}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        let rendered = a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":144})).unwrap();
+        let Content::Png { width, height, .. } = &rendered[0] else { panic!("rendered PNG") };
+        assert_eq!((*width, *height), (6, 8));
+        let target = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+        let added = ok(&mut a, "page_add_image", json!({"doc":target,"page":1,"path":name}));
+        let rect: Vec<f64> = added["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert_eq!((rect[2] - rect[0], rect[3] - rect[1]), (3.0, 4.0));
+        let explicit = ok(&mut a, "doc_create", json!({"from":"images","paths":[name],"dpi":144}))["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({"doc":explicit}));
+        assert_eq!((info["pages"][0]["width"].as_f64(), info["pages"][0]["height"].as_f64()), (Some(1.5), Some(1.0)));
+        assert_eq!(std::fs::read(dir.join(name)).unwrap(), bytes, "source image is unchanged");
+    }
+}
+
+#[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};
     use std::sync::Arc;
@@ -9239,3 +9281,7 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+mod tiff_aspect;
+
+mod subpoint_images;

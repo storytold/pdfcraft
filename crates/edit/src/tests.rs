@@ -7500,3 +7500,61 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
+
+fn subpoint_test_image(doc: &mut Document) -> pdfcraft_cos::ObjRef {
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    dict.set(b"Width".to_vec(), Object::Int(1));
+    dict.set(b"Height".to_vec(), Object::Int(1));
+    dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    doc.add(Object::Stream(Stream::from_raw(dict, vec![128])))
+}
+
+#[test]
+fn added_images_keep_subpoint_geometry() {
+    for rect in [
+        [10.0, 10.0, 10.0192, 35.6],
+        [10.0, 10.0, 61.2, 10.017066666666666],
+        [10.0, 10.0, 10.0000192, 35.6],
+        [10.0, 10.0, 61.2, 10.000017066666666],
+        [10.25, 10.5, 10.0, 10.0],
+    ] {
+        let mut doc = fixture();
+        let image = subpoint_test_image(&mut doc);
+        add_content(&mut doc, 0, &Content::Image(AddedImage::new(rect, image))).expect("positive sub-point images are valid page content");
+        let reopened = reopen(&doc);
+        let items = list_added(&reopened);
+        assert_eq!(items.len(), 1);
+        let actual = items[0].content.rect();
+        let (width, height) = ((rect[2] - rect[0]).abs(), (rect[3] - rect[1]).abs());
+        assert!(((actual[2] - actual[0]).abs() - width).abs() <= width * 1e-10);
+        assert!(((actual[3] - actual[1]).abs() - height).abs() <= height * 1e-10);
+
+        let content = streams(&reopened, 0).join("\n");
+        let line = content.lines().find(|line| line.contains(" re W n ")).expect("the added image has a clipping rectangle and transform");
+        let numbers: Vec<f64> = line.split_whitespace().filter_map(|word| word.parse().ok()).collect();
+        assert_eq!(numbers.len(), 10, "{line}");
+        for (written, expected) in [(numbers[2], width), (numbers[3], height), (numbers[4].abs(), width), (numbers[7].abs(), height)] {
+            assert!(written > 0.0 && (written - expected).abs() <= expected * 1e-10, "image geometry {written} must retain {expected}: {line}");
+        }
+    }
+}
+
+#[test]
+fn added_images_reject_degenerate_or_unrepresentable_geometry() {
+    let mut doc = fixture();
+    let image = subpoint_test_image(&mut doc);
+    for (reason, item) in [
+        ("zero width", AddedImage::new([10.0, 10.0, 10.0, 20.0], image)),
+        ("zero height", AddedImage::new([10.0, 10.0, 20.0, 10.0], image)),
+        ("NaN coordinate", AddedImage::new([f64::NAN, 0.0, 20.0, 20.0], image)),
+        ("infinite coordinate", AddedImage::new([0.0, 0.0, f64::INFINITY, 20.0], image)),
+        ("overflowing span", AddedImage::new([-f64::MAX, 0.0, f64::MAX, 20.0], image)),
+        ("overflowing image matrix", AddedImage { crop: [0.475, 0.0, 0.475, 0.0], ..AddedImage::new([0.0, 0.0, f64::MAX / 2.0, 20.0], image) }),
+    ] {
+        assert!(add_content(&mut doc, 0, &Content::Image(item)).is_err(), "{reason} must be rejected");
+        assert!(list_added(&doc).is_empty(), "a refused image must not become page content");
+    }
+}
