@@ -2314,6 +2314,13 @@ fn the_hand_tool_wheel_zooms_only_over_the_pages() {
     assert_eq!(notch(&mut h, row), egui::Modifiers::NONE, "a menu over the pages scrolls");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
+    // Nor over the expanded All tools view, shown in the document's place: its list scrolls.
+    h.state_mut().set_option("tools", "full").unwrap();
+    h.run_steps(3);
+    assert!(h.state().all_tools_full && h.state().quick_tool == pdfcraft_ui_egui::QuickTool::Hand);
+    assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::NONE, "All tools has the wheel");
+    h.state_mut().all_tools_full = false;
+    h.run_steps(3);
     // Nor with a dialog open.
     h.state_mut().dialog = Some(Dialog::Preferences);
     assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::NONE, "a dialog has the wheel");

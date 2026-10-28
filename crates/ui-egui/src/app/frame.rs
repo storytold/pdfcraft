@@ -97,11 +97,15 @@ impl PdfCraftApp {
 impl PdfCraftApp {
     /// Whether this frame's wheel zooms rather than scrolls ([`scroll_speed::wheel_zooms`]): the
     /// preference is on, the Hand tool is held, no dialog is open, and the pointer is over the
-    /// pages of a document shown (either of a side-by-side comparison's, not a page grid), with
+    /// pages of a document shown (not replaced by the expanded All tools view) (either of a side-by-side comparison's, not a page grid), with
     /// nothing drawn over them there: a menu or popup above the pages keeps the wheel. Both as
     /// the last frame drew them.
     fn hand_wheel_zooms(&self, ctx: &egui::Context, raw: &egui::RawInput) -> bool {
         if !self.hand_wheel_zoom || self.quick_tool != QuickTool::Hand || self.modal_open() {
+            return false;
+        }
+        // The expanded All tools view is shown in the document's place; its list scrolls.
+        if self.mode == Mode::AllTools && self.all_tools_full {
             return false;
         }
         let moved = raw.events.iter().rev().find_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None });

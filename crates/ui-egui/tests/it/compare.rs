@@ -281,29 +281,42 @@ fn export_to_word_html_and_rtf() {
 }
 
 /// #1399: with the Hand tool zooming with the wheel, a notch over either half of a side-by-side
-/// comparison zooms: the old file's half on the left belongs to another tab than the one shown.
+/// comparison zooms that half: the old file's half on the left belongs to another tab than the
+/// one shown. Frames run as in the app, raw input hook first (kittest doesn't call it).
 #[test]
 fn the_hand_tool_wheel_zooms_over_either_half_of_a_comparison() {
-    let mut h = side_by_side();
-    h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
-    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
-    h.run_steps(4);
-    let halves: Vec<egui::Rect> = h.state().views.iter().map(|v| v.viewport_rect()).collect();
-    assert_eq!(halves.len(), 2);
-    assert!(halves[0].right() <= halves[1].left() + 1.0, "side by side: {halves:?}");
-    for (half, rect) in halves.iter().enumerate() {
-        let ctx = h.ctx.clone();
-        let mut raw = egui::RawInput::default();
-        raw.events.push(egui::Event::PointerMoved(rect.center()));
-        raw.events.push(egui::Event::MouseWheel {
+    for half in 0..2 {
+        let mut h = side_by_side();
+        h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
+        h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+        h.state_mut().animation_effects = pdfcraft_ui_egui::motion::AnimationEffects::Off;
+        let step = |h: &mut Harness<'static, PdfCraftApp>| {
+            let ctx = h.ctx.clone();
+            let mut raw = std::mem::take(h.input_mut());
+            h.state_mut().prepare_raw_input(&ctx, &mut raw);
+            *h.input_mut() = raw;
+            h.step();
+        };
+        for _ in 0..4 {
+            step(&mut h);
+        }
+        let halves: Vec<egui::Rect> = h.state().views.iter().map(|v| v.viewport_rect()).collect();
+        assert!(halves[0].right() <= halves[1].left() + 1.0, "side by side: {halves:?}");
+        let width = |h: &Harness<'static, PdfCraftApp>| h.state().views[half].page_screen_rect(0).unwrap().width();
+        let before = width(&h);
+        h.input_mut().events.push(egui::Event::PointerMoved(halves[half].center()));
+        step(&mut h);
+        h.input_mut().events.push(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
             source: egui::MouseWheelSource::Unknown,
         });
-        h.state_mut().prepare_raw_input(&ctx, &mut raw);
-        let zooms = raw.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { modifiers, .. } if *modifiers == egui::Modifiers::COMMAND));
-        assert!(zooms, "half {half} ({rect:?}) zooms");
+        for _ in 0..10 {
+            step(&mut h);
+        }
+        let after = width(&h);
+        assert!(after > before * 1.05, "half {half} zoomed in: {before} -> {after}");
     }
 }
