@@ -97,7 +97,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                             f => f.label().to_string(),
                         };
                         craft_ui::ComboBox::from_id_salt("field-font").selected_text(current_label).show_ui(ui, |ui| {
-                            ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
+                            ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
                             for f in [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier] {
                                 ui.selectable_value(&mut l.font, f, f.label());
                             }
@@ -106,7 +106,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                                 let thai_fonts = pdfcraft_fonts::available_thai_fonts();
                                 if !thai_fonts.is_empty() {
                                     ui.separator();
-                                    ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                                    ui.label(egui::RichText::new(tl!("Thai fonts")).small().color(t.text_muted));
                                     for entry in &thai_fonts {
                                         let selected = l.font == FieldFont::Thai && active_thai.as_ref().is_some_and(|e| e.name == entry.name);
                                         if ui.selectable_label(selected, &entry.name).clicked()
@@ -119,14 +119,14 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                                     }
                                 } else if pdfcraft_fonts::document_thai_font().is_some() {
                                     ui.separator();
-                                    ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                                    ui.label(egui::RichText::new(tl!("Thai fonts")).small().color(t.text_muted));
                                     ui.selectable_value(&mut l.font, FieldFont::Thai, "Thai");
                                 }
                             }
                             #[cfg(target_arch = "wasm32")]
                             if pdfcraft_fonts::document_thai_font().is_some() {
                                 ui.separator();
-                                ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                                ui.label(egui::RichText::new(tl!("Thai fonts")).small().color(t.text_muted));
                                 ui.selectable_value(&mut l.font, FieldFont::Thai, "Thai");
                             }
                         });

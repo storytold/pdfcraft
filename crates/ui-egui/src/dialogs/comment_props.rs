@@ -234,7 +234,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     if let Some(font) = e.font.as_mut() {
                         ui.label(tl!("Font"));
                         craft_ui::ComboBox::from_id_salt("comment-font").selected_text(font.as_str()).width(180.0).show_ui(ui, |ui| {
-                            ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
+                            ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
                             for f in ["Helvetica", "Times", "Courier"] {
                                 if ui.selectable_label(font == f, f).clicked() {
                                     *font = f.to_string();
@@ -245,7 +245,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                                 let thai_fonts = pdfcraft_fonts::available_thai_fonts();
                                 if !thai_fonts.is_empty() {
                                     ui.separator();
-                                    ui.label(egui::RichText::new("Thai / System fonts").small().color(t.text_muted));
+                                    ui.label(egui::RichText::new(tl!("Thai / System fonts")).small().color(t.text_muted));
                                     for entry in &thai_fonts {
                                         if ui.selectable_label(font == &entry.name, &entry.name).clicked()
                                             && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
