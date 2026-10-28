@@ -1622,6 +1622,101 @@ fn a_tab_dropped_where_it_was_stays_and_a_click_still_selects_it() {
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), ids);
 }
 
+/// Five tabs, a to e, with e active.
+fn five_tab_harness() -> Harness<'static, PdfCraftApp> {
+    harness(|app| {
+        for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"] {
+            app.open_bytes(name, None, FIXTURE.to_vec()).unwrap();
+        }
+    })
+}
+
+/// #4590: Ctrl/⌘-click adds a tab to the selection or takes it out, Shift-click selects the run
+/// from the last tab clicked without Shift, and a plain click selects that tab alone.
+#[test]
+fn command_and_shift_clicks_select_several_tabs() {
+    use egui::Modifiers;
+    use egui::accesskit::Role;
+    let mut h = five_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let click = |h: &mut Harness<'static, PdfCraftApp>, name: &str, modifiers: Modifiers| {
+        h.get_by_role_and_label(Role::Tab, name).click_modifiers(modifiers);
+        h.run_steps(3);
+    };
+    assert_eq!(h.state().selected_tabs(), [ids[4]]);
+    click(&mut h, "b.pdf", Modifiers::NONE);
+    click(&mut h, "d.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1], ids[3]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[3]), "the tab added is shown");
+    // Taken out again: the one shown hands over to the other.
+    click(&mut h, "d.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
+    // The last selected tab stays selected.
+    click(&mut h, "b.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1]]);
+    // From b, the last tab clicked without Shift, to d; then from b to a.
+    click(&mut h, "d.pdf", Modifiers::SHIFT);
+    assert_eq!(h.state().selected_tabs(), [ids[1], ids[2], ids[3]]);
+    click(&mut h, "a.pdf", Modifiers::SHIFT);
+    assert_eq!(h.state().selected_tabs(), [ids[0], ids[1]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+    // A plain click on a selected tab selects it alone.
+    click(&mut h, "b.pdf", Modifiers::NONE);
+    assert_eq!(h.state().selected_tabs(), [ids[1]]);
+    // Showing another document some other way, here with Ctrl+Tab, selects its tab alone.
+    click(&mut h, "c.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1], ids[2]]);
+    h.key_press_modifiers(Modifiers::CTRL, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[3]));
+    assert_eq!(h.state().selected_tabs(), [ids[3]]);
+}
+
+/// #4590: dragging one of several selected tabs moves them all, kept in their order on the strip
+/// and together, and the same document stays shown and the same tabs selected.
+#[test]
+fn dragging_a_selected_tab_moves_every_selected_tab() {
+    use egui::Modifiers;
+    use egui::accesskit::Role;
+    let mut h = five_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let order = |h: &Harness<'static, PdfCraftApp>| h.state().views.iter().map(|view| view.id).collect::<Vec<_>>();
+    // d, then b, then a: picked in another order than the strip's.
+    h.get_by_role_and_label(Role::Tab, "d.pdf").click();
+    h.run_steps(3);
+    for name in ["b.pdf", "a.pdf"] {
+        h.get_by_role_and_label(Role::Tab, name).click_modifiers(Modifiers::COMMAND);
+        h.run_steps(3);
+    }
+    // b dragged past the end: a, b and d follow e in the strip's order.
+    let to = h.get_by_role_and_label(Role::Tab, "e.pdf").rect().right_center() + egui::vec2(20.0, 0.0);
+    drag_named_tab(&mut h, "b.pdf", to, true);
+    assert_eq!(order(&h), [ids[2], ids[4], ids[0], ids[1], ids[3]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+    assert_eq!(h.state().selected_tabs(), [ids[0], ids[1], ids[3]]);
+    // Again, to the front.
+    let to = h.get_by_role_and_label(Role::Tab, "c.pdf").rect().left_center() - egui::vec2(10.0, 0.0);
+    drag_named_tab(&mut h, "d.pdf", to, true);
+    assert_eq!(order(&h), [ids[0], ids[1], ids[3], ids[2], ids[4]]);
+    // A tab not selected moves alone, and the selection stays.
+    let to = h.get_by_role_and_label(Role::Tab, "a.pdf").rect().left_center() - egui::vec2(10.0, 0.0);
+    drag_named_tab(&mut h, "e.pdf", to, true);
+    assert_eq!(order(&h), [ids[4], ids[0], ids[1], ids[3], ids[2]]);
+    assert_eq!(h.state().selected_tabs(), [ids[0], ids[1], ids[3]]);
+    // Moving tabs touches no document.
+    for doc in h.state().session.docs() {
+        assert_eq!(doc.bytes.as_slice(), FIXTURE);
+        assert!(!doc.dirty);
+    }
+    if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+        let _gpu = crate::gpu();
+        let to = h.get_by_role_and_label(Role::Tab, "c.pdf").rect().right_center() + egui::vec2(20.0, 0.0);
+        drag_named_tab(&mut h, "b.pdf", to, false);
+        h.render().unwrap().save(format!("{dir}/dragging-selected-tabs.png")).unwrap();
+    }
+}
+
 #[test]
 fn the_combine_tab_does_not_move_and_documents_stay_in_order() {
     let mut h = three_tab_harness();
