@@ -79,6 +79,7 @@ mod persist;
 mod platform;
 mod state;
 mod tools;
+pub mod windows;
 mod workflows;
 
 #[cfg(not(target_arch = "wasm32"))]
