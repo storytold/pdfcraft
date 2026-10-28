@@ -2,6 +2,7 @@ use super::reader::find;
 use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
 use super::xref::{Revision, XrefEntry};
 use super::{Arc, CosError, Dict, Document, Lexer, ObjRef, Object, is_whitespace, parse_indirect_shared};
+use crate::PdfString;
 
 impl Document {
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
@@ -26,7 +27,17 @@ impl Document {
 
     /// Set the PDF header version (`"1.4"`, `"1.7"`, `"2.0"`, …) written by a full save.
     pub fn set_version(&mut self, version: impl Into<String>) {
-        self.version = version.into();
+        let version = version.into();
+        // An incremental save keeps the original header, so a changed version needs a full save.
+        if version != self.version {
+            self.full_save = true;
+        }
+        self.version = version;
+    }
+
+    /// A text string for this document: UTF-8 when its header says PDF 2.0, UTF-16BE before.
+    pub fn text_string(&self, s: &str) -> PdfString {
+        if self.version.starts_with("2.") { PdfString::text_utf8(s) } else { PdfString::text(s) }
     }
 
     pub fn trailer(&self) -> &Dict {
@@ -89,9 +100,10 @@ impl Document {
     }
 
     /// `true` when there are unsaved edits. Removing an `/Encrypt` dictionary written inline in
-    /// the trailer (as MuPDF writes it) changes no object, and is an edit all the same.
+    /// the trailer (as MuPDF writes it) changes no object, and is an edit all the same, as is a
+    /// pending full rewrite (a changed PDF version).
     pub fn is_modified(&self) -> bool {
-        !self.overlay.is_empty() || self.encryption_changed
+        !self.overlay.is_empty() || self.encryption_changed || self.full_save
     }
 
     /// Object numbers changed since the document was opened (or last saved).
