@@ -798,7 +798,8 @@ mod tests {
         let v = app.cert_import.take().unwrap();
         assert_eq!(v.certs.len(), 2, "a certificate repeated in the file is listed once");
         let mut h = import_harness(v, Vec::new());
-        h.get_by_label("Import Other").click();
+        // Neither is an authority, so neither starts ticked: tick one.
+        h.get_by_label("Import Root").click();
         h.run_steps(2);
         h.get_by_label("Trust selected (1)").click();
         h.run_steps(2);
@@ -842,6 +843,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Authorities start ticked; a person's (end-entity) certificate starts unticked, so
+    /// confirming a whole bundle without looking never trusts an individual signer.
+    #[test]
+    fn only_authorities_start_ticked() {
+        // An authority (basic constraints CA:TRUE) and a self-signed certificate without them.
+        let pem = [include_str!("../../../sign/tests/data/ca.crt.pem").to_string(), sign::x509::to_pem(&test_cert("Some Person"))].concat();
+        let v = CertImport::read("bundle.pem", pem.as_bytes()).unwrap();
+        assert_eq!(v.certs.iter().map(|c| c.is_ca).collect::<Vec<_>>(), [true, false]);
+        assert_eq!(v.chosen, [true, false]);
+        assert_eq!(v.picked(&[]).len(), 1);
+        assert!(v.fingerprints.iter().all(|f| f.len() == 32 * 3 - 1), "{:?}", v.fingerprints);
+    }
+
+    /// Files each under the per-file limit are still refused when together they exceed the
+    /// import's total, before any is read.
+    #[test]
+    fn an_import_too_large_in_total_is_refused() {
+        let dir = scratch();
+        let n = panel::MAX_CERTIFICATE_IMPORT_BYTES / panel::MAX_CERTIFICATE_FILE_BYTES + 1;
+        let paths: Vec<PathBuf> = (0..n)
+            .map(|i| {
+                let p = dir.join(format!("{i}.p7b"));
+                std::fs::File::create(&p).unwrap().set_len(panel::MAX_CERTIFICATE_FILE_BYTES).unwrap();
+                p
+            })
+            .collect();
+        let e = CertImport::from_files(&paths).unwrap_err();
+        assert!(e.contains("together too large"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_file_that_is_not_a_certificate_or_too_large_opens_no_import() {
         let dir = scratch();
@@ -864,7 +896,8 @@ mod tests {
     fn an_import_offers_only_what_is_not_trusted_yet() {
         let (a, b) = (test_cert("A"), test_cert("B"));
         let pem = [&a, &b].map(sign::x509::to_pem).concat();
-        let v = CertImport::read("bundle.pem", pem.as_bytes()).unwrap();
+        let mut v = CertImport::read("bundle.pem", pem.as_bytes()).unwrap();
+        v.chosen = vec![true; v.certs.len()];
         assert_eq!(v.picked(std::slice::from_ref(&a)).iter().map(Certificate::display_name).collect::<Vec<_>>(), ["B"]);
         let mut app = PdfCraftApp::new();
         assert_eq!(app.trust_certificates(v.picked(&[])), 2);
