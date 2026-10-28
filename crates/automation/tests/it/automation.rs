@@ -4603,6 +4603,44 @@ fn printing_through_tools() {
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Print ▸ Area…: only the area of each page, one sheet per page; the area has to be four
+/// numbers with some width and height, on every printed page.
+#[test]
+fn printing_an_area_through_tools() {
+    let dir = workdir("print-area");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let (w, h) = (info["pages"][0]["width"].as_f64().unwrap(), info["pages"][0]["height"].as_f64().unwrap());
+    let r = ok(
+        &mut a,
+        "doc_print",
+        json!({ "doc": doc, "pages": "1", "layout": "area", "area": [w * 0.1, h * 0.5, w * 0.9, h * 0.9], "paper": "A4", "path": "area.pdf" }),
+    );
+    assert_eq!((r["sheets"].as_u64(), r["pages"].as_u64()), (Some(1), Some(1)));
+    let printed = ok(&mut a, "doc_open", json!({ "path": "area.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": printed }))["document"]["pages"].as_u64(), Some(1));
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "area", "area": [0, 0, w, h * 0.2], "flip": true, "path": "wide.pdf" }));
+    // Print as image: the area's crop follows its page into the picture document.
+    let r = ok(
+        &mut a,
+        "doc_print",
+        json!({ "doc": doc, "pages": "1", "layout": "area", "area": [0, 0, w, h * 0.2], "as_image": true, "dpi": 72, "path": "picture.pdf" }),
+    );
+    assert_eq!(r["sheets"].as_u64(), Some(1));
+    for bad in [
+        json!({ "doc": doc, "layout": "area", "path": "x.pdf" }),
+        json!({ "doc": doc, "layout": "area", "area": [10, 10, 10, 50], "path": "x.pdf" }),
+        json!({ "doc": doc, "layout": "area", "area": [0, 0, 100], "path": "x.pdf" }),
+        json!({ "doc": doc, "layout": "area", "area": [0, 0, null, 100, 100], "path": "x.pdf" }),
+        json!({ "doc": doc, "layout": "area", "area": "0 0 100 100", "path": "x.pdf" }),
+        // Off the page: it would otherwise print the whole page.
+        json!({ "doc": doc, "layout": "area", "area": [w + 10.0, h + 10.0, w + 200.0, h + 200.0], "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_print", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}
+
 #[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");

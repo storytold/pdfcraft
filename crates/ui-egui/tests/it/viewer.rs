@@ -918,6 +918,36 @@ fn drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
     h.run_steps(3);
 }
 
+/// Print ▸ Area…: the dialog steps aside, the dragged rectangle comes back as the only thing to
+/// print, and the page goes back to Select. Another page choice leaves the area.
+#[test]
+fn print_area_is_dragged_from_the_print_dialog() {
+    use egui::accesskit::Role;
+    use pdfcraft_ui_egui::{PrintHandling, QuickTool};
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::RadioButton, "Area…").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "the dialog steps aside");
+    assert_eq!(h.state().quick_tool, QuickTool::PrintArea);
+    drag(&mut h, at(15.0, 175.0), at(180.0, 140.0));
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::Print)), "and comes back");
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    let d = &h.state().print_draft;
+    assert_eq!(d.handling, PrintHandling::Area);
+    let area = d.crops.first().copied().flatten().expect("the dragged area").rect;
+    let near = |a: f64, b: f64| (a - b).abs() < 2.0;
+    assert!(near(area[0], 15.0) && near(area[1], 140.0) && near(area[2], 180.0) && near(area[3], 175.0), "{area:?}");
+    h.get_by_role_and_label(Role::RadioButton, "All").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.handling, PrintHandling::Size);
+}
+
 #[test]
 fn marquee_zoom_and_snapshot() {
     let mut h = harness();

@@ -17,6 +17,8 @@ pub enum Handling {
     Booklet,
     /// Shipping label: cut to the printed area, turned upright, one per sheet.
     Label,
+    /// Print ▸ Pages to Print ▸ Area…: the dragged rectangle (in `crops`), fitted to the sheet.
+    Area,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,6 +85,8 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// Area… was chosen: the dialog closes so a rectangle can be dragged on the page.
+    pub pick_area: bool,
 }
 
 impl Default for PrintDraft {
@@ -131,6 +135,7 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            pick_area: false,
         }
     }
 }
@@ -188,7 +193,7 @@ impl PrintDraft {
             },
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
-            Handling::Label => Layout::Label { flip: self.label_flip },
+            Handling::Label | Handling::Area => Layout::Label { flip: self.label_flip },
         };
         Ok(print::Settings {
             pages,

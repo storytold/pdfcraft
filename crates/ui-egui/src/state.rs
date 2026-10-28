@@ -90,6 +90,8 @@ pub enum QuickTool {
     MarqueeZoom,
     /// Edit ▸ Take a Snapshot.
     Snapshot,
+    /// Print ▸ Pages to Print ▸ Area…: drag a rectangle, then print just that area.
+    PrintArea,
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
     /// Select tool does the same while Alt/Option is held at the start of a drag.
     ColumnSelect,

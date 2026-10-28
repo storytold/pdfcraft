@@ -75,6 +75,12 @@ impl PdfCraftApp {
                     Err(e) => self.notify_fmt("Couldn't take the snapshot: {e}", &[("e", &e.to_string())]),
                 }
             }
+            QuickTool::PrintArea => {
+                if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
+                    return;
+                }
+                self.open_print_area(page, view_rect);
+            }
             _ => {}
         }
     }
