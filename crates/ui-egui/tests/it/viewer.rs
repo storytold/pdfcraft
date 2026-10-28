@@ -2366,19 +2366,30 @@ fn j_and_k_scroll_like_the_arrow_keys() {
     assert!((top(&h) - down).abs() < 0.5, "J scrolls as far as ↓: {} against {down}", top(&h));
     press(&mut h, Modifiers::NONE, Key::K);
     assert!((top(&h) - start).abs() < 0.5, "K scrolls back as far as ↑");
-    for m in [Modifiers::SHIFT, Modifiers::ALT, Modifiers::COMMAND] {
+    for m in [Modifiers::SHIFT, Modifiers::ALT] {
         press(&mut h, m, Key::J);
         assert!((top(&h) - start).abs() < 0.5, "{m:?} + J doesn't scroll");
     }
+    // ⌘J is the JavaScript Console's, and doesn't scroll either.
+    press(&mut h, Modifiers::COMMAND, Key::J);
+    assert!((top(&h) - start).abs() < 0.5, "⌘J doesn't scroll");
+    assert!(h.state().dialog.is_some(), "⌘J opens the JavaScript Console");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
     assert_eq!(h.state().quick_tool, tool, "J and K choose no tool");
 
-    // With the Find field holding the keyboard, J is the field's, not a scroll; once Find is
-    // closed, the same J scrolls again.
+    // With the Find field holding the keyboard, J is typed into it, not a scroll (a real key
+    // press brings the key and the text it types); once Find is closed, J scrolls again.
     assert!(h.state_mut().execute("edit.find"));
     h.run_steps(3);
-    press(&mut h, Modifiers::NONE, Key::J);
+    assert!(h.state().dialog.is_none(), "nothing else holds the keyboard");
+    h.key_press(Key::J);
+    h.event(egui::Event::Text("j".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().map(|f| f.query.as_str()), Some("j"), "the Find field took the letter");
     assert!((top(&h) - start).abs() < 0.5, "J doesn't scroll while the Find field has the keyboard");
     press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(h.state().views[0].find.is_none(), "Escape closes Find");
     press(&mut h, Modifiers::NONE, Key::J);
     assert!((top(&h) - down).abs() < 0.5, "with Find closed, J scrolls again");
 }
