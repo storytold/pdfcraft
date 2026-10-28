@@ -8395,6 +8395,7 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+
 /// Digital IDs are created and opened, documents signed with them and their signatures validated,
 /// all through the tools.
 #[test]
@@ -8432,6 +8433,36 @@ fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
     assert!(red > 100, "the invalid state is drawn: {red} red pixels");
     ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf", "full": false}));
     assert_eq!(std::fs::read(dir.join("saved.pdf")).unwrap(), original, "the drawn state never enters saves");
+
+/// The PKCS #11 token path end to end, against the SoftHSM bench the `pdfcraft-sign` tests
+/// use: `PDFCRAFT_PKCS11_MODULE` names the module, whose token holds the "Test Signer RSA"
+/// identity (user PIN 1234). Skipped when the bench isn't configured (CI stays green).
+#[test]
+fn signing_with_a_pkcs11_token_through_tools() {
+    if std::env::var("PDFCRAFT_PKCS11_MODULE").map(|v| v.is_empty()).unwrap_or(true) {
+        return; // No PKCS #11 test bench.
+    }
+    let dir = workdir("sign-token");
+    let mut a = auto(&dir);
+    let listing = ok(&mut a, "sign_token_ids", json!({}));
+    let ids = listing["ids"].as_array().unwrap();
+    let reference = ids
+        .iter()
+        .find(|id| id["certificate"]["subject"].as_str().is_some_and(|s| s.contains("Test Signer RSA")))
+        .expect("the bench identity is listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A wrong PIN is refused with the PIN message (and burns no attempts on other tokens).
+    assert!(matches!(
+        a.call("sign_document", &json!({ "doc": 0, "id": reference, "password": "0000", "out": "bad.pdf" })),
+        Err(ToolError::Failed(m)) if m.contains("PIN")
+    ));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": reference, "password": "1234", "out": "token-signed.pdf" }));
+    assert_eq!(r["signature"]["signer"], "Test Signer RSA");
+    assert!(dir.join("token-signed.pdf").exists());
+ (fix(sign): address CodeRabbit review on the PKCS #11 PR)
 }
 
 #[test]
