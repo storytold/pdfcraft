@@ -67,7 +67,7 @@ another. Edits never touch the original bytes.
   revisions can tell whether a reference still reaches the same slot. Headers beyond
   this bounded probe are not additionally recovered. Materialized primary and hybrid rows are
   diagnosed before folding, so a newer row does not hide a retained disagreement.
-  `startxref` is looked for in the last 4 KiB first and then anywhere in the file, so data after
+  `startxref` is looked for in the last 4 KiB first and then anywhere in the file (there only with its offset and `%%EOF`), so data after
   the final `%%EOF` (a web page glued to a served PDF) is not a reason to rebuild.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
   for skipped data, bounds-checks every index, and caps nesting depth. Malformed input yields
