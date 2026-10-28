@@ -1667,9 +1667,10 @@ fn thai_free_text_stacked_marks_headroom_and_no_clip() {
     // Each redraw should add objects (Type 3 font + CharProcs + CMap + AP stream), and pre-flight
     // check must run on a clone so it doesn't double the redraw count. Both deltas should match
     // and each be less than two redraws.
+    let single_redraw = style_delta;
     assert!(style_delta > 0);
     assert_eq!(style_delta, fill_delta);
-    assert!(style_delta < 2 * style_delta);
+    assert!(style_delta < 2 * single_redraw);
 }
 
 /// A line's ends and the corners of connected lines and polygons can be moved after drawing:
