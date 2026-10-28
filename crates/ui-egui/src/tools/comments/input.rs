@@ -372,12 +372,12 @@ impl Gestures<'_> {
             if matches!(*tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
-                    let line = matches!(*tool, CommentTool::Line | CommentTool::Arrow);
-                    points.push(held(points.first(), u, line && shift));
+                    points.push(u);
                 }
             } else {
                 points.truncate(1);
-                points.push(u);
+                let line = matches!(*tool, CommentTool::Line | CommentTool::Arrow);
+                points.push(held(points.first(), u, line && shift));
             }
         }
         if resp.drag_stopped()
