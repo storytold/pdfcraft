@@ -553,6 +553,66 @@ fn language_switch_preserves_document_and_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
 }
 
+#[test]
+fn arabic_and_english_language_switches_preserve_comment_text_drafts_and_history() {
+    let (mut h, c) = harness_pages(1);
+    let original = "ملاحظة محفوظة 123 (PDF)";
+    let shape = pdfcraft_engine::Shape::Note { at: [30.0, 260.0], icon: pdfcraft_engine::NoteIcon::Comment };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: original.into(),
+        author: "Tester".into(),
+    }));
+    ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "comments"}));
+    ok(&mut h, &c, "ui.command", json!({"id": "comment.note"}));
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    ok(&mut h, &c, "ui.click", json!({"x": page.center().x, "y": page.center().y}));
+    let mut expected = "سَلَام بالعربية 123 (PDF)".to_owned();
+    ok(&mut h, &c, "ui.type", json!({"text": expected}));
+    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, expected);
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    let history = |app: &PdfCraftApp| {
+        let doc = app.session.get(app.views[0].id).unwrap();
+        (doc.edit_generation(), doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned))
+    };
+    let before = history(h.state());
+    for (index, language) in ["ar", "en", "ar", "en"].into_iter().enumerate() {
+        ok(&mut h, &c, "ui.set", json!({"key": "language", "value": language}));
+        h.run_steps(3);
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
+        assert_eq!(history(h.state()), before, "changing interface language must not create an edit");
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].contents.as_deref(), Some(original));
+        assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, expected);
+        let inputs = ok(&mut h, &c, "ui.inspect", json!({"role": "MultilineTextInput"}));
+        let input = inputs["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|widget| widget["value"] == expected)
+            .unwrap_or_else(|| panic!("logical input {expected:?} is exposed by {inputs}"));
+        ok(&mut h, &c, "ui.focus", json!({"id": input["id"]}));
+        ok(&mut h, &c, "ui.key", json!({"key": "A", "modifiers": ["command"]}));
+        h.event(egui::Event::Copy);
+        h.step();
+        assert!(
+            h.output().platform_output.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text == &expected))
+        );
+        if index == 0 {
+            expected.push_str(" ٤٥٦");
+            ok(&mut h, &c, "ui.type", json!({"text": expected}));
+        } else if index == 2 {
+            expected = "English draft 123 (PDF)".into();
+            ok(&mut h, &c, "ui.type", json!({"text": expected}));
+        }
+    }
+    ok(&mut h, &c, "ui.key", json!({"key": "Escape"}));
+    assert!(h.state().views[0].comments.composer.is_none());
+    assert_eq!(history(h.state()), before);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
+}
+
 #[cfg(target_os = "linux")]
 fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) -> egui::Pos2 {
     let p = h.state().views[0].viewport_rect().center();

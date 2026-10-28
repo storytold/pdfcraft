@@ -84,6 +84,22 @@ update the numbers.
 
 ### 3. Editing existing text is fragile on real files
 
+- **Arabic progress (2026-10-18):** Edit text keeps existing Arabic in logical Unicode order,
+  and egui 0.37's bidi layout shapes and wraps it and moves the caret and selection in it.
+  Existing upright text can use the reported Noto Sans Arabic fallback when its source subset
+  lacks replacement glyphs, including paragraphs whose rows or runs differ in size, colour,
+  weight and font (a heading over its subtitle, a label beside its value, as browsers print
+  them): each run keeps its look, bold takes the variable face's `wght` 700 instance, oblique
+  Latin keeps its slant (Arabic stays upright), unchanged rows keep their baselines and a reflowed paragraph keeps its line pitch.
+  Right-to-left rows drawn as several runs read back as one row in typing order, including
+  browser-printed justified paragraphs: runs drawn left to right read from the right with
+  embedded Latin runs kept in order, and each letter-with-tanween `/ActualText` cluster (drawn
+  mark first, above the baseline) stays inside its word. Save/reopen regressions retain
+  logical text, the right anchor and neighbouring source runs. This is a bounded fallback, not
+  general Arabic document editing: Latin runs are redrawn in the standard Helvetica faces, a
+  re-edited row that mixes styles takes the style of its first run, shaped style ranges, rotated
+  text and arbitrary producer grouping remain open.
+
 - **Fork progress (2026-10-11):** compatible words and subset-font spaces form lines;
   source fonts lacking a space glyph remain reusable; inline editing previews remove source
   glyphs on a clone. Aligned visual rows now form mixed-style regions (including matrix-scaled headings),
@@ -112,11 +128,12 @@ update the numbers.
   by the same geometry. A row that a list item wraps onto stays with that item. Estimates are unchanged.
 
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
-  needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
-  structure tags, find and replace in edit mode; vector and object editing; arrange and align.
+  needed glyphs, general CJK and right-to-left runs beyond the bounded fallback above, rotated
+  text, lists, superscript/subscript, keeping structure tags, find and replace in edit mode;
+  vector and object editing; arrange and align.
 - **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted);
-  `edit.rtl-cjk-editing`, `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
-  `edit.vector-edit`, `edit.edit-object-tool` are planned. Users:
+  `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
+  `edit.vector-edit`, `edit.edit-object-tool` are planned; `edit.rtl-cjk-editing` is partial. Users:
   [#766](https://github.com/storytold/pdfcraft/issues/766) (editing Arabic text),
   [#844](https://github.com/storytold/pdfcraft/issues/844) (several elements now move together on
   one page, not across pages),
@@ -419,6 +436,7 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-18 | minor | Gap 3: Edit text keeps existing Arabic in logical order; shaped Arabic annotation/form appearances; a bounded upright source fallback that keeps each run's size, colour and weight. General Arabic editing remains partial; estimates unchanged. |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

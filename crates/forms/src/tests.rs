@@ -261,6 +261,239 @@ fn appearance_text(doc: &Document, w: &Widget, font_name: &[u8]) -> (Object, Vec
 }
 
 #[test]
+fn arabic_field_values_choices_comb_and_password_survive_save_reopen() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    for (name, value) in [("name", "سَلَام 123 (PDF)"), ("notes", "السطر الأول\nالسطر الثاني 456"), ("zip", "بَاب")] {
+        set_value(&mut doc, name, &FieldValue::Text(value.into())).unwrap();
+        let all = fields(&doc);
+        let f = field(&all, name);
+        let content = ap(&doc, &f.widgets[0]);
+        let widget = doc.get(f.widgets[0].obj);
+        assert_eq!(widget.as_dict().and_then(pdfcraft_fonts::undrawn_mark), None, "{name}");
+        assert!(content.contains("/PCShaped") && content.contains("/ActualText"), "{name}: {content}");
+        assert!(!content.contains("(?) Tj"), "{name}: {content}");
+        assert_eq!(f.value, vec![value.to_owned()]);
+        doc = reopen(&doc);
+        let all = fields(&doc);
+        let f = field(&all, name);
+        assert_eq!(ap(&doc, &f.widgets[0]), content);
+        assert_eq!(f.value, vec![value.to_owned()]);
+    }
+    let all = fields(&doc);
+    let country = field(&all, "country").obj;
+    doc.update_dict(country, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("ar").into(), PdfString::text("العربية 123").into()])]));
+        let mut mk = Dict::new();
+        mk.set(b"R".to_vec(), Object::Int(90));
+        d.set(b"MK".to_vec(), Object::Dict(mk));
+        d.set(b"Q".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    set_value(&mut doc, "country", &FieldValue::Choice(vec!["ar".into()])).unwrap();
+    let all = fields(&doc);
+    let list = field(&all, "toppings").obj;
+    doc.update_dict(list, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![PdfString::text("خيار أول").into(), PdfString::text("خيار 123").into()]));
+    })
+    .unwrap();
+    set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["خيار أول".into()])).unwrap();
+    set_value(&mut doc, "pin", &FieldValue::Text("سرعربي".into())).unwrap();
+    doc = reopen(&doc);
+    let all = fields(&doc);
+    for name in ["country", "toppings"] {
+        let f = field(&all, name);
+        let widget = doc.get(f.widgets[0].obj);
+        assert_eq!(widget.as_dict().and_then(pdfcraft_fonts::undrawn_mark), None);
+        assert!(ap(&doc, &f.widgets[0]).contains("/ActualText"));
+    }
+    let pin = field(&all, "pin");
+    let content = ap(&doc, &pin.widgets[0]);
+    assert!(content.contains("(******) Tj"));
+    assert!(!content.contains("/ActualText"), "password values must never enter ActualText");
+    let country = field(&all, "country");
+    let widget = doc.get(country.widgets[0].obj);
+    let normal = widget.as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let object = doc.get(normal);
+    let Object::Stream(stream) = object.as_ref() else { panic!() };
+    assert!(stream.dict.contains(b"Matrix"));
+    let font = stream
+        .dict
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"Font")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"PCShaped0")
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert!(font.get(b"ToUnicode").unwrap().as_ref().is_some());
+    for (_, glyph) in font.get(b"CharProcs").unwrap().as_dict().unwrap().iter() {
+        assert!(glyph.as_ref().is_some());
+    }
+}
+
+#[test]
+fn arabic_field_keeps_its_shaping_when_an_unsupported_emoji_is_marked() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    set_value(&mut doc, "name", &FieldValue::Text("نص عربي 😊".into())).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let name = field(&all, "name");
+    let widget = doc.get(name.widgets[0].obj);
+    assert_eq!(widget.as_dict().and_then(pdfcraft_fonts::undrawn_mark), Some('😊'));
+    assert!(ap(&doc, &name.widgets[0]).contains("/PCShaped"));
+    assert_eq!(name.value, ["نص عربي 😊"]);
+}
+
+#[test]
+fn mixed_arabic_fields_keep_their_standard14_da_latin_face_and_advances() {
+    use pdfcraft_fonts::Std14;
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for face in [Std14::Courier, Std14::TimesBold, Std14::TimesItalic, Std14::HelveticaBoldOblique] {
+        let mut doc = fixture();
+        let af = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"AcroForm").unwrap();
+        doc.update_dict(af, |d| {
+            let mut dr = d.get(b"DR").unwrap().as_dict().unwrap().clone();
+            let mut fonts = dr.get(b"Font").unwrap().as_dict().unwrap().clone();
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name(face.base_font()));
+            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            fonts.set(b"Styled".to_vec(), Object::Dict(font));
+            dr.set(b"Font".to_vec(), Object::Dict(fonts));
+            d.set(b"DR".to_vec(), Object::Dict(dr));
+        })
+        .unwrap();
+        let obj = field(&fields(&doc), "name").obj;
+        doc.update_dict(obj, |d| d.set(b"DA".to_vec(), PdfString::text("/Styled 12 Tf 0 g"))).unwrap();
+        let value = "ابت ABC iiiWWW ابت";
+        set_value(&mut doc, "name", &FieldValue::Text(value.into())).unwrap();
+        doc = reopen(&doc);
+        let all = fields(&doc);
+        let f = field(&all, "name");
+        assert_eq!(f.value, [value]);
+        let wd = doc.get(f.widgets[0].obj);
+        let ap = wd.as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let appearance = doc.get(ap);
+        let Object::Stream(stream) = appearance.as_ref() else { panic!() };
+        let fonts = stream.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        let mut font = Vec::new();
+        let mut x = 0.0;
+        let mut after_latin = None;
+        let mut checked = false;
+        for op in pdfcraft_content::parse(&stream.decoded().unwrap()).ops {
+            if op.is("Tf") {
+                font = op.name(0).unwrap().to_vec();
+            }
+            if op.is("Tm") {
+                x = op.num(4).unwrap();
+            }
+            if op.is("Tj") {
+                let text = &op.operands[0].as_string().unwrap().bytes;
+                let resource = doc.resolve(fonts.get(&font).unwrap());
+                let resource = resource.as_dict().unwrap();
+                if text.windows(3).any(|s| s == b"ABC") {
+                    assert_eq!(
+                        resource.name(b"BaseFont"),
+                        Some(face.base_font().as_bytes()),
+                        "the mixed field silently changed its selected Latin face"
+                    );
+                    after_latin = Some(x + face.text_width(std::str::from_utf8(text).unwrap(), 12.0));
+                } else if resource.name(b"Subtype") == Some(b"Type3")
+                    && let Some(expected) = after_latin.take()
+                {
+                    assert!((x - expected).abs() < 1e-4, "selected Latin metrics must position the following Arabic run: {x} != {expected}");
+                    checked = true;
+                }
+            }
+        }
+        assert!(checked, "the test must draw both mixed-script runs using the selected Latin metrics");
+    }
+}
+
+#[test]
+fn a_masked_arabic_password_auto_sizes_with_its_selected_courier_metrics() {
+    let mut doc = fixture();
+    let af = acroform(&doc).unwrap();
+    let font = af.get(b"DR").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap().reference(b"Helv").unwrap();
+    doc.update_dict(font, |d| d.set(b"BaseFont".to_vec(), Object::name("Courier"))).unwrap();
+    let masked = "*".repeat(24);
+    set_value(&mut doc, "pin", &FieldValue::Text("س".repeat(24))).unwrap();
+    doc = reopen(&doc);
+    let all = fields(&doc);
+    let f = field(&all, "pin");
+    let content = ap(&doc, &f.widgets[0]);
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let size = ops.iter().find(|op| op.is("Tf")).unwrap().num(1).unwrap();
+    let inset = ops.iter().find(|op| op.is("Tm")).unwrap().num(4).unwrap();
+    let inner_width = f.widgets[0].rect[2] - f.widgets[0].rect[0] - 2.0 * inset;
+    let drawn_width = pdfcraft_fonts::Std14::Courier.text_width(&masked, size);
+    assert!(drawn_width <= inner_width + 0.01, "masked Courier text overflows its{inner_width}pt inner box: {drawn_width}");
+    assert!(!content.contains("ActualText"), "a password must remain masked");
+}
+
+#[test]
+fn auto_sized_arabic_field_ink_and_marks_fit_the_widget_after_reopen() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "notes", &FieldProps { font_size: Some(0.0), ..Default::default() }).unwrap();
+    for (name, text) in [("name", "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ"), ("zip", "بَاب"), ("notes", "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ\nبِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ")]
+    {
+        set_value(&mut doc, name, &FieldValue::Text(text.into())).unwrap();
+    }
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    for name in ["name", "zip", "notes"] {
+        let field = field(&all, name);
+        let widget = doc.get(field.widgets[0].obj);
+        let normal = widget.as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let object = doc.get(normal);
+        let Object::Stream(stream) = object.as_ref() else { panic!() };
+        let height = stream.dict.get(b"BBox").unwrap().as_array().unwrap()[3].as_f64().unwrap();
+        let fonts = stream.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        let (mut font_name, mut size, mut baseline) = (Vec::new(), 0.0, 0.0);
+        let mut checked = 0;
+        for op in pdfcraft_content::parse(&stream.decoded().unwrap()).ops {
+            if op.is("Tf") {
+                font_name = op.name(0).unwrap().to_vec();
+                size = op.num(1).unwrap();
+            }
+            if op.is("Tm") {
+                baseline = op.num(5).unwrap();
+            }
+            if op.is("Tj") && font_name.starts_with(b"PCShaped") {
+                let code = op.operands[0].as_string().unwrap().bytes[0];
+                let font = fonts.get(&font_name).unwrap().as_dict().unwrap();
+                let glyph = font.get(b"CharProcs").unwrap().as_dict().unwrap().get(format!("g{code:02X}").as_bytes()).unwrap();
+                let glyph = doc.resolve(glyph);
+                let Object::Stream(glyph) = glyph.as_ref() else { panic!() };
+                let d1 = pdfcraft_content::parse(&glyph.decoded().unwrap()).ops.remove(0);
+                let bottom = baseline + d1.num(3).unwrap() * size / 1000.0;
+                let top = baseline + d1.num(5).unwrap() * size / 1000.0;
+                assert!(bottom >= 1.0 - 1e-4 && top <= height - 1.0 + 1e-4, "{name}: ink {bottom}..{top} outside 1..{}", height - 1.0);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+    }
+}
+
+#[test]
 fn the_field_tree_is_read_with_inheritance() {
     let doc = fixture();
     assert_combined_matches_legacy(&doc, 0);

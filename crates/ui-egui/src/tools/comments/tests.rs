@@ -312,6 +312,28 @@ fn two_grids_in_one_parent_open_their_pickers_separately() {
     assert_eq!(h.query_all_by_label("Apply").count(), 1, "only the first grid's picker opens");
 }
 
+/// The grid's columns took egui's 40 point minimum though a swatch is 22 wide, so six of
+/// them made a 270 point grid in the 246 points of the Edit text panel. The panel's column
+/// widened to fit, and everything under the grid was laid out against an edge the panel
+/// clips: right-aligned Arabic lost its first letters. Where there is room, the swatches
+/// keep their spacing.
+#[test]
+fn the_swatch_grid_fits_the_width_it_is_given() {
+    for (width, gap) in [(246.0, 22.8), (400.0, 24.0)] {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(width + 40.0, 300.0)).build_ui(|ui| {
+            ui.set_max_width(width);
+            let _ = swatch_grid(ui, None);
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("grid-test"), ui.min_rect().width()));
+        });
+        h.run();
+        let used: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("grid-test"))).unwrap_or(f32::INFINITY);
+        assert!(used <= width, "a {width} point column holds a {used} point grid");
+        use egui_kittest::kittest::Queryable;
+        let [first, second] = ["Yellow", "Orange"].map(|name| h.get_by_label(name).rect().left());
+        assert!(((second - first) - (22.0 + gap)).abs() < 1.0, "{width}: the swatches are {} apart", second - first);
+    }
+}
+
 #[test]
 fn other_colour_opens_the_picker_inside_the_quick_bar_popup() {
     use egui_kittest::kittest::Queryable;

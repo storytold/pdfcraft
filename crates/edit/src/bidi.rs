@@ -29,6 +29,16 @@ pub(crate) fn is_rtl(c: char) -> bool {
     !is_digit(c) && matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFC | 0x1_0800..=0x1_0FFF | 0x1_E800..=0x1_EFFF)
 }
 
+/// One right-to-left letter with the combining marks drawn on it (a letter with tanween or
+/// harakat) and nothing else: browsers wrap such a cluster in its own `/ActualText`.
+pub(crate) fn is_rtl_cluster(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| is_rtl(c) && !is_mark(c)) && {
+        let mut marks = chars.peekable();
+        marks.peek().is_some() && marks.all(is_mark)
+    }
+}
+
 /// The Hebrew block and the Hebrew presentation forms.
 pub(crate) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0590..=0x05FF | 0xFB1D..=0xFB4F)

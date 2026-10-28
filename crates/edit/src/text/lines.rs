@@ -209,16 +209,20 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
         // separate logical line. Put its letters into visual order before joining the
         // surrounding glyphs; the completed line is recovered to typing order below.
         // Multi-glyph and mixed-direction replacements keep their authoritative order.
-        if s.logical_order && s.glyph_count == 1 && s.text.chars().all(crate::bidi::is_rtl) {
+        // Browsers likewise wrap each letter carrying tanween or harakat in its own ActualText,
+        // drawing the raised mark first: the cluster starts above the baseline it belongs to.
+        let cluster = s.logical_order && s.glyph_count > 1 && crate::bidi::is_rtl_cluster(&s.text);
+        if s.logical_order && ((s.glyph_count == 1 && s.text.chars().all(crate::bidi::is_rtl)) || cluster) {
             s.text = crate::bidi::to_visual(&s.text);
             s.logical_order = false;
         }
+        let drift = if cluster { 0.6 } else { 0.3 };
         // A line belongs to one stream piece. Within it, PDF producers often put every word
         // in its own BT/ET: geometry and text state, not object boundaries, define a line.
         let si = ops.get(s.op).map_or(0, |op| pieces.pieces_of(op).0);
         let joins = last.is_some_and(|(piece, pen)| {
             let bt = pen.bt;
-            let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 });
+            let (near, gap) = pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }, drift);
             piece == si
                 && lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
                 && (bt == s.bt || lines.last().is_some_and(|l| compatible_word(l, &s)))
@@ -237,7 +241,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 && (s.state.render_mode != 3 || gap < pen.size * 0.6)
         });
         if joins && let Some(l) = lines.last_mut() {
-            let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
+            let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0, drift).1);
             let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
             if spaced {
                 l.text.push(' ');
@@ -297,7 +301,15 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 },
             });
         }
-        last = Some((si, Pen::after(&s)));
+        // A joined cluster leaves the line on its own baseline, not on its raised mark.
+        let mut pen = Pen::after(&s);
+        if joins
+            && cluster
+            && let Some((_, before)) = last
+        {
+            pen.across = before.across;
+        }
+        last = Some((si, pen));
     }
     // Content streams draw right-to-left lines in visual order; the editor works in typing order.
     for l in lines.iter_mut().filter(|l| !l.logical_order) {
@@ -312,8 +324,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.runs.clear();
         }
     }
-    // Lines of only spaces aren't editable text.
-    lines.retain(|l| !l.text.trim().is_empty());
+    // ActualText is authoritative, including a wrapped row containing only trailing spaces.
+    // Dropping that row would lose the user's logical characters on the next edit.
+    lines.retain(|l| l.actual_text || !l.text.trim().is_empty());
     Ok(lines)
 }
 
@@ -352,10 +365,10 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
                         && fill_color(&s.state.fill) == l.color
                         && same_paint(l, &s.state)
                 }))
-            && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
+            && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }, 0.3).0
     });
     if joins && let Some(l) = lines.last_mut() {
-        let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
+        let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0, 0.3).1);
         let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
         if spaced {
             l.text.push(' ');
@@ -586,6 +599,6 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             l.runs.clear();
         }
     }
-    lines.retain(|l| !l.text.trim().is_empty());
+    lines.retain(|l| l.actual_text || !l.text.trim().is_empty());
     Ok((lines, w.budget.truncated))
 }

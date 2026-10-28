@@ -738,6 +738,35 @@ fn added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reope
 }
 
 #[test]
+fn arabic_comments_render_edit_and_keep_their_thread_through_save_reopen() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let dir = workdir("arabic-comments-roundtrip");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":800}))["doc"].as_u64().unwrap();
+    let original = "سَلَام 123 (PDF) - ملاحظة عربية";
+    let added = ok(&mut a, "comment_add", json!({"doc":doc,"page":1,"type":"textbox","rect":[50,60,540,120],"contents":original,"font_size":16}));
+    assert!(added.get("warnings").is_none(), "supported Arabic must be drawn: {added}");
+    let id = added["comment"]["id"].as_str().unwrap().to_owned();
+    ok(&mut a, "comment_reply", json!({"doc":doc,"id":id,"text":"رد عربي ٤٥٦","author":"اختبار"}));
+    let replacement = "مُرَاجَعَة PDF رقم ١٢٣";
+    ok(&mut a, "comment_edit", json!({"doc":doc,"id":id,"contents":replacement,"font_size":20,"color":"#123456"}));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    let undone = ok(&mut a, "comment_list", json!({"doc":doc}));
+    assert_eq!(undone["comments"][0]["contents"], original);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    let before = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":96})).unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"arabic-comments.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"arabic-comments.pdf"}))["doc"].as_u64().unwrap();
+    let comments = ok(&mut a, "comment_list", json!({"doc":reopened}));
+    assert_eq!(comments["comments"][0]["contents"], replacement);
+    assert_eq!(comments["comments"][0]["replies"][0]["contents"], "رد عربي ٤٥٦");
+    assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":96})).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn arabic_actual_text_stays_logical_through_editor_tools_and_save_reopen() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
     use std::sync::Arc;
