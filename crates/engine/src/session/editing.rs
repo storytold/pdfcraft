@@ -122,6 +122,15 @@ fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restor
     }
 }
 
+/// What one apply of an edit reported, for the callers that tell it to the user.
+#[derive(Default)]
+pub(crate) struct ApplyReport {
+    /// What an [`Edit::PrepareText`] prepared, repaired and left grouped.
+    pub prepared: Option<pdfcraft_edit::text::forms::Preparation>,
+    /// What an [`Edit::DownsampleImages`] resampled.
+    pub scans: Option<crate::optimize::ScanImages>,
+}
+
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
@@ -133,11 +142,13 @@ impl Session {
     /// groups it left as they were (and why). The counts are this edit's own, not a preview's.
     pub fn prepare_text(&mut self, id: DocId, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, EditError> {
         self.apply_reporting(id, Edit::PrepareText { page })?
+            .prepared
             .ok_or_else(|| EditError::Invalid("preparing grouped text gave no result; the document was not changed".into()))
     }
 
-    /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
-    fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
+    /// [`Session::apply`], giving back what the edits in it reported (`None` for each kind the
+    /// edit does not contain).
+    pub(crate) fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<ApplyReport, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -169,11 +180,11 @@ impl Session {
             check_permission(&edit, &p)?;
         }
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
-            return Ok(None);
+            return Ok(ApplyReport::default());
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
-            return Ok(None);
+            return Ok(ApplyReport::default());
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
@@ -194,7 +205,7 @@ impl Session {
         // a batch keeps the other edits it holds.
         if cx.xfa_unchanged && matches!(edit, Edit::XfaEvent { .. }) {
             take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
-            return Ok(None);
+            return Ok(ApplyReport::default());
         }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word: on every
@@ -384,7 +395,7 @@ impl Session {
             doc.js_output.append(js.output);
         }
         take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
-        Ok(cx.prepared)
+        Ok(ApplyReport { prepared: cx.prepared, scans: cx.scan_images })
     }
 
     /// Undo the last edit of document `id`, keeping it for [`Session::redo`]. Returns its label.

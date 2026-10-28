@@ -44,6 +44,7 @@ mod images;
 mod links;
 mod pool;
 mod samples;
+mod scans;
 mod tiles;
 mod unused;
 
@@ -55,6 +56,7 @@ use pdfcraft_filters::{Filter, Params};
 pub use images::{ImageTarget, effective_resolutions, recolour_image};
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
+pub use scans::{ScanImages, downsample_page_images};
 pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};
 
 #[derive(Debug, thiserror::Error)]

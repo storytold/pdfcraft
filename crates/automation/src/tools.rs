@@ -152,7 +152,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "ppi": {"type":"number","minimum":9,"maximum":1600},
                 "quality": {"type":"integer","minimum":1,"maximum":100},
                 "dpi": {"type":"number","minimum":72,"maximum":600},
-                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
+                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"},
+                "output": {"type":"string","enum":["exact","downsampled"],"description":"OCR output, as in ocr_recognize (default exact)."}
             }), &["paths","out_dir","steps"])),
         t("doc_fix_hairlines", "Fix hairlines", "Print production: strokes narrower than narrower_than points on the page (after every transformation; zero-width lines always) are given width points, in page content and form XObjects; Type 3 glyphs and tiling patterns only when asked, changed in place wherever they are used. Both widths at most 10. Returns fixed (strokes), pages, and elsewhere (glyphs and patterns changed that something outside pages also uses); nothing to fix gives 0 and no edit.")
             .cmd("prepress.hairlines")
@@ -1529,7 +1530,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Needs the engines (ocr_status). Searchable output is undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable. output \"exact\" (default, Searchable Image (Exact)) leaves the page images exactly as they are; \"downsampled\" (Searchable Image) also resamples the images on the pages that were read down to dpi where they are finer (more than 5% above), in place and in the same undo step: same object and placement (the new text still lines up), colour space, decode array and masks kept, JPEG stays JPEG, black-and-white stays 1-bit and lossless; images that can't be handled (CMYK, indexed, 16-bit, JPEG 2000, JBIG2, CCITT, colour-key masks) are left alone and listed under images.skipped with why. Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Needs the engines (ocr_status). Searchable output is undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
@@ -1549,6 +1550,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
                     "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
                     "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },
+                    "output": { "type": "string", "enum": ["exact", "downsampled"], "description": "exact (default): the page images are not changed. downsampled: images on the pages read are reduced to dpi where they are finer; the result carries an images report." },
                 }),
                 &["doc"],
             )),
@@ -1598,6 +1600,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean" },
                     "denoise": { "type": "boolean" },
                     "binarize": { "type": "boolean" },
+                    "output": { "type": "string", "enum": ["exact", "downsampled"], "description": "As in ocr_recognize (default exact); with downsampled each file reports images." },
                 }),
                 &["paths", "folder"],
             )),

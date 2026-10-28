@@ -97,6 +97,8 @@ fn invalid_batch_arguments_and_outside_paths_write_nothing() {
         json!({"ppi":2000}),
         json!({"steps":["ocr"],"language":"not-a-language"}),
         json!({"steps":["ocr"],"dpi":1}),
+        json!({"steps":["ocr"],"output":"smaller"}),
+        json!({"output":"downsampled"}),
     ] {
         let mut args = json!({"paths":["input"],"steps":["optimize"],"out_dir":"out"});
         args.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());

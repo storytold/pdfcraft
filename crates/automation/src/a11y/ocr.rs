@@ -2,9 +2,10 @@ use super::{Args, Automation, Result, ToolError, Value, child, failed, json, wit
 
 impl Automation {
     /// The settings every OCR tool shares: dpi, language, the engine/strategy choice, the four
-    /// preprocessing flags, the skip flags and the output mode — each named exactly as its tool
-    /// schema says. An unknown engine, strategy or mode is an honest error, never a silent
-    /// fallback: a tool run must not quietly do something other than what it was asked.
+    /// preprocessing flags, the skip flags, the output mode and what that output does to the page
+    /// images (`exact` or `downsampled`) — each named exactly as its tool schema says. An unknown
+    /// engine, strategy or mode is an honest error, never a silent fallback: a tool run must not
+    /// quietly do something other than what it was asked.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OutputMode};
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
@@ -64,6 +65,10 @@ impl Automation {
             if let Some(on) = a.opt_bool(key)? {
                 *flag = on;
             }
+        }
+        if let Some(o) = a.opt_str("output")? {
+            settings.output = pdfcraft_engine::ocr::OcrOutput::from_name(o)
+                .ok_or_else(|| ToolError::InvalidArgs(format!("output must be \"exact\" or \"downsampled\", not {o:?}")))?;
         }
         Ok(settings)
     }
@@ -205,6 +210,9 @@ impl Automation {
                     if let Some((count, pages)) = pdfcraft_engine::ocr::low_confidence_pages(&r.pages, threshold) {
                         entry["low_confidence"] = json!({ "count": count, "pages": pages, "threshold": threshold });
                     }
+                    if let Some(i) = &r.images {
+                        entry["images"] = images_json(i);
+                    }
                     out.push(entry);
                 }
                 Err(e) => out.push(json!({ "path": p, "error": e })),
@@ -268,10 +276,15 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         match out {
             None => {
-                let (found, out) = self.session.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
+                let ((found, applied), out) =
+                    self.session.with_own_js_output(id, |s| s.recognize_text_reporting(id, &pages, settings)).map_err(failed)?;
                 let warnings = out.errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
-                Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
+                let mut v = json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) });
+                if let Some(i) = &applied.images {
+                    v["images"] = images_json(i);
+                }
+                Ok(with_warnings(v, warnings))
             }
             Some(out) => {
                 let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
@@ -541,6 +554,13 @@ impl Automation {
             .collect();
         Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
     }
+}
+
+/// What `output: "downsampled"` did to the images: how many the recognised pages draw, how many
+/// were resampled, their encoded bytes before and after, and each image above the resolution left
+/// as it is with why.
+pub(crate) fn images_json(i: &pdfcraft_engine::ocr::ScanImages) -> Value {
+    json!({ "images": i.images, "downsampled": i.resampled, "bytes_before": i.bytes_before, "bytes_after": i.bytes_after, "skipped": i.skipped })
 }
 
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.

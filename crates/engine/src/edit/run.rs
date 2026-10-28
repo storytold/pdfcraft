@@ -158,6 +158,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::LayoutTableToBlocks { .. }
         | Edit::AddOcrText { .. }
         | Edit::EnhanceScan { .. }
+        | Edit::DownsampleImages { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
         | Edit::RemoveStandardId { .. }
@@ -292,6 +293,8 @@ pub(crate) struct EditCtx {
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
+    /// What [`Edit::DownsampleImages`] did, added up over a batch.
+    pub(crate) scan_images: Option<pdfcraft_optimize::ScanImages>,
 }
 
 impl EditCtx {
@@ -345,6 +348,7 @@ impl EditCtx {
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
+            scan_images: None,
         }
     }
 
@@ -379,6 +383,29 @@ impl EditCtx {
         );
         pdfcraft_annot::Meta { date: self.date.clone(), id }
     }
+}
+
+/// Recognize Text's Searchable Image output: the images drawn on `pages` that are finer than
+/// `ppi` are resampled down to it in place, and what that did is added to the edit's report.
+fn run_downsample_images(doc: &mut pdfcraft_cos::Document, pages: &[usize], ppi: f64, cx: &mut EditCtx) -> Result<(), EditError> {
+    let all = pdfcraft_annot::page_refs(doc).map_err(|e| EditError::Invalid(e.to_string()))?;
+    let mut refs = Vec::with_capacity(pages.len());
+    for p in pages {
+        refs.push(*all.get(*p).ok_or_else(|| EditError::Invalid(format!("there is no page {}", p.saturating_add(1))))?);
+    }
+    let r = pdfcraft_optimize::downsample_page_images(doc, &refs, ppi).map_err(|e| EditError::Invalid(e.to_string()))?;
+    // The file gets smaller only when the old images leave it: an incremental update would keep
+    // them in the earlier revision.
+    if r.resampled > 0 {
+        doc.require_full_save();
+    }
+    let total = cx.scan_images.get_or_insert_with(Default::default);
+    total.images += r.images;
+    total.resampled += r.resampled;
+    total.bytes_before = total.bytes_before.saturating_add(r.bytes_before);
+    total.bytes_after = total.bytes_after.saturating_add(r.bytes_after);
+    total.skipped.extend(r.skipped);
+    Ok(())
 }
 
 fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
@@ -931,6 +958,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             crate::ocr::layer::add_text(doc, *page, words)?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
+        Edit::DownsampleImages { pages, ppi } => run_downsample_images(doc, pages, *ppi, cx)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,

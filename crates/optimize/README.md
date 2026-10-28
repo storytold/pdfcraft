@@ -141,6 +141,15 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   its priority. The document only changes in order on one thread, and what a picture costs is paid
   in that order, so the file written, and the pictures the run's decoding allowance refuses, are
   the same with any number.
+- **Scan images for OCR** (`downsample_page_images`, Recognize Text's Searchable Image output):
+  the images drawn on given pages whose effective resolution (smallest over every use in the
+  document) is more than 5% above a target are resampled down to it in place, keeping their
+  kind: same object, colour space, decode array and masks (soft and stencil masks are mapped to
+  the unit square, so they still fit); JPEG stays JPEG, other 8-bit grey/RGB becomes Flate, 1-bit
+  images and image masks stay 1-bit and lossless (averaged, thresholded at half). Anything else
+  (CMYK, indexed, other bit depths, JPEG 2000, JBIG2, CCITT, colour-key masks, `/Matte` soft
+  masks) is left alone and reported with why, and so is an image an annotation's appearance
+  stream also draws (the measure reads page content, not annotations).
 - **Discard objects:** thumbnails, alternate images, document tags, print settings, and form
   submission, import and reset actions (`/SubmitForm`, `/ImportData`, `/ResetForm`, off by
   default). The fields, links, bookmarks and pages that ran a removed action keep their other
