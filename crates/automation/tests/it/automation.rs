@@ -9239,3 +9239,56 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// Redaction searches text on a layer that is off. The renderer leaves such content out, so Find
+/// and the redaction search never saw it: a user who redacted every match of a word was told it
+/// was marked, and the word stayed in the saved file (#3646).
+#[test]
+fn redaction_finds_text_on_a_hidden_layer() {
+    let dir = workdir("redact-hidden-layer");
+    let public = "BT /F1 18 Tf 40 240 Td (Public summary) Tj ET";
+    let secret = "BT /F1 18 Tf 40 140 Td (Account SECRET 4417) Tj ET";
+    // Page 1 puts the line on a layer that is off; page 2 is the same line, visible.
+    let streams = [format!("{public} /OC /L1 BDC {secret} EMC"), format!("{public} {secret}")];
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /OFF [4 0 R] /Order [4 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [5 0 R 7 0 R] /Count 2 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /OCG /Name (Reviewer notes) >>".into(),
+    ];
+    for (i, c) in streams.iter().enumerate() {
+        objs.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> /Properties << /L1 4 0 R >> >> >>",
+            6 + 2 * i
+        ));
+        objs.push(format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len()));
+    }
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("layers.pdf"), pdf).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "layers.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["layers"][0]["visible"], false, "the layer is off");
+
+    // Find still reports what the reader can see: that is a product choice, not this change.
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": doc, "query": "SECRET" }))["count"], 1, "Find is unchanged");
+
+    // Redaction marks both, and applying removes the word from the file.
+    assert_eq!(ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "SECRET" }))["marked"], 2, "both copies are marked");
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": doc }))["applied"], 2);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+    let saved = std::fs::read(dir.join("redacted.pdf")).unwrap();
+    assert!(!saved.windows(6).any(|w| w == b"SECRET"), "the word is gone from the saved bytes");
+    let _ = std::fs::remove_dir_all(dir);
+}

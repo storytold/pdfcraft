@@ -105,7 +105,12 @@ impl Automation {
                 (None, None) => Vec::new(),
             };
             matched_words = needles.iter().map(|w| (w.clone(), 0)).collect();
-            let texts = self.page_texts(id, &pages)?;
+            // A layer that is off hides its content from the renderer, and so from Find. For
+            // redaction the promise is every match on every page, and a match left behind stays
+            // in the saved file, so the search reads the text with every layer visible (#3646).
+            // Documents without a hidden layer take the cached path, which Find shares.
+            let any_hidden = self.doc(a)?.info.layers.iter().any(|l| !l.visible);
+            let texts = if any_hidden { self.page_texts_every_layer(id, &pages)? } else { self.page_texts(id, &pages)? };
             let info = self.doc(a)?.info.clone();
             for (&p, text) in pages.iter().zip(&texts) {
                 let hits: Vec<(Option<usize>, _)> = match pattern {

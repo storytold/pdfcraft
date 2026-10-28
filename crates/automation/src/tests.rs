@@ -550,3 +550,21 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The all-layer search answers in the order it was asked. The parallel path returns pages
+/// sorted by number, and `redact_mark` pairs the texts with its own page list by position --
+/// and redaction asks for the pages that hold matches, in match order, not in ascending
+/// order. A page would then be marked with another page's matches and the word would stay in
+/// the saved file, which is the leak #3646 is about. Nine pages, so the parallel path is the
+/// one taken (it begins at eight, on a machine with more than one core).
+#[test]
+fn the_all_layer_search_answers_in_the_order_it_was_asked() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 9);
+    let pages: Vec<usize> = (0..9).rev().collect();
+    let texts: Vec<String> = a.page_texts_every_layer(id, &pages).unwrap().iter().map(|t| t.plain_text()).collect();
+    assert_eq!(texts, pages.iter().map(|p| format!("Page {}", p + 1)).collect::<Vec<_>>());
+    // A page asked for twice is answered twice, as `page_texts` answers it.
+    let twice: Vec<String> = a.page_texts_every_layer(id, &[3, 3]).unwrap().iter().map(|t| t.plain_text()).collect();
+    assert_eq!(twice, ["Page 4", "Page 4"]);
+}
