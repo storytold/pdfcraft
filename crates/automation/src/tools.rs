@@ -181,6 +181,13 @@ pub fn tools() -> Vec<ToolDef> {
                     "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image","graphic"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
                 "offset":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
                 "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page","objects","offset"])),
+        t("object_restack", "Restack an object", "Raise, lower, bring to front or send to back one object or a group from object_list: paragraphs, Image/Form artwork, inline vector graphics and added content. Give kind and index, or objects [{kind,index}] for a group (its paint order is kept). direction is \"front\", \"forward\", \"backward\" or \"back\"; generation rejects a stale reference. Only the objects' drawing moves in the page's paint order: glyphs, fonts, image data, colours and clips stay, and the rest of the content is copied unchanged. Undoable. Refused when an object shares its text object or content stream with content that would have to move with it.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
+                "kind":{"type":"string","enum":["added","text","image","graphic"]},
+                "index":{"type":"integer","minimum":1,"description":"Object index from object_list."},
+                "objects":{"type":"array","minItems":1,"maxItems":1000,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["added","text","image","graphic"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false},"description":"Several objects to move together, instead of kind/index."},
+                "direction":{"type":"string","enum":["front","forward","backward","back"],"description":"Where to move it in the page's painting order."},
+                "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale reference."}}), &["doc","page","direction"])),
         t("graphic_delete", "Delete a vector graphic", "Delete one inline vector graphic: an icon or logo painted directly by the page content rather than an image or Form XObject. index is a kind \"graphic\" reference from object_list; generation rejects a stale one. Only that graphic's paths are removed; text, images, Forms and neighbouring artwork stay. Undoable.")
             .destructive()
             .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"index":{"type":"integer","minimum":1},

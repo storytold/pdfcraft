@@ -40,6 +40,9 @@ pub(crate) struct ObjectSelection {
 struct Gesture {
     start: Pos2,
     now: Pos2,
+    // For a marquee selection, the start in view space, so the rectangle's corner stays
+    // anchored to the page content while the page scrolls under the pointer.
+    start_view: Option<(f32, f32)>,
     marquee: bool,
     additive: bool,
 }
@@ -67,6 +70,22 @@ impl ObjectSelection {
 
     pub fn count(&self) -> usize {
         self.selected.len()
+    }
+
+    /// The page and every selected object reference, unless a drag is in flight. A group is
+    /// restacked together, keeping its own painting order.
+    pub(crate) fn targets(&self) -> Option<(usize, Vec<ObjectTarget>)> {
+        let page = self.page?;
+        (self.gesture.is_none() && self.resize.is_none() && !self.selected.is_empty())
+            .then(|| (page, self.selected.iter().map(|o| o.target).collect()))
+    }
+
+    /// Keep the selection across a restack: the edit only moves the drawings in the page's paint
+    /// order, so the same objects are remapped by their unchanged geometry and text.
+    pub(crate) fn keep_after_restack(&mut self) {
+        if !self.selected.is_empty() {
+            self.pending = Some(self.selected.clone());
+        }
     }
 
     /// A preview belongs to the active, focused document. Returning from another tab or a
@@ -339,6 +358,22 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
     result
 }
 
+/// Adds every object the marquee area touches to the selection, or replaces it when `keep` is
+/// false, capped so a stray drag over a dense page cannot select an unbounded set.
+fn select_within(s: &mut ObjectSelection, objects: Vec<EditableObject>, area: Rect, keep: bool, xf: &PageXform, info: &DocInfo, page: usize) {
+    let mut selected = if keep { s.selected.clone() } else { Vec::new() };
+    for object in objects.into_iter().filter(|o| area.intersects(screen(xf, info, page, o))) {
+        if !selected.iter().any(|o| o.target == object.target) {
+            selected.push(object);
+        }
+    }
+    if selected.len() <= MAX_MOVE_OBJECTS {
+        s.selected = selected;
+    } else {
+        s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
+    }
+}
+
 fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
     let pointer = ptr.pos;
@@ -350,14 +385,28 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         if let Some(p) = pointer {
             gesture.now = p;
         }
+        // Anchor a marquee's start to the page content, so scrolling moves the rectangle with
+        // the page instead of leaving it pinned to the screen.
+        let start_screen = gesture.start_view.map(|v| xf.norm_to_screen(v.0 / xf.pw, v.1 / xf.ph)).unwrap_or(gesture.start);
+        // While a marquee drag moves the rectangle, the intersecting objects are highlighted
+        // live, so the box that follows the pointer already shows what is being selected.
+        if down
+            && gesture.marquee
+            && let Some(objects) = s.inventory(doc, page).ok()
+        {
+            let area = Rect::from_two_pos(start_screen, gesture.now).intersect(xf.rect);
+            if area.width() > 3.0 && area.height() > 3.0 {
+                select_within(s, objects, area, gesture.additive, xf, info, page);
+            }
+        }
         if !down {
-            if !gesture.marquee && gesture.start.distance(gesture.now) <= 3.0 && resp.double_clicked() {
+            if !gesture.marquee && start_screen.distance(gesture.now) <= 3.0 && resp.double_clicked() {
                 s.clear();
                 return false;
             }
             s.gesture = None;
             if gesture.marquee {
-                let area = Rect::from_two_pos(gesture.start, gesture.now).intersect(xf.rect);
+                let area = Rect::from_two_pos(start_screen, gesture.now).intersect(xf.rect);
                 if !gesture.additive {
                     s.selected.clear();
                 }
@@ -365,24 +414,13 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                     && area.height() > 3.0
                     && let Ok(objects) = s.inventory(doc, page)
                 {
-                    let candidates: Vec<_> = objects.into_iter().filter(|o| area.intersects(screen(xf, info, page, o))).collect();
-                    let mut selected = s.selected.clone();
-                    for object in candidates {
-                        if !selected.iter().any(|o| o.target == object.target) {
-                            selected.push(object);
-                        }
-                    }
-                    if selected.len() <= MAX_MOVE_OBJECTS {
-                        s.selected = selected;
-                    } else {
-                        s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
-                    }
+                    select_within(s, objects, area, true, xf, info, page);
                 }
                 if s.selected.is_empty() {
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
+                let (a, b) = (xf.screen_to_view(start_screen), xf.screen_to_view(gesture.now));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                     Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
                     Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
@@ -417,7 +455,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                 view.pending_edit = Some(Edit::ResizePageGraphic { page, index, rect: target });
             }
         }
-        ui.ctx().set_cursor_icon(resize_cursor(drag.grip));
+        view.cursor.claim(Layer::Drag, resize_cursor(drag.grip));
         return true;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
@@ -483,7 +521,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                 s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
             }
         } else {
-            s.gesture = Some(Gesture { start: p, now: p, marquee: true, additive: true });
+            s.gesture = Some(Gesture { start: p, now: p, start_view: Some(xf.screen_to_view(p)), marquee: true, additive: true });
         }
         leave_single(view);
         view.current = page;
@@ -500,18 +538,20 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         && let Some(grip) = resized_grips(screen(xf, info, page, object)).iter().position(|c| c.distance(p) < 8.0)
     {
         s.resize = Some(ResizeDrag { grip, start: p, now: p, rect: object.rect, preview: screen(xf, info, page, object) });
-        ui.ctx().set_cursor_icon(resize_cursor(grip));
+        view.cursor.claim(Layer::Handle, resize_cursor(grip));
         return true;
     }
     // Vector graphics have no single-object tool of their own: an ordinary click selects one, a
     // drag moves it (the same press starts the move, as on a picture), and Delete or Backspace
     // removes it. The handles above resize the one selected graphic: corners keep its aspect
     // ratio, side midpoints stretch one axis.
-    if let Some(object) = hit.filter(|o| o.target.kind == ObjectKind::Graphic) {
+    if let Some(object) = hit.filter(|o| o.target.kind == ObjectKind::Graphic)
+        && !(s.selected.len() > 1 && s.selected.iter().any(|o| o.target == object.target))
+    {
         s.clear();
         s.page = Some(page);
         s.selected.push(object.clone());
-        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        s.gesture = Some(Gesture { start: p, now: p, start_view: None, marquee: false, additive: false });
         leave_single(view);
         view.current = page;
         return true;
@@ -523,18 +563,20 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     if s.page == Some(page) && !s.selected.is_empty() {
         let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
         if union.contains(p) && !resp.double_clicked() {
-            s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+            s.gesture = Some(Gesture { start: p, now: p, start_view: None, marquee: false, additive: false });
             return true;
         }
     }
     if owner == Some(Owner::Objects { part: ObjectsPart::Frame })
         && let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
         && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        && on_frame(screen(xf, info, page, object), p)
+        && !(s.selected.len() > 1 && s.selected.iter().any(|o| o.target == object.target))
     {
         s.clear();
         s.page = Some(page);
         s.selected.push(object.clone());
-        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        s.gesture = Some(Gesture { start: p, now: p, start_view: None, marquee: false, additive: false });
         leave_single(view);
         view.current = page;
         return true;
@@ -547,7 +589,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     }
     leave_single(view);
     s.page = Some(page);
-    s.gesture = Some(Gesture { start: p, now: p, marquee: true, additive: false });
+    s.gesture = Some(Gesture { start: p, now: p, start_view: Some(xf.screen_to_view(p)), marquee: true, additive: false });
     view.current = page;
     true
 }
@@ -731,7 +773,8 @@ pub(crate) fn paint(
         }
     }
     if let Some(g) = selection.gesture.filter(|g| g.marquee) {
-        let area = Rect::from_two_pos(g.start, g.now).intersect(xf.rect);
+        let start = g.start_view.map(|v| xf.norm_to_screen(v.0 / xf.pw, v.1 / xf.ph)).unwrap_or(g.start);
+        let area = Rect::from_two_pos(start, g.now).intersect(xf.rect);
         painter.rect_filled(area, 0.0, BLUE.gamma_multiply(0.08));
         painter.rect_stroke(area, 0.0, Stroke::new(1.0, BLUE), egui::StrokeKind::Outside);
     }

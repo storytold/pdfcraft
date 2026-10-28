@@ -39,6 +39,8 @@ mod background;
 pub use background::page_background;
 pub mod objects;
 pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
+mod restack;
+pub use restack::{Restack, restack_object, restack_objects};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};

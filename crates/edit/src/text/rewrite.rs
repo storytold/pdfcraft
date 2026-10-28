@@ -997,6 +997,28 @@ pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockSty
     Ok(ops)
 }
 
+/// The show operators of each selectable paragraph, in the same order (and with the same
+/// filtering) as [`selectable_blocks`]: restacking a paragraph moves exactly the text it shows.
+pub(crate) fn selectable_block_ops(
+    doc: &Document,
+    page: usize,
+    excluded: &std::collections::BTreeSet<pdfcraft_cos::ObjRef>,
+) -> Result<Vec<Vec<usize>>, EditError> {
+    let p = page_dict(doc, page)?;
+    let streams = content_streams(doc, &p.dict)?;
+    let lines = text_lines(doc, page)?;
+    Ok(group_blocks(&lines)
+        .into_iter()
+        .filter(|b| {
+            !b.lines
+                .iter()
+                .filter_map(|i| lines.get(*i))
+                .any(|l| streams.get(l.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
+        })
+        .map(|b| b.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()).collect())
+        .collect())
+}
+
 /// Existing paragraph indexes, excluding streams owned by an added-content item.
 pub(crate) fn selectable_blocks(
     doc: &Document,

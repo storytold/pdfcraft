@@ -3187,7 +3187,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // A crop drag needs the wheel too: the page must scroll while the button stays down so a
     // rectangle can span more than the visible part of a page.
     let crop_wheel = tool == QuickTool::Crop && view.crop_drag.is_some();
-    let deferred_wheel = (view.selection_drag || crop_wheel) && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    let deferred_wheel =
+        (view.selection_drag || crop_wheel) && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
         added: &added,
         allowed,

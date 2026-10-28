@@ -8597,6 +8597,70 @@ fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
 }
 
 #[test]
+fn objects_restack_through_tools_with_generation_undo_and_a_refusal() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_full};
+    let dir = workdir("object-restack");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    // Two overlapping squares and a caption, each painted in its own scope.
+    let content = "q 1 0 0 1 20 200 cm 1 0 0 rg 0 0 60 60 re f Q \
+                   q 1 0 0 1 60 220 cm 0 0 1 rg 0 0 60 60 re f Q \
+                   BT /F1 12 Tf 20 100 Td (Keep me) Tj ET";
+    let contents = cos.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(contents))).unwrap();
+    std::fs::write(dir.join("restack.pdf"), write_full(&cos, &Default::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"restack.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(before["count"], 3);
+    let graphic = before["objects"].as_array().unwrap().iter().find(|o| o["kind"] == "graphic").unwrap().clone();
+    let text = before["objects"].as_array().unwrap().iter().find(|o| o["kind"] == "text").unwrap().clone();
+    let pixels = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+
+    // A bad reference, direction or generation changes nothing.
+    for args in [
+        json!({"doc":doc,"page":1,"kind":"graphic","index":99,"direction":"front"}),
+        json!({"doc":doc,"page":1,"kind":"path","index":1,"direction":"front"}),
+        json!({"doc":doc,"page":1,"kind":"graphic","index":graphic["index"],"direction":"sideways"}),
+        json!({"doc":doc,"page":1,"kind":"graphic","index":graphic["index"],"direction":"front","generation":before["generation"].as_u64().unwrap()+1}),
+    ] {
+        assert!(a.call("object_restack", &args).is_err(), "{args}");
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before, "a refusal changes nothing");
+    }
+
+    let moved = ok(
+        &mut a,
+        "object_restack",
+        json!({"doc":doc,"page":1,"generation":before["generation"],"kind":"graphic","index":graphic["index"],"direction":"forward"}),
+    );
+    assert_eq!(moved["direction"], "forward");
+    assert_ne!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap(), pixels, "the overlap changes");
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(after["count"], 3, "nothing is lost or duplicated");
+    assert!(page_text(&mut a, doc)[0].contains("Keep me"));
+
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap(), pixels, "undo restores the order");
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "object_restack", json!({"doc":doc,"page":1,"kind":"text","index":text["index"],"direction":"front"}));
+    // Several references move as one group, keeping their own order; bad groups change nothing.
+    let listed = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let pair: Vec<_> = listed["objects"].as_array().unwrap().iter().take(2).map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    for bad in [json!([]), json!([pair[0], json!({"kind":"graphic","index":99})])] {
+        assert!(a.call("object_restack", &json!({"doc":doc,"page":1,"objects":bad,"direction":"back"})).is_err(), "{bad}");
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), listed, "a refused group changes nothing");
+    }
+    let grouped = ok(&mut a, "object_restack", json!({"doc":doc,"page":1,"objects":pair,"direction":"back"}));
+    assert_eq!(grouped["direction"], "back");
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["count"], 3, "the group is not duplicated");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/restacked.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"out/restacked.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["count"], 3);
+    assert!(page_text(&mut a, reopened)[0].contains("Keep me"));
+}
+
+#[test]
 fn object_move_rejects_invalid_nested_references_without_any_change() {
     let dir = workdir("object-move-refusals");
     let mut a = auto(&dir);
@@ -10191,6 +10255,7 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
 
+#[test]
 fn a_vector_graphic_lists_deletes_and_round_trips_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_full};
     let dir = workdir("vector-graphics");

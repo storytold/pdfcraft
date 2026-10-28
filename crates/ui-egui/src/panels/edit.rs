@@ -45,13 +45,44 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(6.0);
-    // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
+    // Manage levels: always visible, with its four buttons. They are enabled when the Edit text &
+    // images tool has one object or a group selected, including a paragraph opened for editing.
+    let levels = app
+        .active_ids()
+        .filter(|_| app.quick_tool == crate::QuickTool::EditText)
+        .and_then(|(i, _)| level_targets(app, i).map(|(page, objects)| (i, page, objects)));
+    widgets::section_title(ui, tl!("Manage levels"));
+    let enabled = levels.is_some();
+    let mut restack = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for (icon, label, direction) in [
+            ("arrow-up-from-line", tl!("Bring to front"), pdfcraft_engine::Restack::Front),
+            ("chevron-up", tl!("Bring forward"), pdfcraft_engine::Restack::Forward),
+            ("chevron-down", tl!("Send backward"), pdfcraft_engine::Restack::Backward),
+            ("arrow-down-from-line", tl!("Send to back"), pdfcraft_engine::Restack::Back),
+        ] {
+            if ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 30.0, false, label)).inner.clicked()
+                && let Some((i, page, objects)) = levels.clone()
+            {
+                restack = Some((i, page, objects, direction));
+            }
+        }
+    });
+    if let Some((i, page, objects, direction)) = restack {
+        let view = &mut app.views[i];
+        view.pending_edit = Some(if let [object] = objects.as_slice() {
+            pdfcraft_engine::Edit::RestackObject { page, object: *object, direction }
+        } else {
+            pdfcraft_engine::Edit::RestackObjects { page, objects, direction }
+        });
+    }
     let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
     if count > 0 {
         ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
         ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
-        ui.add_space(6.0);
     }
+    ui.add_space(6.0);
     // Format text at the top while text is selected or being added.
     format_section(app, ui, t);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -369,6 +400,30 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
     if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
         style.family = family;
     }
+}
+
+/// The page and references the Edit panel can restack: a multi-object selection first, then one
+/// added item, picture or paragraph opened for editing. A draft being typed, or a paragraph with
+/// unsaved typing, has no targets until it is applied.
+fn level_targets(app: &PdfCraftApp, i: usize) -> Option<(usize, Vec<pdfcraft_engine::ObjectTarget>)> {
+    use pdfcraft_engine::ObjectKind;
+    let view = app.views.get(i)?;
+    if view.content.draft.is_some() {
+        return None;
+    }
+    if let Some(targets) = view.objects.targets() {
+        return Some(targets);
+    }
+    if let Some((page, index)) = view.content.selected {
+        return Some((page, vec![pdfcraft_engine::ObjectTarget { kind: ObjectKind::Added, index }]));
+    }
+    if let Some(selection) = &view.image_selection {
+        return Some((selection.page, vec![pdfcraft_engine::ObjectTarget { kind: ObjectKind::Image, index: selection.index }]));
+    }
+    view.line_editor
+        .as_ref()
+        .filter(|editor| !editor.has_changes())
+        .map(|editor| (editor.page, vec![pdfcraft_engine::ObjectTarget { kind: ObjectKind::Text, index: editor.block }]))
 }
 
 impl PdfCraftApp {

@@ -1,7 +1,7 @@
 //! Multi-object editing through the real shell. Synthetic artwork and standard-font text only.
 use egui::{Key, Modifiers, Pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::{AddedText, Edit, EditableObject};
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -579,4 +579,49 @@ fn dragging_a_side_handle_of_an_inline_vector_icon_stretches_one_axis() {
     for (i, want) in [40.0, 340.0, 90.0, 380.0].into_iter().enumerate() {
         assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
     }
+}
+
+const LEVEL_BUTTONS: [&str; 4] = ["Bring to front", "Bring forward", "Send backward", "Send to back"];
+
+#[test]
+fn the_level_buttons_are_always_shown_and_follow_any_selection() {
+    let mut h = harness();
+    for label in LEVEL_BUTTONS {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} is shown but disabled with nothing selected");
+    }
+    // A paragraph opened for editing is a selection too: the same four buttons become usable.
+    let p = at(&h, 55.0, 70.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().views[0].line_editor.is_some());
+    for label in LEVEL_BUTTONS {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} is enabled for a text block");
+    }
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    for label in LEVEL_BUTTONS {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} goes back to disabled");
+    }
+}
+
+#[test]
+fn pressing_a_level_button_keeps_the_selection_for_the_next_press() {
+    let mut h = harness();
+    let p = at(&h, 245.0, 410.0);
+    click(&mut h, p, Modifiers::NONE);
+    let before = h.state().views[0].line_editor.clone().expect("the paragraph is open");
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().block, before.block);
+    for _ in 0..2 {
+        h.get_by_label("Send backward").click();
+        h.run_steps(4);
+        let editor = h.state().views[0].line_editor.as_ref().expect("the paragraph stays selected");
+        assert_eq!(editor.text, before.text);
+        assert!(h.state().session.get(h.state().views[0].id).unwrap().can_undo() == Some("Send backward"));
+    }
+    // The group path keeps every selected object too.
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    marquee(&mut h);
+    h.get_by_label("Bring forward").click();
+    h.run_steps(4);
+    h.get_by_label("3 objects selected");
 }

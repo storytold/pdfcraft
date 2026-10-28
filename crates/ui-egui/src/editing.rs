@@ -106,6 +106,35 @@ fn form_edit_pages(
     }
     (changed_pages, unbaked)
 }
+/// The single-object tool's selection before a restack, identified by what does not change when
+/// only the page's painting order does. Its index is remapped afterwards, so the paragraph,
+/// picture or added item stays selected for the next level button.
+struct RestackSelection {
+    page: usize,
+    kind: pdfcraft_engine::ObjectKind,
+    content_type: &'static str,
+    text: Option<String>,
+    rect: [f64; 4],
+}
+
+fn restack_selection(view: &crate::DocView, doc: &pdfcraft_engine::Document, edit: &Edit) -> Option<RestackSelection> {
+    use pdfcraft_engine::{ObjectKind, ObjectTarget};
+    let page = match edit {
+        Edit::RestackObject { page, .. } | Edit::RestackObjects { page, .. } => *page,
+        _ => return None,
+    };
+    let target = if let Some(editor) = view.line_editor.as_ref().filter(|e| e.page == page) {
+        ObjectTarget { kind: ObjectKind::Text, index: editor.block }
+    } else if let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) {
+        ObjectTarget { kind: ObjectKind::Image, index: selection.index }
+    } else {
+        let (at, index) = view.content.selected.filter(|(at, _)| *at == page)?;
+        debug_assert_eq!(at, page);
+        ObjectTarget { kind: ObjectKind::Added, index }
+    };
+    let object = doc.editable_objects(page).ok()?.into_iter().find(|o| o.target == target)?;
+    Some(RestackSelection { page, kind: object.target.kind, content_type: object.content_type, text: object.text, rect: object.rect })
+}
 
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
@@ -123,12 +152,20 @@ impl PdfCraftApp {
             (Edit::DeleteAnnotation { page, .. }, Some(d)) => d.info.annotations.iter().filter(|a| a.page == *page).cloned().collect(),
             _ => Vec::new(),
         };
+        // A restack changes indexes by reordering the page's content: note the single tool's
+        // selection first, and follow it to its new index below.
+        let restacked = self.views.get(i).zip(self.session.get(id)).and_then(|(view, doc)| restack_selection(view, doc, &edit));
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
+                // A restack only reorders the page's content, so the selected objects stay
+                // selected: note them here, after this frame's selection refresh, for the next.
+                if matches!(edit, Edit::RestackObject { .. } | Edit::RestackObjects { .. }) {
+                    view.objects.keep_after_restack();
+                }
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
                 view.picked_image = None;
@@ -167,6 +204,41 @@ impl PdfCraftApp {
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, edit, info, &annots_before, self.quick_tool);
+                select_after_edit(view, edit, info, self.quick_tool);
+                if let Some(old) = restacked {
+                    // Restacking keeps an object's text, type and box, so those identify it at
+                    // its new index.
+                    let remapped = doc.editable_objects(old.page).ok().and_then(|objects| {
+                        objects.into_iter().find(|o| {
+                            o.target.kind == old.kind
+                                && o.content_type == old.content_type
+                                && o.text == old.text
+                                && o.rect.iter().zip(old.rect).all(|(a, b)| (a - b).abs() < 0.01)
+                        })
+                    });
+                    match old.kind {
+                        pdfcraft_engine::ObjectKind::Text => match remapped {
+                            Some(object) => {
+                                if let Some(editor) = view.line_editor.as_mut().filter(|e| e.page == old.page) {
+                                    editor.block = object.target.index;
+                                }
+                            }
+                            None => view.line_editor = None,
+                        },
+                        pdfcraft_engine::ObjectKind::Image => match remapped {
+                            Some(object) => {
+                                if let Some(selection) = view.image_selection.as_mut().filter(|s| s.page == old.page) {
+                                    selection.index = object.target.index;
+                                }
+                            }
+                            None => view.image_selection = None,
+                        },
+                        pdfcraft_engine::ObjectKind::Added if view.content.selected.is_some_and(|(page, _)| page == old.page) => {
+                            view.content.selected = remapped.map(|object| (old.page, object.target.index));
+                        }
+                        _ => {}
+                    }
+                }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
