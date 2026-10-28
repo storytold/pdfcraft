@@ -422,9 +422,10 @@ impl CertImport {
         Self::from_files(std::slice::from_ref(&path.to_path_buf()))
     }
 
-    /// Read every file in `paths` into one list, each certificate once. Sizes are checked for
-    /// every file, and for all of them together, before any is read; a file that is too large or
-    /// holds no readable certificate refuses the whole import, naming it.
+    /// Read every file in `paths` into one list, each certificate once. Each must be a regular
+    /// file, and sizes are checked for every file and for all of them together, before any is
+    /// read; a file that isn't, is too large or holds no readable certificate refuses the whole
+    /// import, naming it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_files(paths: &[std::path::PathBuf]) -> Result<CertImport, String> {
         if paths.len() > MAX_CERTIFICATE_FILES {
@@ -433,11 +434,15 @@ impl CertImport {
         let mut total: u64 = 0;
         for path in paths {
             let file = path.display().to_string();
-            let len = std::fs::metadata(path).map_err(|e| format!("{file}: {e}"))?.len();
-            if len > MAX_CERTIFICATE_FILE_BYTES {
+            let meta = std::fs::metadata(path).map_err(|e| format!("{file}: {e}"))?;
+            // A folder, pipe or device is no certificate file, and opening a pipe could block.
+            if !meta.is_file() {
+                return Err(format!("{file}: not a file"));
+            }
+            if meta.len() > MAX_CERTIFICATE_FILE_BYTES {
                 return Err(format!("{file}: too large for a certificate file"));
             }
-            total = total.saturating_add(len);
+            total = total.saturating_add(meta.len());
         }
         if total > MAX_CERTIFICATE_IMPORT_BYTES {
             return Err(format!("{} files: together too large to be certificate files", paths.len()));

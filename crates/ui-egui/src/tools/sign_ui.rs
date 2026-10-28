@@ -874,6 +874,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A folder or a named pipe is refused from its metadata, before it is opened: opening a
+    /// pipe with no writer would block the app.
+    #[test]
+    fn an_import_refuses_what_is_not_a_regular_file() {
+        let dir = scratch();
+        let folder = dir.join("folder.cer");
+        std::fs::create_dir(&folder).unwrap();
+        let e = CertImport::from_files(std::slice::from_ref(&folder)).unwrap_err();
+        assert!(e.contains("not a file"), "{e}");
+        #[cfg(unix)]
+        {
+            let pipe = dir.join("pipe.p7b");
+            if std::process::Command::new("mkfifo").arg(&pipe).status().is_ok_and(|s| s.success()) {
+                let e = CertImport::from_files(std::slice::from_ref(&pipe)).unwrap_err();
+                assert!(e.contains("not a file"), "{e}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_file_that_is_not_a_certificate_or_too_large_opens_no_import() {
         let dir = scratch();
