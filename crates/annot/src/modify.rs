@@ -2,7 +2,7 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{contents_as_drawn, line_endings_of, text_value};
+use super::info::{contents_as_drawn, line_endings_of};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
