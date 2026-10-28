@@ -340,7 +340,8 @@ impl Automation {
                 Some("added") => ObjectKind::Added,
                 Some("text") => ObjectKind::Text,
                 Some("image") => ObjectKind::Image,
-                _ => return Err(bad("object kind must be added, text or image (see object_list)")),
+                Some("graphic") => ObjectKind::Graphic,
+                _ => return Err(bad("object kind must be added, text, image or graphic (see object_list)")),
             };
             let index = row
                 .get("index")
@@ -369,5 +370,34 @@ impl Automation {
         let mut result = self.apply(a, Edit::MoveObjects { page, objects: targets, offset })?;
         result["moved"] = json!(count);
         Ok(result)
+    }
+
+    /// Delete one inline vector graphic (a kind "graphic" index from `object_list`). Only its
+    /// own paths go; text, pictures, Forms and the graphics state around it stay.
+    pub(crate) fn graphic_delete(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let index = a
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let Some(g) = g.as_u64() else {
+                return Err(bad("generation must be a non-negative integer from object_list"));
+            };
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before deleting"));
+            }
+        }
+        let graphics = doc.page_graphics(page);
+        let graphic = graphics.get(index).ok_or_else(|| bad(format!("page {} has no graphic {}; call object_list again", page + 1, index + 1)))?;
+        let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
+        let rect = crate::comments::rect_to_view(info, graphic.rect.map(|v| v as f32));
+        let mut out = self.apply(a, Edit::DeletePageGraphic { page, index })?;
+        out["index"] = json!(index + 1);
+        out["rect"] = json!(rect.map(|v| (f64::from(v) * 100.0).round() / 100.0));
+        Ok(out)
     }
 }

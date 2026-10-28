@@ -399,6 +399,11 @@ pub enum Edit {
         index: usize,
         change: ImageEdit,
     },
+    /// Delete one inline vector graphic on `page` (index from `Document::page_graphics`).
+    DeletePageGraphic {
+        page: usize,
+        index: usize,
+    },
     /// Move mixed existing and added objects together. References resolve before any change;
     /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
     MoveObjects {

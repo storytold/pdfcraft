@@ -142,6 +142,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::EditTextBlock { .. }
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
+        | Edit::DeletePageGraphic { .. }
         | Edit::Flatten { .. }
         | Edit::FlattenFillSign => {
             if p.modify() {
@@ -559,6 +560,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }
+        Edit::DeletePageGraphic { page, index } => pdfcraft_edit::delete_graphic(doc, *page, *index)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
