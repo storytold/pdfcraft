@@ -1237,9 +1237,9 @@ struct PageFrame<'a> {
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
     /// Snap to drawing (M5): the paths of the page being drawn, when its tool snaps.
-    snap: Option<std::sync::Arc<pdfcraft_measure::snap::Geometry>>,
+    snap: Option<std::sync::Arc<pdfcraft_engine::measure::snap::Geometry>>,
     /// The comments already drawn on that page, as snap targets.
-    snap_comments: Option<std::sync::Arc<pdfcraft_measure::snap::Geometry>>,
+    snap_comments: Option<std::sync::Arc<pdfcraft_engine::measure::snap::Geometry>>,
     /// A page took this frame's right-click.
     right_clicked: bool,
 }
@@ -1849,6 +1849,7 @@ fn draw_pages(
         primary_down: _,
         refused,
         stamp_placed,
+        ..
     } = page_out;
     let mut page_action: Option<PageMenuAction> = None;
     let painter = ui.painter();
@@ -3257,6 +3258,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         form_notice,
         copy_selected,
+        comment_notice,
         remote_open,
         form,
         generation,
@@ -3279,6 +3281,8 @@ struct FrameRequests {
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
+    /// What the comment tools have to say (Snap to drawing's limits).
+    comment_notice: Option<&'static str>,
     remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
@@ -3301,6 +3305,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_table,
         form_notice,
         copy_selected,
+        comment_notice,
         remote_open,
         form,
         generation,

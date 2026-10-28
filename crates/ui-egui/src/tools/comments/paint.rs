@@ -1,10 +1,11 @@
 use super::geometry::{HANDLES, handle_pos, is_markup, reaches_points, reshapable, reshaped, resizable};
-use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS};
+use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS, anchor_label};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
     Stroke, color32, vec2,
 };
 use crate::page_router::{CommentPart, Hit, Owner};
+use pdfcraft_engine::measure;
 
 /// The comment outlined under the pointer: the one a press there would take (`hover`, the top hit),
 /// with the Select tool or, over its own marks, Fill & Sign. Not the selected comment, nor while a
