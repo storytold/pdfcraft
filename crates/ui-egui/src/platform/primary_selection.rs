@@ -21,6 +21,10 @@ pub(crate) struct PrimarySelection {
     pub(crate) written_key: Option<(DocId, SelectionKey)>,
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
     worker: Option<Worker>,
+    /// When the last worker was found stopped: a new one is started no sooner than [`RETRY`]
+    /// after, so a desktop with no clipboard isn't asked again on every selection.
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+    stopped: Option<std::time::Instant>,
     /// Tests: what was written, oldest first.
     #[cfg(test)]
     pub(crate) written: Vec<String>,
@@ -37,11 +41,28 @@ impl PrimarySelection {
         self.written.push(text);
         #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
         {
-            if self.worker.is_none() {
-                self.worker = spawn_worker();
-            }
+            let mut text = text;
             if let Some(worker) = &self.worker {
-                worker.send(text);
+                match worker.send(text) {
+                    Ok(()) => return,
+                    // The thread stopped (no clipboard then, or it failed): start another.
+                    Err(back) => {
+                        text = back;
+                        self.worker = None;
+                        self.stopped = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            if !may_start(self.stopped.map(|at| at.elapsed())) {
+                log::debug!("no primary selection to write");
+                return;
+            }
+            self.worker = spawn_worker();
+            if let Some(worker) = &self.worker
+                && worker.send(text).is_err()
+            {
+                self.worker = None;
+                self.stopped = Some(std::time::Instant::now());
             }
         }
         #[cfg(not(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32"))))))]
@@ -59,14 +80,28 @@ struct Worker {
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
 impl Worker {
-    fn send(&self, text: String) {
+    /// Hand the thread `text`. A full channel means the thread is already due to look; a closed
+    /// one, that it found no clipboard or failed, and stopped: then `text` comes back.
+    fn send(&self, text: String) -> Result<(), String> {
         *self.latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text);
-        // A full channel means the thread is already due to look; a closed one, that it found no
-        // clipboard and stopped.
-        if let Err(std::sync::mpsc::TrySendError::Disconnected(())) = self.wake.try_send(()) {
-            log::debug!("no primary selection to write");
+        match self.wake.try_send(()) {
+            Err(std::sync::mpsc::TrySendError::Disconnected(())) => {
+                Err(self.latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take().unwrap_or_default())
+            }
+            _ => Ok(()),
         }
     }
+}
+
+#[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")))))]
+/// How long after a worker is found stopped another may be started.
+const RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")))))]
+/// Whether a worker may be started, given how long ago the last one was found stopped (`None`:
+/// none was).
+fn may_start(since_stopped: Option<std::time::Duration>) -> bool {
+    since_stopped.is_none_or(|since| since >= RETRY)
 }
 
 /// A thread that owns the clipboard and writes the newest selection it is given: connecting to
@@ -100,5 +135,20 @@ fn spawn_worker() -> Option<Worker> {
             log::debug!("no primary selection thread: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RETRY, may_start};
+
+    /// A worker found stopped (no clipboard, say) is started again, but not before a while has
+    /// passed: a desktop with none isn't asked on every selection (#4821).
+    #[test]
+    fn a_stopped_worker_is_started_again_after_a_while() {
+        assert!(may_start(None), "the first one");
+        assert!(!may_start(Some(std::time::Duration::ZERO)));
+        assert!(!may_start(Some(RETRY - std::time::Duration::from_millis(1))));
+        assert!(may_start(Some(RETRY)));
     }
 }
