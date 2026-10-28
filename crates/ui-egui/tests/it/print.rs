@@ -272,6 +272,140 @@ fn print_dialog_shows_the_printer_driver_options() {
     assert_eq!(h.state().print_draft.job("form.pdf").options, media, "another queue must not inherit driver options");
 }
 
+/// The Paper list offers the printer's own sizes after the standard ones (a label printer's
+/// 4 × 6 in, an envelope), the job names the chosen one as its media (the printer's keyword, also
+/// for a standard size the printer has), and the list follows the printer.
+#[test]
+fn the_printers_own_paper_sizes_are_offered_and_named_as_the_jobs_media() {
+    use pdfcraft_engine::print::{PAPERS, spool};
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    let paper = |key: &str, label: &str, size: (f64, f64)| spool::PrinterPaper { key: key.into(), label: label.into(), size, default: false };
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.units = pdfcraft_ui_egui::units::Unit::Inches;
+        d.printer = Some("Label_Queue".into());
+        // Read for this printer already, so the dialog doesn't look for a system queue.
+        d.printer_papers = Some((
+            "Label_Queue".into(),
+            vec![
+                paper("Letter", "US Letter", (612.0, 792.0)),
+                paper("w162h288", "2.25 x 4 in", (162.0, 288.0)),
+                paper("EnvDL", "DL Envelope", (311.81, 623.62)),
+            ],
+        ));
+        // US Letter, whatever size the machine's default printer started the dialog on.
+        d.paper = 0;
+    }
+    h.run_steps(2);
+    // Letter is a standard size too: listed again under the driver's name, and the standard
+    // entry is chosen as the printer's keyword.
+    assert_eq!(
+        h.state().print_draft.own_papers_listed(),
+        [
+            (PAPERS.len(), "US Letter (8.50 × 11.00 in)".to_string()),
+            (PAPERS.len() + 1, "2.25 x 4 in (2.25 × 4.00 in)".to_string()),
+            (PAPERS.len() + 2, "DL Envelope (4.33 × 8.66 in)".to_string())
+        ]
+    );
+    assert_eq!(h.state().print_draft.media().map(|(_, m)| m).as_deref(), Some("Letter"));
+    // The Paper combo shows its choice as its value; opened, the printer's sizes end the list
+    // (below the fold of the popup, so the choice is made as the item would make it).
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("US Letter")).click();
+    h.run_steps(2);
+    h.get_by_label("2.25 x 4 in (2.25 × 4.00 in)");
+    h.get_by_label("DL Envelope (4.33 × 8.66 in)");
+    h.state_mut().print_draft.paper = PAPERS.len() + 1;
+    h.run_steps(2);
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("2.25 x 4 in (2.25 × 4.00 in)"));
+    let d = &h.state().print_draft;
+    assert_eq!((d.paper, d.paper_size(), d.media().map(|(_, m)| m).as_deref()), (PAPERS.len() + 1, (162.0, 288.0), Some("w162h288")));
+    assert_eq!(d.settings(1, &[]).unwrap().paper, (162.0, 288.0), "the sheets are laid out on the label");
+    assert!(d.job("form.pdf").options.contains(&("media".to_string(), "w162h288".to_string())));
+    // Match page at 100% finds the printer's own sizes too.
+    assert_eq!(d.paper_index((288.0, 162.0)), Some(PAPERS.len() + 1));
+    assert_eq!(d.paper_index((612.0, 792.0)), Some(0), "a standard size first");
+    // Another printer's list is read when it is chosen (none here: no such queue), and the
+    // label size, which it lacks, gives way to the first standard size.
+    h.state_mut().print_draft.printer = Some("Office_Queue".into());
+    h.run_steps(2);
+    let d = &h.state().print_draft;
+    assert_eq!(d.printer_papers, Some(("Office_Queue".to_string(), Vec::new())));
+    assert_eq!((d.paper, d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), (0, "US Letter", Some("Letter")));
+    // A standard size stays chosen across printers; Save as PDF has no sizes of its own.
+    h.state_mut().print_draft.paper = 4;
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(2);
+    let d = &h.state().print_draft;
+    assert!(d.printer_papers.is_none() && d.own_papers().is_empty());
+    assert_eq!((d.paper, d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), (4, "A4", Some("A4")));
+}
+
+/// Once a printer's sizes are read, the dialog starts on the printer's default size when the
+/// driver reports one (the stock a label printer is set up for, under the driver's own name),
+/// else keeps the size chosen so far when the printer has it, else the first standard size.
+#[test]
+fn the_printers_default_size_is_chosen_when_its_sizes_are_read() {
+    use pdfcraft_engine::print::{PAPERS, spool};
+    use pdfcraft_ui_egui::PrintDraft;
+    let paper = |key: &str, size: (f64, f64), default: bool| spool::PrinterPaper { key: key.into(), label: key.into(), size, default };
+    let mut d = PrintDraft { printer: Some("Label_Queue".into()), units: pdfcraft_ui_egui::units::Unit::Inches, ..Default::default() };
+    d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("User defined", (162.0, 90.0), true)]));
+    assert_eq!(d.default_own_paper(), Some(PAPERS.len() + 1));
+    assert_eq!(d.paper_after_read((612.0, 792.0)), PAPERS.len() + 1, "the printer's default over the size chosen so far");
+    // A paper the user chose (in the dialog, or remembered from the last session, #2156) stays
+    // chosen when the printer has it; the printer's default is taken only when it hasn't.
+    d.paper_picked = true;
+    assert_eq!(d.paper_after_read((612.0, 792.0)), 0, "a chosen US Letter the printer has");
+    assert_eq!(d.paper_after_read((595.28, 841.89)), PAPERS.len() + 1, "a chosen A4 the printer lacks gives way to its default");
+    d.paper_picked = false;
+    d.paper = d.paper_after_read((0.0, 0.0));
+    assert_eq!((d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), ("User defined (2.25 × 1.25 in)", Some("User defined")));
+    // A default that is a standard size as the driver feeds it starts on the standard entry, under
+    // its own name, and the job still names the printer's keyword.
+    d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), true), paper("User defined", (162.0, 90.0), false)]));
+    d.paper = d.paper_after_read((0.0, 0.0));
+    assert_eq!((d.paper, d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), (0, "US Letter", Some("Letter")));
+    d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("User defined", (162.0, 90.0), true)]));
+    assert_eq!(d.own_papers_listed().len(), 2, "the printer's sizes are all listed, a standard one too");
+    d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("w162h288", (162.0, 288.0), false)]));
+    assert_eq!(d.default_own_paper(), None);
+    assert_eq!(d.paper_after_read((288.0, 162.0)), PAPERS.len() + 1, "else the size chosen so far, when the printer has it");
+    assert_eq!(d.paper_after_read((100.0, 100.0)), 0, "else the first standard size");
+}
+
+/// Opening the dialog again reads the printer's sizes again, even for the same printer: a label
+/// driver's one stock is whatever its settings say at the time, and that changes between prints.
+#[test]
+fn reopening_the_dialog_reads_the_printers_sizes_again() {
+    use pdfcraft_engine::print::{PAPERS, spool};
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Label_Queue".into());
+        d.printer_papers = Some((
+            "Label_Queue".into(),
+            vec![spool::PrinterPaper { key: "User0000000256".into(), label: "User defined".into(), size: (288.0, 396.0), default: true }],
+        ));
+    }
+    h.run_steps(2);
+    h.state_mut().print_draft.paper = PAPERS.len();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.media().map(|(_, m)| m).as_deref(), Some("User0000000256"));
+    // Closed and opened again on the same printer: the list is read afresh (no such queue here,
+    // so it comes back empty and the size gives way to the first standard one), not kept.
+    h.state_mut().dialog = None;
+    assert!(h.state_mut().execute("print.dialog"));
+    h.state_mut().print_draft.printer = Some("Label_Queue".into());
+    h.run_steps(3);
+    let d = &h.state().print_draft;
+    assert_eq!(d.printer_papers, Some(("Label_Queue".to_string(), Vec::new())));
+    assert_eq!((d.paper, d.own_papers_listed().len(), d.media().map(|(_, m)| m).as_deref()), (0, 0, Some("Letter")));
+}
+
 /// The desktop app lists printers in the background (PowerShell on Windows takes a second or
 /// more): the dialog opens at once, then preselects the default when the list arrives — unless
 /// the user has already picked a printer.
@@ -793,7 +927,8 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
     let mut app = PdfCraftApp::new();
     app.restore(&saved);
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
+    // The paper, and that it was chosen: a printer that has A4 keeps it rather than its default.
+    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, paper_picked: true, ..Default::default() };
     assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));

@@ -58,7 +58,18 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Index into the Paper list: the standard sizes, then the printer's own.
     pub paper: usize,
+    /// Whether `paper` was chosen, in the dialog or restored from the last session (#2156),
+    /// rather than left at the first size: a chosen paper the printer has stays chosen when the
+    /// printer's sizes are read, otherwise the printer's default size is taken.
+    pub paper_picked: bool,
+    /// The printer's own paper sizes and the printer they were read for
+    /// ([`spool::printer_papers`]); `None` until a printer is chosen.
+    pub printer_papers: Option<(String, Vec<spool::PrinterPaper>)>,
+    /// Whether `printer_papers` was read since the dialog opened: a driver's stock (a label
+    /// printer's one "User defined" size) changes between prints, so each opening reads again.
+    pub papers_read: bool,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -119,6 +130,9 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            paper_picked: false,
+            printer_papers: None,
+            papers_read: false,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -192,7 +206,7 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper: self.paper_size(),
             orientation: self.orientation,
             layout,
             content: self.content,
@@ -231,8 +245,91 @@ impl PrintDraft {
             }
             .into_iter()
             // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(print::media_option(self.paper))
+            .chain(self.media())
             .collect(),
         }
+    }
+
+    /// The printer's own paper sizes, when they were read for the chosen printer.
+    pub fn own_papers(&self) -> &[spool::PrinterPaper] {
+        match (&self.printer, &self.printer_papers) {
+            (Some(p), Some((read_for, papers))) if p == read_for => papers,
+            _ => &[],
+        }
+    }
+
+    /// The printer's own sizes the Paper list offers after the standard ones, as (index,
+    /// label): all of them, each under the driver's name with its size in the preferences'
+    /// unit (one that is a standard size too is listed again, so what the driver calls it, a
+    /// label driver's "User defined", can be chosen and seen).
+    pub fn own_papers_listed(&self) -> Vec<(usize, String)> {
+        self.own_papers()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (PAPERS.len() + i, format!("{} ({})", p.label, self.units.size(p.size.0, p.size.1))))
+            .collect()
+    }
+
+    /// The Paper list index of the printer's default size, when its driver reports one.
+    pub fn default_own_paper(&self) -> Option<usize> {
+        self.own_papers().iter().position(|p| p.default).map(|i| PAPERS.len() + i)
+    }
+
+    /// The Paper list index to start on for the printer's default size: the standard size when it
+    /// is one as the driver feeds it (so it shows under its translated name, and the job still
+    /// names the printer's keyword, [`Self::media`]), else the printer's own entry.
+    pub fn default_paper(&self) -> Option<usize> {
+        let p = self.own_papers().iter().find(|p| p.default)?;
+        let same = |s: (f64, f64)| (s.0 - p.size.0).abs() <= 0.5 && (s.1 - p.size.1).abs() <= 0.5;
+        PAPERS.iter().position(|(_, s)| same(*s)).or_else(|| self.default_own_paper())
+    }
+
+    /// The paper to choose once the printer's sizes are read, `size` being the one chosen so
+    /// far: that size when it was chosen (`paper_picked`) and the printer lists it (or lists no
+    /// sizes at all), else the printer's default size when its driver reports one (the stock a
+    /// label printer is set up for, an office printer's tray paper), else that size when it is
+    /// a standard size or one of the printer's, else the first standard size.
+    pub fn paper_after_read(&self, size: (f64, f64)) -> usize {
+        let kept = self.paper_index(size);
+        let own = self.own_papers();
+        let listed = own.is_empty() || spool::paper_of_size(own, size).is_some();
+        kept.filter(|_| self.paper_picked && listed).or_else(|| self.default_paper()).or(kept).unwrap_or(0)
+    }
+
+    /// The chosen paper's size in points: a standard size portrait, one of the printer's own as
+    /// its driver feeds it (a label's width is across the feed); a stale index reads as the first size.
+    pub fn paper_size(&self) -> (f64, f64) {
+        match self.paper.checked_sub(PAPERS.len()) {
+            None => PAPERS.get(self.paper).map_or(PAPERS[0].1, |p| p.1),
+            Some(i) => self.own_papers().get(i).map_or(PAPERS[0].1, |p| p.size),
+        }
+    }
+
+    /// The chosen paper as the dialog names it: a standard size translated, one of the
+    /// printer's own as its driver names it, with its size.
+    pub fn paper_name(&self) -> String {
+        match self.paper.checked_sub(PAPERS.len()).map(|i| self.own_papers().get(i)) {
+            Some(Some(p)) => format!("{} ({})", p.label, self.units.size(p.size.0, p.size.1)),
+            Some(None) => tl!(PAPERS[0].0).to_string(),
+            None => tl!(PAPERS.get(self.paper).map_or(PAPERS[0].0, |p| p.0)).to_string(),
+        }
+    }
+
+    /// The index in the Paper list of a sheet of this size (points, either way round): a
+    /// standard size, else one of the printer's own.
+    pub fn paper_index(&self, size: (f64, f64)) -> Option<usize> {
+        print::matching_paper(size).or_else(|| spool::paper_of_size(self.own_papers(), size).map(|i| PAPERS.len() + i))
+    }
+
+    /// The `media` option the job names, so the spooler feeds the sheet the PDF was laid out on
+    /// rather than the queue's default: the printer's own keyword for the chosen size when it has
+    /// one, else the CUPS name of the standard size ([`print::media_option`]).
+    pub fn media(&self) -> Option<(String, String)> {
+        let own = self.own_papers();
+        let index = match self.paper.checked_sub(PAPERS.len()) {
+            Some(i) => Some(i),
+            None => spool::paper_of_size(own, self.paper_size()),
+        };
+        index.and_then(|i| own.get(i)).map(|p| ("media".to_string(), p.key.clone())).or_else(|| print::media_option(self.paper))
     }
 }

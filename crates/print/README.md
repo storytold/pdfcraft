@@ -74,11 +74,23 @@ Automation accepts short names such as `"ARCH D"` (case-insensitive) or the full
 For example, `doc_print` with `paper: "ARCH D"`, `layout: "actual"`,
 `orientation: "auto"` and `path: "plan.pdf"` writes a print-ready PDF at 100%.
 
+**The printer's own sizes.** After the standard sizes, the Paper menu lists the sizes the
+chosen printer's driver offers (`spool::printer_papers`: on CUPS the queue PPD's
+`*PaperDimension` entries, named by their `*PageSize` labels), each under the driver's name
+with its size, a standard size too. The dialog starts on the printer's default size when the
+driver reports one (`*DefaultPageSize`: the stock a label printer is set up for), reading the
+sizes again each time it opens. The job names the chosen sheet as its `media`
+by the printer's own keyword (`w288h432` for a label printer's 4 × 6 in; `Letter` for a
+standard size the printer has), else by the CUPS name of the standard size, so the spooler
+feeds that sheet rather than the queue's default. Headless: `printer_papers` lists them and
+`doc_print` takes a key or label as `paper`. Windows and the web list none yet (craft-print
+reads the driver's sizes when the job is sent and refuses a sheet the driver lacks).
+
 **Match page at 100%** uses the currently viewed document page to choose a standard
-sheet (either orientation, within 0.5 pt for rounded metric dimensions), Actual size
-and Auto orientation. It leaves the selected page range intact. It is disabled
-for a custom page size with no matching preset. One preset applies to the whole job;
-this is not per-page paper-source selection.
+sheet or one of the printer's own (either orientation, within 0.5 pt for rounded metric
+dimensions), Actual size and Auto orientation. It leaves the selected page range intact.
+It is disabled for a custom page size with no matching sheet. One sheet applies to the
+whole job; this is not per-page paper-source selection.
 
 **PDF scale** describes the source-to-sheet transform in the previewed print-ready
 PDF, not measured physical output. Fit reserves an 18 pt margin and can reduce even
