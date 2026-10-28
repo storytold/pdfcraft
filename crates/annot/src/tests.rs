@@ -385,7 +385,7 @@ fn parts_are_drawn_at_opacities_of_their_own() {
     let p = props(&doc2, 0, r).unwrap();
     assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.3), None));
     // The whole comment's opacity (StyleAnnotation, the quick bar): the fill goes along again.
-    set_style(&mut doc, 0, r, None, Some(0.6), None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, r, StyleChange::new(None, Some(0.6), None, None), &meta("")).unwrap();
     let d = &list(&doc, 0)[r];
     assert_eq!((num(d, b"CA"), num(d, b"ca")), (Some(0.6), None));
     assert_eq!(props(&doc, 0, r).unwrap().fill_opacity, Some(0.6));
