@@ -306,9 +306,6 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
     let (zoom_in, zoom_out, zoom_reset) = (pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)), pressed(cmd(Key::Minus)), pressed(cmd(Key::Num0)));
     if view.organize {
-        if arrows {
-            view.grid_arrow_keys(ctx);
-        }
         if zoom_in {
             view.grid_zoom_request = Some(view.grid_zoom * GRID_ZOOM_STEP);
         }
@@ -370,6 +367,10 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     }
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
         view.rotate_view(false);
+    }
+    // The arrows move through the page grid there, ahead of the page keys below (#3436).
+    if view.organize && arrows {
+        view.grid_arrow_keys(ctx);
     }
     zoom_shortcuts(view, &pressed);
     if pressed(cmd(Key::OpenBracket)) {

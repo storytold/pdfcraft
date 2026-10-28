@@ -271,6 +271,33 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
 
 /// Middle-button auto-scroll: its delta scrolls the grid, and the page controls under it are
 /// disabled (but not dimmed) while the gesture lasts.
+/// Where the grid's cells are: its rect, the margin left of the first column, the columns and
+/// the cell size.
+#[derive(Clone, Copy)]
+struct GridLayout {
+    grid: Rect,
+    left: f32,
+    cols: usize,
+    cell: Vec2,
+}
+
+/// Scroll the page Organize opened on to the middle (`reveal`), or the page an arrow key moved
+/// to into view if it is out of view (`follow`). Either may lie in a row the virtualized grid
+/// has not laid out, so its cell is computed rather than found.
+fn scroll_to_page(ui: &egui::Ui, layout: GridLayout, pages: usize, reveal: Option<usize>, follow: Option<usize>) {
+    let GridLayout { grid, left, cols, cell } = layout;
+    let cols = cols.max(1);
+    let cell_of = |page: usize| {
+        let (row, col) = (page / cols, page % cols);
+        Rect::from_min_size(pos2(grid.left() + left + col as f32 * cell.x, grid.top() + row as f32 * cell.y), cell)
+    };
+    if let Some(page) = reveal.filter(|p| *p < pages) {
+        ui.scroll_to_rect_animation(cell_of(page), Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+    } else if let Some(page) = follow.filter(|p| *p < pages) {
+        ui.scroll_to_rect_animation(cell_of(page), None, egui::style::ScrollAnimation::none());
+    }
+}
+
 fn apply_auto_scroll(ui: &mut egui::Ui, middle_gesture: bool, auto_delta: Vec2) {
     if middle_gesture {
         let opacity = ui.opacity();
@@ -359,17 +386,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
         if background.clicked() {
             view.clear_page_selection(Some(view.current));
         }
-        // The page Organize opened on, or an arrow key moved to, may lie in a row the
-        // virtualized grid has not laid out, so its cell is computed rather than found.
-        let cell_of = |page: usize| {
-            let (row, col) = (page / cols, page % cols);
-            Rect::from_min_size(pos2(grid.left() + left + col as f32 * cell.x, grid.top() + row as f32 * cell.y), cell)
-        };
-        if let Some(page) = reveal.filter(|p| *p < info.pages.len()) {
-            ui.scroll_to_rect_animation(cell_of(page), Some(egui::Align::Center), egui::style::ScrollAnimation::none());
-        } else if let Some(page) = follow.filter(|p| *p < info.pages.len()) {
-            ui.scroll_to_rect_animation(cell_of(page), None, egui::style::ScrollAnimation::none());
-        }
+        scroll_to_page(ui, GridLayout { grid, left, cols, cell }, info.pages.len(), reveal, follow);
         for row in thumbnail_rows(clip.top() - 20.0, clip.bottom() - 20.0, cell.y, rows) {
             let row_rect = Rect::from_min_size(grid.min + vec2(0.0, row as f32 * cell.y), vec2(grid.width(), cell.y));
             for col in 0..cols {
