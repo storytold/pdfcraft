@@ -1125,7 +1125,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them), or, for a highlight, underline, strikethrough or squiggly underline, the text it marks (`find`: text on the page, the first match or every match with `all`; or `quads`), which extends or reduces it and keeps its colour and replies. Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
@@ -1140,6 +1140,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
                 "points": { "type": "array", "items": point(), "minItems": 1, "description": "A line's two ends, every corner of connected lines, a polygon or a cloud, or a callout's arrow point and (optionally) knee, in page coordinates. A callout given its arrow point alone keeps the knee it has." },
+                "find": { "type": "string", "description": "Highlight, underline, strikethrough or squiggly underline only: the text on the page (case-insensitive) it now marks, in place of what it marked." },
+                "all": { "type": "boolean", "description": "With `find`: mark every match on the page, not just the first." },
+                "quads": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 8, "maxItems": 8 }, "description": "Highlight, underline, strikethrough or squiggly underline only: the text area it now marks, a quadrilateral per line, in page coordinates." },
             })),
             &["doc"],
         )),

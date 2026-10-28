@@ -347,6 +347,14 @@ impl DocView {
         self.session.clear_selection();
     }
 
+    /// The text selection as markup quadrilaterals in user space when all of it is on `page` and
+    /// read, else `None`.
+    pub(crate) fn selection_quads_on(&self, info: &DocInfo, page: usize) -> Option<Vec<[f64; 8]>> {
+        let marks = self.session.selection_quads(info, self.view.rotation);
+        let Ok([(p, quads)]) = <[_; 1]>::try_from(marks) else { return None };
+        (p == page).then_some(quads)
+    }
+
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
         self.session.all_text = false;

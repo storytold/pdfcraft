@@ -1203,6 +1203,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
         | Edit::SetAnnotationPopup { page, .. }
+        | Edit::SetMarkupRange { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }

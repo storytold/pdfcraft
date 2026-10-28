@@ -267,6 +267,13 @@ pub enum Edit {
         rect: Option<[f64; 4]>,
         open: Option<bool>,
     },
+    /// Change the text a highlight, underline, strikethrough or squiggly underline marks: its new
+    /// text area, a `/QuadPoints` quadrilateral per line (user space).
+    SetMarkupRange {
+        page: usize,
+        index: usize,
+        quads: Vec<[f64; 8]>,
+    },
     /// Resize a rectangle, oval or text box.
     ResizeAnnotation {
         page: usize,
