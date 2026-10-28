@@ -254,6 +254,8 @@ fn hairline_stroke(
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
+    #[cfg(test)]
+    HAIRLINE_PATHS.with(|n| n.set(n.get() + 1));
     let dashes = usable_dash_pattern(path, &stroke_props.dash_array);
     let dashed = if dashes.is_empty() {
         path.clone()
@@ -265,7 +267,12 @@ fn hairline_stroke(
         };
         kurbo::dash(path.elements().iter().copied(), offset, &dashes).collect()
     };
-    let stroke = kurbo::Stroke {
+    Some((transform * dashed, hairline_pen(stroke_props)))
+}
+
+/// PdfCraft patch: the one-pixel pen [`hairline_stroke`] strokes with, under the identity.
+fn hairline_pen(stroke_props: &StrokeProps) -> kurbo::Stroke {
+    kurbo::Stroke {
         width: 1.0,
         join: stroke_props.line_join,
         miter_limit: stroke_props.miter_limit as f64,
@@ -273,8 +280,13 @@ fn hairline_stroke(
         end_cap: stroke_props.line_cap,
         dash_pattern: Default::default(),
         dash_offset: 0.0,
-    };
-    Some((transform * dashed, stroke))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// PdfCraft patch: strokes [`hairline_stroke`] has dashed and mapped to the device.
+    pub(crate) static HAIRLINE_PATHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
@@ -1627,8 +1639,21 @@ impl Renderer {
         self.ctx.set_transform(transform);
         let (width, height) = (self.ctx.width(), self.ctx.height());
         // PdfCraft patch: line weights off, see `hairline_stroke`. Text outlines keep their
-        // widths: stroked glyphs are letterforms, not line art.
-        let hairline = if self.hairline_strokes && !is_text {
+        // widths: stroked glyphs are letterforms, not line art, and so are the strokes a Type 3
+        // glyph draws its letter with (they reach here as paths, not as text).
+        let hairline = if self.hairline_strokes && !is_text && !self.in_type3_glyph {
+            // Culled before the dashes are expanded and mapped: for one tile of a plan most
+            // strokes miss the canvas, and dashing them all cost as much as drawing them. The
+            // undashed path holds every dash, so this never drops a visible one.
+            if !may_paint_canvas(
+                path,
+                transform,
+                stroke_reach(&hairline_pen(stroke_props)),
+                width,
+                height,
+            ) {
+                return;
+            }
             hairline_stroke(path, transform, stroke_props)
         } else {
             None
