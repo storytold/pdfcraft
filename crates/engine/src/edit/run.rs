@@ -1,6 +1,6 @@
 use super::{
-    AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, MarkKind, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image,
+    fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
