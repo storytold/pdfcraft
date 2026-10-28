@@ -68,7 +68,6 @@ mod state;
 mod tools;
 mod workflows;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::same_file;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
 use canvas::autoscroll;
@@ -102,6 +101,8 @@ use panels::search_ui;
 pub use panels::side_panels;
 pub use persist::last_session;
 pub use persist::last_view;
+#[cfg(not(target_arch = "wasm32"))]
+pub use persist::last_view::default_reading_progress_path;
 use persist::recovery;
 pub use persist::units;
 #[cfg(not(target_arch = "wasm32"))]
@@ -331,6 +332,10 @@ pub struct PdfCraftApp {
     pub restore_last_view: bool,
     /// How files were last shown, most recent first (see `last_view`).
     pub last_views: Vec<last_view::LastView>,
+    pub(crate) reading_progress_dirty: bool,
+    pub(crate) reading_progress_changed_at: Option<web_time::Instant>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) reading_progress_path: Option<std::path::PathBuf>,
     /// The files open when PdfCraft last closed, read from the settings for
     /// [`PdfCraftApp::reopen_last_files`].
     pub last_session: last_session::LastSession,

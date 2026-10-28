@@ -19,7 +19,6 @@ mod prefs;
 mod window;
 
 pub(crate) use clipboard::{copy_refused, print_refused};
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
 use frame::migrate_panel_state;
 pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
@@ -88,6 +87,10 @@ impl PdfCraftApp {
             reopen_last_session: false,
             restore_last_view: true,
             last_views: Vec::new(),
+            reading_progress_dirty: false,
+            reading_progress_changed_at: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            reading_progress_path: None,
             last_session: Default::default(),
             quit_session: None,
             reload_changed_files: true,
@@ -328,6 +331,8 @@ impl eframe::App for PdfCraftApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.sync_last_views();
+        self.save_reading_progress();
         // eframe has just stored the window as it is now: not while it is minimized.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -464,7 +469,9 @@ impl eframe::App for PdfCraftApp {
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         #[cfg(target_os = "macos")]
         craft_quit::on_close_request(ctx);
-        self.autosave_tick(ctx, web_time::Instant::now());
+        let now = web_time::Instant::now();
+        self.autosave_tick(ctx, now);
+        self.reading_progress_tick(ctx, now);
         // Reload documents whose files a build rewrote (#431).
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();

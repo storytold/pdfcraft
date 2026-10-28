@@ -806,6 +806,16 @@ impl DocView {
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
     }
+
+    /// Whether the view has completed its initial frame and been shown.
+    pub(crate) fn is_shown(&self) -> bool {
+        self.shown
+    }
+
+    /// Whether a target page or point jump is currently pending.
+    pub(crate) fn is_navigating(&self) -> bool {
+        self.goto.is_some() || self.goto_point.is_some()
+    }
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a

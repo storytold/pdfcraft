@@ -3,7 +3,27 @@ use super::*;
 /// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
 /// current directory (links are not resolved, as in `last_session`).
 pub(crate) fn same_file(a: &str, b: &str) -> bool {
-    a == b || matches!((std::path::absolute(a), std::path::absolute(b)), (Ok(x), Ok(y)) if x == y)
+    #[cfg(target_arch = "wasm32")]
+    {
+        a == b
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        #[cfg(target_os = "windows")]
+        {
+            if a.eq_ignore_ascii_case(b) {
+                return true;
+            }
+            matches!(
+                (std::path::absolute(a), std::path::absolute(b)),
+                (Ok(x), Ok(y)) if x.to_string_lossy().eq_ignore_ascii_case(&y.to_string_lossy())
+            )
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            a == b || matches!((std::path::absolute(a), std::path::absolute(b)), (Ok(x), Ok(y)) if x == y)
+        }
+    }
 }
 
 impl PdfCraftApp {
