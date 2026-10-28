@@ -1,0 +1,2083 @@
+From b33b4bb904c6eed4bd737afe3419bd55ee624a1b Mon Sep 17 00:00:00 2001
+From: PdfCraft Contributor <developer@pdfcraft.local>
+Date: Sat, 24 Oct 2026 06:14:30 +0530
+Subject: [PATCH 2/5] feat: complete M7/M6/M5/M4 tool milestone upgrades and UI
+ fixes for v0.13.0
+
+---
+ crates/ui-egui/src/canvas.rs       |  84 ++++-
+ crates/ui-egui/src/dialogs.rs      |  11 +
+ crates/ui-egui/src/edit_text_ui.rs | 523 ++++++++++++++++++++++++-----
+ crates/ui-egui/src/lib.rs          |  16 +
+ crates/ui-egui/src/panels.rs       | 511 +++++++++++++++++++---------
+ crates/ui-egui/src/prepare.rs      |  98 +++++-
+ 6 files changed, 995 insertions(+), 248 deletions(-)
+
+diff --git a/crates/ui-egui/src/canvas.rs b/crates/ui-egui/src/canvas.rs
+index 77fbc04b..0fb1d938 100644
+--- a/crates/ui-egui/src/canvas.rs
++++ b/crates/ui-egui/src/canvas.rs
+@@ -73,6 +73,8 @@ pub(crate) fn thumbnail_rows(top: f32, bottom: f32, row_height: f32, rows: usize
+     first.saturating_sub(1).min(rows)..end.saturating_add(1).min(rows)
+ }
+ 
++pub const THUMBNAIL_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
++
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+ pub enum Fit {
+     Width,
+@@ -413,6 +415,7 @@ pub struct DocView {
+     pub rotation: u16,
+     pub current: usize,
+     pub organize: bool,
++    pub thumbnail_zoom: f32,
+     pub highlight_fields: bool,
+     pub page_input: String,
+     /// Select the replacement page label once if its editor remains focused.
+@@ -543,9 +546,13 @@ pub struct DocView {
+     /// line being edited.
+     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
+     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
++    /// The paragraph editor whose edit was just queued. It opens again with its typing if the
++    /// edit fails, as a refused form field does.
++    pub(crate) applied_editor: Option<crate::edit_text_ui::LineEditor>,
+     /// The box a click switched to while another paragraph was being edited: it opens once the
+     /// queued edit has applied, so its index and geometry come from the document it now is (#2022).
+-    pub(crate) pending_text_open: Option<(usize, usize)>,
++    /// It is held as the paragraph's text and box, not an index: the edit can regroup the page.
++    pub(crate) pending_text_open: Option<(usize, pdfcraft_engine::BlockKey)>,
+     pub(crate) text_background: crate::edit_text_ui::TextBackground,
+     pub(crate) move_background: crate::content_ui::MoveBackground,
+     /// Edit text & images: the images per page (by document generation), and the selected one.
+@@ -563,6 +570,8 @@ pub struct DocView {
+     pub forms: crate::forms_ui::FormView,
+     /// Prepare a form: the selected field and the gesture in progress.
+     pub prepare: crate::prepare::PrepareView,
++    /// Prepare a form ▸ Calculation order.
++    pub(crate) calc_order: crate::calc_order_ui::CalcOrderView,
+     /// Edit a PDF: the selected added item, the text being typed.
+     pub content: crate::content_ui::ContentView,
+     /// Edit a PDF ▸ Link tool state.
+@@ -698,6 +707,17 @@ pub enum ViewAction {
+ }
+ 
+ impl DocView {
++    pub fn thumbnail_zoom(&self) -> f32 {
++        self.thumbnail_zoom
++    }
++
++    pub fn set_thumbnail_zoom(&mut self, zoom: f32) {
++        let zoom = zoom.clamp(*THUMBNAIL_ZOOM_RANGE.start(), *THUMBNAIL_ZOOM_RANGE.end());
++        if zoom != self.thumbnail_zoom {
++            self.thumbnail_zoom = zoom;
++        }
++    }
++
+     pub fn raster_memory(&self) -> RasterMemory {
+         RasterMemory {
+             thumbnail_count: self.thumbs.len(),
+@@ -750,6 +770,7 @@ impl DocView {
+             rotation: 0,
+             current: 0,
+             organize: false,
++            thumbnail_zoom: 1.0,
+             highlight_fields: defaults.highlight_fields,
+             page_input: "1".into(),
+             page_input_reselect: false,
+@@ -818,6 +839,7 @@ impl DocView {
+             pending_edit: None,
+             edit_lines: HashMap::new(),
+             line_editor: None,
++            applied_editor: None,
+             pending_text_open: None,
+             text_background: Default::default(),
+             move_background: Default::default(),
+@@ -848,6 +870,7 @@ impl DocView {
+             measure: Default::default(),
+             forms: Default::default(),
+             prepare: Default::default(),
++            calc_order: Default::default(),
+             content: Default::default(),
+             links: Default::default(),
+             redact_drag: None,
+@@ -1096,6 +1119,16 @@ impl DocView {
+         self.pages.get(&page).map(|p| p.tex.id())
+     }
+ 
++    pub(crate) fn page_raster_out_of_date(&self, page: usize) -> bool {
++        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG)
++    }
++
++    /// Whether `page` is still drawn, somewhere, as it was before its last change: its whole-page
++    /// raster (a tiled page's backdrop too) or any of its tiles waits for a replacement.
++    pub(crate) fn page_out_of_date(&self, page: usize) -> bool {
++        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG) || self.stale_tiles.iter().any(|k| k.0 == page)
++    }
++
+     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
+     /// thumbnail.
+     pub(crate) fn page_preview(&self, page: usize) -> Option<egui::TextureId> {
+@@ -1257,6 +1290,21 @@ impl DocView {
+         self.current = page;
+     }
+ 
++    /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
++    pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
++        self.go_to_page(page);
++        self.goto_point = None;
++        let Some(p) = info.pages.get(self.current) else { return };
++        if !rect.iter().all(|v| v.is_finite()) {
++            return;
++        }
++        // Halve before adding so even large finite coordinates cannot overflow the midpoint.
++        let x = rect[0] * 0.5 + rect[2] * 0.5;
++        let y = rect[1] * 0.5 + rect[3] * 0.5;
++        let [fx, fy] = p.dest_fraction(Some(x), Some(y), self.rotation);
++        self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
++    }
++
+     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
+     /// and zoomed as `dest` asks, as Acrobat does. `/XYZ` puts (left, top) at the window's
+     /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit
+@@ -2483,6 +2531,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+     }
+     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
+     let preparing = app.is_preparing();
++    // Prepare a form ▸ Calculation order: the order's steps and links on the page.
++    let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
+     // Edit a PDF: added text and images can be selected, moved and edited.
+     let editing_content =
+         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
+@@ -2843,6 +2893,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+     let mut copy_selected = false;
+     let comments_hidden = doc.comments_hidden();
+     let form = doc.form.clone();
++    let generation = doc.edit_generation();
+     let can_fill = doc.allows_form_filling();
+     let can_crop = doc.allows_assembly();
+     let mut open_boxes = false;
+@@ -2880,6 +2931,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+     let mut open_props: Option<(usize, usize)> = None;
+     let mut field_props = false;
+     let mut field_placed = false;
++    let mut open_table: Option<(usize, [f64; 4])> = None;
++    let mut calc_hover: Option<String> = None;
++    // The table being set up in its window, shown on its own document's page.
++    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
+     let can_modify = doc.allows_modification();
+     if preparing {
+         crate::prepare::after_refresh(view, &form);
+@@ -3247,9 +3302,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+                     QuickTool::Field(f) => Some(f),
+                     _ => None,
+                 };
+-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, can_modify, view);
++                // While a table is being set up, nothing else is drawn or moved.
++                let allowed = can_modify && table_preview.is_none() && open_table.is_none();
++                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, allowed, view);
+                 field_props |= o.properties;
+                 field_placed |= o.placed;
++                open_table = open_table.or(o.table);
+                 (o.consumed || field_tool.is_some(), false)
+             } else {
+                 use crate::forms_ui::FieldPointer;
+@@ -3570,6 +3628,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+             }
+             if preparing {
+                 crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
++                if let Some(preview) = &table_preview {
++                    crate::field_table_ui::paint_preview(painter, &xf, i, preview);
++                }
++                if calc_order {
++                    let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
++                    if let Some(name) = crate::calc_order_ui::paint_page(ui, painter, &xf, i, info, &form, &view.calc_order, generation, selected) {
++                        calc_hover = Some(name);
++                    }
++                }
+             } else {
+                 crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
+             }
+@@ -3706,6 +3773,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+                 hover_text = badge_hover.take();
+             }
+         }
++        if calc_order {
++            view.calc_order.set_hover_page(calc_hover);
++            let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
++            crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
++        }
+         // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
+         // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
+         // pointer leaves the selection's page for the gap or the next page; over the whole
+@@ -4194,6 +4266,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+         app.boxes_draft.seeded = None;
+         app.dialog = Some(crate::Dialog::PageBoxes);
+     }
++    if let Some((page, rect)) = open_table {
++        app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
++        app.dialog = Some(crate::Dialog::FieldTable);
++        // The window lasts while the form is prepared. Drawn with the tool picked but its panel
++        // closed, the tool goes back to Select above, so the panel opens to keep it prepared.
++        app.left = crate::LeftPanel::Tool("form");
++        app.reveal_tools();
++    }
+     if let Some(n) = form_notice {
+         match n {
+             crate::forms_ui::FormNotice::Security => app.notify_tr("The document's security settings don't allow filling in form fields"),
+diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
+index cdc68e18..891e07c8 100644
+--- a/crates/ui-egui/src/dialogs.rs
++++ b/crates/ui-egui/src/dialogs.rs
+@@ -25,6 +25,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
+     if app.dialog != Some(Dialog::WordCount) {
+         app.word_count_draft.cancel();
+     }
++    if app.dialog != Some(Dialog::FieldTable) {
++        app.field_table_draft = None;
++    }
++    // A movable window, not this modal: the page under it shows the table as it changes.
++    if app.dialog == Some(Dialog::FieldTable) {
++        crate::field_table_ui::show(app, ctx);
++        return;
++    }
+     let Some(dialog) = app.dialog else {
+         app.props_draft = None;
+         app.view_draft = None;
+@@ -1078,6 +1086,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
+                 });
+                 return;
+             }
++            // Never reached: `dialogs` shows this movable window above and returns before the modal.
++            // The arm keeps the match exhaustive.
++            Dialog::FieldTable => close = true,
+             Dialog::Optimize => {
+                 let (ok, cancel) = crate::optimize_ui::body(ui, &mut app.optimize_draft, &t);
+                 optimize_now = ok;
+diff --git a/crates/ui-egui/src/edit_text_ui.rs b/crates/ui-egui/src/edit_text_ui.rs
+index 66ad98ff..3a1ab043 100644
+--- a/crates/ui-egui/src/edit_text_ui.rs
++++ b/crates/ui-egui/src/edit_text_ui.rs
+@@ -32,6 +32,26 @@ pub(crate) struct TextBackground {
+     received: Option<u64>,
+     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
+     draft_rect: Option<[f64; 4]>,
++    /// This frame's place for the textless page under the open paragraph's editor. It stays
++    /// empty, so the page shows its own text, until the paragraph is changed ([`Self::reveal`]).
++    slot: Option<(egui::Painter, egui::layers::ShapeIdx, egui::Shape)>,
++    /// How the open paragraph looked in its editor last frame.
++    look: Option<EditorLook>,
++    /// An applied paragraph's last look. The page raster still has the old text until the page
++    /// is rendered again, so the textless page and this look stay up until then.
++    settling: Option<EditorLook>,
++}
++
++/// A paragraph editor's text as last drawn: its laid-out rows, where they were on the page (in
++/// the page's 0..1 coordinates), and the page's width and turn on screen then.
++struct EditorLook {
++    page: usize,
++    block: usize,
++    galley: Arc<egui::Galley>,
++    at: (f32, f32),
++    color: Color32,
++    page_width: f32,
++    rot: u16,
+ }
+ 
+ impl TextBackground {
+@@ -39,6 +59,34 @@ impl TextBackground {
+         self.renderer.is_some() && self.received != self.tag
+     }
+ 
++    /// The open paragraph's editor drew `galley` at `pos` this frame.
++    pub fn remember(&mut self, xf: &PageXform, page: usize, block: usize, galley: Arc<egui::Galley>, pos: Pos2, color: Color32) {
++        self.look = Some(EditorLook { page, block, galley, at: xf.screen_to_norm(pos), color, page_width: xf.rect.width(), rot: xf.rot });
++    }
++
++    /// An edit was applied. When it is the open paragraph's, its last look stays up over the
++    /// textless page until the page is rendered again; any other edit ends both.
++    pub fn committed(&mut self, edit: &Edit) {
++        let look = self.look.take().filter(|look| {
++            matches!(edit, Edit::EditTextBlock { page, block, .. } if (look.page, look.block) == (*page, *block))
++                && self.key.is_some_and(|(_, page, target)| (page, target) == (look.page, TextTarget::Block(look.block)))
++                && self.texture.is_some()
++        });
++        match look {
++            Some(look) => {
++                self.renderer = None;
++                self.settling = Some(look);
++            }
++            None => *self = Self::default(),
++        }
++    }
++
++    pub fn page_received(&mut self, page: usize) {
++        if self.settling.as_ref().is_some_and(|look| look.page == page) {
++            *self = Self::default();
++        }
++    }
++
+     pub fn prepare(
+         &mut self,
+         ctx: &egui::Context,
+@@ -50,6 +98,10 @@ impl TextBackground {
+         let key = editor
+             .map(|ed| (doc.edit_generation(), ed.page, TextTarget::Block(ed.block)))
+             .or_else(|| draft.and_then(|d| d.index.map(|index| (doc.edit_generation(), d.page, TextTarget::Added(index)))));
++        self.slot = None;
++        if key.is_none() && self.settling.is_some() {
++            return;
++        }
+         if self.key != key {
+             *self = Self { key, ..Default::default() };
+             if let Some((_, page, target)) = key {
+@@ -101,6 +153,11 @@ impl TextBackground {
+         }
+     }
+ 
++    /// The draft's measured extent, when it was measured for paragraph `block` on `page`.
++    pub fn draft_rect_for(&self, page: usize, block: usize) -> Option<[f64; 4]> {
++        self.draft_rect.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
++    }
++
+     pub fn ready(&self, page: usize, block: usize) -> bool {
+         self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))) && self.texture.is_some()
+     }
+@@ -110,15 +167,20 @@ impl TextBackground {
+     }
+ 
+     pub fn paint(
+-        &self,
++        &mut self,
+         painter: &egui::Painter,
+         xf: &PageXform,
+         page: usize,
+         editor: Option<&LineEditor>,
+         draft: Option<&crate::content_ui::TextDraft>,
+     ) {
+-        let ready = editor.is_some_and(|ed| ed.page == page && self.ready(page, ed.block))
+-            || draft.is_some_and(|d| d.page == page && d.index.is_some_and(|index| self.ready_added(page, index)));
++        let for_editor = editor.is_some_and(|ed| ed.page == page && self.ready(page, ed.block));
++        // A zoom or a turn of the view since the paragraph was applied would misplace its rows:
++        // the page raster (with the old text) shows until the new one arrives instead.
++        let settled =
++            self.settling.as_ref().filter(|look| look.page == page && look.rot == xf.rot && (look.page_width - xf.rect.width()).abs() < 0.5);
++        let ready =
++            for_editor || draft.is_some_and(|d| d.page == page && d.index.is_some_and(|index| self.ready_added(page, index))) || settled.is_some();
+         if !ready {
+             return;
+         }
+@@ -126,7 +188,30 @@ impl TextBackground {
+         // Font metrics can underestimate the actual glyph ink. Paint the complete textless
+         // page so overhanging glyphs cannot remain outside the estimated source rectangle.
+         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+-        xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
++        if for_editor {
++            // Its place under everything drawn on the page later; the editor fills it once the
++            // paragraph changes (an unchanged paragraph looks as the page draws it).
++            let mut mesh = egui::Mesh::with_texture(tex.id());
++            for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
++                mesh.vertices.push(egui::epaint::Vertex { pos: xf.norm_to_screen(u, v), uv: Pos2::new(u, v), color: Color32::WHITE });
++            }
++            mesh.add_triangle(0, 1, 2);
++            mesh.add_triangle(0, 2, 3);
++            let idx = painter.add(egui::Shape::Noop);
++            self.slot = Some((painter, idx, egui::Shape::mesh(mesh)));
++        } else {
++            xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
++            if let Some(look) = settled {
++                painter.galley(xf.norm_to_screen(look.at.0, look.at.1), Arc::clone(&look.galley), look.color);
++            }
++        }
++    }
++
++    /// The open paragraph has changed: show the textless page under its editor this frame.
++    pub fn reveal(&mut self) {
++        if let Some((painter, idx, shape)) = self.slot.take() {
++            painter.set(idx, shape);
++        }
+     }
+ }
+ 
+@@ -158,10 +243,15 @@ pub struct LineEditor {
+     max_width: f32,
+     /// Current screen-space size. Recomputed from the current page transform before painting.
+     size: f32,
+-    focus: bool,
++    /// Take the keyboard focus on the next frame.
++    pub(crate) focus: bool,
+     /// The Format text panel's values, and what the paragraph had (to send only changes).
+     pub look: pdfcraft_engine::AddedText,
+     look0: pdfcraft_engine::AddedText,
++    /// A standard family was picked from the font list. The family guessed from a PDF font name
++    /// (Calibri reads as Helvetica) can be the one picked, so comparing `look` with `look0` alone
++    /// would miss the choice.
++    family_chosen: bool,
+     /// Underline, line spacing (× size; 0 = the paragraph's own), character spacing (pt) and
+     /// horizontal scale (%), and what they were.
+     pub extras: Extras,
+@@ -182,36 +272,47 @@ impl Default for Extras {
+     }
+ }
+ 
+-/// Underline, line spacing, character spacing and horizontal scale for the paragraph being
+-/// edited (under Format text). Returns `true` when something changed.
+-pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
+-    let before = *e;
+-    ui.horizontal(|ui| {
+-        if crate::icons::button(ui, "underline", 26.0, e.underline, tl!("Underline")).clicked() {
+-            e.underline = !e.underline;
++impl LineEditor {
++    /// What Format text's font list shows: the chosen page font, a standard family picked
++    /// instead, or the paragraph's own font (its `/BaseFont` without the subset tag).
++    pub(crate) fn font_shown(&self, sources: &[(String, String)]) -> String {
++        if let Some(face) = self.font_resource.as_ref().and_then(|r| sources.iter().find(|(res, _)| res == r)).map(|(_, face)| face) {
++            return face.clone();
+         }
+-        let zero = tl!("Line spacing").to_string();
+-        let label = |v: f64| if v == 0.0 { zero.clone() } else { format!("{v:.2}×") };
+-        egui::ComboBox::from_id_salt("line-spacing").selected_text(label(e.line_spacing)).width(110.0).show_ui(ui, |ui| {
+-            for v in [1.0, 1.15, 1.5, 2.0] {
+-                ui.selectable_value(&mut e.line_spacing, v, label(v));
+-            }
+-        });
+-    });
+-    ui.horizontal(|ui| {
+-        let l = ui.label(tl!("Character spacing"));
+-        ui.add(egui::DragValue::new(&mut e.char_spacing).range(-5.0..=50.0).speed(0.1).suffix(" pt")).labelled_by(l.id);
+-    });
+-    ui.horizontal(|ui| {
+-        let l = ui.label(tl!("Horizontal scale"));
+-        ui.add(egui::DragValue::new(&mut e.scale).range(10.0..=400.0).speed(1.0).suffix(" %")).labelled_by(l.id);
+-    });
+-    *e != before
+-}
++        if self.look.family != self.look0.family || self.family_chosen {
++            return self.look.family.label().to_string();
++        }
++        let base = self.source.as_ref().map(|(block, _)| block.base_font.as_str()).unwrap_or_default();
++        // "ABCDEF+Calibri" is a subset of Calibri.
++        let name = match base.split_once('+') {
++            Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
++            _ => base,
++        };
++        if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
++    }
++
++    /// Back to the paragraph's own font: no page font chosen and the family it started with.
++    pub(crate) fn keep_source_font(&mut self) {
++        self.font_resource = None;
++        self.look.family = self.look0.family;
++        self.family_chosen = false;
++    }
++
++    /// A standard family picked from the font list, replacing the paragraph's font even when it
++    /// is the family the paragraph's font name reads as.
++    pub(crate) fn choose_family(&mut self, family: pdfcraft_engine::FontFamily) {
++        self.font_resource = None;
++        self.look.family = family;
++        self.family_chosen = true;
++    }
+ 
+-impl LineEditor {
+     pub(crate) fn has_changes(&self) -> bool {
+-        self.text != self.original || self.look != self.look0 || self.extras != self.extras0
++        self.changes_with(&self.text)
++    }
++
++    /// Whether the paragraph with `text` in it differs from what was opened.
++    fn changes_with(&self, text: &str) -> bool {
++        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen
+     }
+ 
+     /// Extra width permitted by the editor. Source containers now remain fixed.
+@@ -229,7 +330,7 @@ impl LineEditor {
+         let (l, o) = (&self.look, &self.look0);
+         let mut style = pdfcraft_engine::BlockStyle {
+             resource: self.font_resource.clone(),
+-            family: (l.family != o.family || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
++            family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
+             size: (l.size != o.size).then_some(l.size),
+             color: (l.color != o.color).then_some(l.color),
+             align: (l.align != o.align).then_some(l.align),
+@@ -267,6 +368,7 @@ impl LineEditor {
+     pub fn applied(&mut self) {
+         self.selection = None;
+         self.font_resource = None;
++        self.family_chosen = false;
+         self.look0 = self.look.clone();
+         self.extras0 = self.extras;
+         self.original = self.text.clone();
+@@ -358,6 +460,11 @@ pub struct ImageSelection {
+     drag: Option<(Pos2, Option<Pos2>)>,
+     /// Crop mode (Acrobat's crop handles): the box kept so far.
+     pub crop: Option<CropMode>,
++    /// The drag is turning the picture by its rotate handle (the `drag` start is then unused).
++    turning: bool,
++    /// A move or resize applied on release: the frame it had and the one it got, in the page's
++    /// 0..1 coordinates, while the page raster still has the picture where it was.
++    settled: Option<(Rect, Rect)>,
+ }
+ 
+ /// Cropping a page image: the handles trim instead of resizing, the part that will go is
+@@ -533,7 +640,29 @@ impl ImageSelection {
+     }
+ }
+ 
+-/// Once a selected corner is grabbed, text under it cannot take over the gesture. The same
++/// The page raster's picture of the box `from`, stretched into `to`, over blanks at `blank` (where
++/// the screen may still show the picture).
++fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::TextureId, blank: &[Rect], from: Rect, to: Rect) {
++    let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
++    for r in blank {
++        clipped.rect_filled(*r, CornerRadius::ZERO, Color32::WHITE);
++    }
++    let mut mesh = egui::Mesh::with_texture(tex);
++    for (a, b) in [
++        (from.left_top(), to.left_top()),
++        (from.right_top(), to.right_top()),
++        (from.right_bottom(), to.right_bottom()),
++        (from.left_bottom(), to.left_bottom()),
++    ] {
++        let (u, v) = xf.screen_to_norm(a);
++        mesh.vertices.push(egui::epaint::Vertex { pos: b, uv: Pos2::new(u, v), color: Color32::WHITE });
++    }
++    mesh.add_triangle(0, 1, 2);
++    mesh.add_triangle(0, 2, 3);
++    clipped.add(egui::Shape::mesh(mesh));
++}
++
++/// Once a selected corner or the rotate knob is grabbed, text under it cannot take over the gesture. The same
+ /// applies after the pointer leaves the image/page while dragging.
+ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) -> bool {
+     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
+@@ -544,7 +673,8 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, inf
+     let Some(rect) = image.visible_rect else { return false };
+     let b = xf.user_rect(info, page, rect.map(|v| v as f32));
+     let p = ui.input(|i| if i.pointer.primary_down() { i.pointer.press_origin() } else { i.pointer.hover_pos() });
+-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().any(|c| c.distance(p) < 8.0))
++    let knob = rotate_knob(b, ui.clip_rect()).0;
++    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), knob].iter().any(|c| c.distance(p) < 8.0))
+ }
+ 
+ /// What a drag on a paragraph box takes hold of.
+@@ -603,6 +733,24 @@ fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
+     })
+ }
+ 
++/// A paragraph's box on screen: its text rect (user space), with a little room around it.
++fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
++    xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
++}
++
++/// The width handles need the page upright (or upside down): on a quarter-turned page the
++/// screen's horizontal is the paragraph's vertical.
++fn has_edges(info: &DocInfo, page: usize) -> bool {
++    info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0)
++}
++
++/// Whether a press at `p` takes hold of the width handle of one of the paragraphs `rects` (user
++/// space). The handle is drawn half outside the box and grabs from a little further out still,
++/// where a press is not on the box itself, so area selection must leave it to [`page_input`].
++pub(crate) fn grabs_edge(xf: &PageXform, info: &DocInfo, page: usize, mut rects: impl Iterator<Item = [f64; 4]>, p: Pos2) -> bool {
++    has_edges(info, page) && rects.any(|r| edge_at(paragraph_box(xf, info, page, r), p).is_some())
++}
++
+ /// What a right-click on a selected image asks for.
+ #[derive(Clone, Copy, Debug, PartialEq)]
+ pub(crate) enum ImageAction {
+@@ -620,6 +768,25 @@ pub(crate) enum ImageAction {
+     Recognize(usize),
+ }
+ 
++/// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
++/// top edge, or below the bottom edge when the area on screen (`view`) has no room above.
++fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
++    let above = b.center_top() - egui::vec2(0.0, 22.0);
++    if above.y - 6.0 >= view.top() { (above, b.center_top()) } else { (b.center_bottom() + egui::vec2(0.0, 22.0), b.center_bottom()) }
++}
++
++/// Degrees clockwise (-180..=180) that turn "straight up" from `centre` onto the pointer; `snap`
++/// rounds to steps of 15 degrees (Shift). A pointer on the centre turns nothing.
++fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
++    let v = pointer - centre;
++    if !(v.x.is_finite() && v.y.is_finite()) || v.length() < 4.0 {
++        return 0.0;
++    }
++    // Screen y points down: up is (0, -1); clockwise is atan2(x, -y).
++    let d = v.x.atan2(-v.y).to_degrees();
++    if snap { (d / 15.0).round() * 15.0 } else { d }
++}
++
+ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
+     let p = &info.pages[page];
+     let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
+@@ -655,14 +822,17 @@ pub(crate) fn image_input(
+     // hovered boxes, so a ~1000-image CAD page stays interactive in Edit text & images.
+     // Fully clipped placements (empty visible frames) get no outline.
+     let faint_all = boxes.len() <= MAX_OUTLINES;
++    // The picture being dragged has its frame at the pointer; its outline where it was would
++    // trail behind until the release.
++    let moving = selected.filter(|_| dragging);
+     if faint_all {
+-        for b in boxes.iter().filter(|b| b.is_positive()) {
++        for (_, b) in boxes.iter().enumerate().filter(|(i, b)| b.is_positive() && moving != Some(*i)) {
+             painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+         }
+     }
+     let hovered_box = hover_pos.and_then(|p| boxes.iter().enumerate().rposition(|(i, b)| b.is_positive() && b.contains(p) && image_contains(i, p)));
+     if !faint_all {
+-        for i in selected.into_iter().chain(hovered_box.filter(|h| Some(*h) != selected)) {
++        for i in selected.filter(|_| moving.is_none()).into_iter().chain(hovered_box.filter(|h| Some(*h) != selected)) {
+             if let Some(b) = boxes.get(i).filter(|b| b.is_positive()) {
+                 painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+             }
+@@ -697,6 +867,26 @@ pub(crate) fn image_input(
+                 );
+             }
+         };
++        // Until the page is rendered again its raster has an applied move or resize's picture
++        // where it was: it stays blanked there and drawn where it went.
++        // The whole-page raster and its tiles are replaced separately: the old frame stays blanked
++        // while anything still shows the picture there, but its pixels come from the old frame
++        // only while the whole-page raster itself is the old one. Once that is fresh it has the
++        // picture where it went, and that is where they come from.
++        let (out_of_date, raster_old, raster) = (view.page_out_of_date(page), view.page_raster_out_of_date(page), view.page_raster(page));
++        let screen = |r: Rect| Rect::from_two_pos(xf.norm_to_screen(r.min.x, r.min.y), xf.norm_to_screen(r.max.x, r.max.y));
++        // Where the screen may still show the picture from before an applied move, while the page
++        // isn't drawn again yet. Another drag keeps it blanked too.
++        let left_at = view.image_selection.as_ref().and_then(|s| s.settled).filter(|_| out_of_date).map(|(from, _)| from);
++        if let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none()) {
++            match (s.settled, raster) {
++                (Some((from, to)), Some(tex)) if out_of_date => {
++                    let source = if raster_old { from } else { to };
++                    stretched_picture(painter, xf, tex, &[screen(from)], screen(source), screen(to));
++                }
++                _ => s.settled = None,
++            }
++        }
+         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
+             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+             handles(b);
+@@ -704,10 +894,28 @@ pub(crate) fn image_input(
+         if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
+             ui.ctx().set_cursor_icon(if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+         }
++        // The rotate handle: a knob above the top edge, joined to it by a short stem.
++        let (knob, stem) = rotate_knob(b, ui.clip_rect());
++        if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
++            painter.line_segment([stem, knob], Stroke::new(1.0, ACCENT));
++            painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, ACCENT));
++            if allow_interaction && hover_pos.is_some_and(|p| p.distance(knob) < 8.0) {
++                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
++            }
++        }
+         let origin = ui.input(|i| i.pointer.press_origin());
+         if allow_interaction
+             && resp.drag_started()
+             && let Some(o) = origin
++            && o.distance(knob) < 8.0
++        {
++            if let Some(s) = view.image_selection.as_mut() {
++                s.drag = Some((o, None));
++                s.turning = true;
++            }
++        } else if allow_interaction
++            && resp.drag_started()
++            && let Some(o) = origin
+         {
+             let corner = corners.iter().position(|c| c.distance(o) < 8.0);
+             if corner.is_some() || image_contains(i, o) {
+@@ -717,6 +925,35 @@ pub(crate) fn image_input(
+                 }
+             }
+         }
++        if view.image_selection.as_ref().is_some_and(|s| s.turning) {
++            let shift = ui.input(|i| i.modifiers.shift);
++            let degrees = hover_pos.map_or(0.0, |p| turn_degrees(b.center(), p, shift));
++            // The turned outline as a preview; the engine redraws the pixels on release.
++            let centre = b.center();
++            let (sin, cos) = degrees.to_radians().sin_cos();
++            let turn = |c: Pos2| {
++                let v = c - centre;
++                centre + egui::vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
++            };
++            let outline = [b.left_top(), b.right_top(), b.right_bottom(), b.left_bottom()].map(turn).to_vec();
++            painter.add(egui::Shape::closed_line(outline, Stroke::new(1.5, ACCENT)));
++            let galley = painter.layout_no_wrap(format!("{degrees:.0}\u{b0}"), egui::FontId::proportional(12.0), ACCENT);
++            let label = Rect::from_center_size(turn(knob) - egui::vec2(0.0, 14.0), galley.size() + egui::vec2(8.0, 4.0));
++            painter.rect(label, CornerRadius::same(3), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
++            painter.galley(label.center() - galley.size() / 2.0, galley, ACCENT);
++            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
++            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
++                if let Some(s) = view.image_selection.as_mut() {
++                    s.drag = None;
++                    s.turning = false;
++                }
++                if degrees.abs() >= 0.05 {
++                    view.pending_edit =
++                        Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::RotateBy(f64::from(degrees)) });
++                }
++            }
++            return true;
++        }
+         if let Some((start, opposite)) = view.image_selection.as_ref().and_then(|s| s.drag)
+             && let Some(p) = hover_pos
+         {
+@@ -754,21 +991,10 @@ pub(crate) fn image_input(
+                 if preview != b
+                     && let Some(tex) = view.page_raster(page)
+                 {
+-                    let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+-                    clipped.rect_filled(b, CornerRadius::ZERO, Color32::WHITE);
+-                    let mut mesh = egui::Mesh::with_texture(tex);
+-                    for (from, to) in [
+-                        (b.left_top(), preview.left_top()),
+-                        (b.right_top(), preview.right_top()),
+-                        (b.right_bottom(), preview.right_bottom()),
+-                        (b.left_bottom(), preview.left_bottom()),
+-                    ] {
+-                        let (u, v) = xf.screen_to_norm(from);
+-                        mesh.vertices.push(egui::epaint::Vertex { pos: to, uv: Pos2::new(u, v), color: Color32::WHITE });
+-                    }
+-                    mesh.add_triangle(0, 1, 2);
+-                    mesh.add_triangle(0, 2, 3);
+-                    clipped.add(egui::Shape::mesh(mesh));
++                    // Its pixels: where the whole-page raster has it.
++                    let source = left_at.filter(|_| raster_old).map_or(b, screen);
++                    let blank: Vec<Rect> = left_at.map(screen).into_iter().chain(std::iter::once(b)).collect();
++                    stretched_picture(painter, xf, tex, &blank, source, preview);
+                 }
+                 painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+                 painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+@@ -777,6 +1003,11 @@ pub(crate) fn image_input(
+             if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+                 if let Some(s) = view.image_selection.as_mut() {
+                     s.drag = None;
++                    let norm = |r: Rect| {
++                        let ((u0, v0), (u1, v1)) = (xf.screen_to_norm(r.min), xf.screen_to_norm(r.max));
++                        Rect::from_two_pos(Pos2::new(u0, v0), Pos2::new(u1, v1))
++                    };
++                    s.settled = (preview != b).then(|| (left_at.unwrap_or_else(|| norm(b)), norm(preview)));
+                 }
+                 if preview != b {
+                     view.pending_edit =
+@@ -832,7 +1063,7 @@ pub(crate) fn image_input(
+         _ => egui::CursorIcon::PointingHand,
+     });
+     if resp.clicked() || resp.secondary_clicked() {
+-        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None });
++        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None, turning: false, settled: None });
+     }
+     if resp.secondary_clicked() {
+         ui.ctx().data_mut(|d| d.insert_temp(menu_key, true));
+@@ -965,6 +1196,7 @@ fn open_editor(
+         focus: true,
+         look: look_of(l),
+         look0: look_of(l),
++        family_chosen: false,
+         extras: Extras::default(),
+         extras0: Extras::default(),
+     });
+@@ -988,8 +1220,9 @@ pub(crate) fn page_input(
+         view.block_drag = None;
+         return true;
+     }
+-    let boxes: Vec<Rect> = lines.iter().map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)).expand(2.0)).collect();
+-    let painter = ui.painter();
++    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
++    // Outlines stay on their page, like its text (#3061).
++    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
+     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
+     for (i, b) in boxes.iter().enumerate() {
+         if active != Some(i) {
+@@ -1000,17 +1233,20 @@ pub(crate) fn page_input(
+     // applied and `lines`/`boxes` are the document's new inventory (#2022).
+     if allow_interaction
+         && active.is_none()
+-        && let Some((open_page, block)) = view.pending_text_open
++        && let Some((open_page, key)) = view.pending_text_open.clone()
+         && open_page == page
+     {
+-        open_editor(ui, xf, doc, lines, &boxes, page, block, view);
++        // The edit may have regrouped the page: open the paragraph that was clicked, wherever it
++        // is now, and none if it was merged into another (#2516).
++        match key.find(lines, 0) {
++            Some(block) => open_editor(ui, xf, doc, lines, &boxes, page, block, view),
++            None => view.pending_text_open = None,
++        }
+     }
+     if !allow_interaction {
+         return false;
+     }
+-    // The width handle needs the page upright (or upside down): on a quarter-turned page the
+-    // screen's horizontal is the paragraph's vertical.
+-    let upright = info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0);
++    let upright = has_edges(info, page);
+     let draw_handles = |b: Rect| {
+         for h in width_handles(b) {
+             painter.rect(h, CornerRadius::same(2), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
+@@ -1081,14 +1317,18 @@ pub(crate) fn page_input(
+         draw_handles(boxes[hit]);
+     }
+     // A closed paragraph moves when dragged (the four-way arrow says so; a click still opens it
+-    // for typing); an edge rewraps it. The open one takes the text cursor.
+-    ui.ctx().set_cursor_icon(if on_edge {
+-        egui::CursorIcon::ResizeHorizontal
+-    } else if active.is_none() {
+-        egui::CursorIcon::Move
+-    } else {
+-        egui::CursorIcon::Text
+-    });
++    // for typing); an edge rewraps it. The open one takes the text cursor. Only where the page
++    // shows, so the mode bar and side panels over a paragraph scrolled under them keep their own
++    // cursor (#2755).
++    if resp.contains_pointer() {
++        ui.ctx().set_cursor_icon(if on_edge {
++            egui::CursorIcon::ResizeHorizontal
++        } else if active.is_none() {
++            egui::CursorIcon::Move
++        } else {
++            egui::CursorIcon::Text
++        });
++    }
+     if resp.clicked() {
+         view.image_selection = None;
+         // A click that moves the editor to another paragraph applies the open one first, so its
+@@ -1101,11 +1341,12 @@ pub(crate) fn page_input(
+             if let Some(old) = view.line_editor.take() {
+                 let style = old.style();
+                 if old.text != old.original || style != pdfcraft_engine::BlockStyle::default() {
++                    view.applied_editor = Some(old.clone());
+                     view.pending_edit = Some(Edit::EditTextBlock { page: old.page, block: old.block, text: old.text, style });
+                 }
+             }
+             // The clicked box opens next frame, from the document with that edit applied.
+-            view.pending_text_open = Some((page, hit));
++            view.pending_text_open = lines.get(hit).map(|l| (page, pdfcraft_engine::BlockKey::of(l)));
+             return true;
+         }
+         open_editor(ui, xf, doc, lines, &boxes, page, hit, view);
+@@ -1177,7 +1418,7 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
+             let Some(line) = lines.get(index) else { continue };
+             let mut look = source_look(&line.base_font, line.size, line.color, line.bold, line.italic);
+             look.size = line.size;
+-            if ed.look.family != ed.look0.family {
++            if ed.look.family != ed.look0.family || ed.family_chosen {
+                 look.family = ed.look.family;
+             }
+             if ed.look.bold != ed.look0.bold {
+@@ -1193,7 +1434,8 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
+                 look.size = ed.look.size;
+             }
+             let mut font = editor_font(&look, (look.size as f32 * scale).clamp(1.0, 300.0));
+-            let original_face = ed.look.family == ed.look0.family && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
++            let original_face =
++                ed.look.family == ed.look0.family && !ed.family_chosen && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
+             let embedded = original_face && ed.fonts.contains_key(&line.font);
+             if embedded && let Some(name) = ed.fonts.get(&line.font) {
+                 font.family = FontFamily::Name(name.clone().into());
+@@ -1228,6 +1470,16 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
+     job
+ }
+ 
++/// `galley` drawn in no colour: its rows still place the caret and the selection.
++fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
++    for placed in &mut Arc::make_mut(&mut galley).rows {
++        for vertex in &mut Arc::make_mut(&mut placed.row).visuals.mesh.vertices {
++            vertex.color = Color32::TRANSPARENT;
++        }
++    }
++    galley
++}
++
+ /// Align the editable galley's baselines to the source rows instead of egui's interface
+ /// leading. Glyphs, meshes, caret and selection receive the same transform.
+ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+@@ -1312,7 +1564,18 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
+         .line_editor
+         .as_ref()
+         .is_some_and(|ed| view.text_background.ready(ed.page, ed.block) && !ed.source.as_ref().is_some_and(|(b, _)| b.invisible));
+-    let draft_rect = view.text_background.draft_rect.map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
++    // The measured extent of this paragraph's draft: a click straight from another paragraph
++    // opens this one after the frame's measuring, which was the other one's.
++    let draft_rect = view
++        .line_editor
++        .as_ref()
++        .and_then(|ed| view.text_background.draft_rect_for(ed.page, ed.block))
++        .map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
++    // The editor draws on its page only, as the page itself does: a paragraph running past the
++    // page's edge (a converter relying on the page clip) must not cover the next page or the
++    // tool bars (#3061).
++    let viewport = view.viewport_rect();
++    let page_clip = xf.rect.intersect(viewport);
+     let ed = view.line_editor.as_mut()?;
+     if hold {
+         ed.focus = true;
+@@ -1336,10 +1599,22 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
+         ed.source.as_ref().and_then(|(block, lines)| block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size as f32).reduce(f32::min));
+     let font = editor_font(&ed.look, smallest.map_or(ed.size, |s| (s * scale * 0.5).clamp(1.0, 300.0).min(ed.size)));
+     let text_color = color32(ed.look.color);
++    let block = ed.block;
+     let mut done = None;
+-    egui::Area::new(egui::Id::new("edit-text-line")).order(egui::Order::Foreground).fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top())).show(
+-        ctx,
+-        |ui| {
++    let mut reveal = false;
++    let mut look = None;
++    // No fade-in: while it faded, the page's own copy of the text showed through the cover.
++    // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
++    // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
++    // the page is, rather than pushed back into the window.
++    egui::Area::new(egui::Id::new("edit-text-line"))
++        .order(egui::Order::Foreground)
++        .fade_in(false)
++        .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
++        .constrain_to(viewport)
++        .constrain(false)
++        .show(ctx, |ui| {
++            ui.set_clip_rect(ui.clip_rect().intersect(page_clip));
+             // The editor opens at the source size. Once text changes, show the real draft
+             // extent: single rows grow toward the page edge, paragraphs rewrap at their
+             // source width, and the visible frame grows/shrinks vertically with their rows.
+@@ -1363,6 +1638,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
+             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
+             // the pointer says so there, and reads as text inside.
+             if let Some(p) = ui.input(|i| i.pointer.hover_pos())
++                && ui.clip_rect().contains(p)
+                 && live.expand(2.0 + FRAME_REACH).contains(p)
+                 && !live.expand(2.0).contains(p)
+             {
+@@ -1371,20 +1647,27 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
+             // White, unless the text is too pale to read on white (white text from a coloured
+             // banner, #913): then a dark box, with a caret that shows on it.
+             let fill = if background_ready { Color32::TRANSPARENT } else { editor_fill(text_color) };
+-            // Until the background worker finishes, cover the entire source box, including
+-            // lines the draft no longer occupies. Shrinking the text must never expose a copy.
+-            if !background_ready {
+-                ui.painter().rect_filled(ed.rect.expand(1.0), CornerRadius::ZERO, fill);
+-            }
+-            egui::Frame::NONE.fill(fill).show(ui, |ui| {
+-                // A textless PDF preview keeps its real page background through the transparent editor.
+-                // The temporary opaque cover uses the shared caret-contrast rule.
+-                ui.visuals_mut().text_cursor.stroke.color =
+-                    if background_ready { if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE } } else { caret_color_on(fill) };
++            // An unchanged paragraph is the page's own text: the editor draws only its frame and
++            // caret over it. Once it changes, the textless page goes under the editor's text or,
++            // until that background is ready, a cover over the entire source box, including lines
++            // the draft no longer occupies. Shrinking the text must never expose a copy. Both are
++            // decided after this frame's typing, in places kept under the editor's text.
++            let cover = ui.painter().add(egui::Shape::Noop);
++            let unchanged = !ed.has_changes();
++            egui::Frame::NONE.show(ui, |ui| {
++                // A textless PDF preview, or the page itself, keeps its real background through
++                // the transparent editor. The temporary opaque cover uses the shared caret-contrast rule.
++                ui.visuals_mut().text_cursor.stroke.color = if background_ready || unchanged {
++                    if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE }
++                } else {
++                    caret_color_on(fill)
++                };
+                 let rows = 1;
+                 let snapshot = ed.clone();
+-                let mut layouter =
+-                    |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
++                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
++                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
++                    if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
++                };
+                 let output = egui::TextEdit::multiline(&mut ed.text)
+                     .id(egui::Id::new("edit-text-line-input"))
+                     .font(font.clone())
+@@ -1395,6 +1678,14 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
+                     .desired_width(width)
+                     .desired_rows(rows)
+                     .show(ui);
++                if ed.has_changes() {
++                    if background_ready {
++                        reveal = true;
++                    } else {
++                        ui.painter().set(cover, egui::Shape::rect_filled(ed.rect.expand(1.0).union(output.response.rect), CornerRadius::ZERO, fill));
++                    }
++                }
++                look = Some((Arc::clone(&output.galley), output.galley_pos));
+                 if let Some(cursor) = output.cursor_range {
+                     let selected = cursor.as_sorted_char_range();
+                     let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
+@@ -1417,12 +1708,21 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
+                     done = Some(true);
+                 }
+             });
+-        },
+-    );
++        });
++    if reveal {
++        view.text_background.reveal();
++    }
++    if let Some((galley, pos)) = look {
++        view.text_background.remember(&xf, page, block, galley, pos, text_color);
++    }
+     match done {
+         Some(apply) => {
+             let ed = view.line_editor.take()?;
+-            if apply { finished_edit(ed) } else { None }
++            if !apply {
++                return None;
++            }
++            view.applied_editor = Some(ed.clone());
++            finished_edit(ed)
+         }
+         None => None,
+     }
+@@ -1449,6 +1749,30 @@ pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn the_rotate_knob_moves_below_when_there_is_no_room_above() {
++        let view = Rect::from_min_max(Pos2::new(0.0, 100.0), Pos2::new(500.0, 500.0));
++        let roomy = Rect::from_min_max(Pos2::new(100.0, 200.0), Pos2::new(200.0, 250.0));
++        assert_eq!(rotate_knob(roomy, view).0, Pos2::new(150.0, 178.0));
++        let at_top = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(200.0, 150.0));
++        let (knob, stem) = rotate_knob(at_top, view);
++        assert_eq!((knob, stem), (Pos2::new(150.0, 172.0), Pos2::new(150.0, 150.0)));
++    }
++
++    #[test]
++    fn the_rotate_knob_measures_clockwise_degrees_from_straight_up() {
++        let c = Pos2::new(100.0, 100.0);
++        let at = |x: f32, y: f32| turn_degrees(c, Pos2::new(x, y), false);
++        assert!(at(100.0, 0.0).abs() < 1e-3);
++        assert!((at(200.0, 100.0) - 90.0).abs() < 1e-3, "right is a clockwise quarter");
++        assert!((at(0.0, 100.0) + 90.0).abs() < 1e-3);
++        assert!((at(100.0, 200.0).abs() - 180.0).abs() < 1e-3);
++        // Shift rounds to 15 degrees; the centre and non-finite points turn nothing.
++        assert_eq!(turn_degrees(c, Pos2::new(180.0, 50.0), true) % 15.0, 0.0);
++        assert_eq!(at(101.0, 101.0), 0.0);
++        assert_eq!(at(f32::NAN, 5.0), 0.0);
++    }
++
+     /// An app with one text document open, and an editor on its first paragraph.
+     fn preview_app() -> (crate::PdfCraftApp, LineEditor) {
+         let mut app = crate::PdfCraftApp::new();
+@@ -1474,12 +1798,31 @@ mod tests {
+             focus: true,
+             look: look_of(&block),
+             look0: look_of(&block),
++            family_chosen: false,
+             extras: Extras::default(),
+             extras0: Extras::default(),
+         };
+         (app, ed)
+     }
+ 
++    #[test]
++    fn picking_the_family_the_font_name_reads_as_still_changes_the_font() {
++        // A Calibri paragraph reads as Helvetica; picking Helvetica from the list used to leave
++        // `look` equal to what the paragraph had, so no family change was sent and Calibri stayed.
++        let (_app, mut ed) = preview_app();
++        let family = ed.look0.family;
++        assert_eq!(ed.style().family, None, "nothing chosen yet");
++        ed.choose_family(family);
++        assert_eq!(ed.style().family, Some((family, ed.look.bold, ed.look.italic)));
++        assert!(ed.has_changes());
++        assert_eq!(ed.font_shown(&[]), family.label());
++        ed.keep_source_font();
++        assert_eq!(ed.style().family, None, "Keep source fonts withdraws the choice");
++        ed.choose_family(family);
++        ed.applied();
++        assert_eq!(ed.style().family, None, "an applied choice is the paragraph's font now");
++    }
++
+     #[test]
+     fn a_loaded_font_is_applied_to_the_paragraph_being_edited() {
+         // Loading a font used to only register it on the page: the paragraph kept its source
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index ef59402f..460de140 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -31,6 +31,9 @@ macro_rules! tl_ctx {
+ mod a11y_ui;
+ mod actions_ui;
+ mod appearance;
++mod calc_order_ui;
++pub mod field_table_ui;
++mod format_text_ui;
+ pub mod canvas;
+ mod chrome;
+ mod combine_grid;
+@@ -188,6 +191,7 @@ impl Mode {
+ pub enum LeftPanel {
+     AllTools,
+     Tool(&'static str),
++    CalculationOrder,
+ }
+ 
+ #[derive(Clone)]
+@@ -495,6 +499,8 @@ pub enum Dialog {
+     Optimize,
+     /// Prepare a form ▸ right-click a field ▸ Duplicate.
+     DuplicateField,
++    /// Prepare a form ▸ Text field table: a movable window rather than a modal (`field_table_ui`).
++    FieldTable,
+     /// Check for accessibility ▸ Accessibility Checker Options.
+     AccessibilityOptions,
+     /// Scan & OCR ▸ Recognize text.
+@@ -953,6 +959,8 @@ pub struct PdfCraftApp {
+     pub attach_override: Option<(String, Vec<u8>)>,
+     /// Duplicate Field: which field and onto which pages.
+     pub duplicate_draft: Option<DuplicateDraft>,
++    /// Text field table: the table being set up, and the page it goes on.
++    pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
+     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
+     pub form_preview: bool,
+     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
+@@ -1266,6 +1274,7 @@ impl PdfCraftApp {
+             system_clipboard: true,
+             attach_override: None,
+             duplicate_draft: None,
++            field_table_draft: None,
+             form_preview: false,
+             window_title: String::new(),
+             recovery: None,
+@@ -3274,6 +3283,13 @@ impl PdfCraftApp {
+             {
+                 object_ui::nudge_keys(ctx, &mut self.views[i], doc);
+             }
++            // A selected field moves with the arrows too (Prepare a form, #2608), before the view
++            // turns the page with them.
++            if self.is_preparing()
++                && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
++            {
++                prepare::nudge_keys(ctx, &mut self.views[i], doc);
++            }
+             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
+             self.copy_key(i, ctx);
+             self.image_pick_keys(i, ctx);
+diff --git a/crates/ui-egui/src/panels.rs b/crates/ui-egui/src/panels.rs
+index 886f9c2e..edfe63eb 100644
+--- a/crates/ui-egui/src/panels.rs
++++ b/crates/ui-egui/src/panels.rs
+@@ -2,12 +2,14 @@
+ //! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
+ 
+ use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
+-use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup};
++use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
+ use pdfcraft_render::{DocInfo, FieldKind, OutlineItem};
+ 
+ use crate::theme::{self, Tokens};
+ use crate::{LeftPanel, PdfCraftApp, RightPanel, icons, widgets};
+ 
++const COLLAPSED_TOOLS: usize = 14;
++
+ fn hue(g: &ToolGroup) -> Color32 {
+     Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2])
+ }
+@@ -19,7 +21,7 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+     if app.left == LeftPanel::Tool("organize") && app.active.and_then(|i| app.views.get(i)).is_some_and(|v| !v.organize) {
+         app.left = crate::organize_panel::workspace_panel(app.mode);
+     }
+-    egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 8, right: 6, top: 6, bottom: 6 }).stroke(Stroke::new(1.0, t.divider)).show(
++    egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 14, right: 10, top: 12, bottom: 10 }).stroke(Stroke::new(1.0, t.divider)).show(
+         ui,
+         |ui| match app.left {
+             // Organize pages has its own panel whenever the grid shows (with a document open).
+@@ -29,88 +31,93 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                 Some(g) => tool_detail(app, ui, &t, g),
+                 None => app.left = LeftPanel::AllTools,
+             },
++            LeftPanel::CalculationOrder => crate::calc_order_ui::panel(app, ui, &t),
+         },
+     );
+ }
+ 
+-fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool, bool) {
++/// A panel's title row: Back (with `back` as its tooltip) when given, the title and Close.
++/// Returns whether Back and Close were clicked.
++pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Option<&str>) -> (bool, bool) {
+     let mut go_back = false;
+     let mut close = false;
+     ui.horizontal(|ui| {
+-        ui.spacing_mut().item_spacing.x = 4.0;
+-        if back && icons::button(ui, "chevron-left", 22.0, false, tl!("Back to all tools")).clicked() {
++        if let Some(tip) = back
++            && icons::button(ui, "chevron-left", 26.0, false, tip).clicked()
++        {
+             go_back = true;
+         }
+-        let avail = ui.available_width();
+-        let close_btn_w = 26.0;
+-        let title_w = (avail - close_btn_w - 4.0).max(40.0);
+-
+-        ui.add_sized(
+-            [title_w, 24.0],
+-            egui::Label::new(egui::RichText::new(tl!(title)).font(theme::semibold(14.0)).color(t.text)).truncate(),
+-        );
+-
+-        if icons::button(ui, "x", 22.0, false, tl!("Close panel")).clicked() {
++        // Reserve space for Close before laying out the translated title. Long tool names
++        // must never expand the fixed-width sidebar or push the Close control off-screen.
++        let title_width = (ui.available_width() - 26.0 - ui.spacing().item_spacing.x).max(1.0);
++        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)).color(t.text)).truncate())
++            .on_hover_text(tl!(title));
++        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
+             close = true;
+         }
+     });
+     ui.add_space(2.0);
+     ui.separator();
+-    ui.add_space(2.0);
++    ui.add_space(4.0);
+     (go_back, close)
+ }
+ 
+ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+-    let (_, close) = panel_header(ui, t, "All tools", false);
++    let (_, close) = panel_header(ui, t, "All tools", None);
+     if close {
+         app.left_open = false;
+-        ui.ctx().request_repaint();
+     }
+-    ui.add_space(2.0);
+-
+-    egui::ScrollArea::vertical()
+-        .auto_shrink([false, false])
+-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+-        .show(ui, |ui| {
+-            for g in TOOL_GROUPS.iter() {
+-                if tool_row(ui, t, g).clicked() {
+-                    app.select_tool(g.id);
+-                }
++    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
++        let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
++        for g in &TOOL_GROUPS[..shown] {
++            if tool_row(ui, t, g).clicked() {
++                app.select_tool(g.id);
+             }
+-        });
++        }
++        ui.add_space(4.0);
++        let more = if app.all_tools_expanded { "View less" } else { "View more" };
++        if ui
++            .add(
++                egui::Label::new(egui::RichText::new(tl!(more)).color(t.accent_text).font(theme::medium(13.0)))
++                    .selectable(false)
++                    .sense(Sense::click()),
++            )
++            .on_hover_cursor(egui::CursorIcon::PointingHand)
++            .clicked()
++        {
++            app.all_tools_expanded = !app.all_tools_expanded;
++        }
++    });
+ }
+ 
+ /// Draw a one-line row label without painting into the status chip or beyond the sidebar.
+ /// Accessibility retains the complete name through the row's WidgetInfo.
+ fn row_label(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32, left_center: egui::Pos2, max_width: f32) -> bool {
+     let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+-    job.wrap = egui::text::TextWrapping { max_width: max_width.max(1.0), max_rows: 1, break_anywhere: false, ..Default::default() };
++    job.wrap = egui::text::TextWrapping { max_width: max_width.max(1.0), max_rows: 1, break_anywhere: true, ..Default::default() };
+     let galley = ui.fonts_mut(|f| f.layout_job(job));
+     let elided = galley.elided;
+-    let pos = pos2(left_center.x.round(), (left_center.y - galley.size().y / 2.0).round());
+-    ui.painter().galley(pos, galley, color);
++    ui.painter().galley(left_center - vec2(0.0, galley.size().y / 2.0), galley, color);
+     elided
+ }
+ 
+ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
+-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
++    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(g.label)));
+     let press = theme::Press::track(ui, &resp);
+     press.wash(ui, rect, 6, false);
+     let body = rect.translate(press.offset());
+-    let icon_color = hue(g);
+-    let icon_rect = Rect::from_min_size(body.min + vec2(6.0, 7.0), vec2(18.0, 18.0));
+-    icons::paint(ui, icon_rect, g.icon, 18.0, icon_color);
++    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 7.0), vec2(20.0, 20.0)), g.icon, 19.0, hue(g));
+     let right_reserved = match (g.badge, g.availability) {
+-        (Some(b), _) => ui.fonts_mut(|f| f.layout_no_wrap(tl!(b).to_owned(), theme::semibold(9.5), Color32::WHITE).size().x) + 24.0,
++        (Some(b), _) => ui.fonts_mut(|f| f.layout_no_wrap(tl!(b).to_owned(), theme::semibold(9.5), Color32::WHITE).size().x) + 26.0,
+         (None, Availability::Planned(m)) if resp.hovered() => {
+             let hint = format!("{} · {m}", tl!("Planned"));
+-            ui.fonts_mut(|f| f.layout_no_wrap(hint, theme::medium(10.5), t.text_faint).size().x) + 16.0
++            ui.fonts_mut(|f| f.layout_no_wrap(hint, theme::medium(10.5), t.text_faint).size().x) + 18.0
+         }
+         _ => 8.0,
+     };
+     let clipped =
+-        row_label(ui, tl!(g.label), theme::regular(13.0), t.text, body.left_center() + vec2(30.0, 0.0), rect.width() - 30.0 - right_reserved);
++        row_label(ui, tl!(g.label), theme::regular(13.5), t.text, body.left_center() + vec2(36.0, 0.0), rect.width() - 36.0 - right_reserved);
+     match (g.badge, g.availability) {
+         (Some(b), _) => {
+             let font = theme::semibold(9.5);
+@@ -132,7 +139,6 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
+         }
+         _ => {}
+     }
+-
+     let tip = match g.availability {
+         Availability::Ready => tl!("Available").to_string(),
+         Availability::Planned(m) => format!("{} {m} — {}", tl!("Planned for milestone"), tl!("open to see what it will include")),
+@@ -143,14 +149,17 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
+ }
+ 
+ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+-    let (back, close) = panel_header(ui, t, g.label, true);
++    if g.id == "edit" {
++        edit_panel(app, ui, t, g);
++        return;
++    }
++    let (back, close) = panel_header(ui, t, g.label, Some(tl!("Back to all tools")));
+     if back {
+         app.left = LeftPanel::AllTools;
+         app.mode = crate::Mode::AllTools;
+     }
+     if close {
+         app.left_open = false;
+-        ui.ctx().request_repaint();
+     }
+     if let Availability::Planned(m) = g.availability {
+         egui::Frame::NONE.fill(t.accent_soft).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+@@ -185,20 +194,6 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
+         });
+         ui.add_space(6.0);
+     }
+-    // Edit a PDF shows Format text at the top while text is selected or being added.
+-    if g.id == "edit" {
+-        if app.quick_tool == crate::QuickTool::EditText {
+-            let count = app.active_ids().map_or(0, |(i, _)| app.views[i].objects.count());
+-            if count > 0 {
+-                ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
+-                ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
+-            } else {
+-                ui.label(tl!("Shift-click to select several objects. Drag empty space to select an area."));
+-            }
+-            ui.add_space(6.0);
+-        }
+-        format_section(app, ui, t);
+-    }
+     let mut run = None;
+     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
+     let footer = g.id == "redact";
+@@ -218,12 +213,13 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
+                 press.wash(ui, rect, 6, false);
+                 let body = rect.translate(press.offset());
+                 let fg = if ready { t.text } else { t.text_muted };
+-                let icon_color = if ready { hue(g) } else { t.text_faint };
+-                let tile_rect = Rect::from_min_size(body.min + vec2(7.0, 5.0), vec2(24.0, 24.0));
+-                if ready {
+-                    ui.painter().rect_filled(tile_rect, CornerRadius::same(6), icon_color.gamma_multiply(0.12));
+-                }
+-                icons::paint(ui, tile_rect, item.icon, 16.0, icon_color);
++                icons::paint(
++                    ui,
++                    Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)),
++                    item.icon,
++                    17.0,
++                    if ready { hue(g) } else { t.text_faint },
++                );
+                 let (chip, fill, cfg) = match item.availability {
+                     Availability::Ready => (tl!("Ready"), Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
+                     Availability::Planned(m) => (m, t.pressed, t.text_muted),
+@@ -233,35 +229,17 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
+                 let chip_label = tl!(chip).to_string();
+                 let w = crate::widgets::text_width(ui, &chip_label, &font);
+                 let r = Rect::from_center_size(body.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
+-                row_label(ui, tl!(item.label), theme::regular(13.0), fg, body.left_center() + vec2(39.0, 0.0), r.left() - body.left() - 47.0);
++                row_label(ui, tl!(item.label), theme::regular(13.0), fg, body.left_center() + vec2(34.0, 0.0), r.left() - body.left() - 42.0);
+                 ui.painter().rect_filled(r, CornerRadius::same(4), fill);
+                 ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
+                 let resp = theme::hand(resp).on_hover_text(format!("{} — {}", tl!(item.label), item.command));
++                // An entry with further commands opens a menu; its caret goes before the chip.
+                 if item.actions.is_empty() {
+                     if resp.clicked() {
+                         run = Some(item.command);
+                     }
+-                } else {
+-                    // A caret before the chip says the entry opens a menu (Add / Update / Remove).
+-                    let c = r.left_center() - vec2(10.0, 0.0);
+-                    ui.painter().add(egui::Shape::convex_polygon(
+-                        vec![c + vec2(-3.5, -2.0), c + vec2(3.5, -2.0), c + vec2(0.0, 2.5)],
+-                        fg,
+-                        egui::Stroke::NONE,
+-                    ));
+-                    egui::Popup::menu(&resp).show(|ui| {
+-                        ui.set_min_width(180.0);
+-                        for (n, id) in item.actions.iter().enumerate() {
+-                            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+-                            // Add stays usable with no document open: it asks for a file first.
+-                            let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
+-                            let label = crate::i18n::menu_label(spec.id, spec.label);
+-                            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+-                                run = Some(spec.id);
+-                                ui.close();
+-                            }
+-                        }
+-                    });
++                } else if let Some(cmd) = actions_menu(app, ui, &resp, item, r.left_center() - vec2(10.0, 0.0), fg) {
++                    run = Some(cmd);
+                 }
+             }
+         }
+@@ -300,6 +278,172 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
+     }
+ }
+ 
++/// The page operations Edit shows as a row of icon buttons, as Acrobat's Edit panel does.
++const EDIT_PAGE_BUTTONS: [&str; 4] = ["page.rotate", "page.insert", "page.delete", "page.extract"];
++/// Add content items shown before More.
++const EDIT_CONTENT_SHOWN: usize = 5;
++/// Other options: the tools Acrobat's Edit panel links to.
++const EDIT_OTHER_TOOLS: [&str; 3] = ["combine", "redact", "form"];
++
++/// Edit a PDF, laid out as Acrobat's Edit panel: the title with Preferences and Close; Format text
++/// while text is being edited or added; Modify page as a row of icon buttons and Organize pages;
++/// Add content with the rarer items under More; and Other options, the neighbouring tools.
++/// Edit text & images itself is on the floating toolbar, and on from the moment Edit opens.
++/// Every item comes from the catalogue, so its label, icon and availability have one source.
++fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
++    let items = || g.sections.iter().flat_map(|s| s.items.iter());
++    let item = |command: &str| items().find(|i| i.command == command);
++    let mut run = None;
++    let mut tool = None;
++    // Back to All tools only when Edit was opened from there; the Edit tab is its own way back.
++    let from_all_tools = app.mode != crate::Mode::Edit;
++    ui.horizontal(|ui| {
++        if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
++            app.left = LeftPanel::AllTools;
++            app.mode = crate::Mode::AllTools;
++        }
++        // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
++        let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
++        let title_width = (ui.available_width() - 2.0 * (26.0 + ui.spacing().item_spacing.x)).max(1.0);
++        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(title).font(theme::semibold(15.5)).color(t.text)).truncate())
++            .on_hover_text(title);
++        if icons::button(ui, "settings", 26.0, false, tl!("Preferences")).clicked() {
++            run = Some("app.preferences");
++        }
++        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
++            app.left_open = false;
++        }
++    });
++    ui.add_space(2.0);
++    ui.separator();
++    ui.add_space(4.0);
++    // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
++    let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
++    if count > 0 {
++        ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
++        ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
++        ui.add_space(6.0);
++    }
++    // Format text at the top while text is selected or being added.
++    format_section(app, ui, t);
++    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
++        widgets::section_title(ui, tl!("Modify page"));
++        ui.horizontal(|ui| {
++            ui.spacing_mut().item_spacing.x = 6.0;
++            for i in EDIT_PAGE_BUTTONS.iter().filter_map(|c| item(c)) {
++                // Enabled as the command itself is: a document that forbids page assembly refuses these.
++                let enabled = pdfcraft_engine::commands::command(i.command).is_some_and(|spec| app.command_enabled(spec));
++                let resp = ui.add_enabled_ui(enabled, |ui| icons::button(ui, i.icon, 34.0, false, tl!(i.label))).inner;
++                if resp.clicked() {
++                    run = Some(i.command);
++                }
++            }
++        });
++        ui.add_space(2.0);
++        // Organize pages is a workspace of its own: its panel replaces this one, with the grid.
++        if let Some(i) = item("page.organize")
++            && edit_row(ui, t, i.icon, tl!(i.label), i.availability).clicked()
++        {
++            // With no document there is no grid to open: the command asks for a file first.
++            if app.active.is_some() {
++                tool = Some("organize");
++            } else {
++                run = Some("page.organize");
++            }
++        }
++
++        widgets::section_title(ui, tl!("Add content"));
++        let content: Vec<_> =
++            g.sections.iter().filter(|s| s.title == "Add content").flat_map(|s| s.items.iter()).filter(|i| i.command != "edit.edit_text").collect();
++        let more_id = egui::Id::new("edit_panel_more");
++        let more = ui.data(|d| d.get_temp::<bool>(more_id)).unwrap_or(false);
++        let shown = if more { content.len() } else { EDIT_CONTENT_SHOWN.min(content.len()) };
++        for i in content.iter().take(shown) {
++            let resp = edit_row(ui, t, i.icon, tl!(i.label), i.availability);
++            // Header and footer, Watermark and Background open their Add / Update / Remove menu.
++            if i.actions.is_empty() {
++                if resp.clicked() {
++                    run = Some(i.command);
++                }
++            } else if let Some(cmd) = actions_menu(app, ui, &resp, i, resp.rect.right_center() - vec2(14.0, 0.0), t.text) {
++                run = Some(cmd);
++            }
++        }
++        if content.len() > EDIT_CONTENT_SHOWN {
++            ui.add_space(4.0);
++            let label = if more { tl!("Less") } else { tl!("More") };
++            let resp = ui
++                .add(
++                    egui::Label::new(egui::RichText::new(label).color(t.accent_text).font(theme::medium(13.0)))
++                        .selectable(false)
++                        .sense(Sense::click()),
++                )
++                .on_hover_cursor(egui::CursorIcon::PointingHand);
++            if resp.clicked() {
++                ui.data_mut(|d| d.insert_temp(more_id, !more));
++            }
++        }
++
++        widgets::section_title(ui, tl!("Other options"));
++        for other in EDIT_OTHER_TOOLS.iter().filter_map(|id| catalog::group(id)) {
++            if edit_row(ui, t, other.icon, tl!(other.label), other.availability).clicked() {
++                tool = Some(other.id);
++            }
++        }
++    });
++    if let Some(id) = tool {
++        app.select_tool(id);
++    }
++    if let Some(cmd) = run {
++        app.run_command(cmd);
++    }
++}
++
++/// A tool entry with further commands (Add / Update / Remove): a caret at `caret` says it opens a
++/// menu, and each command is enabled by its own needs. Returns the command chosen.
++fn actions_menu(app: &PdfCraftApp, ui: &egui::Ui, resp: &egui::Response, item: &ToolItem, caret: egui::Pos2, color: Color32) -> Option<&'static str> {
++    ui.painter().add(egui::Shape::convex_polygon(
++        vec![caret + vec2(-3.5, -2.0), caret + vec2(3.5, -2.0), caret + vec2(0.0, 2.5)],
++        color,
++        egui::Stroke::NONE,
++    ));
++    let mut run = None;
++    egui::Popup::menu(resp).show(|ui| {
++        ui.set_min_width(180.0);
++        for (n, id) in item.actions.iter().enumerate() {
++            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
++            // Add stays usable with no document open: it asks for a file first.
++            let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
++            let label = crate::i18n::menu_label(spec.id, spec.label);
++            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
++                run = Some(spec.id);
++                ui.close();
++            }
++        }
++    });
++    run
++}
++
++/// One row of the Edit panel: a monochrome icon and the label, as Acrobat draws them. A planned
++/// item is muted and says when it ships when hovered.
++fn edit_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability) -> egui::Response {
++    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
++    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
++    let press = theme::Press::track(ui, &resp);
++    press.wash(ui, rect, 6, false);
++    let body = rect.translate(press.offset());
++    let ready = availability == Availability::Ready;
++    let fg = if ready { t.text } else { t.text_muted };
++    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)), icon, 17.0, if ready { t.text } else { t.text_faint });
++    row_label(ui, label, theme::regular(13.5), fg, body.left_center() + vec2(34.0, 0.0), rect.width() - 42.0);
++    let resp = theme::hand(resp);
++    match availability {
++        Availability::Ready => resp,
++        Availability::Planned(m) => resp.on_hover_text(format!("{} {m}", tl!("Planned for milestone"))),
++        Availability::Provider => resp.on_hover_text(tl!("Optional: needs an AI provider you configure")),
++    }
++}
++
+ /// Add a stamp: Dynamic, Sign Here and Standard Business stamps; click one, then click on the
+ /// page to place it.
+ fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+@@ -377,50 +521,42 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+     if let Some((i, _)) = app.active_ids()
+         && let Some(ed) = app.views[i].line_editor.clone()
+     {
++        use crate::format_text_ui::{FontChoice, Fonts};
+         let mut ed = ed;
+-        let mut changed = false;
+-        let font_choices = app.session.get(app.views[i].id).map(|d| d.text_editor_fonts(ed.page)).unwrap_or_default();
+-        egui::ComboBox::from_id_salt("document-font-resource")
+-            .selected_text(
+-                ed.font_resource
+-                    .as_ref()
+-                    .and_then(|r| font_choices.iter().find(|f| &f.resource == r))
+-                    .map_or(tl!("Keep source fonts"), |f| f.face.as_str()),
+-            )
+-            .show_ui(ui, |ui| {
+-                changed |= ui.selectable_value(&mut ed.font_resource, None, tl!("Keep source fonts")).changed();
+-                for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
+-                    changed |= ui.selectable_value(&mut ed.font_resource, Some(font.resource.clone()), &font.face).changed();
+-                }
+-            });
+-        if ui.button(tl!("Load font…")).clicked() {
+-            app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
+-        }
+-        #[cfg(not(target_arch = "wasm32"))]
+-        egui::ComboBox::from_id_salt("installed-document-font").selected_text(tl!("Installed fonts…")).show_ui(ui, |ui| {
+-            if let Some(fonts) = crate::files::installed_font_files(ui.ctx()) {
+-                if fonts.is_empty() {
+-                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
+-                }
+-                for font in fonts {
+-                    if ui.selectable_label(false, &font.face).clicked() {
+-                        app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[font.path]);
+-                    }
+-                }
+-            } else {
+-                ui.label(tl!("Finding document fonts…"));
++        let sources: Vec<(String, String)> = app
++            .session
++            .get(app.views[i].id)
++            .map(|d| d.text_editor_fonts(ed.page))
++            .unwrap_or_default()
++            .into_iter()
++            .map(|f| (f.resource, f.face))
++            .collect();
++        let shown = ed.font_shown(&sources);
++        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
++        let mut changed = out.changed;
++        match out.font {
++            Some(FontChoice::KeepSource) => {
++                ed.keep_source_font();
++                changed = true;
+             }
+-        });
+-        if let Some(look) = crate::content_ui::format_panel(ui, t, &ed.look) {
+-            ed.look = look;
+-            changed = true;
++            Some(FontChoice::Resource(resource)) => {
++                ed.font_resource = Some(resource);
++                changed = true;
++            }
++            Some(FontChoice::Family(family)) => {
++                ed.choose_family(family);
++                changed = true;
++            }
++            Some(FontChoice::Load) => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
++            #[cfg(not(target_arch = "wasm32"))]
++            Some(FontChoice::Installed(path)) => app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[path]),
++            #[cfg(target_arch = "wasm32")]
++            Some(FontChoice::Installed(_)) => {}
++            None => {}
+         }
+-        changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
+         if changed {
+             app.apply_line_format(i, ed, Some(ui.ctx()));
+         }
+-        ui.add_space(6.0);
+-        ui.separator();
+         return;
+     }
+     let image = app.active_ids().and_then(|(i, id)| {
+@@ -454,21 +590,32 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+     });
+     match selected {
+         Some((page, index, text)) => {
+-            if let Some(style) = crate::content_ui::format_panel(ui, t, &text) {
+-                app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style.clone() };
+-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style) });
++            let mut style = text.clone();
++            added_text_format(ui, t, &mut style);
++            if style != text {
++                // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
++                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
++                    app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style };
++                }
+             }
+         }
+         None if app.quick_tool == crate::QuickTool::AddText => {
+             crate::content_ui::hint(ui, t);
+-            if let Some(style) = crate::content_ui::format_panel(ui, t, &app.text_style) {
+-                app.text_style = style;
+-            }
++            let mut style = app.text_style.clone();
++            added_text_format(ui, t, &mut style);
++            app.text_style = style;
+         }
+-        None => return,
++        None => {}
++    }
++}
++
++/// Format text for added text: the standard families, size, colour, style and alignment.
++fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText) {
++    let shown = style.family.label().to_string();
++    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
++    if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
++        style.family = family;
+     }
+-    ui.add_space(6.0);
+-    ui.separator();
+ }
+ 
+ impl PdfCraftApp {
+@@ -506,6 +653,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+     let mut nav: Option<Nav> = None;
+     let mut close = false;
+     let mut toggle_layer: Option<(usize, bool)> = None;
++    let mut reset_layers = false;
+     let mut attachment_action: Option<(usize, bool)> = None; // (index, open instead of save)
+     let mut bm_action: Option<BmAction> = None;
+     let mut bm_expand: Option<usize> = None;
+@@ -598,6 +746,16 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                                 }
+                             });
+                         }
++                        if panel == RightPanel::Layers && !info.layers.is_empty() {
++                            let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Layer options"));
++                            egui::Popup::menu(&more).show(|ui| {
++                                ui.set_min_width(200.0);
++                                if ui.button(tl!("Reset to Initial Visibility")).clicked() {
++                                    reset_layers = true;
++                                    ui.close();
++                                }
++                            });
++                        }
+                         let new_tip = crate::commands::command_tip(ui.ctx(), tl!("New bookmark ({key})"), "bookmark.add");
+                         if panel == RightPanel::Bookmarks && bm_editable && icons::button(ui, "bookmark-plus", 26.0, false, &new_tip).clicked() {
+                             bm_action = Some(BmAction::New);
+@@ -639,6 +797,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                         ancestor.pop();
+                     }
+                 }
++                if panel == RightPanel::Pages {
++                    let enabled = !modal && view.panel_drag.is_none();
++                    thumbnail_size(ui, &t, view, enabled);
++                }
+                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
+                     RightPanel::Comments => {
+                         if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
+@@ -817,23 +979,23 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+     {
+         app.views[index].invalidate_content();
+     }
++    if reset_layers && app.session.reset_layers(id) {
++        app.views[index].invalidate_content();
++    }
+     match nav {
+-        Some(Nav::Page(p)) => {
+-            app.views[index].go_to_page(p);
+-            ui.ctx().request_repaint();
+-        }
+-        Some(Nav::Dest(p, dest)) => {
+-            match app.session.get(id) {
+-                Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
+-                None => app.views[index].go_to_page(p),
+-            }
+-            ui.ctx().request_repaint();
+-        }
++        Some(Nav::Page(p)) => app.views[index].go_to_page(p),
++        Some(Nav::Dest(p, dest)) => match app.session.get(id) {
++            Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
++            None => app.views[index].go_to_page(p),
++        },
+         Some(Nav::Flash(p, r)) => {
+             let v = &mut app.views[index];
+-            v.go_to_page(p);
++            if let Some(doc) = app.session.get(id) {
++                v.reveal_rect(p, r, &doc.info);
++            } else {
++                v.go_to_page(p);
++            }
+             v.flash = Some((p, r, 0.0));
+-            ui.ctx().request_repaint();
+         }
+         None => {}
+     }
+@@ -989,11 +1151,7 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
+         let h = (galley.size().y + 12.0).max(28.0);
+         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
+         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.title));
+-        let active = item.page == Some(cx.current);
+-        theme::Press::track(ui, &resp).wash(ui, rect, 6, active);
+-        if active {
+-            ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+-        }
++        theme::Press::track(ui, &resp).wash(ui, rect, 6, false);
+         let x0 = rect.left() + indent;
+         if !item.children.is_empty() {
+             let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
+@@ -1051,6 +1209,57 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
+     }
+ }
+ 
++/// Size controls stay above the scroll area, so they remain reachable on long documents.
++fn thumbnail_size(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, enabled: bool) {
++    let before = view.thumbnail_zoom();
++    let mut zoom = before;
++    let label = ui
++        .horizontal(|ui| {
++            let label = ui.label(egui::RichText::new(tl!("Thumbnail size")).small().color(t.text_muted));
++            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
++                ui.label(egui::RichText::new(format!("{:.0}%", before * 100.0)).small().color(t.text_muted));
++            });
++            label
++        })
++        .inner;
++    ui.add_enabled_ui(enabled, |ui| {
++        ui.spacing_mut().slider_width = (ui.available_width() - 52.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
++        ui.horizontal(|ui| {
++            if ui
++                .add_enabled_ui(zoom > *crate::canvas::THUMBNAIL_ZOOM_RANGE.start(), |ui| {
++                    icons::button(ui, "zoom-out", 26.0, false, tl!("Smaller thumbnails"))
++                })
++                .inner
++                .clicked()
++            {
++                zoom -= 0.25;
++            }
++            let mut percent = zoom * 100.0;
++            let range = (*crate::canvas::THUMBNAIL_ZOOM_RANGE.start() * 100.0)..=(*crate::canvas::THUMBNAIL_ZOOM_RANGE.end() * 100.0);
++            ui.scope(|ui| {
++                // The regular field fill blends into this panel; keep the slider's full rail visible.
++                ui.visuals_mut().widgets.inactive.bg_fill = t.border;
++                let slider = ui.add(egui::Slider::new(&mut percent, range).step_by(1.0).show_value(false).trailing_fill(true)).labelled_by(label.id);
++                slider.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(percent), tl!("Thumbnail size")));
++            });
++            zoom = percent / 100.0;
++            if ui
++                .add_enabled_ui(zoom < *crate::canvas::THUMBNAIL_ZOOM_RANGE.end(), |ui| {
++                    icons::button(ui, "zoom-in", 26.0, false, tl!("Larger thumbnails"))
++                })
++                .inner
++                .clicked()
++            {
++                zoom += 0.25;
++            }
++        });
++    });
++    if zoom != before {
++        view.set_thumbnail_zoom(zoom);
++    }
++    ui.add_space(6.0);
++}
++
+ /// The page thumbnails. A click goes to the page; ⌘/Ctrl-click and ⇧-click pick several pages
+ /// (the selection page commands and Print act on) without moving the document. Right-click
+ /// offers Extract, Cut, Copy and Paste on the selection, or on the page clicked; dragging
+@@ -1079,7 +1288,9 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
+     // scroll bar dragged by the user already wins over a scroll to a place in egui.
+     let follow = view.panel_followed != Some(view.current) && view.panel_drag.is_none();
+     view.panel_followed = Some(view.current);
+-    let w = (ui.available_width() - 40.0).clamp(120.0, 240.0);
++    let available = (ui.available_width() - 16.0).max(1.0);
++    let usual = (ui.available_width() - 40.0).clamp(1.0, 150.0);
++    let w = (usual * view.thumbnail_zoom()).min(available);
+     let count = info.pages.len();
+     let mut rows: Vec<Rect> = Vec::with_capacity(info.pages.len());
+     let mut dropped = false;
+diff --git a/crates/ui-egui/src/prepare.rs b/crates/ui-egui/src/prepare.rs
+index a4661127..f79ebf17 100644
+--- a/crates/ui-egui/src/prepare.rs
++++ b/crates/ui-egui/src/prepare.rs
+@@ -7,7 +7,7 @@
+ 
+ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
+ use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIME_PRESETS, Validate, format_value};
+-use pdfcraft_engine::{BorderStyle, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
++use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
+ use pdfcraft_render::DocInfo;
+ 
+ use crate::canvas::{DocView, PageXform};
+@@ -17,12 +17,14 @@ use crate::widgets;
+ 
+ const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+ /// Acrobat's field fill in Prepare Form (light blue).
+-const FIELD_FILL: Color32 = Color32::from_rgba_premultiplied(0x1B, 0x34, 0x54, 0x59);
++pub(crate) const FIELD_FILL: Color32 = Color32::from_rgba_premultiplied(0x1B, 0x34, 0x54, 0x59);
+ 
+ /// The Add form components tools.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ pub enum FieldTool {
+     Text,
++    /// Rows and columns of text fields in the area drawn, set up in a window first.
++    TextTable,
+     CheckBox,
+     Radio,
+     Combo,
+@@ -33,8 +35,9 @@ pub enum FieldTool {
+     Signature,
+ }
+ 
+-pub const FIELD_TOOLS: [FieldTool; 9] = [
++pub const FIELD_TOOLS: [FieldTool; 10] = [
+     FieldTool::Text,
++    FieldTool::TextTable,
+     FieldTool::CheckBox,
+     FieldTool::Radio,
+     FieldTool::Combo,
+@@ -49,6 +52,7 @@ impl FieldTool {
+     pub fn command(self) -> &'static str {
+         match self {
+             FieldTool::Text => "form.add.text",
++            FieldTool::TextTable => "form.add.text_table",
+             FieldTool::CheckBox => "form.add.checkbox",
+             FieldTool::Radio => "form.add.radio",
+             FieldTool::Combo => "form.add.combo",
+@@ -67,6 +71,7 @@ impl FieldTool {
+     pub fn label(self) -> &'static str {
+         match self {
+             FieldTool::Text => "Text field",
++            FieldTool::TextTable => "Text field table",
+             FieldTool::CheckBox => "Checkbox",
+             FieldTool::Radio => "Radio button",
+             FieldTool::Combo => "Drop-down list",
+@@ -82,7 +87,8 @@ impl FieldTool {
+     /// join it with the next free choice.
+     pub fn new_field(self, join: Option<&FormField>) -> NewField {
+         match self {
+-            FieldTool::Text => NewField::Text { multiline: false },
++            // A table's cells are text fields.
++            FieldTool::Text | FieldTool::TextTable => NewField::Text { multiline: false },
+             FieldTool::CheckBox => NewField::CheckBox,
+             FieldTool::Radio => match join.filter(|f| f.kind == FormFieldKind::Radio) {
+                 Some(g) => {
+@@ -105,6 +111,7 @@ impl FieldTool {
+     /// Width and height in points of a field placed with a single click.
+     pub fn default_size(self) -> (f64, f64) {
+         match self {
++            FieldTool::TextTable => (180.0, 110.0),
+             FieldTool::CheckBox | FieldTool::Radio => (14.0, 14.0),
+             FieldTool::List => (144.0, 54.0),
+             FieldTool::Button => (72.0, 22.0),
+@@ -178,6 +185,23 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
+     [u[0] as f64, u[1] as f64]
+ }
+ 
++/// Where a table goes, in view space, for a screen rect drawn with the table tool: a click (a rect
++/// under 4 pixels either way) puts the default size's top-left corner at the pointer, moved in from
++/// the page's edges as far as it takes to stay on the page.
++fn table_rect(xf: &PageXform, r: Rect) -> [f64; 4] {
++    let (x0, y0) = xf.screen_to_view(r.min);
++    if r.width() < 4.0 || r.height() < 4.0 {
++        let (pw, ph) = (f64::from(xf.pw), f64::from(xf.ph));
++        let (dw, dh) = FieldTool::TextTable.default_size();
++        // Smaller than the default only on a page smaller than it.
++        let (w, h) = (dw.min(pw), dh.min(ph));
++        let (x, y) = (f64::from(x0).min(pw - w).max(0.0), f64::from(y0).min(ph - h).max(0.0));
++        return [x, y, x + w, y + h];
++    }
++    let (x1, y1) = xf.screen_to_view(r.max);
++    [x0, y0, x1, y1].map(f64::from)
++}
++
+ /// A screen rect → a normalised user-space rect.
+ fn user_rect(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
+     let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
+@@ -208,6 +232,8 @@ pub(crate) struct Outcome {
+     pub properties: bool,
+     /// A field was placed: go back to the Select tool.
+     pub placed: bool,
++    /// A table of text fields was drawn: open its window for this page and area (view space).
++    pub table: Option<(usize, [f64; 4])>,
+ }
+ 
+ /// Pointer input on one page while preparing a form.
+@@ -223,7 +249,7 @@ pub(crate) fn page_input(
+     allowed: bool,
+     view: &mut DocView,
+ ) -> Outcome {
+-    let mut out = Outcome { consumed: false, properties: false, placed: false };
++    let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
+     let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+     let prep = &mut view.prepare;
+ 
+@@ -267,6 +293,11 @@ pub(crate) fn page_input(
+                 }
+                 Grab::Draw(from) => {
+                     let Some(tool) = tool else { return out };
++                    if tool == FieldTool::TextTable {
++                        out.table = Some((page, table_rect(xf, Rect::from_two_pos(from, end).intersect(xf.rect))));
++                        out.placed = true;
++                        return out;
++                    }
+                     let r = Rect::from_two_pos(from, end).intersect(xf.rect);
+                     let rect = user_rect(xf, info, page, r);
+                     let rect = if r.width() < 4.0 || r.height() < 4.0 {
+@@ -312,6 +343,11 @@ pub(crate) fn page_input(
+             if resp.clicked() {
+                 // A click without a drag: finish at once.
+                 prep.grab = None;
++                if tool == FieldTool::TextTable {
++                    out.table = Some((page, table_rect(xf, Rect::from_min_size(p, egui::Vec2::ZERO))));
++                    out.placed = true;
++                    return out;
++                }
+                 let at = to_user(xf, info, page, p);
+                 let (w, h) = tool.default_size();
+                 let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
+@@ -565,6 +601,53 @@ pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
+     Some(Edit::Batch { label, edits: names.into_iter().map(|name| Edit::DeleteField { name }).collect() })
+ }
+ 
++/// The arrow keys move the selected field a point, Shift and an arrow ten points, as in Acrobat,
++/// as the object nudge does (`object_ui::nudge_keys`) and as dragging it does (#2608). The keys
++/// are consumed before the view turns the page with them; one press is one undo step.
++pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
++    // `consume_key` lets an extra Alt through, and Alt+↑/↓ belongs to Calculation order's move.
++    if ctx.egui_wants_keyboard_input() || view.prepare.grab.is_some() || ctx.input(|i| i.modifiers.alt) {
++        return;
++    }
++    let Some((name, wi)) = view.prepare.selected.clone() else { return };
++    let Some(w) = doc.form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return };
++    let Some(page) = w.page else { return };
++    let Some(xf) = view.page_xform(page) else { return };
++    use egui::{Key, Modifiers};
++    let mut step = egui::Vec2::ZERO;
++    ctx.input_mut(|i| {
++        for (key, direction) in [
++            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
++            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
++            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
++            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
++        ] {
++            // Shift first: a plain key pattern also matches a Shift press.
++            if i.consume_key(Modifiers::SHIFT, key) {
++                step += direction * 10.0;
++            } else if i.consume_key(Modifiers::NONE, key) {
++                step += direction;
++            }
++        }
++    });
++    if step == egui::Vec2::ZERO {
++        return;
++    }
++    // A point in view space whatever the zoom and whatever way the view is turned; the page's own
++    // rotation turns it into the user-space move the widget's rect is stored in.
++    let c = xf.rect.center();
++    let unit = |d: egui::Vec2| {
++        let (a, b) = (xf.screen_to_view(c), xf.screen_to_view(c + d));
++        let v = egui::vec2(b.0 - a.0, b.1 - a.1);
++        if v.length() > 0.0 { v / v.length() } else { egui::Vec2::ZERO }
++    };
++    let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
++    let Ok(offset) = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]) else { return };
++    let r = w.rect;
++    let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
++    view.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, rect)), ..Default::default() }) });
++}
++
+ /// Delete removes the selected fields; Escape clears the selection.
+ pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
+     let mut selected =
+@@ -989,7 +1072,10 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
+                         if ui.add(widgets::checkbox(&mut auto, tl!("Auto"))).changed() {
+                             d.font_size = if auto { 0.0 } else { 12.0 };
+                         }
+-                        ui.add_enabled(!auto, egui::DragValue::new(&mut d.font_size).range(2.0..=100.0).speed(0.25).suffix(" pt"));
++                        ui.add_enabled(
++                            !auto,
++                            egui::DragValue::new(&mut d.font_size).range(2.0..=100.0).clamp_existing_to_range(false).speed(0.25).suffix(" pt"),
++                        );
+                     });
+                     ui.end_row();
+                     if let Some(l) = d.look.as_mut() {
+-- 
+2.56.0.windows.2
+

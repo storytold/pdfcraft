@@ -44,6 +44,8 @@ pub struct FormNode {
     pub occur_max: Option<usize>,
     pub index: usize,
     pub children: Vec<FormNode>,
+    /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
+    pub display_picture: Option<String>,
 }
 
 /// A script the template runs for an event of one node instance.
@@ -186,6 +188,9 @@ impl Walker<'_> {
         true
     }
 
+    /// Record the scripts of the object at `som` as events: each non-empty event script, then its
+    /// calculate and validate scripts (the validate one with `message`). Once [`MAX_EVENTS`] events
+    /// are recorded, nothing more is and the form is marked truncated.
     fn push_events(&mut self, som: &str, scripts: &[Script], calculate: Option<&Script>, validate: Option<&Script>, message: Option<&str>) {
         if self.events.len() >= MAX_EVENTS {
             self.truncated = true;
@@ -227,14 +232,20 @@ impl Walker<'_> {
         }
     }
 
-    fn presence(&self, som: &str, p: Presence) -> String {
-        self.ov.presence.get(som).cloned().unwrap_or_else(|| presence_name(p).to_string())
+    /// The presence of the object named `name` at `som`: a script's, or else the template's. An
+    /// unnamed object shares its parent's SOM path, so a presence set there is not its own.
+    fn presence(&self, name: Option<&str>, som: &str, p: Presence) -> String {
+        name.and_then(|_| self.ov.presence.get(som)).cloned().unwrap_or_else(|| presence_name(p).to_string())
     }
 
+    /// The access of the object at `som`: a script's, or else the template's `a`.
     fn access(&self, som: &str, a: Access) -> String {
         self.ov.access.get(som).cloned().unwrap_or_else(|| access_name(a).to_string())
     }
 
+    /// The live node of field `f`, child `index` of `parent_som`, with its scripts recorded. In an
+    /// exclusion group (`radio` is the group's selected value) its value is its on value when picked,
+    /// else empty; elsewhere it is its data value (as saved, as scripts read it) or its template default.
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
         let data_value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
@@ -244,7 +255,7 @@ impl Walker<'_> {
                 let on = f.items.first().cloned().unwrap_or_default();
                 if selected == on { on } else { String::new() }
             }
-            (None, Some(v)) => f.saved_value(&v),
+            (None, Some(v)) => f.saved_value(&Walker::as_scripts_read(f, &v)),
             (None, None) => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
         };
         self.push_events(&som, &f.scripts, f.calculate.as_ref(), f.validate.as_ref(), f.validate_message.as_deref());
@@ -254,26 +265,37 @@ impl Walker<'_> {
             kind: Some(NodeKind::Field),
             value,
             numeric: f.numeric,
-            presence: self.presence(&som, f.common.presence),
+            presence: self.presence(Some("field"), &som, f.common.presence),
             access: self.access(&som, f.access),
             repeatable: false,
             occur_min: 1,
             occur_max: Some(1),
             index,
             children: Vec::new(),
+            display_picture: f.display_picture.clone(),
         }
     }
 
-    /// What [`Self::field`] gives a field outside an exclusion group: its data value (as saved)
-    /// or its template default.
+    /// A value the data holds as scripts read it: a date the field's data picture writes in
+    /// another form (`20261018`) is the ISO date (`2026-10-18`) another viewer gives scripts as
+    /// `rawValue`. Other values, and dates that don't match the picture, are as they are.
+    fn as_scripts_read(f: &Field, v: &str) -> String {
+        crate::data::data_to_iso(v, crate::data::data_date_letters(f).as_deref())
+    }
+
+    /// What [`Self::field`] gives a field outside an exclusion group: its data value (as saved,
+    /// as scripts read it) or its template default.
     fn plain_field_value(tpl: &Template, data: Option<&DataNode>, f: &Field, som: &str) -> String {
         let data_value = data.and_then(|d| d.value_at(&data_path(tpl, som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         match data_value {
-            Some(v) => f.saved_value(&v),
+            Some(v) => f.saved_value(&Walker::as_scripts_read(f, &v)),
             None => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
         }
     }
 
+    /// The live nodes of `nodes`, the children of `parent_som`, with their scripts recorded: one per
+    /// instance of a repeating subform (what the data holds, else its initial count). Nothing past
+    /// [`MAX_DEPTH`] is built, and building stops once the object budget is spent.
     fn children(&mut self, nodes: &[Node], parent_som: &str, depth: usize) -> Vec<FormNode> {
         let mut out = Vec::new();
         if depth > MAX_DEPTH {
@@ -307,13 +329,14 @@ impl Walker<'_> {
                             kind: Some(NodeKind::Subform),
                             value: String::new(),
                             numeric: false,
-                            presence: self.presence(&som, sf.common.presence),
+                            presence: self.presence(sf.common.name.as_deref(), &som, sf.common.presence),
                             access: "open".into(),
                             repeatable: sf.occur.max != Some(1),
                             occur_min: sf.occur.min,
                             occur_max: sf.occur.max,
                             index,
                             children,
+                            display_picture: None,
                         });
                     }
                 }
@@ -324,7 +347,7 @@ impl Walker<'_> {
                         name: a.common.name.clone().unwrap_or_else(|| "#area".into()),
                         som: som.clone(),
                         kind: Some(NodeKind::Area),
-                        presence: self.presence(&som, a.common.presence),
+                        presence: self.presence(a.common.name.as_deref(), &som, a.common.presence),
                         access: "open".into(),
                         occur_min: 1,
                         occur_max: Some(1),
@@ -341,7 +364,7 @@ impl Walker<'_> {
                         som: som.clone(),
                         kind: Some(NodeKind::Draw),
                         value: d.value.plain().unwrap_or_default(),
-                        presence: self.presence(&som, d.common.presence),
+                        presence: self.presence(d.common.name.as_deref(), &som, d.common.presence),
                         access: "open".into(),
                         occur_min: 1,
                         occur_max: Some(1),
@@ -368,7 +391,7 @@ impl Walker<'_> {
                         som: som.clone(),
                         kind: Some(NodeKind::ExclGroup),
                         value: selected.unwrap_or_default(),
-                        presence: self.presence(&som, g.common.presence),
+                        presence: self.presence(Some("group"), &som, g.common.presence),
                         access: "open".into(),
                         occur_min: 1,
                         occur_max: Some(1),
@@ -443,6 +466,9 @@ pub fn has_scripts(tpl: &Template) -> bool {
 /// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
 /// instance of a repeating subform hide them all).
 pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
+    /// Set the presence `ov` gives each of `nodes` (children of `parent_som`) and their descendants,
+    /// down to [`MAX_DEPTH`], and the access it gives a field outside an exclusion group. An unnamed
+    /// draw, area or subform shares its parent's SOM path, so it takes no override of its own.
     fn walk(nodes: &mut [Node], parent_som: &str, ov: &Overrides, depth: usize) {
         if depth > MAX_DEPTH {
             return;
@@ -455,9 +481,12 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
                 Node::ExclGroup(_) => Some("group"),
                 _ => None,
             };
-            let som = child_som(parent_som, n.common().name.as_deref().or(name_default), sib);
-            let presence = ov.presence.get(&som).map(|p| Presence::parse(Some(p)));
-            let access = ov.access.get(&som).cloned();
+            let name = n.common().name.as_deref().or(name_default);
+            let som = child_som(parent_som, name, sib);
+            // An unnamed draw, area or subform has no SOM name: `som` is its parent's, and so are
+            // the overrides under it.
+            let presence = name.and_then(|_| ov.presence.get(&som)).map(|p| Presence::parse(Some(p)));
+            let access = name.and_then(|_| ov.access.get(&som)).cloned();
             match n {
                 Node::Subform(s) => {
                     if let Some(p) = presence {
@@ -589,44 +618,10 @@ pub fn template_of(doc: &Document) -> Result<Template, XfaError> {
     crate::parse(&packets.xdp).map(|(t, _)| t)
 }
 
-/// The template field the object at `som` is an instance of, when it is a field outside an
-/// exclusion group (whose buttons take their value from the group).
-fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
-    let path = crate::data::som_to_path(som);
-    let (first, rest) = path.split_first()?;
-    if tpl.root.common.name.as_deref() != Some(first.0.as_str()) {
-        return None;
-    }
-    let mut level: &[Node] = &tpl.root.children;
-    let mut found: Option<&Node> = None;
-    for (name, _) in rest {
-        let next = named_in(level, name, 0)?;
-        level = match next {
-            Node::Subform(sf) => &sf.children,
-            Node::Area(a) => &a.children,
-            _ => &[],
-        };
-        found = Some(next);
-    }
-    match found {
-        Some(Node::Field(f)) => Some(f),
-        _ => None,
-    }
-}
-
-/// The child of `nodes` named `name`, looking through unnamed subforms and areas (as data
-/// paths do); exclusion groups are not looked into.
-fn named_in<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    nodes.iter().find(|n| n.common().name.as_deref() == Some(name)).or_else(|| {
-        nodes.iter().find_map(|n| match n {
-            Node::Subform(sf) if sf.common.name.is_none() => named_in(&sf.children, name, depth + 1),
-            Node::Area(a) if a.common.name.is_none() => named_in(&a.children, name, depth + 1),
-            _ => None,
-        })
-    })
+/// Whether the template field at `som` is multiline text without a fixed height.
+/// A change to its value can require a new layout, including new continuation pages.
+pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
+    crate::data::template_field(tpl, som).is_some_and(Field::grows_with_text)
 }
 
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a
@@ -637,11 +632,13 @@ fn named_in<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node>
 /// node bound there is not a plain field the tree can refresh alone (a radio button, an
 /// exclusion group, an object the template doesn't have): rebuild the tree.
 pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode>, som: &str) -> Option<bool> {
-    template_field(tpl, som)?;
+    crate::data::template_field(tpl, som)?;
     let path = data_path(tpl, som);
     if path.is_empty() {
         return None;
     }
+    /// Down the one branch of `n` that `path` leads to from segment `pos`, giving each field
+    /// bound there its value from `data`; `None` when something there needs a rebuild.
     fn walk(
         n: &mut FormNode,
         tpl: &Template,
@@ -673,7 +670,7 @@ pub fn refresh_value(live: &mut FormNode, tpl: &Template, data: Option<&DataNode
             if c.kind != Some(NodeKind::Field) {
                 return None;
             }
-            let f = template_field(tpl, &c.som)?;
+            let f = crate::data::template_field(tpl, &c.som)?;
             let value = Walker::plain_field_value(tpl, data, f, &c.som);
             if c.value != value {
                 c.value = value;

@@ -1,0 +1,9 @@
+[package]
+name = "pdfcraft-iso-standards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ISO 19005 (PDF/A-1b/2b/3b/4) and ISO 15930 (PDF/X-1a/3/4) compliance profiles and OutputIntent generator"
+
+[dependencies]
+pdfcraft-preflight-engine = { path = "../preflight_engine" }

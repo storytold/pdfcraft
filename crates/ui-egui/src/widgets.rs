@@ -161,7 +161,9 @@ pub fn ghost_button_sized(ui: &mut egui::Ui, icon: &str, label: &str, height: f3
     let press = theme::Press::track(ui, &resp);
     press.wash(ui, rect, 6, false);
     let body = rect.translate(press.offset());
-    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, (height - 18.0) / 2.0), vec2(18.0, 18.0)), icon, 17.0, t.icon);
+    let icon_top = (body.min.y + ((height - 18.0) * 0.5)).round();
+    let icon_left = (body.min.x + 6.0).round();
+    icons::paint(ui, Rect::from_min_size(egui::pos2(icon_left, icon_top), vec2(18.0, 18.0)), icon, 18.0, t.icon);
     ui.painter().text(body.left_center() + vec2(30.0, 0.0), Align2::LEFT_CENTER, label, font, t.text);
     theme::hand(resp)
 }

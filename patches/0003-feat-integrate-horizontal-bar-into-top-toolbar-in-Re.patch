@@ -1,0 +1,273 @@
+From fabbe61f6923f1dd69a62ccb1e56156be773632a Mon Sep 17 00:00:00 2001
+From: PdfCraft Contributor <developer@pdfcraft.local>
+Date: Sat, 24 Oct 2026 06:34:43 +0530
+Subject: [PATCH 3/5] feat: integrate horizontal bar into top toolbar in Read
+ mode and restore bottom floating bar in all other cases
+
+---
+ crates/ui-egui/src/canvas.rs |  12 +-
+ crates/ui-egui/src/chrome.rs | 211 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 215 insertions(+), 8 deletions(-)
+
+diff --git a/crates/ui-egui/src/canvas.rs b/crates/ui-egui/src/canvas.rs
+index 0fb1d938..94fc74b2 100644
+--- a/crates/ui-egui/src/canvas.rs
++++ b/crates/ui-egui/src/canvas.rs
+@@ -4410,6 +4410,10 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+         (view.id, count, labels)
+     };
+     let is_read = app.mode == crate::Mode::Read;
++    // In Read mode, all controls are integrated directly into the top bar, freeing the entire canvas.
++    if is_read {
++        return;
++    }
+     let view = &mut app.views[index];
+     let t = Tokens::get(ui.ctx());
+ 
+@@ -4423,13 +4427,7 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+ 
+     let bar_w = 520.0;
+     let x = (viewport.center().x - bar_w / 2.0).clamp(viewport.left() + 10.0, (viewport.right() - bar_w - 10.0).max(viewport.left() + 10.0));
+-    let y = if is_read {
+-        // Shifted to the upper part in Read mode!
+-        viewport.top() + 8.0
+-    } else {
+-        // Bottom horizontal bar in Normal and other modes!
+-        (viewport.bottom() - 48.0).clamp(viewport.top() + 60.0, viewport.bottom() - 44.0)
+-    };
++    let y = (viewport.bottom() - 48.0).clamp(viewport.top() + 60.0, viewport.bottom() - 44.0);
+ 
+     let mut goto_page = None;
+     let mut step_dir = None;
+diff --git a/crates/ui-egui/src/chrome.rs b/crates/ui-egui/src/chrome.rs
+index 9f063707..2a13943f 100644
+--- a/crates/ui-egui/src/chrome.rs
++++ b/crates/ui-egui/src/chrome.rs
+@@ -2,7 +2,7 @@
+ 
+ use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
+ 
+-use crate::canvas::{DocView, Fit, PageLayout};
++use crate::canvas::{DocView, Fit, PageFilter, PageLayout};
+ use crate::theme::{self, ThemePreference, Tokens};
+ use crate::{Dialog, Mode, PdfCraftApp, PropsTab, QuickTool, RightPanel, comments::CommentTool, icons, widgets, window_controls};
+ 
+@@ -670,6 +670,215 @@ pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                 ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                 ui.add_space(6.0);
+ 
++                // 4. Center section: Integrated navigation, page filters, layout and zoom (horizontal bar integrated in Read mode)
++                let active_info = app.active.and_then(|idx| {
++                    let view = app.views.get(idx)?;
++                    let doc = app.session.get(view.id)?;
++                    let count = doc.info.pages.len();
++                    if count == 0 {
++                        return None;
++                    }
++                    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
++                    Some((idx, count, labels))
++                });
++
++                if let Some((idx, page_count, labels)) = active_info {
++                    let view = &mut app.views[idx];
++                    let is_dark = t.dark();
++                    let page_input_id = ui.make_persistent_id(("read_mode_bar_page_input", view.id.0));
++
++                    // First page [ |< ]
++                    let can_prev = view.current > 0;
++                    if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevrons-left", 26.0, false, "First page")).inner.clicked() {
++                        view.go_to_page(0);
++                    }
++
++                    // Prev page [ < ]
++                    if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevron-left", 26.0, false, tl!("Previous page"))).inner.clicked() {
++                        view.step_page(false);
++                    }
++
++                    // Page indicator: [ 1 ] / N
++                    let cur_label = view.current_page_label(labels.get(view.current).map(String::as_str));
++                    let has_focus = ui.ctx().memory(|m| m.has_focus(page_input_id));
++
++                    if !has_focus {
++                        view.page_input = cur_label.clone();
++                    }
++
++                    let edit = egui::TextEdit::singleline(&mut view.page_input)
++                        .id(page_input_id)
++                        .desired_width(34.0)
++                        .horizontal_align(egui::Align::Center)
++                        .font(theme::medium(12.0))
++                        .margin(vec2(2.0, 3.0));
++                    let r = egui::Frame::NONE
++                        .fill(if is_dark { t.field } else { Color32::from_gray(245) })
++                        .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
++                        .corner_radius(CornerRadius::same(6))
++                        .show(ui, |ui| ui.add(edit))
++                        .inner;
++
++                    if r.gained_focus() {
++                        let mut state = egui::TextEdit::load_state(ui.ctx(), page_input_id).unwrap_or_default();
++                        let end = egui::text::CCursor::new(view.page_input.chars().count());
++                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
++                        state.store(ui.ctx(), page_input_id);
++                        ui.ctx().request_repaint();
++                    }
++
++                    let enter_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
++                    if enter_pressed {
++                        let typed = view.page_input.trim().to_string();
++                        if !typed.is_empty() {
++                            view.go_to_typed(&typed, &labels);
++                        }
++                        ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
++                        view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                        ui.ctx().request_repaint();
++                    } else if r.lost_focus() {
++                        let typed = view.page_input.trim().to_string();
++                        if !typed.is_empty() {
++                            view.go_to_typed(&typed, &labels);
++                        }
++                        view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                        ui.ctx().request_repaint();
++                    }
++
++                    ui.add_space(2.0);
++                    ui.label(egui::RichText::new(format!("/ {page_count}")).font(theme::regular(12.0)).color(t.text_muted));
++                    ui.add_space(2.0);
++
++                    // Next page [ > ]
++                    let can_next = view.current + 1 < page_count;
++                    if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevron-right", 26.0, false, tl!("Next page"))).inner.clicked() {
++                        view.step_page(true);
++                    }
++
++                    // Last page [ >| ]
++                    if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevrons-right", 26.0, false, "Last page")).inner.clicked() {
++                        view.go_to_page(page_count.saturating_sub(1));
++                    }
++
++                    // Divider
++                    ui.add_space(4.0);
++                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
++                    ui.add_space(4.0);
++
++                    // Page layout toggle (Single <-> Two-up)
++                    let is_two_up = view.layout == PageLayout::TwoUp;
++                    let layout_tip = if is_two_up { "Switch to single-page view" } else { "Switch to two-page view" };
++                    if icons::button(ui, view.layout.icon(), 26.0, is_two_up, layout_tip).clicked() {
++                        view.layout = if is_two_up { PageLayout::Single } else { PageLayout::TwoUp };
++                        view.goto = Some((view.current, 0.0));
++                    }
++
++                    // Reading filters menu (Color Filters: Normal, Invert, Sepia, Night, Grayscale)
++                    let filter_tip = format!("Page color filter: {}", tl!(view.page_filter.label()));
++                    let filter_resp = icons::button(ui, "contrast", 26.0, view.page_filter != PageFilter::Normal, &filter_tip);
++                    let mut change_filter = None;
++                    egui::Popup::menu(&filter_resp)
++                        .align(egui::RectAlign::TOP_START)
++                        .gap(6.0)
++                        .show(|ui| {
++                            ui.set_min_width(180.0);
++                            for f in [PageFilter::Normal, PageFilter::Invert, PageFilter::Sepia, PageFilter::Night, PageFilter::Grayscale] {
++                                let on = view.page_filter == f;
++                                let (fill, stroke) = f.dot_color();
++                                let resp = ui.horizontal(|ui| {
++                                    let (slot, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
++                                    ui.painter().circle_filled(slot.center(), 6.0, fill);
++                                    if let Some(s) = stroke {
++                                        ui.painter().circle_stroke(slot.center(), 6.0, Stroke::new(1.0, s));
++                                    }
++                                    ui.selectable_label(on, tl!(f.label()))
++                                }).inner;
++                                if resp.clicked() {
++                                    change_filter = Some(f);
++                                    ui.close();
++                                }
++                            }
++                        });
++                    if let Some(f) = change_filter {
++                        if view.page_filter != f {
++                            view.page_filter = f;
++                            ui.ctx().request_repaint();
++                        }
++                    }
++
++                    // Rotate CW
++                    let rotate_tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
++                    if icons::button(ui, "rotate-cw", 26.0, false, &rotate_tip).clicked() {
++                        view.rotate_view(true);
++                    }
++
++                    // Fit toggle
++                    let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
++                    if icons::button(ui, fit_icon, 26.0, false, tl!("Toggle fit page / fit width")).clicked() {
++                        view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
++                        view.goto = Some((view.current, 0.0));
++                    }
++
++                    // Divider
++                    ui.add_space(4.0);
++                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
++                    ui.add_space(4.0);
++
++                    // Zoom out [-]
++                    let zoom_out_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
++                    if icons::button(ui, "zoom-out", 26.0, false, &zoom_out_tip).clicked() {
++                        view.zoom_step(false);
++                    }
++
++                    // Zoom in [+]
++                    let zoom_in_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
++                    if icons::button(ui, "zoom-in", 26.0, false, &zoom_in_tip).clicked() {
++                        view.zoom_step(true);
++                    }
++
++                    // Zoom percentage label & menu
++                    let zoom_str = format!("{:.0}%", view.zoom * 100.0);
++                    let zoom_btn = ui.add(
++                        egui::Button::new(
++                            egui::RichText::new(&zoom_str)
++                                .font(theme::semibold(11.5))
++                                .color(t.text_muted),
++                        )
++                        .frame(false)
++                        .min_size(vec2(42.0, 24.0)),
++                    ).on_hover_text("Zoom presets");
++
++                    let mut new_zoom = None;
++                    egui::Popup::menu(&zoom_btn)
++                        .align(egui::RectAlign::TOP_START)
++                        .show(|ui| {
++                            ui.set_min_width(130.0);
++                            for (label, val) in [
++                                ("Actual size (100%)", 1.0),
++                                ("50%", 0.5),
++                                ("75%", 0.75),
++                                ("125%", 1.25),
++                                ("150%", 1.5),
++                                ("200%", 2.0),
++                                ("300%", 3.0),
++                                ("400%", 4.0),
++                            ] {
++                                if ui.selectable_label((view.zoom - val).abs() < 0.01, label).clicked() {
++                                    new_zoom = Some(val);
++                                    ui.close();
++                                }
++                            }
++                        });
++                    if let Some(z) = new_zoom {
++                        view.set_zoom(z);
++                        ui.ctx().request_repaint();
++                    }
++
++                    ui.add_space(4.0);
++                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
++                    ui.add_space(6.0);
++                }
++
+                 // 6. Right section: Search, Print, Save, Fullscreen, and "Edit with PdfCraft"
+                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                     ui.spacing_mut().item_spacing.x = 4.0;
+-- 
+2.56.0.windows.2
+

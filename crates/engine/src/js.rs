@@ -70,11 +70,15 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
 
 /// A form field as scripts see it.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
+    field_state_with_display(f, display(doc, f))
+}
+
+fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
-    s.display = display(doc, f);
+    s.display = display;
     s.char_limit = f.max_len;
     s.options = match f.kind {
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
@@ -85,10 +89,19 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::Fiel
 
 /// The changes a script made, against the fields as they were.
 fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]) -> Vec<FieldChange> {
+    if after.is_empty() {
+        return Vec::new();
+    }
+    // Outcomes contain only fields touched by the script. Index the original snapshot once,
+    // keeping the first match as the old linear lookup did for malformed duplicate names.
+    let mut by_name = std::collections::HashMap::with_capacity(before.len());
+    for field in before {
+        by_name.entry(field.name.as_str()).or_insert(field);
+    }
     after
         .iter()
         .filter_map(|a| {
-            let b = before.iter().find(|b| b.name == a.name)?;
+            let b = by_name.get(a.name.as_str())?;
             let c = FieldChange {
                 name: a.name.clone(),
                 value: (a.value != b.value).then(|| a.value.clone()),
@@ -106,14 +119,25 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
-    /// The fields in the document as the forms code last read them (for `display`).
+    /// Immutable document snapshot from the start of the edit (for widget `display`).
     cos: pdfcraft_cos::Document,
+    // `cos` is the same immutable pre-edit snapshot for the runner's lifetime. Cache only
+    // its scalar display readings, not COS objects: large forms exceed the object cache and
+    // otherwise reparse every widget for every calculation. Values/flags still come from
+    // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
+    displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
 }
 
 impl JsRunner {
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let doc = pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos) };
-        JsRunner { doc, doc_scripts: pdfcraft_forms::document_scripts(cos), output: JsOutput::default(), cos: cos.clone() }
+        JsRunner {
+            doc,
+            doc_scripts: pdfcraft_forms::document_scripts(cos),
+            output: JsOutput::default(),
+            cos: cos.clone(),
+            displays: std::collections::HashMap::new(),
+        }
     }
 }
 
@@ -130,19 +154,28 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
 
 impl Scripts for JsRunner {
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
-        let states: Vec<_> = fields.iter().map(|f| field_state(&self.cos, f)).collect();
+        let states: Vec<_> = fields
+            .iter()
+            .map(|f| {
+                let display = match f.widgets.first() {
+                    Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f)),
+                    None => pdfcraft_js::DISPLAY_VISIBLE,
+                };
+                field_state_with_display(f, display)
+            })
+            .collect();
+        let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run(script, &ev, &self.doc, &states, &self.doc_scripts, Limits::default());
+        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
         self.output.absorb(&o);
         if o.error.is_some() {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
             return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
         }
-        let after: Vec<_> = states.iter().map(|s| o.changed.iter().find(|c| c.name == s.name).unwrap_or(s).clone()).collect();
         ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
-            changes: changes(&states, &after),
+            changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().cloned()).flatten(),
         }
     }
@@ -192,7 +225,8 @@ impl Session {
         // A button PdfCraft generated from an XFA template runs its XFA click script.
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
-            && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, t)
+            && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
             let out = self.take_js_output(id);
@@ -213,8 +247,7 @@ impl Session {
             None => pdfcraft_js::Event::doc("Console"),
         };
         let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
-        let after: Vec<_> = states.iter().map(|s| o.changed.iter().find(|c| c.name == s.name).unwrap_or(s).clone()).collect();
-        let changes = changes(&states, &after);
+        let changes = changes(&states, &o.changed);
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -349,7 +382,12 @@ impl Session {
                 pdfcraft_forms::detect::Kind::CheckBox => (pdfcraft_forms::NewField::CheckBox, None),
                 pdfcraft_forms::detect::Kind::Comb { cells } => (pdfcraft_forms::NewField::Text { multiline: false }, Some(cells)),
             };
-            let mut props = FieldProps::default();
+            // The page already draws the line or box the field sits on, so the field gets no
+            // border or fill of its own: an opaque fill would hide the printed form (#294, #2831).
+            let mut props = FieldProps {
+                appearance: Some(pdfcraft_forms::LookPatch { border: Some(None), fill: Some(None), ..Default::default() }),
+                ..Default::default()
+            };
             if turn != 0 {
                 // A turned field keeps its place: the rectangle is already the one on the page.
                 props.rotation = Some((0, turn));
@@ -360,11 +398,53 @@ impl Session {
                 props.flags = vec![(pdfcraft_forms::flags::COMB, true)];
             }
             edits.push(Edit::AddField { page, rect: c.rect, kind, name: Some(c.name.clone()) });
-            if turn != 0 || comb.is_some() {
-                edits.push(Edit::SetFieldProps { name: c.name, props: Box::new(props) });
-            }
+            edits.push(Edit::SetFieldProps { name: c.name, props: Box::new(props) });
         }
         self.apply(id, Edit::Batch { label: "Detect form fields".into(), edits })?;
         Ok(names)
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_field_names_diff_against_first_original() {
+        let first = pdfcraft_js::FieldState::new("duplicate", pdfcraft_js::FieldType::Text, vec!["first".into()]);
+        let mut second = first.clone();
+        second.value = vec!["second".into()];
+        second.display = pdfcraft_js::DISPLAY_HIDDEN;
+        let before = vec![first.clone(), second.clone()];
+        assert!(changes(&before, std::slice::from_ref(&first)).is_empty());
+        let actual = changes(&before, std::slice::from_ref(&second));
+        assert_eq!(
+            actual,
+            vec![FieldChange {
+                name: "duplicate".into(),
+                value: Some(second.value),
+                display: Some(pdfcraft_js::DISPLAY_HIDDEN),
+                ..Default::default()
+            }]
+        );
+        let outcome = pdfcraft_js::run_shared(
+            "event.value = getField('duplicate').value; getField('duplicate').value = 'updated';",
+            &pdfcraft_js::Event::field("Calculate", "duplicate", ""),
+            &pdfcraft_js::DocInfo::default(),
+            std::sync::Arc::new(before.clone()),
+            &[],
+            Limits::default(),
+        );
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.value, "first");
+        assert_eq!(outcome.changed.len(), 1);
+        assert_eq!(
+            changes(&before, &outcome.changed),
+            vec![FieldChange { name: "duplicate".into(), value: Some(vec!["updated".into()]), ..Default::default() }]
+        );
+        assert!(changes(&before, &[]).is_empty());
+        let mut missing = first;
+        missing.name = "missing".into();
+        assert!(changes(&before, &[missing]).is_empty());
     }
 }

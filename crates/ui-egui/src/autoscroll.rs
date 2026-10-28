@@ -48,7 +48,7 @@ impl AutoScroll {
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
     /// once started, moving outside that viewport still controls the speed.
     pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"))
+        self.update_for_platform(ui, viewport, organize, true)
     }
 
     fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool) -> Vec2 {
@@ -106,15 +106,23 @@ impl AutoScroll {
             }
         }
         let (Some(anchor), Some(pointer)) = (self.anchor, pointer) else { return Vec2::ZERO };
-        let displacement = pointer.y - anchor.y;
+        let displacement_y = pointer.y - anchor.y;
+        let displacement_x = pointer.x - anchor.x;
         // Cap the elapsed time too: returning from an idle/hidden window must never jump pages.
-        let delta = scroll_delta(displacement, dt);
-        if displacement.is_finite() && displacement.abs() > DEAD_ZONE {
-            // Continuous redraws let stable_dt use measured frame time. Delayed redraws
-            // instead use predicted_dt, which can make speed depend on the actual frame rate.
+        let delta_y = scroll_delta(displacement_y, dt);
+        let delta_x = scroll_delta(displacement_x, dt);
+        if (displacement_y.is_finite() && displacement_y.abs() > DEAD_ZONE)
+            || (displacement_x.is_finite() && displacement_x.abs() > DEAD_ZONE)
+        {
+            // Continuous redraws let stable_dt use measured frame time.
             ctx.request_repaint();
         }
-        vec2(0.0, delta)
+        if middle_released && ((displacement_x * displacement_x + displacement_y * displacement_y).sqrt() > DEAD_ZONE) {
+            self.cancel();
+            self.block_input = true;
+            return Vec2::ZERO;
+        }
+        vec2(delta_x, delta_y)
     }
 
     /// Without auto-scroll, a middle-button drag pans the view 1:1, like the Hand tool. Input is

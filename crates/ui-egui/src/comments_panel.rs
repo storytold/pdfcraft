@@ -454,12 +454,14 @@ fn card(
                 ui.close();
             }
             ui.menu_button(tl!("Set status"), |ui| {
-                for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
-                    if ui.button(tl!(s.name())).clicked() {
-                        edit = Some(Edit::SetAnnotationStatus { page: a.page, index: a.index, state: s, author: prefs.author.clone() });
-                        ui.close();
+                crate::chrome::scroll_menu(ui, |ui| {
+                    for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
+                        if ui.button(tl!(s.name())).clicked() {
+                            edit = Some(Edit::SetAnnotationStatus { page: a.page, index: a.index, state: s, author: prefs.author.clone() });
+                            ui.close();
+                        }
                     }
-                }
+                });
             });
             if ui.button(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" })).clicked() {
                 edit = Some(Edit::MarkAnnotation { page: a.page, index: a.index, marked: !marked, author: prefs.author.clone() });

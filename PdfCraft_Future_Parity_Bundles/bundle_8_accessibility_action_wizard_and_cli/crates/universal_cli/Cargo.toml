@@ -1,0 +1,9 @@
+[package]
+name = "pdfcraft-universal-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Universal CLI command dispatcher exposing 100% of engine commands with JSON-RPC support"
+
+[dependencies]
+pdfcraft-action-wizard = { path = "../action_wizard" }

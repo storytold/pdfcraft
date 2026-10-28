@@ -1,0 +1,9 @@
+[package]
+name = "pdfcraft-js-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Fuel-limited sandboxed ECMAScript execution engine with standard Acrobat DOM host objects"
+
+[dependencies]
+pdfcraft-forms-engine = { path = "../forms_engine" }

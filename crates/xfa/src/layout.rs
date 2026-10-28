@@ -13,7 +13,7 @@ use std::sync::Arc;
 use base64::Engine;
 
 use crate::XfaError;
-use crate::data::{DataNode, data_path, is_on, iso_to_pattern};
+use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::*;
 use crate::text::{self, Block, Face, Span};
 
@@ -396,15 +396,39 @@ fn is_row(node: &Node) -> bool {
 
 /// The Acrobat date pattern for an XFA picture clause such as `date{YYYY-MM-DD}`.
 fn date_pattern(picture: Option<&str>) -> String {
-    let p = picture.unwrap_or("");
-    let inner = p.find('{').and_then(|a| p[a + 1..].find('}').map(|b| &p[a + 1..a + 1 + b])).unwrap_or(p);
-    let inner = inner.trim();
-    if inner.is_empty() || inner.chars().any(|c| !"YMDEJ-/., :".contains(c)) {
-        return "yyyy-mm-dd".into();
-    }
-    inner.replace('E', "d").to_ascii_lowercase()
+    picture.and_then(date_letters).unwrap_or_else(|| "yyyy-mm-dd".into())
 }
 
+/// What scripts read as a field's `formattedValue` when its display picture is `picture`: the
+/// ISO date `raw` shown in a date picture (`date{YYYYMMDD}` turns `2026-10-20` into
+/// `20261020`; of several alternatives, the first). `None` for other kinds of picture, for a
+/// clause this can't read or show (month and weekday names) and for a value that isn't an ISO
+/// date: the raw value stands then.
+pub fn formatted_value(picture: &str, raw: &str) -> Option<String> {
+    let first = picture.split('|').next()?.trim();
+    let rest = first.strip_prefix("date")?;
+    if !rest.starts_with(['{', '(']) {
+        return None;
+    }
+    let pattern = date_pattern(Some(first));
+    // A picture with parts this can't show yet (month or weekday names, `MMM` or `EEE`) would
+    // leave them as letters: the raw value stands then.
+    let shows = |t: &String| !t.chars().all(|c| c.is_ascii_alphabetic()) || matches!(t.as_str(), "yyyy" | "yy" | "mm" | "m" | "dd" | "d");
+    if !crate::data::date_tokens(&pattern).iter().all(shows) {
+        return None;
+    }
+    // Only the ISO date's own shape (`2026-10-20`): `2026-1-2` is not one, and stands.
+    let b = raw.as_bytes();
+    let iso = b.len() == 10 && b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() });
+    if !iso {
+        return None;
+    }
+    let shown = iso_to_pattern(raw, &pattern);
+    (shown != raw).then_some(shown)
+}
+
+/// The native PDF action a button's click script amounts to (a reset, print, save or link),
+/// else the script itself to run; `None` without a click script.
 fn button_action(scripts: &[Script]) -> Option<Action> {
     let s = scripts.iter().find(|s| s.activity == "click")?;
     let t = &s.text;
@@ -873,6 +897,8 @@ impl Layouter<'_> {
         }
     }
 
+    /// The width and height `node` takes in `avail_w`: its own size, else what its content needs
+    /// (containers are measured once per width and depth, and measuring stops at its caps).
     fn size_of(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
         let c = node.common();
         let spent = self.measures.get().saturating_add(1);
@@ -904,6 +930,9 @@ impl Layouter<'_> {
         size
     }
 
+    /// The size (width, height) of `node` within `avail_w`, uncached ([`Self::size_of`] caches it).
+    /// Without a width, a container, a text draw or a button is as wide as its content (at most
+    /// `avail_w`) and anything else takes `avail_w`; without a height, it is as tall as its content.
     fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
         let c = node.common();
         // The node's own SOM: its repeating children count their instances under it, and a
@@ -912,7 +941,8 @@ impl Layouter<'_> {
         let ctx = ctx.with_som(c, 0);
         let som = ctx.som.clone();
         // A container without a width is as wide as its content (a radio group beside its
-        // question, say); a leaf without one takes what is available.
+        // question, say), and so is a text label or a button (as wide as its caption), within
+        // what is available; any other field without one takes what is available.
         let w = match c.w {
             Some(w) => w,
             None => match node {
@@ -920,7 +950,13 @@ impl Layouter<'_> {
                     let inner = (avail_w - c.margin.horizontal()).max(1.0);
                     (self.content_width(node, inner, &ctx, depth) + c.margin.horizontal()).min(avail_w)
                 }
-                Node::Field(_) | Node::Draw(_) => avail_w,
+                Node::Draw(d) => self.natural_width(&d.value, &ctx.font, &ctx.para).map_or(avail_w, |t| (t + c.margin.horizontal()).min(avail_w)),
+                Node::Field(f) if f.ui == Ui::Button => f
+                    .caption
+                    .as_ref()
+                    .and_then(|cap| self.natural_width(&cap.value, &ctx.font.apply(&cap.font), &ctx.para.apply(&cap.para)))
+                    .map_or(avail_w, |t| (t + c.margin.horizontal() + f.ui_margin.horizontal()).min(avail_w)),
+                Node::Field(_) => avail_w,
             },
         };
         let w = clamp_opt(w, c.min_w, c.max_w);
@@ -1004,6 +1040,22 @@ impl Layouter<'_> {
         }
     }
 
+    /// How wide text `v` is unwrapped, in `font` and `para`, with a hair to spare so that laying
+    /// it out at that width keeps it on its lines; `None` for what isn't text, or text that draws
+    /// nothing.
+    fn natural_width(&self, v: &Value, font: &Font, para: &Para) -> Option<f64> {
+        let rich = match v {
+            Value::Text(t) => text::plain(t),
+            Value::Rich(r) => r.clone(),
+            _ => return None,
+        };
+        // No text (a bordered spacer or rule): nothing to size to, so it keeps what it has room for.
+        let w = text::natural_width(&rich, para, &Face::of(font), &|id| self.embed(id));
+        (w > 0.0).then_some(w + 0.01)
+    }
+
+    /// How tall value `v` is laid out `w` wide: text wrapped in the context's font and paragraph,
+    /// an image at its aspect ratio, and nothing for lines, rectangles and empty values.
     fn value_height(&self, v: &Value, w: f64, ctx: &Ctx) -> f64 {
         match v {
             Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id| self.embed(id)),
@@ -1013,6 +1065,8 @@ impl Layouter<'_> {
         }
     }
 
+    /// Where field `f`'s caption goes and how much room it takes from the field's box, or `None`
+    /// when it has no caption that takes room (a button's is drawn inside its box).
     fn caption_reserve(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> Option<(Placement, f64)> {
         let cap = f.caption.as_ref()?;
         if !cap.presence.occupies() || f.ui == Ui::Button {
@@ -1037,11 +1091,26 @@ impl Layouter<'_> {
         Some((placement, reserve))
     }
 
+    /// The height of field `f`'s content within `inner_w` (inside its margins): its widget (a check
+    /// box, a button's caption, or one line of text or three when multi-line, more for a text field
+    /// that grows) plus a caption above or below it, or the taller of the two for one beside it.
     fn field_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
         let font = ctx.font.apply(&f.common.font);
         let lines = if f.multiline { 3.0 } else { 1.0 };
         let ui = match f.ui {
             Ui::CheckButton => f.check_size.unwrap_or(10.0).max(text::line_height(font.size)),
+            // A button shows its caption: as tall as the caption's text in its own font.
+            Ui::Button if f.caption.as_ref().is_some_and(|c| !c.value.is_empty()) => {
+                let cap = f.caption.as_ref().map_or(0.0, |c| {
+                    let rich = match &c.value {
+                        Value::Rich(r) => r.clone(),
+                        other => text::plain(&other.plain().unwrap_or_default()),
+                    };
+                    let w = (inner_w - f.ui_margin.horizontal()).max(1.0);
+                    text::measure_height(&rich, w, &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id| self.embed(id))
+                });
+                cap + f.ui_margin.vertical()
+            }
             _ => (text::line_height(font.size) * lines).max(self.grown_text_height(f, inner_w, ctx)) + 4.0 + f.ui_margin.vertical(),
         };
         match self.caption_reserve(f, inner_w, ctx) {
@@ -1062,25 +1131,38 @@ impl Layouter<'_> {
         }
     }
 
+    /// The face a field's text is laid out in: at its horizontal scale when the layout draws
+    /// the text itself (a non-interactive field), as designed when the forms layer draws it in
+    /// a widget, whose appearances have no horizontal scaling.
+    fn field_text_face(f: &Field, font: &Font) -> Face {
+        let face = Face::of(font);
+        if f.access == Access::NonInteractive { face } else { face.unscaled() }
+    }
+
     /// The height the text of a multi-line text field takes (its value in the data, else the
     /// template's), for a field without a fixed height, which grows to hold its text. `ctx`
     /// is the field's own (its SOM ends in the field). Zero for anything else.
     fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
-        if f.ui != Ui::TextEdit || !f.multiline || f.common.h.is_some() || f.common.name.is_none() {
+        if !f.grows_with_text() || f.common.name.is_none() {
             return 0.0;
         }
         let value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
         let Some(value) = value.filter(|t| !t.trim().is_empty()) else { return 0.0 };
-        // Beside a caption the text has what the caption leaves; 2pt of padding on each side.
+        // Beside a caption the text has what the caption leaves; a widget's text has 2pt of
+        // padding on each side, a non-interactive field's (drawn as text) none, so it wraps
+        // where it is drawn.
         let beside = match self.caption_reserve(f, inner_w, ctx) {
             Some((Placement::Top | Placement::Bottom, _)) | None => 0.0,
             Some((_, r)) => r,
         };
-        let w = (inner_w - beside - f.ui_margin.horizontal() - 4.0).max(1.0);
+        let padding = if f.access == Access::NonInteractive { 0.0 } else { 4.0 };
+        let w = (inner_w - beside - f.ui_margin.horizontal() - padding).max(1.0);
         let font = ctx.font.apply(&f.common.font);
-        text::measure_height(&text::plain(value.trim_end()), w, &ctx.para, &Face::of(&font), &|_| String::new())
+        text::measure_height(&text::plain(value.trim_end()), w, &ctx.para, &Self::field_text_face(f, &font), &|_| String::new())
     }
 
+    /// The height of an exclusion group's fields at `inner_w`, by the group's layout: stacked
+    /// top to bottom, at their own positions, or packed in rows.
     fn group_height(&self, g: &ExclGroup, inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
         match g.layout {
@@ -1449,6 +1531,8 @@ impl Layouter<'_> {
         self.push(Item::Image { rect: fitted, data: Arc::new(data.to_vec()), content_type: content_type.to_string() })
     }
 
+    /// A field name made from `base` that no earlier field of the form has: the first keeps it,
+    /// later ones get `_2`, `_3`, ….
     fn unique_name(&mut self, base: &str) -> String {
         let base = clean_name(base);
         let n = self.names.entry(base.clone()).or_insert(0);
@@ -1456,6 +1540,9 @@ impl Layouter<'_> {
         if *n == 1 { base } else { format!("{base}_{n}") }
     }
 
+    /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
+    /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
+    /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
     fn draw_field(
         &mut self,
         f: &Field,
@@ -1529,7 +1616,7 @@ impl Layouter<'_> {
                     match base64::engine::general_purpose::STANDARD.decode(&text) {
                         Ok(d) if crate::image::kind(&d).is_some() => Some(d),
                         Ok(_) => {
-                            self.warn_once(format!("{field_name}: the picture in the data is not a JPEG, PNG or GIF and is left out"));
+                            self.warn_once(format!("{field_name}: the picture in the data is not a JPEG, PNG, GIF, BMP or TIFF and is left out"));
                             None
                         }
                         Err(_) => {
@@ -1570,7 +1657,7 @@ impl Layouter<'_> {
         }
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.
-        if f.ui == Ui::TextEdit && f.multiline && f.common.h.is_none() && rect.h > self.cursor().0.h + 0.01 {
+        if f.grows_with_text() && rect.h > self.cursor().0.h + 0.01 {
             let value =
                 self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
             if let Some(value) = value.filter(|t| !t.trim().is_empty()) {
@@ -1583,14 +1670,16 @@ impl Layouter<'_> {
                     right: f.ui_margin.right + 2.0,
                 };
                 let para = Para { v_align: VAlign::Top, ..fctx.para.clone() };
-                let block = text::layout(&text::plain(value.trim_end()), ui.inset(&m), &para, &Face::of(&fctx.font), &|_| String::new());
+                // In the face it was measured in, so it takes the lines it was given.
+                let face = Self::field_text_face(f, &fctx.font);
+                let block = text::layout(&text::plain(value.trim_end()), ui.inset(&m), &para, &face, &|_| String::new());
                 return self.push_block(block);
             }
         }
         let face = match (&f.ui, &f.caption) {
             // Buttons show their caption in the caption's font.
-            (Ui::Button, Some(cap)) => Face::of(&ctx.font.apply(&cap.font)),
-            _ => Face::of(&fctx.font),
+            (Ui::Button, Some(cap)) => Face::of(&ctx.font.apply(&cap.font)).unscaled(),
+            _ => Face::of(&fctx.font).unscaled(),
         };
         let h_align = match (&f.ui, &f.caption) {
             (Ui::Button, Some(cap)) => ctx.para.apply(&cap.para).h_align,
@@ -1632,18 +1721,22 @@ impl Layouter<'_> {
             }
             Ui::Button => {
                 let caption = f.caption.as_ref().and_then(|c| c.value.plain()).unwrap_or_default().trim().to_string();
-                // A button's box is its field border; without one it is invisible (a link
-                // over text, say).
+                // A button's box is its field border, around the whole field (its margins pad
+                // the caption, not the box); without one it is invisible (a link over text, say).
                 let border = match &f.common.border {
                     Some(b) => widget_border(Some(b), false),
                     None => WidgetBorder { color: None, fill: None, shape: BorderShape::None, width: 0.0 },
                 };
-                (WidgetKind::Button { caption }, ui, border, None, f.tooltip.clone())
+                (WidgetKind::Button { caption }, rect, border, None, f.tooltip.clone())
             }
             Ui::DateTimeEdit => {
                 let pattern = date_pattern(f.picture.as_deref());
-                // Data holds ISO dates; the field shows them in its pattern.
-                let shown = plain_value.as_ref().map(|v| if data_value.is_some() { iso_to_pattern(v, &pattern) } else { v.clone() });
+                // The data holds the date in the field's data picture, or else as an ISO date; the
+                // field shows it in its own pattern.
+                let data_pattern = data_date_letters(f);
+                let shown = plain_value
+                    .as_ref()
+                    .map(|v| if data_value.is_some() { iso_to_pattern(&data_to_iso(v, data_pattern.as_deref()), &pattern) } else { v.clone() });
                 (WidgetKind::Date(pattern), ui, widget_border(f.ui_border.as_ref(), false), shown, f.tooltip.clone())
             }
             Ui::ChoiceList => {

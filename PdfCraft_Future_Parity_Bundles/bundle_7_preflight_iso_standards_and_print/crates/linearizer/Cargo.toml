@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-linearizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ISO 32000-1 Annex F Fast Web View linearizer and primary hint stream generator"
+
+[dependencies]

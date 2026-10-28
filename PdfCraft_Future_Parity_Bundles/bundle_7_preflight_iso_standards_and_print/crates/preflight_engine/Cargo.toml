@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-preflight-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Extensible PDF preflight rule validation framework, automated fixups, and audit reporting"
+
+[dependencies]

@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-codecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "High-performance, memory-safe image codecs and stream filter pipeline for PDF (DCT, JPX, JBIG2, CCITT Fax)"
+
+[dependencies]

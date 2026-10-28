@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-pkcs11-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clean-room OASIS PKCS#11 Cryptoki hardware security module and smart card signing abstraction"
+
+[dependencies]

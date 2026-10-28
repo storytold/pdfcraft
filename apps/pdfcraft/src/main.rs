@@ -54,6 +54,15 @@ const APP_ID: &str = "ai.storyteller.pdfcraft";
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft-1024.png");
 #[cfg(not(target_os = "macos"))]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
+const APP_ICON_NIGHTLY_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft_evo-256.png");
+
+fn is_nightly() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()))
+        .is_some_and(|name| name.contains("evo") || name.contains("nightly"))
+        || std::env::args().any(|a| a == "--evo" || a == "--nightly")
+}
 
 /// The app was called PrintCraft before; settings saved then are under this key.
 const LEGACY_STORAGE_KEY: &str = "printcraft";
@@ -61,8 +70,27 @@ const LEGACY_STORAGE_KEY: &str = "printcraft";
 /// The preferences folder (`app.ron`, docs/development.md). In portable mode
 /// it is `PdfCraftData` beside the executable (#157). XDG desktops use the configuration base;
 /// other platforms retain eframe's PdfCraft folder. Logs and recovery stay in the data folder.
-fn settings_dir() -> Option<std::path::PathBuf> {
-    let legacy = eframe::storage_dir("PdfCraft");
+fn settings_dir(is_nightly: bool) -> Option<std::path::PathBuf> {
+    let app_folder = if is_nightly { "PdfCraftEVO" } else { "PdfCraft" };
+    let legacy = eframe::storage_dir(app_folder);
+    if is_nightly {
+        if let Some(target) = legacy.as_ref() {
+            let target_ron = target.join("data").join("app.ron");
+            if !target_ron.exists() {
+                // Try migrating from PdfCraftNightly first, then PdfCraft
+                let source_dir = eframe::storage_dir("PdfCraftNightly")
+                    .filter(|d| d.join("data").join("app.ron").exists())
+                    .or_else(|| eframe::storage_dir("PdfCraft"));
+                if let Some(source) = source_dir {
+                    let source_ron = source.join("data").join("app.ron");
+                    if source_ron.exists() {
+                        let _ = std::fs::create_dir_all(target.join("data"));
+                        let _ = std::fs::copy(&source_ron, &target_ron);
+                    }
+                }
+            }
+        }
+    }
     match settings::directory(
         cfg!(all(unix, not(target_os = "macos"))),
         pdfcraft_ui_egui::portable::data_dir(),
@@ -167,9 +195,11 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
     out
 }
 
-fn main() -> eframe::Result {
+pub fn entry(force_nightly: bool) -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
+    let nightly = force_nightly || is_nightly();
+    let app_name = if nightly { "PdfCraft EVO" } else { "PdfCraft" };
     // Last-resort guard (AGENTS.md §4): commands, edits, opens and saves catch panics and report
     // them; this hook logs every panic, caught or not, with a backtrace when RUST_BACKTRACE is set.
     std::panic::set_hook(Box::new(|info| {
@@ -196,12 +226,13 @@ fn main() -> eframe::Result {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--version" => {
-                println!("pdfcraft {}", pdfcraft_engine::build_info::version());
+                println!("{app_name} {}", pdfcraft_engine::build_info::version());
                 return Ok(());
             }
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
             "--new-window" => new_window = true,
+            "--nightly" | "--evo" => {}
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
@@ -217,11 +248,12 @@ fn main() -> eframe::Result {
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
     // Records logged until now are written to it first.
+    let app_storage_name = if nightly { "PdfCraftEVO" } else { "PdfCraft" };
     if let (Some(logger), Some(dir)) =
-        (logger, pdfcraft_ui_egui::portable::data_dir().map(std::path::Path::to_path_buf).or_else(|| eframe::storage_dir("PdfCraft")))
+        (logger, pdfcraft_ui_egui::portable::data_dir().map(std::path::Path::to_path_buf).or_else(|| eframe::storage_dir(app_storage_name)))
     {
         match logger.attach_dir(&dir.join("logs")) {
-            Ok(path) => log::info!("PdfCraft {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
+            Ok(path) => log::info!("{app_name} {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
             // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
             Err(e) => log::warn!("no log file: {e}"),
         }
@@ -247,39 +279,62 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
-    let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    let first = match choice {
+        RendererChoice::Gl => eframe::Renderer::Glow,
+        RendererChoice::Wgpu => eframe::Renderer::Wgpu,
+        RendererChoice::Auto => {
+            #[cfg(target_os = "windows")]
+            {
+                eframe::Renderer::Glow
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                eframe::Renderer::Wgpu
+            }
+        }
+    };
     let result = eframe::run_native(
-        "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
+        app_name,
+        native_options(launch.integrated, launch.window_controls.is_some(), first, nightly),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
             instance.as_ref(),
             #[cfg(target_os = "macos")]
             &apple_events,
+            nightly,
         ),
     );
     match result {
         // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
         // help either, and winit's own error says more.
-        Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
-            // Old or unusual GPUs and drivers (#461, #435, #392) can't give wgpu a device; OpenGL
-            // usually still works there, so that's better than quitting.
-            log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
+        Err(e) if retry_with_gl(choice, started.get()) => {
+            let fallback = if first == eframe::Renderer::Glow {
+                eframe::Renderer::Wgpu
+            } else {
+                eframe::Renderer::Glow
+            };
+            log::error!("the primary renderer didn't start: {e}. Retrying with fallback ({fallback:?})...");
             eframe::run_native(
-                "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                app_name,
+                native_options(launch.integrated, launch.window_controls.is_some(), fallback, nightly),
                 app_creator(
                     launch,
                     started,
                     instance.as_ref(),
                     #[cfg(target_os = "macos")]
                     &apple_events,
+                    nightly,
                 ),
             )
         }
         other => other,
     }
+}
+
+#[allow(dead_code)]
+fn main() -> eframe::Result {
+    entry(false)
 }
 
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
@@ -308,16 +363,18 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 }
 
 /// The window and renderer settings for one run.
-fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
+fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer, is_nightly: bool) -> eframe::NativeOptions {
+    let title = if is_nightly { "PdfCraft EVO" } else { "PdfCraft" };
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PdfCraft")
+        .with_title(title)
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size([820.0, 520.0])
         .with_drag_and_drop(true)
         // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
-        .with_app_id(APP_ID);
+        .with_app_id(if is_nightly { "ai.storyteller.pdfcraft.evo" } else { APP_ID });
     // Dock, taskbar, Alt-Tab and launcher icon when running unbundled.
-    match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
+    let icon_bytes = if is_nightly { APP_ICON_NIGHTLY_PNG } else { APP_ICON_PNG };
+    match eframe::icon_data::from_png_bytes(icon_bytes) {
         Ok(icon) => viewport = viewport.with_icon(icon),
         Err(e) => log::warn!("app icon: {e}"),
     }
@@ -328,7 +385,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
         // The tab strip is the title bar (pdfcraft_ui_egui::window_controls).
         viewport = viewport.with_decorations(false);
     }
-    let persistence_path = settings_dir().map(|d| d.join("app.ron"));
+    let persistence_path = settings_dir(is_nightly).map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
     if renderer == eframe::Renderer::Wgpu {
@@ -366,11 +423,13 @@ fn app_creator<'a>(
     started: Rc<Cell<bool>>,
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
+    is_nightly: bool,
 ) -> eframe::AppCreator<'a> {
     let Launch { files, options, control_file, create_images, integrated, window_controls } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
+        app.is_nightly = is_nightly;
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();
         #[cfg(target_os = "linux")]

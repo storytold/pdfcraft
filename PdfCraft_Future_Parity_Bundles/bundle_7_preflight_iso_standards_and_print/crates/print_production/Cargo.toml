@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-print-production"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pre-press print inspection, CMYK separation previews, and Total Area Coverage (TAC) ink limits"
+
+[dependencies]

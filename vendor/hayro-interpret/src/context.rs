@@ -146,6 +146,13 @@ impl<'a> InterpreterCache<'a> {
     pub fn decoded_image_decodes(&self) -> usize {
         self.decoded_cache.decodes()
     }
+
+    /// PdfCraft patch (48): how many `/ICCBased` profiles were read through this cache, for
+    /// diagnostics and tests. A profile used again, by the same stream object or by a copy with
+    /// the same dictionary and bytes, is read once.
+    pub fn icc_profile_reads(&self) -> usize {
+        self.object_cache.icc_profile_reads()
+    }
 }
 
 /// A per-page interpretation context that borrows shared data from an [`InterpreterCache`].
@@ -447,36 +454,66 @@ pub(crate) fn path_as_rect(path: &BezPath) -> Option<Rect> {
         return None;
     }
 
-    let bbox = path.fast_bounding_box();
-    let (min_x, min_y, max_x, max_y) = (bbox.min_x(), bbox.min_y(), bbox.max_x(), bbox.max_y());
-    let mut corners = [false; 4];
-
-    let mut check_point = |p: Point| {
-        corners[0] |= p.x.is_nearly_equal(min_x) && p.y.is_nearly_equal(min_y);
-        corners[1] |= p.x.is_nearly_equal(min_x) && p.y.is_nearly_equal(max_y);
-        corners[2] |= p.x.is_nearly_equal(max_x) && p.y.is_nearly_equal(min_y);
-        corners[3] |= p.x.is_nearly_equal(max_x) && p.y.is_nearly_equal(max_y);
-    };
-
+    // PdfCraft patch: the points have to trace the rectangle, not merely reach its corners. The
+    // length check above admits one MoveTo and four LineTo as well as the intended one MoveTo,
+    // three LineTo and one ClosePath, and asking only that each corner of the bounding box was
+    // visited says nothing about the order or the steps between: a five-point polyline whose
+    // ends reached every corner of its own bounding box was painted as that box, and a clip of
+    // that shape was discarded. Four distinct points, each step along one axis, the last point
+    // back at the first: that is a rectangle and nothing else is.
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    let mut closed = false;
     for (idx, el) in path.elements().iter().enumerate() {
         match el {
             PathEl::MoveTo(p) => {
                 if idx != 0 {
                     return None;
                 }
-
-                check_point(*p);
+                points.push(*p);
             }
-            PathEl::LineTo(l) => check_point(*l),
+            PathEl::LineTo(p) => points.push(*p),
             PathEl::QuadTo(_, _) => return None,
             PathEl::CurveTo(_, _, _) => return None,
-            PathEl::ClosePath => {}
+            // A subpath that ends and starts again is more than one shape.
+            PathEl::ClosePath => {
+                if idx + 1 != path.elements().len() {
+                    return None;
+                }
+                closed = true;
+            }
         }
     }
 
-    if corners[0] && corners[1] && corners[2] && corners[3] {
-        Some(bbox)
-    } else {
-        None
+    // Exactly equal, not nearly: `is_nearly_equal` allows a 256th of a path unit, and the matrix
+    // is applied after this, so a `cm` of 10,000 turns that into tens of device units -- a path
+    // that only nearly closes would be painted as the rectangle, with a side it does not have.
+    // A rectangle's coordinates are equal in the content stream, not approximately equal, so
+    // nothing that is one loses the fast path by this; a path that misses takes the general route
+    // and is painted as written (#3327 review).
+    let same = |a: Point, b: Point| a.x == b.x && a.y == b.y;
+    // `m l l l l`: the fourth line goes back to the start, which `m l l l h` does with ClosePath.
+    if !closed {
+        if points.len() != 5 || !same(points[4], points[0]) {
+            return None;
+        }
+        points.pop();
     }
+    if points.len() != 4 {
+        return None;
+    }
+    // Distinct, so a degenerate path is not one, and each step along one axis only: the four
+    // points of an axis-aligned rectangle, in order round it.
+    for (i, p) in points.iter().enumerate() {
+        let q = points[(i + 1) % 4];
+        let along_x = p.y == q.y && p.x != q.x;
+        let along_y = p.x == q.x && p.y != q.y;
+        if !(along_x || along_y) {
+            return None;
+        }
+        if points.iter().skip(i + 1).any(|o| same(*p, *o)) {
+            return None;
+        }
+    }
+
+    Some(path.fast_bounding_box())
 }

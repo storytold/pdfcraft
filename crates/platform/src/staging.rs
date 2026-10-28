@@ -31,16 +31,16 @@ pub fn create_staging(
     create_staging_as(dir, name, form, suffixes, None)
 }
 
-/// [`create_staging`], giving the new file the permissions `keep` on Unix. It is created readable
-/// and writable by its owner only and then given `keep`, so its mode is never more open than that
-/// of the file it will replace, not even while it is still empty (a handle opened then would keep
-/// reading what is written later). Only the mode is copied: the owner and group are the saver's.
+/// [`create_staging`], giving the new file the mode and group of the file `keep` describes on
+/// Unix. It is created readable and writable by its owner only and then given them, so its mode
+/// is never more open than that of the file it will replace, not even while it is still empty (a
+/// handle opened then would keep reading what is written later). The owner is the saver's.
 fn create_staging_as(
     dir: &Path,
     name: &str,
     form: StagingName,
     suffixes: impl IntoIterator<Item = u64>,
-    keep: Option<&std::fs::Permissions>,
+    keep: Option<&std::fs::Metadata>,
 ) -> std::io::Result<(PathBuf, std::fs::File)> {
     // At most 128 bytes of the target's name, cut between characters, so the staging name fits
     // the 255-byte (Linux, macOS) and 255-unit (Windows) limits however long that name is.
@@ -68,7 +68,7 @@ fn create_staging_as(
                 if let Some(keep) = keep {
                     // A volume that can't change modes (FAT, some network shares) leaves the file
                     // owner-only: stricter than the file it replaces, never looser.
-                    let _ = file.set_permissions(keep.clone());
+                    let _ = file.set_permissions(kept_permissions(&file, keep));
                 }
                 return Ok((tmp, file));
             }
@@ -79,6 +79,26 @@ fn create_staging_as(
         }
     }
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
+}
+
+/// The permissions a staging file gets to replace the file `keep` describes. The mode's group bits
+/// are meant for that file's group, so the staging file joins it first. Where it can't (the saver
+/// isn't a member), group and others get nothing: someone the group bits shut out would
+/// otherwise read the file as one of the others.
+#[cfg(unix)]
+fn kept_permissions(file: &std::fs::File, keep: &std::fs::Metadata) -> std::fs::Permissions {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let mut mode = keep.permissions();
+    let joined = file.metadata().is_ok_and(|m| m.gid() == keep.gid()) || std::os::unix::fs::fchown(file, None, Some(keep.gid())).is_ok();
+    if !joined {
+        mode.set_mode(mode.mode() & !0o077);
+    }
+    mode
+}
+
+#[cfg(not(unix))]
+fn kept_permissions(_: &std::fs::File, keep: &std::fs::Metadata) -> std::fs::Permissions {
+    keep.permissions()
 }
 
 /// Unpredictable staging-name suffixes, so a name can't be planted in advance. Each is the
@@ -98,9 +118,11 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
 /// and the target is untouched until the new file is complete. The target's folder must exist;
 /// a folder at the target is refused by the rename. Flushing is the staging file's own
 /// (`sync_all`); parent-directory durability after a power loss is not promised. On Unix a file
-/// that is replaced keeps its permissions, so a private file stays private; a new file gets the
+/// that is replaced keeps its permissions and group, so a private file stays private; a new file gets the
 /// usual mode for a new file. On Windows and macOS a replaced file keeps its creation date, where
 /// the volume stores one.
+/// On macOS, accessible extended attributes of an existing regular destination are copied
+/// before flushing; a copy failure refuses the save rather than losing metadata (#2658).
 pub fn write_atomically(path: &Path, bytes: &[u8], form: StagingName) -> std::io::Result<()> {
     write_atomically_with(path, bytes, form, staging_suffixes(), std::fs::File::sync_all)
 }
@@ -124,9 +146,9 @@ pub fn write_atomically_with(
     }
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
-    // A file that is replaced keeps its permissions (#1790). Unix modes only: Windows is as before.
+    // A file that is replaced keeps its permissions (#1790) and group. Unix only: Windows is as before.
     #[cfg(unix)]
-    let keep = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let keep = std::fs::metadata(path).ok();
     #[cfg(not(unix))]
     let keep = None;
     // A saved file is the same document: it keeps its creation date (#2658).
@@ -138,6 +160,10 @@ pub fn write_atomically_with(
         {
             let mut file = file;
             file.write_all(bytes)?;
+            #[cfg(target_os = "macos")]
+            preserve_target_xattrs(path, &file).map_err(|e| {
+                std::io::Error::new(e.kind(), format!("could not preserve the file's extended attributes; save a copy with Save As: {e}"))
+            })?;
             #[cfg(any(windows, target_os = "macos"))]
             keep_created(&file, created);
             sync_staged(&file, sync_all)?;
@@ -148,6 +174,73 @@ pub fn write_atomically_with(
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Copy accessible macOS attributes to the staging descriptor before publication. The kernel
+/// hides compression bookkeeping unless SHOWCOMPRESSION is requested; leave that option off.
+/// Provenance is managed by macOS for the new file, not writable document metadata.
+#[cfg(target_os = "macos")]
+fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Result<()> {
+    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, flistxattr, fsetxattr, open};
+    use rustix::io::Errno;
+
+    // A new destination has nothing to retain. Replacing a symlink has always replaced the
+    // link, not its referent: do not open it to read metadata from a different file. NONBLOCK
+    // also prevents a FIFO at the destination from hanging the metadata read.
+    let source = match open(path, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK, Mode::empty()) {
+        Ok(fd) => std::fs::File::from(fd),
+        Err(Errno::NOENT | Errno::LOOP) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    if !source.metadata()?.is_file() {
+        return Ok(());
+    }
+
+    // Metadata is untrusted too: bound both allocations and total copying, including forks.
+    const MAX_NAMES_BYTES: usize = 64 * 1024;
+    const MAX_ATTRIBUTES: usize = 1024;
+    const MAX_VALUE_BYTES: usize = 16 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+    let mut names = vec![0u8; MAX_NAMES_BYTES];
+    let len = match flistxattr(&source, names.as_mut_slice()) {
+        Ok(len) => len,
+        Err(Errno::NOTSUP) => return Ok(()), // No attributes exist on this filesystem.
+        Err(Errno::RANGE) => return Err(std::io::Error::other("extended attribute name list exceeds 64 KiB")),
+        Err(e) => return Err(e.into()),
+    };
+    let names = names.get(..len).ok_or_else(|| std::io::Error::other("extended attribute name list exceeds 64 KiB"))?;
+    let mut total = 0usize;
+    for (index, name) in names.split(|b| *b == 0).filter(|name| !name.is_empty()).enumerate() {
+        if index >= MAX_ATTRIBUTES {
+            return Err(std::io::Error::other("extended attribute count exceeds 1024"));
+        }
+        if name == b"com.apple.provenance" {
+            continue;
+        }
+        let name = std::ffi::CString::new(name).map_err(|_| std::io::Error::other("invalid extended attribute name"))?;
+        let size = fgetxattr(&source, &name, &mut [] as &mut [u8])?;
+        if size > MAX_VALUE_BYTES || size > MAX_TOTAL_BYTES.saturating_sub(total) {
+            return Err(std::io::Error::other("extended attributes exceed the 16 MiB per-value or 64 MiB total limit"));
+        }
+        // Resource forks may return a prefix instead of ERANGE on growth; check the size again.
+        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?))?;
+        fsetxattr(staged, &name, &value, XattrFlags::empty())?;
+        total = total.saturating_add(value.len());
+    }
+    Ok(())
+}
+
+/// Read an already size-bounded attribute, refusing a partial result or a changed post-read size.
+#[cfg(target_os = "macos")]
+fn read_xattr_value(size: usize, mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>) -> std::io::Result<Vec<u8>> {
+    let mut value = vec![0u8; size.max(1)];
+    let len = read(value.as_mut_slice())?;
+    let after = read(&mut [])?;
+    if len != size || after != size {
+        return Err(std::io::Error::other("extended attribute changed size while saving"));
+    }
+    value.truncate(len);
+    Ok(value)
 }
 
 /// Give the staging file the creation date of the file it replaces, where the system keeps one
@@ -304,6 +397,182 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn atomic_saves_keep_finder_tags_and_binary_extended_attributes() {
+        use rustix::fs::{XattrFlags, fgetxattr, setxattr};
+        use std::os::macos::fs::FileTimesExt as _;
+        let dir = test_dir("xattrs");
+        let target = dir.join("out.pdf");
+        let attributes: &[(&str, &[u8])] = &[
+            ("com.apple.metadata:_kMDItemUserTags", b"<plist version=\"1.0\"><array><string>PdfCraft\n6</string></array></plist>"),
+            ("com.pdfcraft.test.binary", b"\0\xff\x80original\0"),
+            ("com.pdfcraft.test.empty", b""),
+        ];
+        std::fs::write(&target, b"OLD").unwrap();
+        for (name, value) in attributes {
+            setxattr(&target, *name, value, XattrFlags::empty()).unwrap();
+        }
+        let created = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_934_245);
+        let original = std::fs::OpenOptions::new().write(true).open(&target).unwrap();
+        original.set_times(std::fs::FileTimes::new().set_created(created)).unwrap();
+        assert_eq!(original.metadata().unwrap().created().unwrap(), created);
+        drop(original);
+        // Both desktop and automation name forms, including a second save of the replacement.
+        for form in [StagingName::TagThenSuffix, StagingName::SuffixThenTag] {
+            write_atomically_with(&target, b"NEW", form, [7], |staged| {
+                assert_eq!(staged.metadata().unwrap().created().unwrap(), created, "creation date must survive attribute copying before flush");
+                for (name, value) in attributes {
+                    let mut bytes = [0u8; 256];
+                    let len = fgetxattr(staged, *name, &mut bytes[..]).unwrap();
+                    assert_eq!(&bytes[..len], *value, "metadata must be present before flush: {name}");
+                }
+                Ok(())
+            })
+            .unwrap();
+            let saved = std::fs::File::open(&target).unwrap();
+            assert_eq!(saved.metadata().unwrap().created().unwrap(), created);
+            for (name, value) in attributes {
+                let mut bytes = [0u8; 256];
+                let len = fgetxattr(&saved, *name, &mut bytes[..]).unwrap();
+                assert_eq!(&bytes[..len], *value);
+            }
+            assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_flush_keeps_the_original_extended_attributes() {
+        use rustix::fs::{XattrFlags, getxattr, setxattr};
+        let dir = test_dir("xattrs-flush");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        setxattr(&target, "com.pdfcraft.test", b"original", XattrFlags::empty()).unwrap();
+        let e = write_atomically_with(&target, b"NEW", StagingName::TagThenSuffix, [9], |_| Err(std::io::Error::other("flush refused"))).unwrap_err();
+        assert!(e.to_string().contains("flush refused"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+        let mut value = [0u8; 64];
+        let len = getxattr(&target, "com.pdfcraft.test", &mut value[..]).unwrap();
+        assert_eq!(&value[..len], b"original");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Model an HFS-style partial read while using real macOS metadata and the atomic writer.
+    /// The shared read validator must reject growth before the staging file can be published.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
+        use rustix::fs::{XattrFlags, fgetxattr, fsetxattr, getxattr, setxattr};
+        let dir = test_dir("xattrs-growing-fork");
+        let target = dir.join("out.pdf");
+        let name = "com.apple.ResourceFork";
+        for form in [StagingName::TagThenSuffix, StagingName::SuffixThenTag] {
+            std::fs::write(&target, b"ORIGINAL PDF").unwrap();
+            setxattr(&target, name, b"ABC", XattrFlags::empty()).unwrap();
+            let source = std::fs::File::open(&target).unwrap();
+            let result = write_atomically_with(&target, b"REPLACEMENT PDF", form, [23], |staged| {
+                let size = fgetxattr(&source, name, &mut [] as &mut [u8])?;
+                let value = read_xattr_value(size, |buffer| {
+                    if buffer.is_empty() {
+                        return Ok(fgetxattr(&source, name, buffer)?);
+                    }
+                    // HFS can return the prefix that fits instead of ERANGE. APFS need not
+                    // have that behaviour: model the kernel response, not a timing race.
+                    setxattr(&target, name, b"ABCD", XattrFlags::empty())?;
+                    buffer.get_mut(..3).unwrap().copy_from_slice(b"ABC");
+                    Ok(3)
+                })?;
+                fsetxattr(staged, name, &value, XattrFlags::empty())?;
+                Ok(())
+            });
+            let error = result.expect_err("a short prefix of the grown fork must not be published");
+            assert!(error.to_string().contains("changed size"), "{error}");
+            assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL PDF");
+            let mut bytes = [0u8; 8];
+            let len = getxattr(&target, name, &mut bytes[..]).unwrap();
+            assert_eq!(&bytes[..len], b"ABCD", "the original's grown fork must remain intact");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "staging files are removed on refusal");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Stable empty/binary values are accepted; short reads, growth and failed rechecks are refused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn attribute_reads_require_a_complete_value_and_stable_size() {
+        for bytes in [&b""[..], &b"\0\xffB"[..]] {
+            let value = read_xattr_value(bytes.len(), |buffer| {
+                if !buffer.is_empty() {
+                    buffer.get_mut(..bytes.len()).unwrap().copy_from_slice(bytes);
+                }
+                Ok(bytes.len())
+            })
+            .unwrap();
+            assert_eq!(value, bytes);
+        }
+        for (before, read_len, after) in [(3, 2, 3), (3, 3, 4), (0, 1, 1), (3, 2, 2)] {
+            let result = read_xattr_value(before, |buffer| Ok(if buffer.is_empty() { after } else { read_len }));
+            assert!(result.unwrap_err().to_string().contains("changed size"));
+        }
+        let result = read_xattr_value(3, |buffer| {
+            if buffer.is_empty() { Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "size recheck refused")) } else { Ok(3) }
+        });
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() {
+        use rustix::fs::{XattrFlags, getxattr, setxattr};
+        let dir = test_dir("xattrs-limit");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        // A resource fork can exceed the ordinary attribute limit on macOS. No fixture file
+        // is committed; only the OS metadata of this temporary synthetic file holds the bytes.
+        let fork = vec![42u8; 16 * 1024 * 1024 + 1];
+        setxattr(&target, "com.apple.ResourceFork", &fork, XattrFlags::empty()).unwrap();
+        let mut flushed = false;
+        let e = write_atomically_with(&target, b"NEW", StagingName::TagThenSuffix, [10], |_| {
+            flushed = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(e.to_string().contains("extended attributes"), "{e}");
+        assert!(e.to_string().contains("Save As"), "{e}");
+        assert!(!flushed, "metadata failure must stop before flush and rename");
+        assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
+        let size = getxattr(&target, "com.apple.ResourceFork", &mut [] as &mut [u8]).unwrap();
+        assert_eq!(size, fork.len());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn replacing_a_symlink_does_not_copy_attributes_from_its_referent() {
+        use rustix::fs::{XattrFlags, getxattr, setxattr};
+        let dir = test_dir("xattrs-symlink");
+        let outside = test_dir("xattrs-outside").join("private.pdf");
+        std::fs::write(&outside, b"PRIVATE").unwrap();
+        setxattr(&outside, "com.pdfcraft.test", b"private metadata", XattrFlags::empty()).unwrap();
+        let target = dir.join("out.pdf");
+        std::os::unix::fs::symlink(&outside, &target).unwrap();
+        write_atomically(&target, b"NEW", StagingName::TagThenSuffix).unwrap();
+        assert_eq!(std::fs::read(&outside).unwrap(), b"PRIVATE");
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+        assert!(!target.symlink_metadata().unwrap().file_type().is_symlink());
+        let mut bytes = [0u8; 64];
+        assert_eq!(getxattr(&target, "com.pdfcraft.test", &mut bytes[..]).unwrap_err(), rustix::io::Errno::NOATTR);
+        let len = getxattr(&outside, "com.pdfcraft.test", &mut bytes[..]).unwrap();
+        assert_eq!(&bytes[..len], b"private metadata");
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(outside.parent().unwrap()).unwrap();
+    }
+
     /// #1790: a replaced file keeps its permissions, and its staging file already has them while
     /// it is written; a new file gets the same mode as any other new file.
     #[cfg(unix)]
@@ -331,6 +600,37 @@ mod tests {
         let plain = dir.join("plain");
         std::fs::write(&plain, b"").unwrap();
         assert_eq!(mode(&fresh), mode(&plain), "a new file is not made private");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A replaced file keeps its group as well as its mode, so group permissions never reach a
+    /// group that couldn't read the file before (the saver's own group, by default).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_replaced_file_keeps_its_group() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = test_dir("group");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        let created = std::fs::metadata(&target).unwrap().gid();
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let groups = status.lines().find_map(|l| l.strip_prefix("Groups:")).unwrap_or_default();
+        let Some(other) = groups.split_whitespace().filter_map(|g| g.parse::<u32>().ok()).find(|&g| g != created) else {
+            eprintln!("skipped: the test needs a second group");
+            return;
+        };
+        std::os::unix::fs::chown(&target, None, Some(other)).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mut staged = (0, 0);
+        write_atomically_with(&target, b"NEW", StagingName::SuffixThenTag, [7], |f| {
+            let m = f.metadata()?;
+            staged = (m.gid(), m.permissions().mode() & 0o777);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(staged, (other, 0o640), "the staging file has the target's group before it is flushed");
+        let m = std::fs::metadata(&target).unwrap();
+        assert_eq!((m.gid(), m.permissions().mode() & 0o777), (other, 0o640));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

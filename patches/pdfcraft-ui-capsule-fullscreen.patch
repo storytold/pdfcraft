@@ -1,0 +1,606 @@
+diff --git a/crates/ui-egui/src/canvas.rs b/crates/ui-egui/src/canvas.rs
+index 0fb1d938..36cedd34 100644
+--- a/crates/ui-egui/src/canvas.rs
++++ b/crates/ui-egui/src/canvas.rs
+@@ -1470,6 +1470,16 @@ impl DocView {
+         self.reset_coarse_state();
+     }
+ 
++    /// Sets the visual reading color filter and invalidates page textures for immediate update.
++    pub fn set_page_filter(&mut self, f: PageFilter) {
++        if self.page_filter != f {
++            self.page_filter = f;
++            self.pages.clear();
++            self.tiles.clear();
++            self.last_queue.clear();
++        }
++    }
++
+     /// Switch the zoom mode, keeping the current page in view.
+     pub fn set_fit(&mut self, fit: Fit) {
+         self.fit = fit;
+@@ -4287,12 +4297,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+     if copy_selected {
+         app.execute("edit.copy");
+     }
+-    // Page action pill and quick bar hidden in Read mode for maximum breathing space.
+-    if app.mode != crate::Mode::Read {
+-        page_action_pill(app, avail, ui);
+-        quick_bar(app, avail, ui);
++    // Floating action pills and toolbars hidden in Full Screen mode and Read mode for clean viewing.
++    if !app.full_screen {
++        if app.mode != crate::Mode::Read {
++            page_action_pill(app, avail, ui);
++            quick_bar(app, avail, ui);
++        }
++        modern_floating_bar(app, avail, ui);
+     }
+-    modern_floating_bar(app, avail, ui);
+     if let Some((source, file, destination)) = remote_open {
+         app.open_remote_link(source, file, destination);
+     }
+@@ -4301,7 +4313,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+ /// Floating action pill on the right margin of the active page.
+ /// Appears only when the mouse hovers over the active page or the pill itself.
+ fn page_action_pill(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui) {
+-    if app.mode == crate::Mode::Read {
++    if app.full_screen || app.mode == crate::Mode::Read {
+         return;
+     }
+     let Some(index) = app.active else { return };
+@@ -4410,6 +4422,10 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+         (view.id, count, labels)
+     };
+     let is_read = app.mode == crate::Mode::Read;
++    // In Full Screen mode and Read mode, keep canvas free from floating overlays.
++    if app.full_screen || is_read {
++        return;
++    }
+     let view = &mut app.views[index];
+     let t = Tokens::get(ui.ctx());
+ 
+@@ -4423,13 +4439,7 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+ 
+     let bar_w = 520.0;
+     let x = (viewport.center().x - bar_w / 2.0).clamp(viewport.left() + 10.0, (viewport.right() - bar_w - 10.0).max(viewport.left() + 10.0));
+-    let y = if is_read {
+-        // Shifted to the upper part in Read mode!
+-        viewport.top() + 8.0
+-    } else {
+-        // Bottom horizontal bar in Normal and other modes!
+-        (viewport.bottom() - 48.0).clamp(viewport.top() + 60.0, viewport.bottom() - 44.0)
+-    };
++    let y = (viewport.bottom() - 48.0).clamp(viewport.top() + 60.0, viewport.bottom() - 44.0);
+ 
+     let mut goto_page = None;
+     let mut step_dir = None;
+@@ -4480,16 +4490,19 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+                             view.page_input = cur_label.clone();
+                         }
+ 
++                        let input_w = if page_count >= 1000 { 42.0 } else if page_count >= 100 { 36.0 } else { 30.0 };
+                         let edit = egui::TextEdit::singleline(&mut view.page_input)
+                             .id(page_input_id)
+-                            .desired_width(32.0)
++                            .desired_width(input_w)
+                             .horizontal_align(egui::Align::Center)
+                             .font(theme::medium(11.5))
++                            .frame(egui::Frame::NONE)
+                             .margin(vec2(2.0, 2.0));
+                         let r = egui::Frame::NONE
+                             .fill(if is_dark { t.field } else { Color32::from_gray(245) })
+                             .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
+-                            .corner_radius(CornerRadius::same(6))
++                            .corner_radius(CornerRadius::same(5))
++                            .inner_margin(egui::Margin::symmetric(4, 2))
+                             .show(ui, |ui| ui.add(edit))
+                             .inner;
+ 
+@@ -4502,22 +4515,29 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+                             ui.ctx().request_repaint();
+                         }
+ 
+-                        let enter_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
+-                        if enter_pressed {
+-                            let typed = view.page_input.trim().to_string();
+-                            if !typed.is_empty() {
+-                                view.go_to_typed(&typed, &labels);
+-                            }
++                        let esc_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape));
++                        if esc_pressed {
+                             ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
+                             view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                             ui.ctx().request_repaint();
+-                        } else if r.lost_focus() {
+-                            let typed = view.page_input.trim().to_string();
+-                            if !typed.is_empty() {
+-                                view.go_to_typed(&typed, &labels);
++                        } else {
++                            let enter_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
++                            if enter_pressed {
++                                let typed = view.page_input.trim().to_string();
++                                if !typed.is_empty() {
++                                    view.go_to_typed(&typed, &labels);
++                                }
++                                ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
++                                view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                                ui.ctx().request_repaint();
++                            } else if r.lost_focus() {
++                                let typed = view.page_input.trim().to_string();
++                                if !typed.is_empty() {
++                                    view.go_to_typed(&typed, &labels);
++                                }
++                                view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                                ui.ctx().request_repaint();
+                             }
+-                            view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+-                            ui.ctx().request_repaint();
+                         }
+                         ui.add_space(2.0);
+                         ui.label(egui::RichText::new(format!("/ {page_count}")).font(theme::regular(11.5)).color(t.text_muted));
+@@ -4584,13 +4604,8 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+                                 }
+                             });
+                         if let Some(f) = change_filter {
+-                            if view.page_filter != f {
+-                                view.page_filter = f;
+-                                view.pages.clear();
+-                                view.tiles.clear();
+-                                view.last_queue.clear();
+-                                ui.ctx().request_repaint();
+-                            }
++                            view.set_page_filter(f);
++                            ui.ctx().request_repaint();
+                         }
+ 
+                         // Rotate CW
+@@ -5282,6 +5297,9 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
+ 
+ /// The floating quick-action bar at the left edge of the document area.
+ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
++    if app.full_screen || app.mode == crate::Mode::Read {
++        return;
++    }
+     let t = Tokens::get(ui.ctx());
+     let pos = area.left_top() + vec2(14.0, 14.0);
+     egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+diff --git a/crates/ui-egui/src/chrome.rs b/crates/ui-egui/src/chrome.rs
+index 9f063707..ce4c300d 100644
+--- a/crates/ui-egui/src/chrome.rs
++++ b/crates/ui-egui/src/chrome.rs
+@@ -2,7 +2,7 @@
+ 
+ use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
+ 
+-use crate::canvas::{DocView, Fit, PageLayout};
++use crate::canvas::{DocView, Fit, PageFilter, PageLayout};
+ use crate::theme::{self, ThemePreference, Tokens};
+ use crate::{Dialog, Mode, PdfCraftApp, PropsTab, QuickTool, RightPanel, comments::CommentTool, icons, widgets, window_controls};
+ 
+@@ -558,12 +558,21 @@ pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+             ui.horizontal_centered(|ui| {
+                 ui.spacing_mut().item_spacing.x = 3.0;
+ 
+-                // 1. Menu (hamburger)
++                // 1. Menu (hamburger) & Mode Tabs
+                 main_menu(app, ui);
+                 ui.add_space(5.0);
+                 ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                 ui.add_space(5.0);
+ 
++                // Mode tabs: Read (active) and Edit (to switch instantly)
++                let _ = widgets::mode_tab(ui, tl!("Read"), true);
++                if widgets::mode_tab(ui, tl!("Edit"), false).on_hover_text("Switch to Edit mode (edit text and images)").clicked() {
++                    app.switch_mode(Mode::Edit, true);
++                }
++                ui.add_space(4.0);
++                ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
++                ui.add_space(4.0);
++
+                 // 2. Inking & Annotation tools
+                 let is_draw = matches!(app.quick_tool, QuickTool::Comment(CommentTool::Ink));
+                 let draw_tip = tl!("Draw");
+@@ -670,33 +679,326 @@ pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                 ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                 ui.add_space(6.0);
+ 
++                // 4. Center section: Integrated horizontal pill bar matching modern floating bar design and button positions
++                let active_info = app.active.and_then(|idx| {
++                    let view = app.views.get(idx)?;
++                    let doc = app.session.get(view.id)?;
++                    let count = doc.info.pages.len();
++                    if count == 0 {
++                        return None;
++                    }
++                    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
++                    Some((idx, count, labels))
++                });
++
++                if let Some((idx, page_count, labels)) = active_info {
++                    let view = &mut app.views[idx];
++                    let is_dark = t.dark();
++                    let page_input_id = ui.make_persistent_id(("read_mode_bar_page_input", view.id.0));
++
++                    let bg_fill = if is_dark { t.card } else { Color32::from_rgb(255, 255, 255) };
++                    let border_stroke = Stroke::new(1.0, if is_dark { t.border } else { Color32::from_gray(215) });
++                    let shadow_color = if is_dark { Color32::from_black_alpha(110) } else { Color32::from_black_alpha(24) };
++
++                    egui::Frame::NONE
++                        .fill(bg_fill)
++                        .stroke(border_stroke)
++                        .corner_radius(CornerRadius::same(20))
++                        .shadow(egui::Shadow {
++                            offset: [0, 2],
++                            blur: 12,
++                            spread: 0,
++                            color: shadow_color,
++                        })
++                        .inner_margin(egui::Margin::symmetric(10, 3))
++                        .show(ui, |ui| {
++                            ui.spacing_mut().item_spacing.x = 4.0;
++                            ui.horizontal_centered(|ui| {
++                                // 1. First page [ |< ]
++                                let can_prev = view.current > 0;
++                                if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevrons-left", 24.0, false, "First page")).inner.clicked() {
++                                    view.go_to_page(0);
++                                }
++
++                                // 2. Prev page [ < ]
++                                if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevron-left", 24.0, false, tl!("Previous page"))).inner.clicked() {
++                                    view.step_page(false);
++                                }
++
++                                // 3. Page indicator: [ 1 ] / N
++                                let cur_label = view.current_page_label(labels.get(view.current).map(String::as_str));
++                                let has_focus = ui.ctx().memory(|m| m.has_focus(page_input_id));
++
++                                if !has_focus {
++                                    view.page_input = cur_label.clone();
++                                }
++
++                                let input_w = if page_count >= 1000 { 42.0 } else if page_count >= 100 { 36.0 } else { 30.0 };
++                                let edit = egui::TextEdit::singleline(&mut view.page_input)
++                                    .id(page_input_id)
++                                    .desired_width(input_w)
++                                    .horizontal_align(egui::Align::Center)
++                                    .font(theme::medium(11.5))
++                                    .frame(egui::Frame::NONE)
++                                    .margin(vec2(2.0, 2.0));
++                                let r = egui::Frame::NONE
++                                    .fill(if is_dark { t.field } else { Color32::from_gray(245) })
++                                    .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
++                                    .corner_radius(CornerRadius::same(5))
++                                    .inner_margin(egui::Margin::symmetric(4, 2))
++                                    .show(ui, |ui| ui.add(edit))
++                                    .inner;
++
++                                if r.gained_focus() {
++                                    let mut state = egui::TextEdit::load_state(ui.ctx(), page_input_id).unwrap_or_default();
++                                    let end = egui::text::CCursor::new(view.page_input.chars().count());
++                                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
++                                    state.store(ui.ctx(), page_input_id);
++                                    ui.ctx().request_repaint();
++                                }
++
++                                let esc_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape));
++                                if esc_pressed {
++                                    ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
++                                    view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                                    ui.ctx().request_repaint();
++                                } else {
++                                    let enter_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
++                                    if enter_pressed {
++                                        let typed = view.page_input.trim().to_string();
++                                        if !typed.is_empty() {
++                                            view.go_to_typed(&typed, &labels);
++                                        }
++                                        ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
++                                        view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                                        ui.ctx().request_repaint();
++                                    } else if r.lost_focus() {
++                                        let typed = view.page_input.trim().to_string();
++                                        if !typed.is_empty() {
++                                            view.go_to_typed(&typed, &labels);
++                                        }
++                                        view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
++                                        ui.ctx().request_repaint();
++                                    }
++                                }
++
++                                ui.add_space(2.0);
++                                ui.label(egui::RichText::new(format!("/ {page_count}")).font(theme::regular(11.5)).color(t.text_muted));
++                                ui.add_space(3.0);
++
++                                // 4. Next page [ > ]
++                                let can_next = view.current + 1 < page_count;
++                                if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevron-right", 24.0, false, tl!("Next page"))).inner.clicked() {
++                                    view.step_page(true);
++                                }
++
++                                // 5. Last page [ >| ]
++                                if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevrons-right", 24.0, false, "Last page")).inner.clicked() {
++                                    view.go_to_page(page_count.saturating_sub(1));
++                                }
++
++                                // Divider
++                                ui.add_space(3.0);
++                                let (sep1, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
++                                ui.painter().vline(sep1.center().x, (sep1.top())..=(sep1.bottom()), Stroke::new(1.0, if is_dark { Color32::from_gray(80) } else { Color32::from_gray(210) }));
++                                ui.add_space(3.0);
++
++                                // 6. Page layout quick toggle (Single <-> Two-up)
++                                let is_two_up = view.layout == PageLayout::TwoUp;
++                                let layout_tip = if is_two_up { "Switch to single-page view" } else { "Switch to two-page view" };
++                                if icons::button(ui, view.layout.icon(), 24.0, is_two_up, layout_tip).clicked() {
++                                    view.layout = if is_two_up { PageLayout::Single } else { PageLayout::TwoUp };
++                                    view.goto = Some((view.current, 0.0));
++                                }
++
++                                // 7. Reading color filters menu (Color Filters: Normal, Invert, Sepia, Night, Grayscale)
++                                let filter_tip = format!("Page color filter: {}", tl!(view.page_filter.label()));
++                                let filter_resp = icons::button(ui, "contrast", 24.0, view.page_filter != PageFilter::Normal, &filter_tip);
++                                let mut change_filter = None;
++                                egui::Popup::menu(&filter_resp)
++                                    .align(egui::RectAlign::TOP_START)
++                                    .gap(6.0)
++                                    .show(|ui| {
++                                        ui.set_min_width(180.0);
++                                        for f in [PageFilter::Normal, PageFilter::Invert, PageFilter::Sepia, PageFilter::Night, PageFilter::Grayscale] {
++                                            let on = view.page_filter == f;
++                                            let (fill, stroke) = f.dot_color();
++                                            let resp = ui.horizontal(|ui| {
++                                                let (slot, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
++                                                ui.painter().circle_filled(slot.center(), 6.0, fill);
++                                                if let Some(s) = stroke {
++                                                    ui.painter().circle_stroke(slot.center(), 6.0, Stroke::new(1.0, s));
++                                                }
++                                                ui.selectable_label(on, tl!(f.label()))
++                                            }).inner;
++                                            if resp.clicked() {
++                                                change_filter = Some(f);
++                                                ui.close();
++                                            }
++                                        }
++                                    });
++                                if let Some(f) = change_filter {
++                                    view.set_page_filter(f);
++                                    ui.ctx().request_repaint();
++                                }
++
++                                // 8. Rotate CW
++                                let rotate_tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
++                                if icons::button(ui, "rotate-cw", 24.0, false, &rotate_tip).clicked() {
++                                    view.rotate_view(true);
++                                }
++
++                                // 9. Fit toggle
++                                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
++                                if icons::button(ui, fit_icon, 24.0, false, tl!("Toggle fit page / fit width")).clicked() {
++                                    view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
++                                    view.goto = Some((view.current, 0.0));
++                                }
++
++                                // Divider
++                                ui.add_space(3.0);
++                                let (sep2, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
++                                ui.painter().vline(sep2.center().x, (sep2.top())..=(sep2.bottom()), Stroke::new(1.0, if is_dark { Color32::from_gray(80) } else { Color32::from_gray(210) }));
++                                ui.add_space(3.0);
++
++                                // 10. Zoom out [-]
++                                let zoom_out_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
++                                if icons::button(ui, "zoom-out", 24.0, false, &zoom_out_tip).clicked() {
++                                    view.zoom_step(false);
++                                }
++
++                                // 11. Sleek rail track + vertical capsule thumb zoom slider matching Acrobat style
++                                let slider_w = 80.0_f32;
++                                let slider_h = 20.0_f32;
++                                let (slider_rect, slider_resp) = ui.allocate_exact_size(vec2(slider_w, slider_h), Sense::click_and_drag());
++                                let track_color = if is_dark { Color32::from_gray(75) } else { Color32::from_gray(212) };
++                                let track_y = slider_rect.center().y;
++                                let track_inset = 6.0_f32;
++                                let track_x0 = slider_rect.left() + track_inset;
++                                let track_x1 = slider_rect.right() - track_inset;
++                                let track_len = (track_x1 - track_x0).max(1.0);
++
++                                // Draw thin horizontal track rail
++                                ui.painter().line_segment([pos2(track_x0, track_y), pos2(track_x1, track_y)], Stroke::new(1.0, track_color));
++
++                                let zoom_min = 0.25_f32;
++                                let zoom_max = 4.0_f32;
++                                let cur_zoom = view.zoom.clamp(zoom_min, zoom_max);
++                                let t_val = ((cur_zoom / zoom_min).ln() / (zoom_max / zoom_min).ln()).clamp(0.0, 1.0);
++
++                                if slider_resp.dragged() || slider_resp.clicked() {
++                                    if let Some(mouse_pos) = slider_resp.interact_pointer_pos() {
++                                        let frac = ((mouse_pos.x - track_x0) / track_len).clamp(0.0, 1.0);
++                                        let new_zoom = zoom_min * (zoom_max / zoom_min).powf(frac);
++                                        view.set_zoom((new_zoom * 100.0).round() / 100.0);
++                                        ui.ctx().request_repaint();
++                                    }
++                                }
++                                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
++                                if slider_resp.hovered() && scroll.abs() > 0.0 {
++                                    let factor = if scroll > 0.0 { 1.1 } else { 0.9 };
++                                    view.set_zoom((cur_zoom * factor).clamp(zoom_min, zoom_max));
++                                    ui.ctx().request_repaint();
++                                }
++
++                                // Render vertical capsule thumb
++                                let thumb_x = track_x0 + t_val * track_len;
++                                let thumb_rect = Rect::from_center_size(pos2(thumb_x, track_y), vec2(12.0, 18.0));
++                                let thumb_bg = if is_dark { t.card } else { Color32::WHITE };
++                                let thumb_stroke_color = if slider_resp.hovered() || slider_resp.dragged() {
++                                    t.accent
++                                } else if is_dark {
++                                    Color32::from_gray(140)
++                                } else {
++                                    Color32::from_gray(145)
++                                };
++                                ui.painter().rect(
++                                    thumb_rect,
++                                    CornerRadius::same(6),
++                                    thumb_bg,
++                                    Stroke::new(1.2, thumb_stroke_color),
++                                    egui::StrokeKind::Inside,
++                                );
++
++                                // 12. Zoom in [+]
++                                let zoom_in_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
++                                if icons::button(ui, "zoom-in", 24.0, false, &zoom_in_tip).clicked() {
++                                    view.zoom_step(true);
++                                }
++
++                                // 13. Zoom percentage label & quick presets menu
++                                let zoom_str = format!("{:.0}%", view.zoom * 100.0);
++                                let zoom_btn = ui.add(
++                                    egui::Button::new(
++                                        egui::RichText::new(&zoom_str)
++                                            .font(theme::semibold(11.0))
++                                            .color(t.text_muted),
++                                    )
++                                    .frame(false)
++                                    .min_size(vec2(36.0, 20.0)),
++                                ).on_hover_text("Zoom presets");
++
++                                let mut new_zoom = None;
++                                egui::Popup::menu(&zoom_btn)
++                                    .align(egui::RectAlign::TOP_START)
++                                    .show(|ui| {
++                                        ui.set_min_width(130.0);
++                                        for (label, val) in [
++                                            ("Actual size (100%)", 1.0),
++                                            ("50%", 0.5),
++                                            ("75%", 0.75),
++                                            ("125%", 1.25),
++                                            ("150%", 1.5),
++                                            ("175%", 1.75),
++                                            ("200%", 2.0),
++                                            ("250%", 2.5),
++                                            ("300%", 3.0),
++                                            ("400%", 4.0),
++                                        ] {
++                                            if ui.selectable_label((view.zoom - val).abs() < 0.01, tl!(label)).clicked() {
++                                                new_zoom = Some(val);
++                                                ui.close();
++                                            }
++                                        }
++                                    });
++                                if let Some(z) = new_zoom {
++                                    view.set_zoom(z);
++                                    ui.ctx().request_repaint();
++                                }
++                            });
++                        });
++
++                    ui.add_space(4.0);
++                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
++                    ui.add_space(6.0);
++                }
++
+                 // 6. Right section: Search, Print, Save, Fullscreen, and "Edit with PdfCraft"
+                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                     ui.spacing_mut().item_spacing.x = 4.0;
+ 
+-                    // Edit with PdfCraft button (prominent accent styling)
++                    // Edit button
+                     let edit_btn = ui.add(
+                         egui::Button::new(
+-                            egui::RichText::new("✏ Edit with PdfCraft")
++                            egui::RichText::new("✏ Edit")
+                                 .font(theme::semibold(12.0))
+                                 .color(Color32::WHITE),
+                         )
+                         .fill(t.accent)
+                         .corner_radius(CornerRadius::same(6))
+-                        .min_size(vec2(144.0, 30.0)),
++                        .min_size(vec2(76.0, 28.0)),
+                     );
+-                    if edit_btn.on_hover_text("Switch to All Tools editing workspace").clicked() {
+-                        app.switch_mode(Mode::AllTools, true);
+-                        app.reveal_tools();
++                    if edit_btn.on_hover_text("Switch to Edit mode (M7 Edit text and images)").clicked() {
++                        app.switch_mode(Mode::Edit, true);
+                     }
+ 
+                     ui.add_space(5.0);
+                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                     ui.add_space(5.0);
+ 
+-                    // Full screen
+-                    let fs_icon = if app.full_screen { "minimize-2" } else { "monitor" };
+-                    let fs_tip = if app.full_screen { "Exit full screen" } else { "Full screen" };
++                    // Full screen mode (PC monitor with diagonal expansion arrows matching PC full screen mode)
++                    let fs_icon = if app.full_screen { "minimize-2" } else { "full-screen-mode" };
++                    let fs_tip = if app.full_screen { "Exit full screen (Esc)" } else { "Full screen mode (F11)" };
+                     if icons::button(ui, fs_icon, 30.0, app.full_screen, fs_tip).clicked() {
+                         app.execute("view.full_screen");
+                     }
+@@ -1007,8 +1309,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                     .and_then(|r| r.inner);
+ 
+                 // Full screen button (above View options)
+-                let fs_icon = if full_screen { "minimize-2" } else { "monitor" };
+-                let fs_tip = if full_screen { "Exit full screen" } else { "Full screen" };
++                let fs_icon = if full_screen { "minimize-2" } else { "full-screen-mode" };
++                let fs_tip = if full_screen { "Exit full screen" } else { "Full screen mode" };
+                 if icons::button(ui, fs_icon, 32.0, full_screen, &fs_tip).clicked() {
+                     page_display_cmd = Some("view.full_screen");
+                 }
+diff --git a/crates/ui-egui/src/icons.rs b/crates/ui-egui/src/icons.rs
+index 6feac981..97c7866c 100644
+--- a/crates/ui-egui/src/icons.rs
++++ b/crates/ui-egui/src/icons.rs
+@@ -17,7 +17,7 @@ fn white_icons() -> &'static SvgIconSet {
+ }
+ 
+ pub fn exists(name: &str) -> bool {
+-    white_icons().contains(name)
++    name == "full-screen-mode" || white_icons().contains(name)
+ }
+ 
+ fn source(name: &str) -> egui::ImageSource<'static> {
+@@ -29,7 +29,43 @@ pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
+     egui::Image::new(source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
+ }
+ 
++fn paint_fullscreen_pc(ui: &egui::Ui, rect: Rect, size: f32, tint: Color32) {
++    use egui::{pos2, vec2, CornerRadius, Stroke};
++    let stroke = Stroke::new(1.3, tint);
++    let painter = ui.painter();
++
++    // Monitor screen outline: width ~0.84*size, height ~0.56*size
++    let sw = (size * 0.84).round();
++    let sh = (size * 0.56).round();
++    let screen_center = pos2(rect.center().x, rect.center().y - (size * 0.10).round());
++    let screen_rect = Rect::from_center_size(screen_center, vec2(sw, sh));
++    painter.rect_stroke(screen_rect, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
++
++    // Monitor stand and base
++    let stand_y = screen_rect.bottom();
++    let base_y = (rect.center().y + size * 0.38).round();
++    painter.line_segment([pos2(rect.center().x, stand_y), pos2(rect.center().x, base_y)], stroke);
++    let base_w = (size * 0.44).round();
++    painter.line_segment([pos2(rect.center().x - base_w * 0.5, base_y), pos2(rect.center().x + base_w * 0.5, base_y)], stroke);
++
++    // Inside screen: top-right corner bracket (pointing to top-right corner)
++    let margin = 2.5;
++    let b_len = 3.2;
++    let tr = pos2(screen_rect.right() - margin, screen_rect.top() + margin);
++    painter.line_segment([pos2(tr.x - b_len, tr.y), tr], stroke);
++    painter.line_segment([tr, pos2(tr.x, tr.y + b_len)], stroke);
++
++    // Inside screen: bottom-left corner bracket (pointing to bottom-left corner)
++    let bl = pos2(screen_rect.left() + margin, screen_rect.bottom() - margin);
++    painter.line_segment([pos2(bl.x + b_len, bl.y), bl], stroke);
++    painter.line_segment([bl, pos2(bl.x, bl.y - b_len)], stroke);
++}
++
+ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
++    if name == "full-screen-mode" {
++        paint_fullscreen_pc(ui, rect, size, tint);
++        return;
++    }
+     let size = size.round();
+     let min = (rect.center() - Vec2::splat(size * 0.5)).round();
+     let snapped_rect = Rect::from_min_size(min, Vec2::splat(size));

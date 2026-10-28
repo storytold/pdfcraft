@@ -300,25 +300,7 @@ pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<
         }
     })?;
     if key == b"C" {
-        let af_ref = crate::author::ensure_form(doc)?;
-        let mut co: Vec<Object> = doc
-            .get(af_ref)
-            .as_dict()
-            .and_then(|d| d.get(b"CO").cloned())
-            .map(|c| doc.resolve(&c))
-            .and_then(|c| c.as_array().cloned())
-            .unwrap_or_default();
-        co.retain(|o| o.as_ref() != Some(f.obj));
-        if js.is_some() {
-            co.push(Object::Ref(f.obj));
-        }
-        doc.update_dict(af_ref, |d| {
-            if co.is_empty() {
-                d.remove(b"CO");
-            } else {
-                d.set(b"CO".to_vec(), Object::Array(co));
-            }
-        })?;
+        crate::calc_order::keep_listed(doc, f.obj, js.is_some())?;
     }
     Ok(())
 }

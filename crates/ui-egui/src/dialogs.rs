@@ -5,7 +5,7 @@ use egui::{Align, Layout};
 use crate::theme::{self, Tokens};
 use pdfcraft_engine::Edit;
 
-use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
+use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, icons, panels::human_size, widgets};
 
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 
@@ -24,6 +24,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     crate::updates::dialog(app, ctx);
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
+    }
+    if app.dialog != Some(Dialog::FieldTable) {
+        app.field_table_draft = None;
+    }
+    // A movable window, not this modal: the page under it shows the table as it changes.
+    if app.dialog == Some(Dialog::FieldTable) {
+        crate::field_table_ui::show(app, ctx);
+        return;
     }
     let Some(dialog) = app.dialog else {
         app.props_draft = None;
@@ -69,6 +77,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut optimize_now = false;
     let mut duplicate_now: Option<Edit> = None;
     let mut replace_now = false;
+    let mut insert_now = false;
     let mut open_revision: Option<usize> = None;
     let mut a11y_now = false;
     let mut ocr_now = false;
@@ -83,6 +92,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
+            Dialog::InsertPages => 620.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             _ => 520.0,
@@ -529,6 +539,358 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::InsertPages => {
+                let Some(d) = app.insert_draft.as_mut() else {
+                    close = true;
+                    return;
+                };
+                ui.label(egui::RichText::new("Insert Pages").font(theme::semibold(18.0)));
+                ui.add_space(8.0);
+
+                // Source document details
+                ui.label(
+                    egui::RichText::new(format!("File: {} ({} pages)", &d.name, d.src_pages))
+                        .font(theme::medium(13.0))
+                        .color(t.text),
+                );
+                ui.add_space(8.0);
+
+                // Page Range to Insert
+                ui.label(egui::RichText::new("Pages to insert").font(theme::semibold(13.0)).color(t.text));
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.all_pages, true, tl!("All pages"));
+                });
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.all_pages, false, tl!("Pages:"));
+                    d.src_from = d.src_from.clamp(1, d.src_pages.max(1));
+                    d.src_to = d.src_to.clamp(d.src_from, d.src_pages.max(1));
+                    let from_r = ui.add_enabled(!d.all_pages, egui::DragValue::new(&mut d.src_from).range(1..=d.src_pages.max(1)));
+                    ui.label(tl!("to"));
+                    let to_r = ui.add_enabled(!d.all_pages, egui::DragValue::new(&mut d.src_to).range(d.src_from..=d.src_pages.max(1)));
+                    if from_r.changed() || to_r.changed() {
+                        d.all_pages = false;
+                    }
+                    ui.label(egui::RichText::new(format!("of {}", d.src_pages)).color(t.text_muted));
+                });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                // Target Location
+                ui.label(egui::RichText::new(tl!("Location")).font(theme::semibold(13.0)).color(t.text));
+                ui.horizontal(|ui| {
+                    ui.label("Insert:");
+                    ui.radio_value(&mut d.insert_after, true, "After");
+                    ui.radio_value(&mut d.insert_after, false, "Before");
+                    ui.add_space(8.0);
+                    ui.label("page:");
+                    d.target_page = d.target_page.clamp(1, d.doc_pages.max(1));
+                    ui.add(egui::DragValue::new(&mut d.target_page).range(1..=d.doc_pages.max(1)));
+                    ui.label(egui::RichText::new(format!("of {}", d.doc_pages)).color(t.text_muted));
+                });
+
+                let start_p = if d.all_pages { 1 } else { d.src_from };
+                let end_p = if d.all_pages { d.src_pages } else { d.src_to };
+                let target_p = d.target_page;
+
+                // Render or retrieve cached source thumbnails
+                let cache_valid = app.insert_preview_cache.as_ref().is_some_and(|c| {
+                    c.bytes_len == d.bytes.len() && c.start_page == start_p && c.end_page == end_p
+                });
+
+                if !cache_valid {
+                    let mut renderer = pdfcraft_render::PageRenderer::new(d.bytes.clone(), pdfcraft_render::RenderConfig::default());
+                    let res_start = renderer.render(pdfcraft_render::RenderRequest {
+                        page: start_p.saturating_sub(1),
+                        kind: pdfcraft_render::RequestKind::Pixels,
+                        tile: None,
+                        scale: 0.45,
+                        tag: 0,
+                        preview: true,
+                    });
+                    let res_end = renderer.render(pdfcraft_render::RenderRequest {
+                        page: end_p.saturating_sub(1),
+                        kind: pdfcraft_render::RequestKind::Pixels,
+                        tile: None,
+                        scale: 0.45,
+                        tag: 0,
+                        preview: true,
+                    });
+
+                    let start_img = if res_start.width > 0 && res_start.height > 0 && res_start.rgba.len() >= (res_start.width * res_start.height * 4) as usize {
+                        egui::ColorImage::from_rgba_unmultiplied([res_start.width as usize, res_start.height as usize], &res_start.rgba)
+                    } else {
+                        egui::ColorImage::example()
+                    };
+                    let end_img = if res_end.width > 0 && res_end.height > 0 && res_end.rgba.len() >= (res_end.width * res_end.height * 4) as usize {
+                        egui::ColorImage::from_rgba_unmultiplied([res_end.width as usize, res_end.height as usize], &res_end.rgba)
+                    } else {
+                        egui::ColorImage::example()
+                    };
+
+                    let start_aspect = if res_start.height > 0 { res_start.width as f32 / res_start.height as f32 } else { 0.77 };
+                    let end_aspect = if res_end.height > 0 { res_end.width as f32 / res_end.height as f32 } else { 0.77 };
+
+                    let start_tex = ctx.load_texture("insert_preview_start", start_img, egui::TextureOptions::LINEAR);
+                    let end_tex = ctx.load_texture("insert_preview_end", end_img, egui::TextureOptions::LINEAR);
+
+                    app.insert_preview_cache = Some(crate::InsertPreviewCache {
+                        bytes_len: d.bytes.len(),
+                        start_page: start_p,
+                        end_page: end_p,
+                        start_tex,
+                        end_tex,
+                        start_aspect,
+                        end_aspect,
+                    });
+                }
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Visual Preview").font(theme::semibold(14.0)).color(t.text));
+                ui.add_space(6.0);
+
+                let is_single = start_p == end_p;
+                let page_count = end_p.saturating_sub(start_p) + 1;
+
+                // Fetch target page thumbnail & aspect
+                let target_idx = target_p.saturating_sub(1);
+                let (target_tex, target_aspect) = if let Some(i) = app.active {
+                    if let Some(view) = app.views.get_mut(i) {
+                        view.need_thumbnail(target_idx, true);
+                        let asp = app.session.get(view.id).and_then(|doc| doc.info.pages.get(target_idx)).map_or(0.77, |p| {
+                            if p.height > 0.0 { p.width as f32 / p.height as f32 } else { 0.77 }
+                        });
+                        (view.thumb(target_idx).map(|t| t.id()), asp)
+                    } else {
+                        (None, 0.77)
+                    }
+                } else {
+                    (None, 0.77)
+                };
+
+                let (src_start_tex, src_end_tex, src_start_aspect, _src_end_aspect) = app.insert_preview_cache.as_ref().map_or(
+                    (None, None, 0.77, 0.77),
+                    |c| (Some(c.start_tex.id()), Some(c.end_tex.id()), c.start_aspect, c.end_aspect),
+                );
+
+                // Layout constants
+                let card_w = 110.0_f32;
+                let card_h = 140.0_f32;
+                let arrow_w = 60.0_f32;
+
+                egui::Frame::NONE
+                    .fill(if t.dark() { egui::Color32::from_gray(24) } else { egui::Color32::from_gray(245) })
+                    .stroke(egui::Stroke::new(1.0, t.border))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(20, 16))
+                    .show(ui, |ui| {
+                        // Helper: draw a single page card with aspect-fitted paper sheet & shadow
+                        let paint_card = |ui: &mut egui::Ui, label: &str, sublabel: &str, tex: Option<egui::TextureId>, aspect: f32, accent: bool| {
+                            ui.vertical(|ui| {
+                                ui.set_width(card_w);
+                                // Label
+                                let lbl_color = if accent { t.accent_text } else { t.text };
+                                ui.add(egui::Label::new(egui::RichText::new(label).font(theme::semibold(11.0)).color(lbl_color)).wrap_mode(egui::TextWrapMode::Truncate));
+                                ui.add(egui::Label::new(egui::RichText::new(sublabel).font(theme::regular(10.0)).color(t.text_faint)).wrap_mode(egui::TextWrapMode::Truncate));
+                                ui.add_space(4.0);
+
+                                // Bounding box for page card
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(card_w, card_h), egui::Sense::hover());
+
+                                // Aspect ratio calculation: fits inside card without distortion
+                                let asp = if aspect.is_finite() && aspect > 0.1 && aspect < 10.0 { aspect } else { 0.77 };
+                                let box_aspect = (card_w - 8.0) / (card_h - 8.0);
+                                let (paper_w, paper_h) = if asp > box_aspect {
+                                    let w = card_w - 8.0;
+                                    let h = (w / asp).min(card_h - 8.0);
+                                    (w, h)
+                                } else {
+                                    let h = card_h - 8.0;
+                                    let w = (h * asp).min(card_w - 8.0);
+                                    (w, h)
+                                };
+                                let paper_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(paper_w, paper_h));
+
+                                // Drop shadow
+                                ui.painter().rect(
+                                    paper_rect.translate(egui::vec2(1.5, 2.5)),
+                                    egui::CornerRadius::same(3),
+                                    egui::Color32::TRANSPARENT,
+                                    egui::Stroke::new(1.5, egui::Color32::from_black_alpha(if t.dark() { 60 } else { 25 })),
+                                    egui::StrokeKind::Outside,
+                                );
+
+                                // White paper surface
+                                ui.painter().rect_filled(paper_rect, egui::CornerRadius::same(3), egui::Color32::WHITE);
+
+                                // Border
+                                let border_color = if accent { t.accent } else if t.dark() { egui::Color32::from_gray(90) } else { egui::Color32::from_gray(200) };
+                                let border_w = if accent { 1.5 } else { 1.0 };
+                                ui.painter().rect_stroke(paper_rect, egui::CornerRadius::same(3), egui::Stroke::new(border_w, border_color), egui::StrokeKind::Inside);
+
+                                if let Some(tex_id) = tex {
+                                    ui.painter().image(
+                                        tex_id,
+                                        paper_rect.shrink(1.0),
+                                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                                        egui::Color32::WHITE,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        paper_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        sublabel,
+                                        theme::medium(11.0),
+                                        egui::Color32::from_gray(160),
+                                    );
+                                }
+                                resp
+                            }).inner
+                        };
+
+                        // Helper: draw the center arrow connector
+                        let paint_arrow = |ui: &mut egui::Ui, text: &str| {
+                            ui.vertical(|ui| {
+                                ui.set_width(arrow_w);
+                                ui.add_space(38.0);
+                                ui.vertical_centered(|ui| {
+                                    let (arr_rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::hover());
+                                    icons::paint(ui, arr_rect, "move-right", 24.0, t.accent);
+                                    ui.add_space(4.0);
+                                    ui.add(egui::Label::new(egui::RichText::new(text).font(theme::semibold(9.5)).color(t.accent_text)).wrap_mode(egui::TextWrapMode::Extend));
+                                });
+                            });
+                        };
+
+                        // Helper: draw inserted pages group (stacked card for multi-page)
+                        let paint_inserted = |ui: &mut egui::Ui| {
+                            if is_single {
+                                let resp = paint_card(ui, "+1 Page", &format!("Page {start_p}"), src_start_tex, src_start_aspect, true);
+                                resp.on_hover_text(format!("Source: {}\nPage {}", d.name, start_p));
+                            } else {
+                                // Show first page with stacked offset behind, plus a badge
+                                ui.vertical(|ui| {
+                                    ui.set_width(card_w + 6.0);
+                                    let lbl = format!("+{page_count} Pages");
+                                    ui.add(egui::Label::new(egui::RichText::new(&lbl).font(theme::semibold(11.0)).color(t.accent_text)).wrap_mode(egui::TextWrapMode::Truncate));
+                                    let range_lbl = format!("Pages {start_p}–{end_p}");
+                                    ui.add(egui::Label::new(egui::RichText::new(&range_lbl).font(theme::regular(10.0)).color(t.text_faint)).wrap_mode(egui::TextWrapMode::Truncate));
+                                    ui.add_space(4.0);
+
+                                    // Stacked cards: back card offset, front card on top
+                                    let total_h = card_h + 6.0;
+                                    let (area, _) = ui.allocate_exact_size(egui::vec2(card_w + 6.0, total_h), egui::Sense::hover());
+
+                                    // Compute aspect-fitted size for stacked cards
+                                    let asp = if src_start_aspect.is_finite() && src_start_aspect > 0.1 { src_start_aspect } else { 0.77 };
+                                    let box_aspect = (card_w - 8.0) / (card_h - 8.0);
+                                    let (pw, ph) = if asp > box_aspect {
+                                        let w = card_w - 8.0;
+                                        let h = (w / asp).min(card_h - 8.0);
+                                        (w, h)
+                                    } else {
+                                        let h = card_h - 8.0;
+                                        let w = (h * asp).min(card_w - 8.0);
+                                        (w, h)
+                                    };
+
+                                    // Back card (offset by +5,-3 — represents subsequent pages)
+                                    let back_center = area.center() + egui::vec2(4.0, -3.0);
+                                    let back_rect = egui::Rect::from_center_size(back_center, egui::vec2(pw, ph));
+                                    ui.painter().rect_filled(back_rect, egui::CornerRadius::same(3), if t.dark() { egui::Color32::from_gray(60) } else { egui::Color32::from_gray(240) });
+                                    ui.painter().rect_stroke(back_rect, egui::CornerRadius::same(3), egui::Stroke::new(1.0, if t.dark() { egui::Color32::from_gray(80) } else { egui::Color32::from_gray(200) }), egui::StrokeKind::Inside);
+                                    if let Some(tex_id) = src_end_tex {
+                                        ui.painter().image(
+                                            tex_id,
+                                            back_rect.shrink(1.0),
+                                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                                            egui::Color32::from_white_alpha(140),
+                                        );
+                                    }
+
+                                    // Front card (main — first page)
+                                    let front_center = area.center() + egui::vec2(-2.0, 2.0);
+                                    let front_rect = egui::Rect::from_center_size(front_center, egui::vec2(pw, ph));
+                                    // Drop shadow
+                                    ui.painter().rect(
+                                        front_rect.translate(egui::vec2(1.5, 2.0)),
+                                        egui::CornerRadius::same(3),
+                                        egui::Color32::TRANSPARENT,
+                                        egui::Stroke::new(1.5, egui::Color32::from_black_alpha(if t.dark() { 60 } else { 25 })),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    ui.painter().rect_filled(front_rect, egui::CornerRadius::same(3), egui::Color32::WHITE);
+                                    ui.painter().rect_stroke(front_rect, egui::CornerRadius::same(3), egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                                    if let Some(tex_id) = src_start_tex {
+                                        ui.painter().image(
+                                            tex_id,
+                                            front_rect.shrink(1.0),
+                                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                                            egui::Color32::WHITE,
+                                        );
+                                    } else {
+                                        ui.painter().text(
+                                            front_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            format!("Page {start_p}"),
+                                            theme::medium(11.0),
+                                            egui::Color32::from_gray(160),
+                                        );
+                                    }
+
+                                    // Page count badge on top-right of front card
+                                    let badge_text = format!("+{page_count}");
+                                    let badge_w = 34.0_f32;
+                                    let badge_h = 18.0_f32;
+                                    let badge_rect = egui::Rect::from_min_size(
+                                        egui::pos2(front_rect.right() - badge_w - 4.0, front_rect.top() + 4.0),
+                                        egui::vec2(badge_w, badge_h),
+                                    );
+                                    ui.painter().rect_filled(badge_rect, egui::CornerRadius::same(9), t.accent);
+                                    ui.painter().text(badge_rect.center(), egui::Align2::CENTER_CENTER, &badge_text, theme::semibold(10.0), egui::Color32::WHITE);
+                                });
+                            }
+                        };
+
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let total_w = if is_single { card_w * 2.0 + arrow_w } else { card_w * 2.0 + arrow_w + 12.0 };
+                            let pad = ((ui.available_width() - total_w) / 2.0).max(4.0);
+                            ui.add_space(pad);
+
+                            let position_text = if d.insert_after { "Insert After" } else { "Insert Before" };
+
+                            if d.insert_after {
+                                // [Current Doc Page] → [+ Inserted Pages]
+                                let resp = paint_card(ui, "Current Doc", &format!("Page {target_p}"), target_tex, target_aspect, false);
+                                resp.on_hover_text(format!("Current Document\nPage {target_p}"));
+                                paint_arrow(ui, position_text);
+                                paint_inserted(ui);
+                            } else {
+                                // [+ Inserted Pages] → [Current Doc Page]
+                                paint_inserted(ui);
+                                paint_arrow(ui, position_text);
+                                let resp = paint_card(ui, "Current Doc", &format!("Page {target_p}"), target_tex, target_aspect, false);
+                                resp.on_hover_text(format!("Current Document\nPage {target_p}"));
+                            }
+                        });
+                    });
+
+                ui.add_space(14.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                        insert_now = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                });
+                return;
+            }
             Dialog::RedactPages => {
                 let n = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len());
                 let (ok, cancel) = crate::redact_ui::pages_body(ui, &mut app.redact_pages_draft, n, &t);
@@ -595,6 +957,11 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &count.to_string())])
                 };
                 ui.label(text);
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let l = ui.label(tl!("Pages"));
+                    ui.add(egui::TextEdit::singleline(&mut app.extract_draft.pages_input).desired_width(180.0).hint_text("e.g. 1-5, 8, 11-13")).labelled_by(l.id);
+                });
                 ui.add_space(4.0);
                 // The name the pages are saved under (#737); separate files add " (page N)".
                 ui.horizontal(|ui| {
@@ -719,6 +1086,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            // Never reached: `dialogs` shows this movable window above and returns before the modal.
+            // The arm keeps the match exhaustive.
+            Dialog::FieldTable => close = true,
             Dialog::Optimize => {
                 let (ok, cancel) = crate::optimize_ui::body(ui, &mut app.optimize_draft, &t);
                 optimize_now = ok;
@@ -783,6 +1153,114 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                         close = true;
                     }
+                });
+                return;
+            }
+            Dialog::AiService => {
+                ui.label(egui::RichText::new("Choose AI Assistant").font(theme::semibold(18.0)));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Select which AI service you would like to connect for reading, summarizing, and querying documents:",
+                    )
+                    .color(t.text_faint),
+                );
+                ui.add_space(12.0);
+
+                let providers = [
+                    (
+                        crate::AiProvider::ChatGpt,
+                        "ChatGPT",
+                        "OpenAI's smart reasoning model for general document analysis, summarization, and writing.",
+                    ),
+                    (
+                        crate::AiProvider::Gemini,
+                        "Google Gemini",
+                        "Multimodal AI with massive context window, great for deep book, paper, & code queries.",
+                    ),
+                    (
+                        crate::AiProvider::Grok,
+                        "xAI Grok",
+                        "Real-time AI model with rapid search integration and direct insights.",
+                    ),
+                    (
+                        crate::AiProvider::Claude,
+                        "Anthropic Claude",
+                        "Specialized in long-form writing, technical analysis, and nuanced comprehension.",
+                    ),
+                ];
+
+                for (provider, name, desc) in providers {
+                    let is_active = app.ai_provider == Some(provider);
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 52.0), egui::Sense::click());
+                    let hovered = resp.hovered();
+                    let bg = if is_active {
+                        t.accent.linear_multiply(0.12)
+                    } else if hovered {
+                        t.hover
+                    } else {
+                        t.field
+                    };
+                    let stroke = egui::Stroke::new(if is_active { 1.5 } else { 1.0 }, if is_active { t.accent } else { t.border });
+                    ui.painter().rect(rect, egui::CornerRadius::same(8), bg, stroke, egui::StrokeKind::Inside);
+
+                    // Radio indicator
+                    let radio_center = egui::pos2(rect.left() + 20.0, rect.center().y);
+                    ui.painter().circle_stroke(radio_center, 6.0, egui::Stroke::new(1.2, if is_active { t.accent } else { t.border }));
+                    if is_active {
+                        ui.painter().circle_filled(radio_center, 3.5, t.accent);
+                    }
+
+                    // Text
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 38.0, rect.top() + 14.0),
+                        egui::Align2::LEFT_CENTER,
+                        name,
+                        theme::semibold(13.0),
+                        t.text,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 38.0, rect.top() + 34.0),
+                        egui::Align2::LEFT_CENTER,
+                        desc,
+                        theme::regular(10.5),
+                        t.text_faint,
+                    );
+
+                    if resp.clicked() {
+                        app.ai_provider = Some(provider);
+                        app.open_ai_assistant(provider, None);
+                        close = true;
+                    }
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.label(egui::RichText::new("Target Document").font(theme::semibold(12.5)).color(t.text));
+                ui.add_space(4.0);
+                let active_name = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or("No document open", |d| &d.name);
+                ui.label(
+                    egui::RichText::new(format!("Active PDF: {active_name} (will be placed on clipboard as real file drop)"))
+                        .font(theme::regular(11.0))
+                        .color(t.text_faint),
+                );
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if widgets::pill_button(ui, "📄 Ask with Custom PDF…", false).clicked() {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("PDF files", &["pdf"]).pick_file() {
+                            let prov = app.ai_provider.unwrap_or(crate::AiProvider::ChatGpt);
+                            app.open_ai_assistant(prov, Some(path));
+                            close = true;
+                        }
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if widgets::pill_button(ui, "Cancel", false).clicked() {
+                            close = true;
+                        }
+                    });
                 });
                 return;
             }
@@ -963,9 +1441,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::Preferences => {
-                // The settings outgrow a short window: scroll them rather than run off the screen.
-                let max = (ui.ctx().content_rect().height() - 120.0).max(200.0);
-                close = egui::ScrollArea::vertical().max_height(max).show(ui, |ui| crate::js_ui::preferences_body(ui, app, &t)).inner;
+                ui.set_width(740.0);
+                close = crate::js_ui::preferences_body(ui, app, &t);
                 return;
             }
             Dialog::RecognizeText => {
@@ -1157,7 +1634,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         ui.horizontal(|ui| {
                             widgets::artcraft_mark(ui, 40.0);
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("PdfCraft").font(theme::semibold(20.0)));
+                                ui.label(egui::RichText::new(app.app_display_name()).font(theme::semibold(20.0)));
                                 ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", &pdfcraft_engine::build_info::version())]));
                             });
                         });
@@ -1170,7 +1647,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             .color(t.text_muted)
                             .small(),
                         );
-                        ui.add_space(12.0);
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("UI Architecture & Evolution:").font(theme::semibold(12.0)).color(t.text));
+                            ui.hyperlink_to(egui::RichText::new("Manideep Velchuri (@Manideepvelchuri)").font(theme::semibold(12.0)).color(t.accent_text), "https://github.com/Manideepvelchuri");
+                        });
+                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!("Part of")).color(t.text_muted));
                             widgets::artcraft_logo(ui, 16.0);
@@ -1245,6 +1727,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             bytes: d.bytes.clone(),
             src_pages: (d.src_from - 1..d.src_from - 1 + n).collect(),
         });
+    }
+    if insert_now {
+        app.confirm_insert_draft();
     }
     // A print or save that fails keeps the dialog open, with the reason in a notice.
     if print_go && !app.print_now() {
@@ -1387,6 +1872,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.props_draft = None;
         app.view_draft = None;
         app.bulk_field_props = None;
+        app.insert_draft = None;
     } else {
         app.dialog = Some(next);
     }
@@ -1748,5 +2234,151 @@ fn unlock(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         Some(PasswordAnswer::Cancel) => app.submit_unlock(None),
         None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_pages_preview_labels_do_not_wrap() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, crate::theme::ThemeKind::Dark);
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 600.0)));
+        let mut output = ctx.run_ui(raw_input, |ui| {
+            ui.horizontal_centered(|ui| {
+                let card_w = 90.0;
+                ui.vertical_centered(|ui| {
+                    ui.set_min_width(card_w);
+                    ui.set_max_width(card_w);
+                    let resp = ui.add(
+                        egui::Label::new(egui::RichText::new("Target (P. 19)").font(theme::semibold(11.5))).wrap_mode(egui::TextWrapMode::Extend),
+                    );
+                    assert!(resp.rect.width() >= 40.0, "label must lay out horizontally, width: {}", resp.rect.width());
+                    assert!(resp.rect.height() < 25.0, "label must be a single line, height: {}", resp.rect.height());
+                });
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn insert_pages_preview_layout_is_balanced_and_does_not_overflow() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, crate::theme::ThemeKind::Dark);
+        let t = Tokens::get(&ctx);
+
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 600.0)));
+        let mut output = ctx.run_ui(raw_input, |ui| {
+            ui.set_max_width(520.0);
+            let card_w = 90.0;
+            let card_h = 118.0;
+            let mut badge_w = 96.0;
+
+            let start_p = 1;
+            let end_p = 4;
+            let target_p = 19;
+            let is_single = start_p == end_p;
+
+            let _frame_resp = ui.horizontal(|ui| {
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_gray(24))
+                    .stroke(egui::Stroke::new(1.0, t.border))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            let start_title = if is_single {
+                                format!("Source (P. {})", start_p)
+                            } else {
+                                format!("Start (P. {})", start_p)
+                            };
+
+                            ui.vertical_centered(|ui| {
+                                ui.set_min_width(card_w);
+                                ui.set_max_width(card_w);
+                                let r_lbl = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(start_title)
+                                            .font(theme::semibold(11.5))
+                                            .color(t.text),
+                                    )
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                                assert!(r_lbl.rect.height() < 25.0, "start label must be single line");
+                                ui.add_space(4.0);
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(card_w, card_h), egui::Sense::hover());
+                                assert_eq!(rect.width(), card_w);
+                                assert_eq!(rect.height(), card_h);
+                            });
+
+                            assert!(!is_single);
+                            ui.add_space(6.0);
+                            ui.vertical_centered(|ui| {
+                                ui.set_min_width(20.0);
+                                ui.add_space(68.0);
+                                ui.label(egui::RichText::new("→").font(theme::semibold(16.0)).color(t.text_muted));
+                            });
+                            ui.add_space(6.0);
+
+                            ui.vertical_centered(|ui| {
+                                ui.set_min_width(card_w);
+                                ui.set_max_width(card_w);
+                                let r_lbl = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!("End (P. {})", end_p))
+                                            .font(theme::semibold(11.5))
+                                            .color(t.text),
+                                    )
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                                assert!(r_lbl.rect.height() < 25.0, "end label must be single line");
+                                ui.add_space(4.0);
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(card_w, card_h), egui::Sense::hover());
+                                assert_eq!(rect.width(), card_w);
+                            });
+
+                            ui.add_space(14.0);
+                            let badge_text = format!("After P. {}", target_p);
+                            let badge_font = theme::semibold(11.5);
+                            let badge_text_w = ui.fonts_mut(|f| f.layout_no_wrap(badge_text.clone(), badge_font.clone(), egui::Color32::WHITE).size().x);
+                            badge_w = (badge_text_w + 22.0).max(96.0);
+
+                            ui.vertical_centered(|ui| {
+                                ui.set_min_width(badge_w);
+                                ui.add_space(68.0);
+                                let (badge_rect, _) = ui.allocate_exact_size(egui::vec2(badge_w, 24.0), egui::Sense::hover());
+                                assert_eq!(badge_rect.width(), badge_w);
+                            });
+                            ui.add_space(14.0);
+
+                            ui.vertical_centered(|ui| {
+                                ui.set_min_width(card_w);
+                                ui.set_max_width(card_w);
+                                let r_lbl = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!("Target (P. {})", target_p))
+                                            .font(theme::semibold(11.5))
+                                            .color(t.accent_text),
+                                    )
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                                assert!(r_lbl.rect.height() < 25.0, "target label must be single line");
+                                ui.add_space(4.0);
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(card_w, card_h), egui::Sense::hover());
+                                assert_eq!(rect.width(), card_w);
+                            });
+                        });
+                    })
+            }).inner;
+            let total_content_w = card_w * 3.0 + badge_w + 40.0;
+            assert!(total_content_w < 550.0, "Total content width must fit comfortably inside 620px dialog: actual {total_content_w}");
+        });
+        output.textures_delta.clear();
     }
 }

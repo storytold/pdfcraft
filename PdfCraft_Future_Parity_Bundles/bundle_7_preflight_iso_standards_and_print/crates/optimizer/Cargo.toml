@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-optimizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PDF Optimizer, image bicubic downsampling, stream recompression, and font subset pruning"
+
+[dependencies]

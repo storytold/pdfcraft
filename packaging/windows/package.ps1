@@ -21,6 +21,7 @@
 #>
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
+  [string] $Version,
   [switch] $SkipBuild
 )
 $ErrorActionPreference = 'Stop'
@@ -30,6 +31,10 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
   & $Block
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
+}
+
+if ($Version) {
+  $env:PDFCRAFT_VERSION = $Version
 }
 
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
@@ -55,17 +60,24 @@ if (-not $env:PDFCRAFT_BUILD_DATE) { $env:PDFCRAFT_BUILD_DATE = (Get-Date).ToUni
 
 Write-Output "PdfCraft $Version for Windows $Arch ($Target)"
 
-if (-not $SkipBuild) {
-  # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
-  # proc-macros are unaffected.
-  $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
-  [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
-  # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
-  $env:PDFCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
-}
-
 $Bin = Join-Path $TargetDir "$Target\release"
+
+if (-not $SkipBuild) {
+  $hasBin = (Test-Path (Join-Path $Bin 'pdfcraft.exe')) -and (Test-Path (Join-Path $Bin 'pdfcraft-cli.exe'))
+  $hasLink = [bool](Get-Command link.exe -ErrorAction SilentlyContinue)
+
+  if ($hasBin -and -not $hasLink) {
+    Write-Warning "MSVC link.exe not found on host; reusing prebuilt binaries in $Bin"
+  } else {
+    # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
+    # proc-macros are unaffected.
+    $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
+    [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
+    # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
+    $env:PDFCRAFT_REQUIRE_WINRES = '1'
+    Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
+  }
+}
 
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
 # x64 build can never ship labelled arm64 (#61). Subsystem (optional header): 2 = Windows GUI,
@@ -101,8 +113,13 @@ Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
 # the MSI and the portable zip take the whole folder, so new models ship without naming them here.
 $Models = Join-Path $Stage 'models'
 New-Item -ItemType Directory -Force -Path $Models | Out-Null
-Push-Location $Root
-try { Invoke-Native 'cargo xtask models' { cargo xtask models $Models } } finally { Pop-Location }
+$cachedModels = Join-Path $Root 'assets\models'
+if (Test-Path (Join-Path $cachedModels 'ATTRIBUTION.txt')) {
+  Copy-Item (Join-Path $cachedModels '*') $Models -Recurse -Force
+} else {
+  Push-Location $Root
+  try { Invoke-Native 'cargo xtask models' { cargo xtask models $Models } } finally { Pop-Location }
+}
 Remove-Item -Force (Join-Path $Models '*.part') -ErrorAction SilentlyContinue
 if (-not (Test-Path (Join-Path $Models 'ATTRIBUTION.txt')) -or -not (Get-ChildItem (Join-Path $Models '*.LICENCE.txt'))) {
   throw "no OCR models in $Models after cargo xtask models"
@@ -110,18 +127,23 @@ if (-not (Test-Path (Join-Path $Models 'ATTRIBUTION.txt')) -or -not (Get-ChildIt
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "pdfcraft-$Version-windows-$Arch.msi"
-Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'pdfcraft.wxs') -arch $Arch `
-    (Join-Path $PSScriptRoot 'installer-ui.wxs') `
-    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "ModelsDir=$Models" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
-    -o $Msi
+$hasWix = [bool](Get-Command wix.exe -ErrorAction SilentlyContinue) -or [bool](Get-Command wix -ErrorAction SilentlyContinue)
+if ($hasWix) {
+  Invoke-Native 'wix build' {
+    wix build (Join-Path $PSScriptRoot 'pdfcraft.wxs') -arch $Arch `
+      (Join-Path $PSScriptRoot 'installer-ui.wxs') `
+      -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "ModelsDir=$Models" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
+      -o $Msi
+  }
+  # Inspect the built MSI, not just the XML, before signing/publishing it. In a child process, so
+  # its Windows Installer database handle is gone before signtool opens the MSI.
+  Invoke-Native 'test-msi' { & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-msi.ps1') $Msi }
+  # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
+  Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
+  & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
+} else {
+  Write-Warning "WiX CLI not found; skipping MSI package. Portable zip will be created."
 }
-# Inspect the built MSI, not just the XML, before signing/publishing it. In a child process, so
-# its Windows Installer database handle is gone before signtool opens the MSI.
-Invoke-Native 'test-msi' { & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-msi.ps1') $Msi }
-# wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
-Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
-& (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
 # ---- portable zip ------------------------------------------------------------------------------
 $Portable = Join-Path $TargetDir "windows-package\pdfcraft-$Version-windows-$Arch-portable"
@@ -160,4 +182,6 @@ if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
 } else {
   Write-Output "skipping pdfcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
-Get-Item $Msi, $Zip | Format-Table Name, Length
+$Outputs = @($Zip)
+if (Test-Path $Msi) { $Outputs += $Msi }
+Get-Item $Outputs | Format-Table Name, Length

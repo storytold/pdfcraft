@@ -224,6 +224,8 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
 /// The name of the installed Tamil face [`installed_font_definitions`] may add.
 pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
+/// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add. (#3505, #3517)
+pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
@@ -253,6 +255,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
+            (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
         ] {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
@@ -460,12 +463,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // Crisper text at 100–150 % scaling (#76): glyphs sit on whole pixels instead of being
     // rendered at quarter-pixel offsets, which egui notes blurs them. In the light theme, a mild
     // gamma darkens the antialiased edges of dark text (egui's default is linear, which reads thin
-    // and grey next to the system's text); the dark theme keeps egui's own curve. At 200 % both
-    // make little difference.
+    // and grey next to the system's text); the dark theme keeps egui's own curve.
     v.text_options.subpixel_binning = false;
-    if !t.dark() {
-        v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(0.75);
-    }
+    v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(if t.dark() { 0.85 } else { 0.75 });
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);

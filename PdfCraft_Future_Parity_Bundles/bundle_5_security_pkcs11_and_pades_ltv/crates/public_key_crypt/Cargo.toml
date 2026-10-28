@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-public-key-crypt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ISO 32000-1 §7.6.5 Public-Key Security Handler and CMS EnvelopedData recipient permission engine"
+
+[dependencies]

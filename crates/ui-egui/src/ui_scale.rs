@@ -10,10 +10,10 @@
 
 /// The smallest and largest interface sizes, as factors.
 pub const MIN: f32 = 0.5;
-pub const MAX: f32 = 3.0;
+pub const MAX: f32 = 4.0;
 
 /// The sizes the Preferences menu offers, in percent.
-pub const PRESETS: [u16; 12] = [75, 80, 85, 90, 95, 100, 125, 150, 175, 200, 250, 300];
+pub const PRESETS: [u16; 18] = [75, 80, 85, 90, 95, 100, 110, 120, 125, 135, 150, 160, 175, 200, 225, 250, 300, 350];
 
 /// A factor from settings, the control channel or the system: finite and within [`MIN`]..=[`MAX`],
 /// or `None`.

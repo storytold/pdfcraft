@@ -576,6 +576,9 @@ fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
 
         // Consume the actual native-picker callback (or its empty-path cancellation).
         harness.state_mut().process_picked();
+        if harness.state().dialog == Some(crate::Dialog::InsertPages) {
+            harness.state_mut().confirm_insert_draft();
+        }
         let doc = harness.state().session.get(a_id).expect("A after picker completion");
         assert_eq!(doc.info.pages.len(), if cancel { 2 } else { 3 });
         assert_eq!(doc.dirty, !cancel);

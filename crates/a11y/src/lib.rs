@@ -21,6 +21,22 @@ mod report;
 mod structure;
 mod tags;
 
+#[cfg(test)]
+thread_local! {
+    /// Marked-content stack entries read to decide which marks enclose an operator, for the tests
+    /// that keep that constant per operator.
+    static MARK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Page content passes made to find figure bounds.
+    static BOUNDS_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` marked-content stack reads (tests only).
+#[inline]
+fn count_mark_reads(_n: usize) {
+    #[cfg(test)]
+    MARK_READS.with(|c| c.set(c.get().saturating_add(_n)));
+}
+
 pub use alt::{AltError, ArtifactError, Figure, figures, mark_decorative, mark_tag_artifact, set_alt};
 pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
 pub use autotag_fields::tag_form_fields;

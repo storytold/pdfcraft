@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "bundle_1_core_decoders_and_rasterizer/crates/codecs",
+    "bundle_1_core_decoders_and_rasterizer/crates/storage",
+    "bundle_1_core_decoders_and_rasterizer/crates/rasterizer",
+    "bundle_1_core_decoders_and_rasterizer/crates/arlington",
+    "bundle_2_viewing_tiling_wasm_and_assembly/crates/tiling",
+    "bundle_2_viewing_tiling_wasm_and_assembly/crates/wasm_bridge",
+    "bundle_2_viewing_tiling_wasm_and_assembly/crates/a11y_bridge",
+    "bundle_2_viewing_tiling_wasm_and_assembly/crates/assembly",
+    "bundle_3_annotations_appearances_and_scripted_forms/crates/appearances",
+    "bundle_3_annotations_appearances_and_scripted_forms/crates/forms_engine",
+    "bundle_3_annotations_appearances_and_scripted_forms/crates/js_sandbox",
+    "bundle_4_typography_editing_subsetting_and_reflow/crates/subsetter",
+    "bundle_4_typography_editing_subsetting_and_reflow/crates/reflow",
+    "bundle_4_typography_editing_subsetting_and_reflow/crates/content_editor",
+    "bundle_5_security_pkcs11_and_pades_ltv/crates/public_key_crypt",
+    "bundle_5_security_pkcs11_and_pades_ltv/crates/pades_ltv",
+    "bundle_5_security_pkcs11_and_pades_ltv/crates/pkcs11_bridge",
+    "bundle_5_security_pkcs11_and_pades_ltv/crates/signature_history",
+    "bundle_6_multilingual_ocr_and_office_export/crates/scan_cleanup",
+    "bundle_6_multilingual_ocr_and_office_export/crates/multilingual_ocr",
+    "bundle_6_multilingual_ocr_and_office_export/crates/office_export",
+    "bundle_7_preflight_iso_standards_and_print/crates/preflight_engine",
+    "bundle_7_preflight_iso_standards_and_print/crates/iso_standards",
+    "bundle_7_preflight_iso_standards_and_print/crates/optimizer",
+    "bundle_7_preflight_iso_standards_and_print/crates/linearizer",
+    "bundle_7_preflight_iso_standards_and_print/crates/print_production",
+    "bundle_8_accessibility_action_wizard_and_cli/crates/pdf_ua_remediation",
+    "bundle_8_accessibility_action_wizard_and_cli/crates/action_wizard",
+    "bundle_8_accessibility_action_wizard_and_cli/crates/universal_cli",
+    "bundle_8_accessibility_action_wizard_and_cli/crates/platform_readiness",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.10.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["PdfCraft Contributors"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

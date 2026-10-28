@@ -77,7 +77,11 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     let bytes = row.checked_mul(h)?;
     let row_bits = row.checked_mul(8)?;
     bytes.checked_mul(8)?;
-    let mut data = s.decoded().ok()?;
+    // Decode no further than the raster can need: a filter stage may legitimately produce up to
+    // twice it (ASCIIHex text under Flate) plus a PNG predictor's byte per row. Data past that
+    // can only be a decompression bomb; the image is then removed whole.
+    let allowance = bytes.checked_add(h)?.checked_mul(2)?.checked_add(4096)?;
+    let mut data = s.decoded_within(allowance).ok()?;
     if data.len() < bytes {
         return None;
     }

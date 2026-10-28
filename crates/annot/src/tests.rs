@@ -991,6 +991,29 @@ fn malformed_optional_interior_color_does_not_hide_shape_strokes() {
     assert!(list(&doc, 0)[0].get(b"AP").is_none(), "display generation leaves the source document unchanged");
 }
 
+/// #3175: viewers draw a note without an appearance as a fixed-size icon at the upper-left corner
+/// of its `/Rect`. The display copy must not stretch the icon over a large `/Rect` or shrink it
+/// to nothing in one with no width.
+#[test]
+fn a_note_without_an_appearance_is_shown_at_icon_size() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [-23 240 480 468] /C [1 0 0] /Open true >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [310 380 310 392] /Name /Comment /F 4 >>",
+        b"<< /Type /Annot /Subtype /FileAttachment /Rect [100 50 300 10] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the notes get a display appearance");
+    let rects = |doc: &Document| -> Vec<Vec<f64>> {
+        let rect = |d: &Dict| d.get(b"Rect").and_then(|r| r.as_array()).map(|a| a.iter().filter_map(Object::as_f64).collect::<Vec<f64>>());
+        list(doc, 0).iter().map(|d| rect(d).unwrap_or_default()).collect()
+    };
+    assert_eq!(rects(&display), [vec![-23.0, 448.0, -3.0, 468.0], vec![310.0, 372.0, 330.0, 392.0], vec![100.0, 30.0, 120.0, 50.0]]);
+    let original = [vec![-23.0, 240.0, 480.0, 468.0], vec![310.0, 380.0, 310.0, 392.0], vec![100.0, 50.0, 300.0, 10.0]];
+    assert_eq!(rects(&doc), original, "the source document is unchanged");
+}
+
 #[test]
 fn every_line_ending_is_drawn() {
     let filled = [LineEnding::Square, LineEnding::Circle, LineEnding::Diamond, LineEnding::ClosedArrow, LineEnding::RClosedArrow];
@@ -1301,6 +1324,28 @@ fn cached_appearances_are_reused_while_annotations_are_unchanged() {
     assert_eq!(a, b, "the reused appearance is byte-identical");
 }
 
+/// A comment that `/Annots` lists many times, and that a second page lists too, is drawn once in
+/// the display copy. Every listing used to add another appearance stream, so a short array of
+/// repeated references multiplied the display bytes the engine writes on each refresh.
+#[test]
+fn a_comment_listed_many_times_is_drawn_once_for_display() {
+    let first = format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", vec!["5 0 R"; 1_000].join(" "));
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>",
+        first.as_bytes(),
+        b"<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [1 0 0] >>",
+    ]);
+    let mut cache = AppearanceCache::default();
+    let display = with_missing_appearances_cached(&doc, &mut cache).expect("the square needs an appearance");
+    assert_eq!(display.object_numbers().len(), doc.object_numbers().len() + 1, "one appearance stream, not one per listing");
+    assert_eq!((cache.builds(), cache.hits()), (1, 0));
+    assert!(list(&display, 0).iter().chain(&list(&display, 1)).all(|d| d.contains(b"AP")), "every listing shows it");
+    with_missing_appearances_cached(&doc, &mut cache).expect("a refresh");
+    assert_eq!((cache.builds(), cache.hits()), (1, 1), "a refresh reuses the cached stream once");
+}
+
 /// #1908: a text box's font size changes in `/DA` (colour kept), the rich text follows, the box
 /// grows to hold the bigger text but never shrinks, and bad sizes and other subtypes are refused.
 #[test]
@@ -1381,4 +1426,81 @@ fn free_text_properties_show_legacy_or_absent_border_width() {
     })
     .unwrap();
     assert_eq!(props(&doc, 0, index).unwrap().width, Some(4.0));
+}
+
+/// A line's ends and the corners of connected lines and polygons can be moved after drawing:
+/// the points change, `/Rect` follows them (with room for an arrowhead), and the appearance is
+/// drawn anew. A line needs two ends far enough apart; a locked comment keeps its shape.
+#[test]
+fn lines_and_polygons_are_reshaped_by_their_points() {
+    let mut doc = fixture();
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [100.0, 100.0], to: [200.0, 100.0], start: LineEnding::None, end: LineEnding::OpenArrow }),
+        &meta("l"),
+    )
+    .unwrap();
+    let before = ap_content(&doc, &list(&doc, 0)[l]);
+    set_points(&mut doc, 0, l, &[[100.0, 100.0], [100.0, 300.0]], &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[l];
+    let ends: Vec<f64> = d.get(b"L").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(ends, [100.0, 100.0, 100.0, 300.0]);
+    let r = rect(d);
+    assert!(r[0] < 100.0 && r[2] > 100.0 && r[1] < 100.0 && r[3] > 300.0, "the rectangle holds the line and its arrowhead: {r:?}");
+    assert!(r[2] - r[0] < 40.0, "and no more: {r:?}");
+    assert_ne!(ap_content(&doc2, d), before, "drawn anew");
+    assert_eq!(summaries(&doc2).into_iter().find(|s| s.index == l).unwrap().points, vec![[100.0, 100.0], [100.0, 300.0]]);
+    // Two ends exactly, far enough apart.
+    assert!(matches!(set_points(&mut doc, 0, l, &[[1.0, 1.0]], &meta("")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_points(&mut doc, 0, l, &[[1.0, 1.0], [1.2, 1.0]], &meta("")), Err(AnnotError::Invalid(_))));
+    assert!(matches!(set_points(&mut doc, 0, l, &[[f64::NAN, 1.0], [10.0, 1.0]], &meta("")), Err(AnnotError::Invalid(_))));
+    // A polygon's corner.
+    let g = add_annotation(
+        &mut doc,
+        &new(0, Shape::Polygon { vertices: vec![[300.0, 300.0], [400.0, 300.0], [350.0, 380.0]], cloud: false }),
+        &meta("g"),
+    )
+    .unwrap();
+    set_points(&mut doc, 0, g, &[[300.0, 300.0], [450.0, 300.0], [350.0, 380.0], [300.0, 360.0]], &meta("")).unwrap();
+    let d = &list(&doc, 0)[g];
+    let v: Vec<f64> = d.get(b"Vertices").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(v.len(), 8);
+    assert!(rect(d)[2] > 450.0);
+    // Locked: refused, and nothing changes.
+    set_locked(&mut doc, 0, l, true).unwrap();
+    assert!(set_points(&mut doc, 0, l, &[[0.0, 0.0], [50.0, 50.0]], &meta("")).is_err());
+    // Other comments have no points to move.
+    let s = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("s")).unwrap();
+    assert!(matches!(set_points(&mut doc, 0, s, &[[0.0, 0.0], [50.0, 50.0]], &meta("")), Err(AnnotError::Invalid(_))));
+}
+
+#[test]
+fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
+    let mut doc = fixture();
+    let root = ObjRef { num: 2, generation: 0 };
+    let (first, second) = (ObjRef { num: 3, generation: 0 }, ObjRef { num: 4, generation: 0 });
+    // A cycle back to the root, then both pages 128 times over.
+    let mut kids = vec![Object::Ref(root)];
+    kids.extend([Object::Ref(first), Object::Ref(second)].into_iter().cycle().take(256));
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+    let mut walk = PageWalk::new(&doc, root);
+    assert_eq!(walk.next(), Some(first));
+    assert!(walk.pending.len() <= 2, "repeated kids retained {} pending entries", walk.pending.len());
+    assert_eq!(walk.next(), Some(second));
+    assert_eq!(walk.next(), None);
+    assert_eq!(page_refs(&doc).unwrap(), [first, second]);
+}
+
+/// #1786: TrueType glyph contours (such as Inter's composite Ђ and ћ) overlap with the same
+/// winding direction where strokes cross, so typed signature appearances must fill with the
+/// non-zero winding operator (`f`), not even-odd (`f*`).
+#[test]
+fn typed_signature_uses_nonzero_winding_fill() {
+    let mut doc = fixture();
+    let contours = vec![vec![[0.4, 0.0], [0.6, 0.0], [0.6, 1.0], [0.4, 1.0]], vec![[0.0, 0.7], [1.0, 0.7], [1.0, 0.85], [0.0, 0.85]]];
+    let idx = add_annotation(&mut doc, &new(0, Shape::TypedSignature { rect: [100.0, 100.0, 200.0, 140.0], contours }), &meta("sig")).unwrap();
+    let ap = ap_content(&doc, &list(&doc, 0)[idx]);
+    assert!(ap.ends_with("h\nf\n"), "expected non-zero winding fill (`f`), got: {ap}");
+    assert!(!ap.contains("f*"), "must not use even-odd fill (`f*`): {ap}");
 }

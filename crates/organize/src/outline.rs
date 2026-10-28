@@ -59,6 +59,8 @@ pub enum OutlineError {
     IntoItself,
     #[error("the title must not be empty")]
     EmptyTitle,
+    #[error("a bookmark's position must be a finite number")]
+    BadPosition,
     #[error("this document has no tagged headings to make bookmarks from")]
     NoEntries,
     #[error("{0}")]
@@ -472,24 +474,55 @@ fn recount(doc: &mut Document) -> Result<()> {
 }
 
 fn destination(doc: &Document, page: usize) -> Result<Object> {
+    destination_at(doc, page, None, None)
+}
+
+/// A destination on `page` (0-based) at the user-space point (`left`, `top`), either of which
+/// may be left out to keep the reader's position in that direction.
+fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f64>) -> Result<Object> {
+    if ![left, top].iter().flatten().all(|v| v.is_finite()) {
+        return Err(OutlineError::BadPosition);
+    }
     let pages = walk(doc)?;
     let (p, _) = pages.get(page).ok_or(OrganizeError::NoSuchPage(page))?;
-    Ok(go_to(*p))
+    Ok(go_to_at(*p, left, top))
 }
 
 /// `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for a
 /// new bookmark when the view has no specific position).
 fn go_to(page: ObjRef) -> Object {
-    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), Object::Null, Object::Null, Object::Null])
+    go_to_at(page, None, None)
+}
+
+/// `/XYZ left top null`: the point (`left`, `top`) at the window's upper-left corner, at the
+/// reader's zoom; a coordinate that is left out keeps the reader's position.
+fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
+    let coordinate = |v: Option<f64>| v.map_or(Object::Null, Object::Real);
+    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), coordinate(left), coordinate(top), Object::Null])
 }
 
 /// Add a bookmark titled `title` that goes to `page` (0-based), as child `index` of
 /// `parent_path` (`[]` = top level; an index past the end appends). Returns its path.
 pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, title: &str, page: usize) -> Result<Vec<usize>> {
+    add_bookmark_at(doc, parent_path, index, title, page, None, None)
+}
+
+/// [`add_bookmark`] going to the user-space point (`left`, `top`) of `page`, as `/XYZ left top null`
+/// (zoom kept). Either coordinate may be left out to keep the reader's position in that
+/// direction; one that is not finite is refused.
+pub fn add_bookmark_at(
+    doc: &mut Document,
+    parent_path: &[usize],
+    index: usize,
+    title: &str,
+    page: usize,
+    left: Option<f64>,
+    top: Option<f64>,
+) -> Result<Vec<usize>> {
     if title.trim().is_empty() {
         return Err(OutlineError::EmptyTitle);
     }
-    let dest = destination(doc, page)?;
+    let dest = destination_at(doc, page, left, top)?;
     let parent = container(doc, parent_path)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     let mut d = Dict::new();

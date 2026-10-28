@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-arlington"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Machine-readable structural validation rules engine based on the Arlington PDF Model (PDF 1.0 - 2.0)"
+
+[dependencies]

@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-pades-ltv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ETSI EN 319 142 PAdES B-LT/B-LTA Long-Term Validation, /DSS Document Security Store, and RFC 3161 timestamps"
+
+[dependencies]

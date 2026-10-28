@@ -129,6 +129,7 @@ pub(crate) struct XfaRun<'a> {
     pub ran_away: bool,
 }
 
+/// The live form node `n`, with its descendants, as the script engine's snapshot of it.
 fn to_js(n: &FormNode) -> XfaNode {
     XfaNode {
         name: n.name.clone(),
@@ -149,6 +150,7 @@ fn to_js(n: &FormNode) -> XfaNode {
         occur_max: n.occur_max,
         index: n.index,
         children: n.children.iter().map(to_js).collect(),
+        formatted: n.display_picture.as_deref().and_then(|p| pdfcraft_xfa::formatted_value(p, &n.value)),
     }
 }
 
@@ -669,9 +671,12 @@ impl<'a, 'b> Runner<'a, 'b> {
         for n in &o.notes {
             self.error(format!("{} ({}): {n}", ev.som, ev.activity));
         }
+        // A script that fails keeps what it changed before the error, as JavaScript does: forms
+        // often trip over an object an earlier version had, late in a script whose first lines
+        // did the work (opening the next fields, showing a subform). An abandoned script, or
+        // one the engine failed, reports no changes.
         if let Some(e) = &o.error {
             self.error(format!("{} ({}): {e}", ev.som, ev.activity));
-            return Ok(Some(o));
         }
         if self.apply_effects(ev, &o.effects)? {
             self.relayout()?;
@@ -764,6 +769,49 @@ fn collect_fields(n: &FormNode, out: &mut Vec<(String, String, String, String)>,
     }
 }
 
+/// Reflow a laid-out XFA form when an edited multiline field can grow. The datasets must
+/// already hold the final values, including calculation results. Fixed-height fields keep
+/// their existing geometry; forms without scripts parse their template only when needed.
+/// `Some` means pages/widgets were rebuilt and the caller must fully refresh its snapshot.
+pub(crate) fn relayout_changed_text(
+    doc: &mut pdfcraft_cos::Document,
+    cached: Option<&Template>,
+    before: &[pdfcraft_forms::Field],
+) -> Result<Option<Vec<String>>, String> {
+    if pdfcraft_xfa::existing_layout(doc).is_none() {
+        return Ok(None);
+    }
+    let current = &*doc;
+    let mut changed = before
+        .iter()
+        .filter(|f| f.kind == pdfcraft_forms::FieldKind::Text && f.has(pdfcraft_forms::flags::MULTILINE))
+        .filter_map(|f| {
+            let object = current.get(f.obj);
+            let dict = object.as_dict()?;
+            let value = dict.get(b"V").and_then(|v| current.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+            if f.value.first().map_or("", String::as_str) == value {
+                return None;
+            }
+            dict.get(pdfcraft_xfa::SOM_KEY).and_then(|s| current.resolve(s).as_string().map(|s| s.to_text()))
+        })
+        .peekable();
+    if changed.peek().is_none() {
+        return Ok(None);
+    }
+    let template = match cached {
+        Some(tpl) => std::borrow::Cow::Borrowed(tpl),
+        None => std::borrow::Cow::Owned(pdfcraft_xfa::template_of(current).map_err(|e| e.to_string())?),
+    };
+    let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som));
+    drop(changed);
+    if !reflow {
+        return Ok(None);
+    }
+    let report = pdfcraft_xfa::rerender(doc, &template).map_err(|e| e.to_string())?;
+    crate::xfa_redraw(doc)?;
+    Ok(Some(report.warnings))
+}
+
 /// On open: initialize scripts, then calculations. Returns what they changed.
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
@@ -826,10 +874,12 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     r.finish().map(|_| ())
 }
 
-/// The SOM path of field `name` when PdfCraft generated it from an XFA template and the
-/// template has a click script for it (a button with a native action has none).
-pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, name: &str) -> Option<String> {
-    let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, f)| f == name).map(|(s, _)| s)?;
+/// The SOM path of a generated field whose template has a click script.
+pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field) -> Option<String> {
+    // Page-master copies have distinct PDF field names but share a SOM path. Reversing
+    // fields_by_som would lose every copy except the last: use the clicked field itself.
+    let object = doc.get(field.obj);
+    let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
     let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
     live.events.iter().any(|e| e.som == som && e.activity == "click").then_some(som)
 }

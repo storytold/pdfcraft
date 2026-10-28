@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::XfaError;
-use crate::model::{Node, Template};
+use crate::model::{Field, Node, SomIndices, Template};
 use crate::packets::{Encoding, encode};
 
 const XFA_DATA_NS: &str = "http://www.xfa.org/schema/xfa-data/1.0/";
@@ -157,6 +157,113 @@ fn named<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
     })
 }
 
+/// The date letters (`yyyy-mm-dd`, `yyyymmdd`) of an XFA date picture clause such as
+/// `date{YYYY-MM-DD}`, or `None` when it has none this reads (empty, or with symbols beyond
+/// years, months, days and separators).
+pub(crate) fn date_letters(picture: &str) -> Option<String> {
+    let inner = picture
+        .find('{')
+        .and_then(|a| {
+            let rest = picture.get(a + 1..)?;
+            rest.find('}').and_then(|b| rest.get(..b))
+        })
+        .unwrap_or(picture)
+        .trim();
+    if inner.is_empty() || inner.chars().any(|c| !"YMDEJ-/., :".contains(c)) {
+        return None;
+    }
+    Some(inner.replace('E', "d").to_ascii_lowercase())
+}
+
+/// The date letters of `f`'s data picture, when it holds a whole date. A data picture without a
+/// year, a month or a day can't hold the date the field shows, so such a field's data keeps
+/// ISO dates.
+pub(crate) fn data_date_letters(f: &Field) -> Option<String> {
+    let letters = f.data_picture.as_deref().and_then(date_letters)?;
+    let tokens = date_tokens(&letters);
+    let has = |any: &[&str]| tokens.iter().any(|t| any.contains(&t.as_str()));
+    (has(&["yyyy", "yy"]) && has(&["mm", "m"]) && has(&["dd", "d"])).then_some(letters)
+}
+
+/// A date as the data holds it, written in `data_pattern` (the field's data picture), read as
+/// an ISO date. A value that doesn't match, or a field without a data picture, is taken as it
+/// is: the data holds ISO dates by default.
+pub(crate) fn data_to_iso(value: &str, data_pattern: Option<&str>) -> String {
+    data_pattern.and_then(|p| pattern_to_iso(value, p)).unwrap_or_else(|| value.to_string())
+}
+
+/// An ISO date as the data should hold it: in `data_pattern` when the field has one and the
+/// date reads back from it unchanged (a two-digit year holds only 1950 to 2049), else as ISO.
+pub(crate) fn iso_to_data(iso: String, data_pattern: Option<&str>) -> String {
+    match data_pattern {
+        Some(p) => {
+            let written = iso_to_pattern(&iso, p);
+            if pattern_to_iso(&written, p).as_deref() == Some(iso.as_str()) { written } else { iso }
+        }
+        None => iso,
+    }
+}
+
+/// The child of `nodes` the SOM segment `name[index]` names, numbered as the form numbers its
+/// objects ([`SomIndices`]): same-named siblings count up, and the instances of a repeating
+/// subform take the numbers from its own on. Unnamed subforms and areas are looked through,
+/// as [`named`] does.
+fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<&'a Node> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let sibs = SomIndices::of(nodes);
+    let mut repeating = None;
+    for (i, n) in nodes.iter().enumerate() {
+        if n.common().name.as_deref() != Some(name) {
+            continue;
+        }
+        let sib = sibs.at(i);
+        if sib == index {
+            return Some(n);
+        }
+        if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
+            repeating = Some(n);
+        }
+    }
+    repeating.or_else(|| {
+        nodes.iter().find_map(|n| match n {
+            Node::Subform(sf) if sf.common.name.is_none() => named_at(&sf.children, name, index, depth + 1),
+            Node::Area(a) if a.common.name.is_none() => named_at(&a.children, name, index, depth + 1),
+            _ => None,
+        })
+    })
+}
+
+/// The template field the object at a SOM path is an instance of, each segment's number counted
+/// as the form counts it ([`named_at`]). `None` when the template has no such field, or it is
+/// a button of an exclusion group (whose buttons take their value from the group).
+pub(crate) fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
+    let path = som_to_path(som);
+    let ((root, _), rest) = path.split_first()?;
+    if tpl.root.common.name.as_deref() != Some(root.as_str()) {
+        return None;
+    }
+    let ((last, last_index), inner) = rest.split_last()?;
+    let mut children: &[Node] = &tpl.root.children;
+    for (name, index) in inner {
+        children = match named_at(children, name, *index, 0)? {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => return None,
+        };
+    }
+    match named_at(children, last, *last_index, 0)? {
+        Node::Field(f) => Some(f),
+        _ => None,
+    }
+}
+
+/// The date letters of the data picture of the field `som` names, when it has one.
+fn data_date_pattern(tpl: Option<&Template>, som: &str) -> Option<String> {
+    tpl.and_then(|t| template_field(t, som)).and_then(data_date_letters)
+}
+
 /// What a field holds, for writing the datasets.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldData {
@@ -238,8 +345,34 @@ fn date_pattern_of(doc: &Document, f: &FieldDatum) -> Option<String> {
     Some(body[..body.find('"')?].to_string())
 }
 
-/// The tokens of a date pattern: `yyyy`, `yy`, `mm`, `m`, `dd`, `d`, or a literal character.
-fn date_tokens(pattern: &str) -> Vec<String> {
+const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/// The weekday (0 = Sunday) of a proleptic Gregorian date.
+fn weekday(y: u32, m: u32, d: u32) -> usize {
+    const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = i64::from(y) - i64::from(m < 3);
+    let t = T.get((m as usize).wrapping_sub(1)).copied().unwrap_or(0);
+    ((y + y / 4 - y / 100 + y / 400 + t + i64::from(d)).rem_euclid(7)) as usize
+}
+
+/// The index and length of the name in `names` that `text` starts with (ignoring case),
+/// cut to `abbr` letters when that is set.
+fn name_at(text: &str, names: &[&str], abbr: bool) -> Option<(usize, usize)> {
+    names.iter().enumerate().find_map(|(i, n)| {
+        let n = if abbr { n.get(..3)? } else { n };
+        text.get(..n.len()).filter(|t| t.eq_ignore_ascii_case(n)).map(|_| (i, n.len()))
+    })
+}
+
+/// Whether `token` is a run of the date letters (`y`, `m`, `d`) rather than a literal.
+fn is_date_run(token: &str) -> bool {
+    token.starts_with(['y', 'm', 'd'])
+}
+
+/// The tokens of a date pattern: runs of `y`, `m` and `d` (`yyyy`, `yy`, `mmmm`, `mmm`, `mm`,
+/// `m`, `dddd`, `ddd`, `dd`, `d` are understood), or a literal character.
+pub(crate) fn date_tokens(pattern: &str) -> Vec<String> {
     let mut out = Vec::new();
     let chars: Vec<char> = pattern.chars().collect();
     let mut i = 0;
@@ -260,8 +393,8 @@ fn date_tokens(pattern: &str) -> Vec<String> {
     out
 }
 
-/// `2001-02-03` shown in `pattern` (`mm/dd/yyyy` → `02/03/2001`). Unknown patterns and
-/// non-dates come back as they are.
+/// `2001-02-03` shown in `pattern` (`mm/dd/yyyy` → `02/03/2001`, `mmm d, yyyy` →
+/// `Feb 3, 2001`). Patterns with a token this doesn't know and non-dates come back as they are.
 pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
     let parts: Vec<&str> = iso.trim().splitn(3, '-').collect();
     let [y, m, d] = parts[..] else { return iso.to_string() };
@@ -275,6 +408,21 @@ pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
             "m" => out.push_str(&m.to_string()),
             "dd" => out.push_str(&format!("{d:02}")),
             "d" => out.push_str(&d.to_string()),
+            "mmm" | "mmmm" => {
+                let Some(name) = m.checked_sub(1).and_then(|i| MONTHS.get(i as usize)) else { return iso.to_string() };
+                match t.len() {
+                    3 => out.push_str(name.get(..3).unwrap_or(name)),
+                    _ => out.push_str(name),
+                }
+            }
+            "ddd" | "dddd" => {
+                let name = WEEKDAYS.get(weekday(y, m, d)).copied().unwrap_or_default();
+                match t.len() {
+                    3 => out.push_str(name.get(..3).unwrap_or(name)),
+                    _ => out.push_str(name),
+                }
+            }
+            other if is_date_run(other) => return iso.to_string(),
             other => out.push_str(other),
         }
     }
@@ -285,6 +433,7 @@ pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
 pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
     let text = text.trim();
     let (mut y, mut m, mut d) = (None, None, None);
+    let mut day_name = None;
     let mut rest = text;
     let tokens = date_tokens(pattern);
     for (i, t) in tokens.iter().enumerate() {
@@ -310,6 +459,17 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
                     _ => d = Some(v),
                 }
             }
+            "mmm" | "mmmm" => {
+                let (i, len) = name_at(rest, &MONTHS, t.len() == 3)?;
+                m = Some(i as u32 + 1);
+                rest = rest.get(len..)?;
+            }
+            "ddd" | "dddd" => {
+                let (i, len) = name_at(rest, &WEEKDAYS, t.len() == 3)?;
+                day_name = Some(i);
+                rest = rest.get(len..)?;
+            }
+            run if is_date_run(run) => return None,
             lit => {
                 rest = rest.strip_prefix(lit)?;
             }
@@ -320,6 +480,9 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
         return None;
     }
     let (y, m, d) = (y?, m?, d?);
+    if day_name.is_some_and(|w| w != weekday(y, m, d)) {
+        return None;
+    }
     (1..=12).contains(&m).then(|| format!("{y:04}-{m:02}-{d:02}")).filter(|_| (1..=31).contains(&d))
 }
 
@@ -446,6 +609,8 @@ fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
     }
 }
 
+/// The values the datasets should hold for `fields`, by data path: dates in each field's data
+/// picture (or ISO), check and radio states, choice values as saved.
 fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<Want> {
     let mut out = Vec::new();
     for f in fields {
@@ -456,7 +621,11 @@ fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<
         }
         let text = match &f.data {
             FieldData::Text(t) => match date_pattern_of(doc, f) {
-                Some(p) => pattern_to_iso(t, &p).unwrap_or_else(|| t.clone()),
+                Some(p) => match pattern_to_iso(t, &p) {
+                    // The date goes into the data in the field's data picture, or as an ISO date.
+                    Some(iso) => iso_to_data(iso, data_date_pattern(tpl, &som).as_deref()),
+                    None => t.clone(),
+                },
                 None => t.clone(),
             },
             FieldData::Check(on) => {
@@ -938,7 +1107,9 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
             let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
             if node.children().any(|c| c.is_element()) {
                 let all: String = node.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
-                if all.trim() != w.text.trim() {
+                // Ignore existing XML indentation, but not whitespace in the accepted value.
+                // A skipped mismatch must warn: relayout would otherwise use stale data.
+                if all.trim() != w.text {
                     skipped(warnings, STRUCTURED, &w.som);
                 }
                 continue;
@@ -1525,17 +1696,20 @@ pub fn read_values_with(doc: &Document, tpl: Option<&Template>, fields: &[FieldD
     with_template(doc, tpl, |t| values_at(doc, t, fields))
 }
 
+/// The values the document's datasets hold for `fields`, read in each field's data picture and
+/// shown in its own pattern; only fields the data mentions.
 fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> Vec<(String, FieldData)> {
     let Ok(Some(p)) = crate::read_packets(doc) else { return Vec::new() };
     let Some(data) = parse_datasets(&p.xdp) else { return Vec::new() };
     let mut out = Vec::new();
     for f in fields {
-        let path = path_of(tpl, &som_of(doc, f));
+        let som = som_of(doc, f);
+        let path = path_of(tpl, &som);
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {
             FieldData::Text(_) => FieldData::Text(match date_pattern_of(doc, f) {
-                Some(pat) => iso_to_pattern(text, &pat),
+                Some(pat) => iso_to_pattern(&data_to_iso(text, data_date_pattern(tpl, &som).as_deref()), &pat),
                 None => text.to_string(),
             }),
             FieldData::Check(_) => {

@@ -73,9 +73,9 @@ impl Automation {
             .iter()
             .map(|it| {
                 let index = per_page.entry(it.page).or_default();
-                let ph = doc.info.pages[it.page].height as f64;
-                let mut v =
-                    json!({ "page": it.page + 1, "index": *index + 1, "rect": to_view(it.content.rect(), ph).map(|x| (x * 100.0).round() / 100.0) });
+                // Unchanged on a page the viewer could not read (#2660), like `crate::view_rect`.
+                let rect = doc.info.pages.get(it.page).map_or(it.content.rect(), |p| to_view(it.content.rect(), p.height as f64));
+                let mut v = json!({ "page": it.page + 1, "index": *index + 1, "rect": rect.map(|x| (x * 100.0).round() / 100.0) });
                 *index += 1;
                 match &it.content {
                     AddedContent::Text(t) => {
@@ -171,7 +171,8 @@ impl Automation {
                     if deg.rem_euclid(90) != 0 {
                         return Err(bad("rotate must be a multiple of 90"));
                     }
-                    i.rotation = ((i64::from(i.rotation) * 90 + deg).rem_euclid(360) / 90) as u8;
+                    // Reduce untrusted degrees before adding the current quarter turns.
+                    i.rotation = (i64::from(i.rotation) + deg.rem_euclid(360) / 90).rem_euclid(4) as u8;
                 }
                 if a.opt_bool("flip_h")? == Some(true) {
                     i.flip_h = !i.flip_h;

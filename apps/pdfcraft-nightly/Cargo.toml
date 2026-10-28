@@ -1,0 +1,38 @@
+[package]
+name = "pdfcraft-nightly"
+description = "PdfCraft Nightly desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+pdfcraft-ui-egui = { workspace = true }
+pdfcraft-engine = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links"] }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fmv-macos-events = "=0.1.0"
+craft-quit = { workspace = true, features = ["menu"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
+windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"] }
+uds_windows = "=1.2.1"
+
+[build-dependencies]
+winresource = "0.1"

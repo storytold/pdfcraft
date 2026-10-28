@@ -1,7 +1,7 @@
 //! Acrobat JavaScript in the shell: what scripts ask for (alerts, printing, navigation, links),
 //! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
 
-use egui::{Align, Layout};
+use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, vec2};
 use pdfcraft_engine::js::{JsOutput, Request};
 use pdfcraft_engine::{DocId, Edit};
 
@@ -262,7 +262,85 @@ fn reading_mode_label(mode: &str) -> &'static str {
 
 /// Preferences: interface language and size, appearance, identity and JavaScript. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
+    });
+    ui.add_space(8.0);
+    let max = (ui.ctx().content_rect().height() - 140.0).clamp(320.0, 520.0);
+
+    ui.horizontal(|ui| {
+        // Left Column: Categories List (~180px)
+        ui.allocate_ui_with_layout(vec2(180.0, max), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(180.0);
+            ui.label(egui::RichText::new("Categories").font(theme::semibold(11.5)).color(t.text_faint));
+            ui.add_space(4.0);
+            for &cat in crate::PrefCategory::ALL {
+                let active = app.pref_category == cat;
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                let press = theme::Press::track(ui, &resp);
+                let (fill, text_color) = if active {
+                    (t.accent.gamma_multiply(0.18), t.accent_text)
+                } else {
+                    (press.fill(Color32::TRANSPARENT, t.hover, t.pressed), t.text)
+                };
+                ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+                if active {
+                    let indicator = Rect::from_min_size(rect.left_top() + vec2(2.0, 6.0), vec2(3.0, 20.0));
+                    ui.painter().rect_filled(indicator, CornerRadius::same(1), t.accent);
+                }
+                let icon_rect = Rect::from_center_size(rect.left_center() + vec2(16.0, 0.0), vec2(16.0, 16.0));
+                crate::icons::paint(ui, icon_rect, cat.icon(), 14.0, if active { t.accent } else { t.text_muted });
+                let text_pos = rect.left_center() + vec2(32.0, 0.0);
+                ui.painter().text(
+                    text_pos,
+                    Align2::LEFT_CENTER,
+                    tl!(cat.label()),
+                    if active { theme::semibold(13.0) } else { theme::regular(13.0) },
+                    text_color,
+                );
+                if theme::hand(resp).clicked() {
+                    app.pref_category = cat;
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        // Right Column: Active Category Settings (~520px)
+        let right_width = (ui.available_width() - 10.0).max(100.0);
+        ui.allocate_ui_with_layout(vec2(right_width, max), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(right_width);
+            ui.label(egui::RichText::new(tl!(app.pref_category.label())).font(theme::semibold(15.0)).color(t.text));
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            egui::ScrollArea::vertical()
+                .max_height(max - 36.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 12, top: 0, bottom: 4 }).show(ui, |ui| {
+                        match app.pref_category {
+                            crate::PrefCategory::General => pref_general(ui, app, t),
+                            crate::PrefCategory::Appearance => pref_appearance(ui, app, t),
+                            crate::PrefCategory::DocumentsView => pref_documents_view(ui, app, t),
+                            crate::PrefCategory::ReadingColors => pref_reading_colors(ui, app, t),
+                            crate::PrefCategory::Commenting => pref_commenting(ui, app, t),
+                            crate::PrefCategory::FormsSign => pref_forms_sign(ui, app, t),
+                            crate::PrefCategory::JavaScript => pref_javascript(ui, app, t),
+                        }
+                    });
+                });
+        });
+    });
+
+    ui.add_space(10.0);
+    buttons(ui, tl!("OK"), &[]).is_some()
+}
+
+fn pref_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.label(tl!("Interface language"));
         let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
@@ -282,6 +360,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
         }
     });
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         use crate::ui_scale;
         ui.label(tl!("Interface size"));
@@ -301,13 +380,61 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
                     ui.close();
                 }
             }
+            ui.separator();
+            if ui.selectable_label(app.custom_scale_prompt, "Custom…").clicked() {
+                app.custom_scale_input = app.ui_scale.map_or(auto_percent.to_string(), |f| ui_scale::percent(f).to_string());
+                app.custom_scale_prompt = true;
+                ui.close();
+            }
         });
+        ui.add_space(6.0);
+        ui.label(tl!("Custom:"));
+        let mut custom_val = app.ui_scale.map_or(auto_percent as f32, |f| f * 100.0);
+        if ui.add(egui::DragValue::new(&mut custom_val).range(50.0..=400.0).suffix("%").speed(1.0)).changed() {
+            app.ui_scale = Some(custom_val / 100.0);
+        }
     });
+    if app.custom_scale_prompt {
+        egui::Window::new("Custom Interface Size")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.set_min_width(280.0);
+                ui.label("Enter interface scaling percentage (50% – 400%):");
+                ui.add_space(4.0);
+                let edit = ui.text_edit_singleline(&mut app.custom_scale_input);
+                let parsed = app.custom_scale_input.trim().trim_end_matches('%').parse::<f32>();
+                let valid = parsed.as_ref().map_or(false, |&p| (50.0..=400.0).contains(&p));
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && valid {
+                    if let Ok(pct) = parsed {
+                        app.ui_scale = Some(pct / 100.0);
+                        app.custom_scale_prompt = false;
+                    }
+                }
+                if !valid && !app.custom_scale_input.is_empty() {
+                    ui.label(egui::RichText::new("Please enter a valid percentage between 50% and 400%").color(Color32::from_rgb(220, 50, 50)).small());
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(valid, egui::Button::new(tl!("Apply"))).clicked() {
+                        if let Ok(pct) = parsed {
+                            app.ui_scale = Some(pct / 100.0);
+                            app.custom_scale_prompt = false;
+                        }
+                    }
+                    if ui.button(tl!("Cancel")).clicked() {
+                        app.custom_scale_prompt = false;
+                    }
+                });
+            });
+    }
     ui.label(
         egui::RichText::new(tl!("Auto follows the system's text size. Pages always render at the display's full resolution."))
             .small()
             .color(t.text_muted),
     );
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Tools panel side"));
         let right = app.docking.tools_on_right();
@@ -322,10 +449,44 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             app.notify(error);
         }
     });
-    ui.add_space(8.0);
+    ui.add_space(6.0);
+    // The web build has no file paths to reopen.
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
+    // The web build has no files on disk to watch.
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
+}
+
+fn pref_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     crate::appearance::preferences_section(ui, app, t);
     ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Documents and view")).font(theme::semibold(13.0)));
+    // Whether anything animates, the wheel's scrolling and zooming included; left alone it
+    // follows the system's animation setting.
+    ui.horizontal(|ui| {
+        ui.label(tl!("Animation effects"));
+        for choice in crate::motion::AnimationEffects::ALL {
+            widgets::radio_value(ui, &mut app.animation_effects, choice, tl_ctx!("animation effects", choice.label()));
+        }
+    });
+    // Only where the app draws the title bar (GNOME on Wayland); elsewhere the desktop draws it.
+    if app.window_controls.is_some() {
+        ui.add_space(4.0);
+        ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
+            .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
+    }
+}
+
+fn pref_documents_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    ui.label(egui::RichText::new("Open Settings").font(theme::semibold(13.5)).color(t.text));
+    ui.add(widgets::checkbox(&mut app.restore_last_view, "Restore last view settings when reopening documents"));
+    ui.add(widgets::checkbox(&mut app.remember_all_tools_state, "Remember last state of the All tools pane when opening documents"));
+    ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
+    ui.add(widgets::checkbox(&mut app.reload_changed_files, "Reload documents when changed on disk"));
+    ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(8.0);
+
     ui.horizontal(|ui| {
         ui.label(tl!("Default workspace mode"));
         for (mode, label) in [
@@ -343,6 +504,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.add_space(6.0);
     let defaults = &mut app.view_defaults;
     ui.horizontal(|ui| {
         ui.label(tl!("Default page display"));
@@ -368,6 +530,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Units"));
         for u in crate::units::Unit::ALL {
@@ -375,36 +538,16 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
     });
     ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
-    // The web build has no file paths to reopen.
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
-    // The web build has no files on disk to watch.
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Scroll speed (mouse wheel and arrow keys)"));
         for speed in crate::scroll_speed::ScrollSpeed::ALL {
             widgets::radio_value(ui, &mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
         }
     });
-    // Whether anything animates, the wheel's scrolling and zooming included; left alone it
-    // follows the system's animation setting.
-    ui.horizontal(|ui| {
-        ui.label(tl!("Animation effects"));
-        for choice in crate::motion::AnimationEffects::ALL {
-            widgets::radio_value(ui, &mut app.animation_effects, choice, tl_ctx!("animation effects", choice.label()));
-        }
-    });
-    // Only where the app draws the title bar (GNOME on Wayland); elsewhere the desktop draws it.
-    if app.window_controls.is_some() {
-        ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
-            .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
-    }
-    ui.add_space(8.0);
-    // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
-    // remapped while rendering, and the page clears to the background colour. The preference
-    // is app-wide: every open document follows it, and documents open with it.
-    ui.label(egui::RichText::new(tl!("Reading colours")).font(theme::semibold(13.0)));
+}
+
+fn pref_reading_colors(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.label(tl!("Replace document colours"));
         let mode = app.reading_colors.mode_name();
@@ -460,38 +603,40 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
     }
     ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
-    ui.add_space(8.0);
-    // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
-    ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
+}
+
+fn pref_commenting(ui: &mut egui::Ui, app: &mut PdfCraftApp, _t: &Tokens) {
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Name on new comments"));
         ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
     });
+    ui.add_space(6.0);
     ui.add(widgets::checkbox(&mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text")));
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Fill & Sign")).font(theme::semibold(13.0)));
+}
+
+fn pref_forms_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving")));
     ui.label(
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );
     ui.add_space(8.0);
     date_format(ui, app, t);
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
+}
+
+fn pref_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let mut on = app.session.javascript();
         if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
             app.session.set_javascript(on);
         }
+        ui.add_space(4.0);
         ui.label(
             egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
                 .small()
                 .color(t.text_muted),
         );
     });
-    ui.add_space(10.0);
-    buttons(ui, tl!("OK"), &[]).is_some()
 }
 
 /// Preferences ▸ Date format: a preset, or any pattern typed in, for Fill & Sign dates, and the

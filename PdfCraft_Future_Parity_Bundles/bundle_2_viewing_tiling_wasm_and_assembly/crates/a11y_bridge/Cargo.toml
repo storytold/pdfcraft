@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-a11y-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AccessKit screen-reader bridge translating PDF logical structure to native OS accessibility trees"
+
+[dependencies]

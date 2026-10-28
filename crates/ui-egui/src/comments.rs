@@ -1645,26 +1645,30 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
             }
             ui.add_enabled_ui(allowed, |ui| {
                 ui.menu_button(tl!("Set status"), |ui| {
-                    for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
-                        if ui.button(tl!(s.name())).clicked() {
-                            action =
-                                Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
-                            ui.close();
+                    crate::chrome::scroll_menu(ui, |ui| {
+                        for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
+                            if ui.button(tl!(s.name())).clicked() {
+                                action =
+                                    Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
                 ui.menu_button(tl!("Colour"), |ui| {
-                    if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
-                            page,
-                            index,
-                            color: Some(c),
-                            opacity: None,
-                            width: None,
-                            endings: None,
-                        })));
-                        ui.close();
-                    }
+                    crate::chrome::scroll_menu(ui, |ui| {
+                        if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
+                            action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                                page,
+                                index,
+                                color: Some(c),
+                                opacity: None,
+                                width: None,
+                                endings: None,
+                            })));
+                            ui.close();
+                        }
+                    });
                 });
             });
             let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();

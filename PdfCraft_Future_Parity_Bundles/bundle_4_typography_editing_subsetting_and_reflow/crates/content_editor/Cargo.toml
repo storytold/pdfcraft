@@ -1,0 +1,10 @@
+[package]
+name = "pdfcraft-content-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AST content stream editor, marked content preservation, vector manipulation, and Bates numbering"
+
+[dependencies]
+pdfcraft-subsetter = { path = "../subsetter" }
+pdfcraft-reflow = { path = "../reflow" }

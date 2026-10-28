@@ -1,0 +1,9 @@
+[package]
+name = "pdfcraft-multilingual-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multilingual OCR engine routing and invisible searchable text layer (3 Tr) generator"
+
+[dependencies]
+pdfcraft-scan-cleanup = { path = "../scan_cleanup" }

@@ -626,13 +626,17 @@ impl Automation {
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
         let settings = self.ocr_settings(a)?;
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
-        let id = self.doc(a)?.id;
+        let doc = self.doc(a)?;
+        // Recognizing needs only permission to change the document; the words it found are
+        // returned only when copying is allowed too.
+        let (id, copy) = (doc.id, doc.allows_copying());
         let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
         let list: Vec<Value> = found
             .iter()
             .map(|p| match &p.skipped {
                 Some(why) => json!({ "page": p.page + 1, "skipped": why }),
-                None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page, "text": p.text() }),
+                None if copy => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page, "text": p.text() }),
+                None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page }),
             })
             .collect();
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))

@@ -42,7 +42,11 @@ impl Panel {
     }
 }
 
-fn permissions(panel: &Panel) -> Permissions {
+fn render_permissions(panel: &Panel) -> Permissions {
+    if matches!(*panel, Panel::Canvas | Panel::Tools) { Permissions::PROTECTED } else { Permissions::default() }
+}
+
+fn action_permissions(panel: &Panel) -> Permissions {
     if *panel == Panel::Canvas { Permissions::PROTECTED } else { Permissions::default() }
 }
 
@@ -68,9 +72,9 @@ impl Default for Workspace {
             layout: Layout {
                 root: Some(split(
                     SplitAxis::Horizontal,
-                    SplitSize::FixedFirst(272.0),
+                    SplitSize::FixedFirst(220.0),
                     tabs(Panel::Tools),
-                    split(SplitAxis::Horizontal, SplitSize::FixedSecond(330.0), tabs(Panel::Canvas), tabs(Panel::Inspector)),
+                    split(SplitAxis::Horizontal, SplitSize::FixedSecond(340.0), tabs(Panel::Canvas), tabs(Panel::Inspector)),
                 )),
                 floating: Vec::new(),
             },
@@ -155,13 +159,14 @@ impl Workspace {
         } else if let Action::Open { panel, .. } | Action::OpenAt { panel, .. } = &action {
             next.hidden.retain(|(id, _)| id != panel);
         }
-        next.layout.apply_with_permissions(action, permissions).map_err(|error| error.to_string())?;
+        next.layout.apply_with_permissions(action, action_permissions).map_err(|error| error.to_string())?;
         next.validate()?;
         *self = next;
         Ok(())
     }
 
     /// Whether a panel's body is exposed by its selected tab or open stack entry.
+    #[allow(dead_code)]
     pub(crate) fn exposed(&self, panel: Panel) -> bool {
         if self.layout.floating.iter().any(|group| group.panels.get(group.active) == Some(&panel)) {
             return true;
@@ -205,7 +210,7 @@ impl Workspace {
             next.layout
                 .apply_with_permissions(
                     Action::OpenAt { panel, anchor: Panel::Canvas, placement: Placement::Split(panel.default_side()) },
-                    permissions,
+                    action_permissions,
                 )
                 .map_err(|error| error.to_string())?;
         }
@@ -313,7 +318,7 @@ fn publish_visibility(app: &mut crate::PdfCraftApp, workspace: &Workspace) {
         if app.right.is_some() {
             app.choose_right_panel(None);
         }
-    } else if app.right.is_none() {
+    } else if app.right.is_none() && !app.right_panel_closed {
         app.choose_right_panel(Some(crate::RightPanel::Comments));
     }
 }
@@ -390,18 +395,33 @@ pub fn show(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui) {
     style.border = egui::Stroke::new(1.0, t.divider);
     style.accent = t.accent;
     style.font = crate::theme::medium(12.0);
+    let _ = sync(&mut workspace, app);
     drain_reveals(&mut workspace, app);
     let mut rendered = workspace.layout.clone();
     if app.active.is_none() && rendered.contains(&Panel::Inspector) {
         // Availability is a render projection: the saved group, selection and width survive Home.
         let _ = rendered.apply(Action::Close { panel: Panel::Inspector });
     }
+    let right_title = match app.right {
+        Some(crate::RightPanel::Comments) => "Comments",
+        Some(crate::RightPanel::Bookmarks) => "Bookmarks",
+        Some(crate::RightPanel::Pages) => "Pages",
+        Some(crate::RightPanel::Fields) => "Fields",
+        Some(crate::RightPanel::Layers) => "Layers",
+        Some(crate::RightPanel::Attachments) => "Attachments",
+        Some(crate::RightPanel::Signatures) => "Signatures",
+        Some(crate::RightPanel::Accessibility) => "Accessibility Checker",
+        Some(crate::RightPanel::Tags) => "Tags",
+        Some(crate::RightPanel::Search) => "Search",
+        Some(crate::RightPanel::Compare) => "Compare",
+        None => "Inspector",
+    };
     let output = DockArea::new(egui::Id::new("pdfcraft-docking")).show_with_limits(
         ui,
         &rendered,
         &style,
-        |panel| crate::i18n::t(panel.label()).into(),
-        permissions,
+        |panel| if *panel == Panel::Inspector { crate::i18n::t(right_title).into() } else { crate::i18n::t(panel.label()).into() },
+        render_permissions,
         panel_limits,
         |ui, panel| match panel {
             Panel::Canvas => {
@@ -444,8 +464,8 @@ pub fn show(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui) {
 fn panel_limits(panel: &Panel) -> PanelLimits {
     let (min, max_width) = match panel {
         Panel::Canvas => (egui::vec2(160.0, 160.0), 1_000_000.0),
-        Panel::Tools => (egui::vec2(240.0, 120.0), 520.0),
-        Panel::Inspector => (egui::vec2(260.0, 120.0), 520.0),
+        Panel::Tools => (egui::vec2(260.0, 120.0), 400.0),
+        Panel::Inspector => (egui::vec2(280.0, 120.0), 560.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }

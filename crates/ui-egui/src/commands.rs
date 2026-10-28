@@ -766,6 +766,13 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     for spec in commands::menu(menu) {
+        // #3524: Organize flat menus with visual separators between logical groups.
+        if menu == "File" && matches!(spec.id, "create.blank" | "file.save" | "print.dialog" | "export.image" | "optimize.reduce" | "protect.password") {
+            ui.separator();
+        }
+        if menu == "Edit" && matches!(spec.id, "edit.find" | "edit.copy" | "form.clear" | "app.preferences") {
+            ui.separator();
+        }
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
         // Open Recent is a submenu of the live recent list, not one action: disabled while the

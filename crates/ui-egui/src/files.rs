@@ -92,6 +92,21 @@ pub struct ReplaceDraft {
     pub(crate) target: Option<PickTarget>,
 }
 
+/// The Insert Pages dialog: chosen file, source page range, and insertion location details.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertDraft {
+    pub name: String,
+    pub bytes: Arc<Vec<u8>>,
+    pub src_pages: usize,
+    pub all_pages: bool,
+    pub src_from: usize,
+    pub src_to: usize,
+    pub insert_after: bool,
+    pub target_page: usize,
+    pub doc_pages: usize,
+    pub(crate) target: Option<PickTarget>,
+}
+
 impl FilePurpose {
     /// Insert and Replace edit the active document, at its selection.
     pub(crate) fn edits_active_document(self) -> bool {
@@ -166,6 +181,8 @@ pub struct ExtractDraft {
     /// the document's name when it opens; empty means that name too. As separate files each
     /// page is `<name> (page N).pdf`, and a single page the user renamed is `<name>.pdf`.
     pub name: String,
+    /// Optional page range input (e.g. "1-5, 8, 11-13"). Empty means selected pages. (#3593)
+    pub pages_input: String,
 }
 
 /// `name` made safe as a file name on every platform: no path separators, reserved or control
@@ -499,7 +516,11 @@ impl PdfCraftApp {
                 }
             }
             FilePurpose::Combine => self.stage_combine(files),
-            FilePurpose::InsertPages => self.insert_files(files),
+            FilePurpose::InsertPages => {
+                if let Some((name, bytes)) = files.into_iter().next() {
+                    self.start_insert(name, bytes);
+                }
+            }
             FilePurpose::ReplacePages => {
                 if let Some((name, bytes)) = files.into_iter().next() {
                     self.start_replace(name, bytes);
@@ -547,6 +568,63 @@ impl PdfCraftApp {
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
         self.replace_draft = Some(ReplaceDraft { name, bytes, src_pages, from, to, src_from: 1, pages, range_edited: false, target });
         self.dialog = Some(crate::Dialog::ReplacePages);
+    }
+
+    /// Open the Insert Pages dialog for `bytes`, asking for page range and insertion location.
+    pub fn start_insert(&mut self, name: String, bytes: Vec<u8>) {
+        let Some(i) = self.active else { return };
+        let bytes = Arc::new(bytes);
+        let src_pages = match self.session.page_count_of(&name, &bytes) {
+            Ok(n) => n,
+            Err(e) => {
+                self.notify_fmt("Couldn't use {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                return;
+            }
+        };
+        let doc_pages = self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(1, |d| d.info.pages.len());
+        let cur_page = self.views.get(i).map_or(1, |v| v.current + 1);
+        let target = self.pick_target(self.active_ids().map(|(_, id)| id));
+        self.insert_draft = Some(InsertDraft {
+            name,
+            bytes,
+            src_pages,
+            all_pages: true,
+            src_from: 1,
+            src_to: src_pages.max(1),
+            insert_after: true,
+            target_page: cur_page.min(doc_pages),
+            doc_pages,
+            target,
+        });
+        self.dialog = Some(crate::Dialog::InsertPages);
+    }
+
+    /// Apply the pending Insert Pages draft to the active document and dismiss the dialog.
+    pub fn confirm_insert_draft(&mut self) {
+        if let Some(d) = self.insert_draft.take()
+            && self.still_pick_target(d.target)
+        {
+            let pages = if d.all_pages {
+                None
+            } else {
+                let from = d.src_from.saturating_sub(1);
+                let to = d.src_to.min(d.src_pages);
+                Some((from..to).collect())
+            };
+            let at = if d.insert_after {
+                d.target_page
+            } else {
+                d.target_page.saturating_sub(1)
+            };
+            self.apply_edit(pdfcraft_engine::Edit::InsertPagesFrom {
+                name: d.name,
+                bytes: d.bytes,
+                pages,
+                at,
+                field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
+            });
+            self.dialog = None;
+        }
     }
 
     /// Insert all pages of a file after the organize selection (or the current page).
@@ -608,6 +686,7 @@ impl PdfCraftApp {
     pub fn open_extract_dialog(&mut self) {
         self.extract_draft.name =
             self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
+        self.extract_draft.pages_input.clear();
         self.dialog = Some(crate::Dialog::Extract);
     }
 
@@ -618,9 +697,25 @@ impl PdfCraftApp {
             return;
         }
         let Some((i, id)) = self.active_ids() else { return };
-        let pages = self.views[i].target_pages();
-        let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
         let opts = self.extract_draft.clone();
+        let pages = if !opts.pages_input.trim().is_empty() {
+            let total_count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+            let labels: Vec<String> = self.session.get(id).map(|d| d.info.pages.iter().map(|p| p.label.clone()).collect()).unwrap_or_default();
+            match pdfcraft_engine::print::select_pages(total_count, Some(&opts.pages_input), &labels, pdfcraft_engine::print::Subset::All, false) {
+                Ok(p) if !p.is_empty() => p,
+                Ok(_) => {
+                    self.notify_tr("No pages matched the specified range.");
+                    return;
+                }
+                Err(e) => {
+                    self.notify_fmt("Invalid page range: {e}", &[("e", &e.to_string())]);
+                    return;
+                }
+            }
+        } else {
+            self.views[i].target_pages()
+        };
+        let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
         // The name typed in the dialog (#737), else the document's.
         let chosen = file_stem_from_user(&opts.name);
         let renamed = !chosen.is_empty() && chosen != file_stem_from_user(&stem);

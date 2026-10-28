@@ -1,0 +1,232 @@
+From 27423ee01b2426ab3d222a1a12458ee953e40a1b Mon Sep 17 00:00:00 2001
+From: PdfCraft Contributor <developer@pdfcraft.local>
+Date: Sat, 24 Oct 2026 07:19:56 +0530
+Subject: [PATCH 5/5] feat(ui): match full screen mode icon, hide all overlays
+ in full screen, fix page input focus frame, and add Read/Edit mode switcher
+
+---
+ crates/ui-egui/src/canvas.rs | 25 +++++++++++++++---------
+ crates/ui-egui/src/chrome.rs | 36 ++++++++++++++++++++++------------
+ crates/ui-egui/src/icons.rs  | 38 +++++++++++++++++++++++++++++++++++-
+ 3 files changed, 76 insertions(+), 23 deletions(-)
+
+diff --git a/crates/ui-egui/src/canvas.rs b/crates/ui-egui/src/canvas.rs
+index 2554fb0b..36cedd34 100644
+--- a/crates/ui-egui/src/canvas.rs
++++ b/crates/ui-egui/src/canvas.rs
+@@ -4297,12 +4297,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+     if copy_selected {
+         app.execute("edit.copy");
+     }
+-    // Page action pill and quick bar hidden in Read mode for maximum breathing space.
+-    if app.mode != crate::Mode::Read {
+-        page_action_pill(app, avail, ui);
+-        quick_bar(app, avail, ui);
++    // Floating action pills and toolbars hidden in Full Screen mode and Read mode for clean viewing.
++    if !app.full_screen {
++        if app.mode != crate::Mode::Read {
++            page_action_pill(app, avail, ui);
++            quick_bar(app, avail, ui);
++        }
++        modern_floating_bar(app, avail, ui);
+     }
+-    modern_floating_bar(app, avail, ui);
+     if let Some((source, file, destination)) = remote_open {
+         app.open_remote_link(source, file, destination);
+     }
+@@ -4311,7 +4313,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
+ /// Floating action pill on the right margin of the active page.
+ /// Appears only when the mouse hovers over the active page or the pill itself.
+ fn page_action_pill(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui) {
+-    if app.mode == crate::Mode::Read {
++    if app.full_screen || app.mode == crate::Mode::Read {
+         return;
+     }
+     let Some(index) = app.active else { return };
+@@ -4420,8 +4422,8 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+         (view.id, count, labels)
+     };
+     let is_read = app.mode == crate::Mode::Read;
+-    // In Read mode, all controls are integrated directly into the top bar, freeing the entire canvas.
+-    if is_read {
++    // In Full Screen mode and Read mode, keep canvas free from floating overlays.
++    if app.full_screen || is_read {
+         return;
+     }
+     let view = &mut app.views[index];
+@@ -4494,11 +4496,13 @@ fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui)
+                             .desired_width(input_w)
+                             .horizontal_align(egui::Align::Center)
+                             .font(theme::medium(11.5))
++                            .frame(egui::Frame::NONE)
+                             .margin(vec2(2.0, 2.0));
+                         let r = egui::Frame::NONE
+                             .fill(if is_dark { t.field } else { Color32::from_gray(245) })
+                             .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
+-                            .corner_radius(CornerRadius::same(6))
++                            .corner_radius(CornerRadius::same(5))
++                            .inner_margin(egui::Margin::symmetric(4, 2))
+                             .show(ui, |ui| ui.add(edit))
+                             .inner;
+ 
+@@ -5293,6 +5297,9 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
+ 
+ /// The floating quick-action bar at the left edge of the document area.
+ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
++    if app.full_screen || app.mode == crate::Mode::Read {
++        return;
++    }
+     let t = Tokens::get(ui.ctx());
+     let pos = area.left_top() + vec2(14.0, 14.0);
+     egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+diff --git a/crates/ui-egui/src/chrome.rs b/crates/ui-egui/src/chrome.rs
+index a60efe61..ce4c300d 100644
+--- a/crates/ui-egui/src/chrome.rs
++++ b/crates/ui-egui/src/chrome.rs
+@@ -558,12 +558,21 @@ pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+             ui.horizontal_centered(|ui| {
+                 ui.spacing_mut().item_spacing.x = 3.0;
+ 
+-                // 1. Menu (hamburger)
++                // 1. Menu (hamburger) & Mode Tabs
+                 main_menu(app, ui);
+                 ui.add_space(5.0);
+                 ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                 ui.add_space(5.0);
+ 
++                // Mode tabs: Read (active) and Edit (to switch instantly)
++                let _ = widgets::mode_tab(ui, tl!("Read"), true);
++                if widgets::mode_tab(ui, tl!("Edit"), false).on_hover_text("Switch to Edit mode (edit text and images)").clicked() {
++                    app.switch_mode(Mode::Edit, true);
++                }
++                ui.add_space(4.0);
++                ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
++                ui.add_space(4.0);
++
+                 // 2. Inking & Annotation tools
+                 let is_draw = matches!(app.quick_tool, QuickTool::Comment(CommentTool::Ink));
+                 let draw_tip = tl!("Draw");
+@@ -730,11 +739,13 @@ pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                                     .desired_width(input_w)
+                                     .horizontal_align(egui::Align::Center)
+                                     .font(theme::medium(11.5))
++                                    .frame(egui::Frame::NONE)
+                                     .margin(vec2(2.0, 2.0));
+                                 let r = egui::Frame::NONE
+                                     .fill(if is_dark { t.field } else { Color32::from_gray(245) })
+                                     .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
+-                                    .corner_radius(CornerRadius::same(6))
++                                    .corner_radius(CornerRadius::same(5))
++                                    .inner_margin(egui::Margin::symmetric(4, 2))
+                                     .show(ui, |ui| ui.add(edit))
+                                     .inner;
+ 
+@@ -966,29 +977,28 @@ pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                     ui.spacing_mut().item_spacing.x = 4.0;
+ 
+-                    // Edit with PdfCraft button (prominent accent styling)
++                    // Edit button
+                     let edit_btn = ui.add(
+                         egui::Button::new(
+-                            egui::RichText::new("✏ Edit with PdfCraft")
++                            egui::RichText::new("✏ Edit")
+                                 .font(theme::semibold(12.0))
+                                 .color(Color32::WHITE),
+                         )
+                         .fill(t.accent)
+                         .corner_radius(CornerRadius::same(6))
+-                        .min_size(vec2(144.0, 30.0)),
++                        .min_size(vec2(76.0, 28.0)),
+                     );
+-                    if edit_btn.on_hover_text("Switch to All Tools editing workspace").clicked() {
+-                        app.switch_mode(Mode::AllTools, true);
+-                        app.reveal_tools();
++                    if edit_btn.on_hover_text("Switch to Edit mode (M7 Edit text and images)").clicked() {
++                        app.switch_mode(Mode::Edit, true);
+                     }
+ 
+                     ui.add_space(5.0);
+                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                     ui.add_space(5.0);
+ 
+-                    // Full screen (diagonal expansion arrow icon matching PC fullscreen)
+-                    let fs_icon = if app.full_screen { "minimize-2" } else { "maximize-2" };
+-                    let fs_tip = if app.full_screen { "Exit full screen (Esc)" } else { "Full screen (F11)" };
++                    // Full screen mode (PC monitor with diagonal expansion arrows matching PC full screen mode)
++                    let fs_icon = if app.full_screen { "minimize-2" } else { "full-screen-mode" };
++                    let fs_tip = if app.full_screen { "Exit full screen (Esc)" } else { "Full screen mode (F11)" };
+                     if icons::button(ui, fs_icon, 30.0, app.full_screen, fs_tip).clicked() {
+                         app.execute("view.full_screen");
+                     }
+@@ -1299,8 +1309,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                     .and_then(|r| r.inner);
+ 
+                 // Full screen button (above View options)
+-                let fs_icon = if full_screen { "minimize-2" } else { "monitor" };
+-                let fs_tip = if full_screen { "Exit full screen" } else { "Full screen" };
++                let fs_icon = if full_screen { "minimize-2" } else { "full-screen-mode" };
++                let fs_tip = if full_screen { "Exit full screen" } else { "Full screen mode" };
+                 if icons::button(ui, fs_icon, 32.0, full_screen, &fs_tip).clicked() {
+                     page_display_cmd = Some("view.full_screen");
+                 }
+diff --git a/crates/ui-egui/src/icons.rs b/crates/ui-egui/src/icons.rs
+index 6feac981..97c7866c 100644
+--- a/crates/ui-egui/src/icons.rs
++++ b/crates/ui-egui/src/icons.rs
+@@ -17,7 +17,7 @@ fn white_icons() -> &'static SvgIconSet {
+ }
+ 
+ pub fn exists(name: &str) -> bool {
+-    white_icons().contains(name)
++    name == "full-screen-mode" || white_icons().contains(name)
+ }
+ 
+ fn source(name: &str) -> egui::ImageSource<'static> {
+@@ -29,7 +29,43 @@ pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
+     egui::Image::new(source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
+ }
+ 
++fn paint_fullscreen_pc(ui: &egui::Ui, rect: Rect, size: f32, tint: Color32) {
++    use egui::{pos2, vec2, CornerRadius, Stroke};
++    let stroke = Stroke::new(1.3, tint);
++    let painter = ui.painter();
++
++    // Monitor screen outline: width ~0.84*size, height ~0.56*size
++    let sw = (size * 0.84).round();
++    let sh = (size * 0.56).round();
++    let screen_center = pos2(rect.center().x, rect.center().y - (size * 0.10).round());
++    let screen_rect = Rect::from_center_size(screen_center, vec2(sw, sh));
++    painter.rect_stroke(screen_rect, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
++
++    // Monitor stand and base
++    let stand_y = screen_rect.bottom();
++    let base_y = (rect.center().y + size * 0.38).round();
++    painter.line_segment([pos2(rect.center().x, stand_y), pos2(rect.center().x, base_y)], stroke);
++    let base_w = (size * 0.44).round();
++    painter.line_segment([pos2(rect.center().x - base_w * 0.5, base_y), pos2(rect.center().x + base_w * 0.5, base_y)], stroke);
++
++    // Inside screen: top-right corner bracket (pointing to top-right corner)
++    let margin = 2.5;
++    let b_len = 3.2;
++    let tr = pos2(screen_rect.right() - margin, screen_rect.top() + margin);
++    painter.line_segment([pos2(tr.x - b_len, tr.y), tr], stroke);
++    painter.line_segment([tr, pos2(tr.x, tr.y + b_len)], stroke);
++
++    // Inside screen: bottom-left corner bracket (pointing to bottom-left corner)
++    let bl = pos2(screen_rect.left() + margin, screen_rect.bottom() - margin);
++    painter.line_segment([pos2(bl.x + b_len, bl.y), bl], stroke);
++    painter.line_segment([bl, pos2(bl.x, bl.y - b_len)], stroke);
++}
++
+ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
++    if name == "full-screen-mode" {
++        paint_fullscreen_pc(ui, rect, size, tint);
++        return;
++    }
+     let size = size.round();
+     let min = (rect.center() - Vec2::splat(size * 0.5)).round();
+     let snapped_rect = Rect::from_min_size(min, Vec2::splat(size));
+-- 
+2.56.0.windows.2
+

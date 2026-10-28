@@ -32,6 +32,8 @@ const TELUGU_PROBE: char = '\u{0C15}';
 const SINHALA_PROBE: char = '\u{0D9A}';
 /// Tamil letter ka (க): the face must have it to cover Tamil.
 const TAMIL_PROBE: char = '\u{0B95}';
+/// Hangul syllable ga (가): the face must have it to cover Korean.
+const HANGUL_PROBE: char = '\u{AC00}';
 /// 欢 (U+6B22): Simplified only, absent from the Japanese craft-fonts faces.
 const HANS_PROBE: char = '\u{6B22}';
 /// 說 (U+8AAA): Traditional only, absent from the Japanese craft-fonts faces.
@@ -103,6 +105,13 @@ pub fn tamil_fallback() -> Option<Arc<FontData>> {
     CACHE.get_or_init(|| script_fallback(&tamil_candidates(), TAMIL_PROBE)).clone()
 }
 
+/// The installed fallback face for Hangul (Korean), read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can. (#3505, #3517)
+pub fn hangul_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&hangul_candidates(), HANGUL_PROBE)).clone()
+}
+
 fn script_fallback(candidates: &[PathBuf], probe: char) -> Option<Arc<FontData>> {
     if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
         return None;
@@ -117,9 +126,11 @@ fn devanagari_candidates() -> Vec<PathBuf> {
     } else if cfg!(target_os = "macos") {
         [
             "/System/Library/Fonts/Supplemental/DevanagariMT.ttc",
-            "/System/Library/Fonts/Supplemental/DevanagariSangamMN.ttc",
-            "/System/Library/Fonts/Supplemental/Kohinoor.ttc",
+            "/System/Library/Fonts/DevanagariMT.ttc",
+            "/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc",
+            "/System/Library/Fonts/Devanagari Sangam MN.ttc",
             "/System/Library/Fonts/Kohinoor.ttc",
+            "/System/Library/Fonts/Supplemental/Kohinoor.ttc",
             "/Library/Fonts/Arial Unicode.ttf",
         ]
         .iter()
@@ -223,6 +234,30 @@ fn tamil_candidates() -> Vec<PathBuf> {
             "noto/NotoSansTamilUI-Regular.ttf",
             "lohit-tamil-fonts/Lohit-Tamil.ttf",
             "truetype/lohit-tamil/Lohit-Tamil.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Hangul (Korean) faces, best first (#3505, #3517).
+fn hangul_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["malgun.ttf", "malgunbd.ttf", "gulim.ttc", "batang.ttc"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+            "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            "/System/Library/Fonts/Supplemental/AppleMyungjo.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "nanum/NanumGothic.ttf",
+            "truetype/nanum/NanumGothic.ttf",
+            "unfonts-core/UnDotum.ttf",
+            "truetype/unfonts-core/UnDotum.ttf",
+            "droid/DroidSansFallbackFull.ttf",
         ])
     }
 }

@@ -1166,8 +1166,13 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.previous_view", "view.next_view"]
 tools = []
-evidence = ["crates/ui-egui/tests/viewer.rs::view_history_select_all_and_find_options", "crates/ui-egui/tests/control.rs::navigation_history_commands_and_rail_are_per_tab_and_non_editing", "crates/ui-egui/tests/control.rs::routine_continuous_scrolling_does_not_add_navigation_history"]
-notes = "Per-tab page history: explicit search-result jumps, page navigation, bookmarks and links; no continuous-scroll history or restart persistence; existing page-step history is retained. Rail buttons, View ▸ Page navigation and Ctrl/⌘[ / Ctrl/⌘]. UI control ui.command exposes view.previous_view / view.next_view; standalone engine sessions have no viewport history. Restores page tops, not exact scroll/zoom positions."
+evidence = [
+    "crates/ui-egui/tests/viewer.rs::view_history_select_all_and_find_options",
+    "crates/ui-egui/tests/control.rs::navigation_history_commands_and_rail_are_per_tab_and_non_editing",
+    "crates/ui-egui/tests/control.rs::routine_continuous_scrolling_does_not_add_navigation_history",
+    "crates/ui-egui/src/canvas.rs::destinations_set_the_zoom_mode_and_the_point_to_show",
+]
+notes = "Per-tab page history: explicit search-result jumps, page navigation, bookmarks and links; no continuous-scroll history or restart persistence; existing page-step history is retained. Rail buttons, View ▸ Page navigation and Ctrl/⌘[ / Ctrl/⌘] or Alt+Left / Alt+Right. UI control ui.command exposes view.previous_view / view.next_view; standalone engine sessions have no viewport history. Restores page tops, not exact scroll/zoom positions."
 
 [[feature]]
 id = "view.follow-links"
@@ -6997,11 +7002,15 @@ title = "Export to Excel (.xlsx) with table detection"
 area = "J"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["export.xlsx"]
+tools = ["doc_export_office"]
+evidence = [
+    "crates/export/src/xlsx.rs::xlsx_is_a_spreadsheetml_package",
+    "crates/export/src/xlsx.rs::xlsx_multi_page_creates_multiple_sheets",
+    "crates/engine/src/tests.rs::office_export_positions_follow_the_displayed_crop_rotation_and_units",
+]
+notes = "OpenXML SpreadsheetML (.xlsx) with table detection, per-page worksheets, merged spanning cells, number types, and bold styling."
 
 [[feature]]
 id = "create.export-pptx"

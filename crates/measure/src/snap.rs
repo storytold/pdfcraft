@@ -218,7 +218,8 @@ impl Walker<'_> {
                     match s.decoded_within(remaining) {
                         Ok(data) => {
                             joined.extend(data);
-                            joined.push(b'\n');
+                            // A space, as the renderer joins pieces: a trailing comment runs on.
+                            joined.push(b' ');
                         }
                         Err(_) => self.geometry.unreadable = self.geometry.unreadable.saturating_add(1),
                     }

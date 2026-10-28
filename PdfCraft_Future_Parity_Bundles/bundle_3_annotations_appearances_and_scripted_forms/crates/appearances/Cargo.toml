@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-appearances"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clean-room appearance stream synthesizer for all 18 PDF annotation markup types and rich text (/RC)"
+
+[dependencies]

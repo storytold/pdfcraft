@@ -93,6 +93,8 @@ pub struct PrintDraft {
     pub crops: Vec<Option<print::Crop>>,
     /// The pages `crops` were read for, so a changed page selection reads them again.
     pub crop_pages: Option<Vec<usize>>,
+    /// Saved paper size before entering Label mode, restored when leaving Label mode (#3564).
+    pub saved_paper: Option<usize>,
 }
 
 impl Default for PrintDraft {
@@ -138,6 +140,7 @@ impl Default for PrintDraft {
             label_flip: false,
             crops: Vec::new(),
             crop_pages: None,
+            saved_paper: None,
         }
     }
 }
@@ -913,8 +916,13 @@ pub(crate) fn body(
                 });
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
+                    if d.saved_paper.is_none() {
+                        d.saved_paper = Some(before);
+                    }
                     d.handling = Handling::Label;
                     d.sheet = 0;
+                } else if d.paper != before && before == print::LABEL_PAPER {
+                    d.saved_paper = None;
                 }
                 ui.end_row();
             });
@@ -990,11 +998,19 @@ pub(crate) fn body(
                     (Handling::Label, tl!("Label")),
                 ] {
                     if widgets::mode_tab(ui, label, d.handling == h).clicked() {
+                        let prev = d.handling;
                         d.handling = h;
                         d.sheet = 0;
-                        // A label goes on label stock.
+                        // A label goes on label stock; leaving it restores the previous paper size (#3564).
                         if h == Handling::Label {
+                            if prev != Handling::Label {
+                                d.saved_paper = Some(d.paper);
+                            }
                             d.paper = print::LABEL_PAPER;
+                        } else if prev == Handling::Label {
+                            if let Some(saved) = d.saved_paper.take() {
+                                d.paper = saved;
+                            }
                         }
                     }
                 }
@@ -1376,5 +1392,32 @@ mod tests {
         later.sheet = 2;
         let rasters = preview_rasters(&later, &sizes, &labels, 2.0, 8192.0);
         assert!(rasters.iter().any(|(page, _)| *page == 2));
+    }
+
+    /// #3564: Switching to Label sets paper to 4x6 label; switching back to Size or other handling
+    /// restores the previously chosen paper size.
+    #[test]
+    fn leaving_label_mode_restores_previous_paper_size() {
+        let mut d = PrintDraft { paper: 4, ..PrintDraft::default() };
+        assert_eq!(d.paper, 4);
+
+        // Enter label mode:
+        let prev = d.handling;
+        d.handling = Handling::Label;
+        if prev != Handling::Label {
+            d.saved_paper = Some(d.paper);
+        }
+        d.paper = print::LABEL_PAPER;
+        assert_eq!(d.paper, print::LABEL_PAPER);
+
+        // Leave label mode:
+        let prev = d.handling;
+        d.handling = Handling::Size;
+        if prev == Handling::Label {
+            if let Some(saved) = d.saved_paper.take() {
+                d.paper = saved;
+            }
+        }
+        assert_eq!(d.paper, 4, "previous paper must be restored after leaving Label mode");
     }
 }

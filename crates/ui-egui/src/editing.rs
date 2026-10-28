@@ -523,17 +523,51 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        let typing = self
-            .views
-            .get(i)
-            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
+        let typing = self.views.get(i).is_some_and(|v| {
+            v.pending_edit.is_some()
+                || v.forms.focus.is_some()
+                || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+                || v.content.draft.is_some()
+                || v.line_editor.as_ref().is_some_and(|ed| ed.has_unsaved_text())
+        });
         if self.active != Some(i) {
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id)
+        self.commit_form_typing()
+            && self.commit_open_fill_text(id)
+            && self.commit_open_content_draft(id)
+            && self.commit_open_line_editor(id)
+    }
+
+    /// A draft text box (Add Text) commits on click-away. Save does that first, so the added text
+    /// is written to the file instead of being lost (#3546, #3496).
+    fn commit_open_content_draft(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let Some(doc) = self.session.get(id) else { return true };
+        let added = doc.added();
+        if let Some(view) = self.views.get_mut(i)
+            && let Some(edit) = view.content.finish_draft(&added)
+        {
+            view.content.selected = None;
+            self.apply_edit(edit);
+        }
+        true
+    }
+
+    /// A paragraph being edited in the PDF text editor applies on click-away. Save applies it
+    /// first, so the modified text is saved to disk (#3546, #3496).
+    fn commit_open_line_editor(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        if let Some(view) = self.views.get_mut(i)
+            && let Some(ed) = view.line_editor.take()
+            && let Some(edit) = crate::edit_text_ui::finished_edit(ed)
+        {
+            self.apply_edit(edit);
+        }
+        true
     }
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
@@ -1070,7 +1104,7 @@ impl PdfCraftApp {
         let edit = match action {
             A::New => {
                 let n = self.session.get(id).map_or(0, |d| d.info.outline.len());
-                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page: current });
+                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page: current, left: None, top: None });
                 // Like Acrobat: the new bookmark starts in rename mode.
                 self.bookmark_rename = Some((vec![n], "Untitled".into()));
                 self.right = Some(crate::RightPanel::Bookmarks);

@@ -926,7 +926,16 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let lingering = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     std::thread::Builder::new().name("pdfcraft-control".into()).spawn(move || {
-        for stream in listener.incoming().flatten() {
+        for stream in listener.incoming() {
+            let stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("control channel: accept failed ({e})");
+                    // Don't spin if accepting keeps failing (e.g. file descriptor exhaustion).
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+            };
             let _ = stream.set_write_timeout(Some(limits.write_timeout));
             // Admitted only while fewer than the limit wait to authenticate: refused on the
             // accepting thread, so a refused connection costs no thread at all.

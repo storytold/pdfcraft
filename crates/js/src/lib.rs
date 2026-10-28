@@ -25,10 +25,13 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use boa_engine::context::HostHooks;
 use boa_engine::object::builtins::{JsArray, JsFunction};
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
 use boa_engine::property::Attribute;
+use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 /// The kinds of field, as `field.type` names them.
@@ -194,7 +197,7 @@ impl Default for Limits {
 }
 
 struct Host {
-    fields: Vec<FieldState>,
+    fields: Arc<Vec<FieldState>>,
     changed: BTreeSet<usize>,
     alerts: Vec<String>,
     console: Vec<String>,
@@ -286,7 +289,8 @@ fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
 fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
-    change(&mut h.fields[i]);
+    let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
+    change(field);
     h.changed.insert(i);
     Ok(())
 }
@@ -1098,6 +1102,13 @@ fn refuse(source: &str) -> Option<String> {
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
 /// functions field scripts call), with the form's `fields`.
 pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared(script, event, doc, Arc::new(fields.to_vec()), doc_scripts, limits)
+}
+
+/// Like [`run`], sharing an immutable initial field snapshot. Scripts still get a fresh
+/// context; the first field write copies the snapshot, so neither the caller nor another
+/// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
+pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = std::iter::once(script).chain(doc_scripts.iter().map(String::as_str)).find_map(refuse) {
         return failed(why);
@@ -1119,12 +1130,50 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
     run_here(script, event, doc, fields, doc_scripts, limits)
 }
 
-fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
-    let mut ctx = Context::default();
+/// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
+/// and async kin). Such code is built at run time, so it never passed [`refuse`], and boa's
+/// recursive parser would overflow the stack on a deeply nested one.
+struct NoCodeFromStrings;
+
+impl HostHooks for NoCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, _: &[JsString], _: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
+        Err(JsNativeError::typ().with_message("scripts can't compile code from strings (eval, Function)").into())
+    }
+}
+
+/// Host hooks that hold code compiled from strings to the checks a script passes ([`refuse`]),
+/// for runners that start the script itself through `eval`.
+pub(crate) struct CheckedCodeFromStrings;
+
+impl HostHooks for CheckedCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, parameters: &[JsString], body: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
+        let units = parameters.iter().chain(std::iter::once(body)).fold(0usize, |n, s| n.saturating_add(s.len()));
+        if units > MAX_SCRIPT_BYTES {
+            return Err(JsNativeError::range().with_message("the code is too long to compile").into());
+        }
+        // As one text: brackets left open in one parameter carry into the next.
+        let mut source = parameters.iter().map(JsString::to_std_string_lossy).collect::<Vec<_>>().join(",");
+        source.push('\n');
+        source.push_str(&body.to_std_string_lossy());
+        match refuse(&source) {
+            Some(why) => Err(JsNativeError::range().with_message(why).into()),
+            None => Ok(()),
+        }
+    }
+}
+
+fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            let error = Some(format!("the script engine could not start: {e}"));
+            return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
+        }
+    };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
-        fields: fields.to_vec(),
+        fields,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="PdfCraft Nightly"
+      Manufacturer="ArtCraft Team"
+      Version="$(var.Version)"
+      UpgradeCode="6B8E4219-F879-4A9B-B1D6-8E3A7165D9EE"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="PdfCraft Nightly PDF workbench" Manufacturer="ArtCraft Team" />
+    <Launch Condition="ALLUSERS = 1 OR (Installed AND REMOVE = &quot;ALL&quot;)"
+        Message="PdfCraft Nightly must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of PdfCraft Nightly is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="PdfcraftNightlyIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="PdfcraftNightlyIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/storytold/pdfcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/storytold/pdfcraft" />
+    <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+
+    <Property Id="INSTALLDESKTOPSHORTCUT" Secure="yes" Value="1" />
+    <Property Id="INSTALLPDFCONTEXTMENU" Secure="yes" Value="1" />
+
+    <UIRef Id="PdfcraftInstallerUI" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="PdfCraft Nightly">
+        <Directory Id="ModelsFolder" Name="models" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="Main" Title="PdfCraft Nightly" Level="1">
+      <ComponentGroupRef Id="PdfcraftNightlyFiles" />
+      <ComponentGroupRef Id="PdfcraftNightlyModels" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="PdfcraftNightlyFiles" Directory="INSTALLFOLDER">
+      <Component Id="PdfcraftNightlyApp" Guid="4D87819B-3C2D-4C98-A28D-40EE76523912">
+        <File Id="PdfcraftNightlyExe" Source="$(var.BinDir)\pdfcraft-nightly.exe" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft-nightly.exe" Value="[#PdfcraftNightlyExe]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft-nightly.exe" Name="Path" Value="[INSTALLFOLDER]" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftNightly.Document" Value="PDF Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftNightly.Document\DefaultIcon" Value="&quot;[#PdfcraftNightlyExe]&quot;,-2" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftNightly.Document\shell\open\command" Value="&quot;[#PdfcraftNightlyExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftNightly.Document" Name="TypeOverlay" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="PdfCraftNightly.Document" Value="" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-nightly.exe" Name="FriendlyAppName" Value="PdfCraft Nightly" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-nightly.exe\DefaultIcon" Value="&quot;[#PdfcraftNightlyExe]&quot;,-2" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-nightly.exe\SupportedTypes" Name=".pdf" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-nightly.exe\shell\open\command" Value="&quot;[#PdfcraftNightlyExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftNightly\Capabilities" Name="ApplicationName" Value="PdfCraft Nightly" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftNightly\Capabilities" Name="ApplicationDescription" Value="Open-source PDF workbench Nightly" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftNightly\Capabilities" Name="ApplicationIcon" Value="[#PdfcraftNightlyExe],0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftNightly\Capabilities\FileAssociations" Name=".pdf" Value="PdfCraftNightly.Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PdfCraft Nightly" Value="Software\PdfCraftNightly\Capabilities" Type="string" />
+      </Component>
+
+      <Component Id="PdfcraftNightlyStartMenuShortcut" Directory="ProgramMenuFolder" Guid="6A55B21E-74B8-4FE2-A554-C3D751431BC7">
+        <Shortcut Id="StartMenuShortcut" Name="PdfCraft Nightly" Description="PdfCraft Nightly PDF workbench"
+            Target="[#PdfcraftNightlyExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftNightlyIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftNightly\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="PdfcraftNightlyDesktopShortcut" Directory="DesktopFolder" Guid="D2A6B29C-926D-4892-BA49-D84CE9A71B62"
+          Condition="INSTALLDESKTOPSHORTCUT = 1">
+        <Shortcut Id="DesktopShortcut" Name="PdfCraft Nightly" Description="PdfCraft Nightly PDF workbench"
+            Target="[#PdfcraftNightlyExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftNightlyIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftNightly\Shortcuts" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="PdfcraftNightlyContextMenu" Guid="60B312E4-0E37-4BAA-B981-6C7EE1A9C682"
+          Condition="INSTALLPDFCONTEXTMENU = 1">
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftNightly.Edit" Value="Edit with PdfCraft Nightly" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftNightly.Edit" Name="Icon" Value="&quot;[#PdfcraftNightlyExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftNightly.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftNightly.Edit\command" Value="&quot;[#PdfcraftNightlyExe]&quot; &quot;%1&quot;" Type="string" />
+      </Component>
+
+      <Component Id="PdfcraftNightlyCli">
+        <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftNightlyIco">
+        <File Id="PdfcraftNightlyIcoFile" Source="$(var.BinDir)\pdfcraft_nightly.ico" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftNightlyDocIconLicense">
+        <File Id="PdfcraftNightlyDocIconLicenseFile" Source="$(var.BinDir)\LICENSE-document.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftNightlyMitLicense">
+        <File Id="PdfcraftNightlyMitLicenseFile" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftNightlyApacheLicense">
+        <File Id="PdfcraftNightlyApacheLicenseFile" Source="$(var.BinDir)\LICENSE-APACHE" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftNightlyNotice">
+        <File Id="PdfcraftNightlyNoticeFile" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="PdfcraftNightlyModels" Directory="ModelsFolder">
+      <Files Include="$(var.ModelsDir)\*" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

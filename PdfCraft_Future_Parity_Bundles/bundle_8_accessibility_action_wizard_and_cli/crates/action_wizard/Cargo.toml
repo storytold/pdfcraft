@@ -1,0 +1,9 @@
+[package]
+name = "pdfcraft-action-wizard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Action Wizard batch automation runner executing multi-step recipes over folders and documents"
+
+[dependencies]
+pdfcraft-pdf-ua-remediation = { path = "../pdf_ua_remediation" }

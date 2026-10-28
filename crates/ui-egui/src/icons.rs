@@ -17,7 +17,7 @@ fn white_icons() -> &'static SvgIconSet {
 }
 
 pub fn exists(name: &str) -> bool {
-    white_icons().contains(name)
+    name == "full-screen-mode" || white_icons().contains(name)
 }
 
 fn source(name: &str) -> egui::ImageSource<'static> {
@@ -29,8 +29,47 @@ pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
 }
 
+fn paint_fullscreen_pc(ui: &egui::Ui, rect: Rect, size: f32, tint: Color32) {
+    use egui::{pos2, vec2, CornerRadius, Stroke};
+    let stroke = Stroke::new(1.3, tint);
+    let painter = ui.painter();
+
+    // Monitor screen outline: width ~0.84*size, height ~0.56*size
+    let sw = (size * 0.84).round();
+    let sh = (size * 0.56).round();
+    let screen_center = pos2(rect.center().x, rect.center().y - (size * 0.10).round());
+    let screen_rect = Rect::from_center_size(screen_center, vec2(sw, sh));
+    painter.rect_stroke(screen_rect, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+
+    // Monitor stand and base
+    let stand_y = screen_rect.bottom();
+    let base_y = (rect.center().y + size * 0.38).round();
+    painter.line_segment([pos2(rect.center().x, stand_y), pos2(rect.center().x, base_y)], stroke);
+    let base_w = (size * 0.44).round();
+    painter.line_segment([pos2(rect.center().x - base_w * 0.5, base_y), pos2(rect.center().x + base_w * 0.5, base_y)], stroke);
+
+    // Inside screen: top-right corner bracket (pointing to top-right corner)
+    let margin = 2.5;
+    let b_len = 3.2;
+    let tr = pos2(screen_rect.right() - margin, screen_rect.top() + margin);
+    painter.line_segment([pos2(tr.x - b_len, tr.y), tr], stroke);
+    painter.line_segment([tr, pos2(tr.x, tr.y + b_len)], stroke);
+
+    // Inside screen: bottom-left corner bracket (pointing to bottom-left corner)
+    let bl = pos2(screen_rect.left() + margin, screen_rect.bottom() - margin);
+    painter.line_segment([pos2(bl.x + b_len, bl.y), bl], stroke);
+    painter.line_segment([bl, pos2(bl.x, bl.y - b_len)], stroke);
+}
+
 pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
-    image(name, size, tint).paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(size)));
+    if name == "full-screen-mode" {
+        paint_fullscreen_pc(ui, rect, size, tint);
+        return;
+    }
+    let size = size.round();
+    let min = (rect.center() - Vec2::splat(size * 0.5)).round();
+    let snapped_rect = Rect::from_min_size(min, Vec2::splat(size));
+    image(name, size, tint).paint_at(ui, snapped_rect);
 }
 
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
@@ -44,7 +83,7 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
         pressed: Some(clear(t.icon)),
         selected: clear(t.accent_text),
         corner_radius: t.radius.into(),
-        focus_stroke: Stroke::new(1.0, t.accent),
+        focus_stroke: Stroke::NONE,
     };
     let label = if tooltip.is_empty() { name } else { tooltip };
     // The wash eases from the response, so reserve its place under the icon and focus ring.
@@ -55,6 +94,7 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
         let press = theme::Press::track(ui, &resp);
         let mut shapes = Vec::with_capacity(2);
         let fill = press.wash_color(&t, selected);
+        let rect = Rect::from_min_size(rect.min.round(), rect.size().round());
         if fill.a() > 0 {
             shapes.push(egui::Shape::rect_filled(rect, t.radius, fill));
         }
@@ -66,9 +106,9 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
                 egui::StrokeKind::Inside,
             ));
         }
-        ui.painter().set(wash, egui::Shape::Vec(shapes));
+        ui.painter().set(wash, if shapes.is_empty() { egui::Shape::Noop } else { egui::Shape::Vec(shapes) });
         // The glyph shrinks a little and drops a pixel while the pointer is down.
-        let size = (box_size * 0.5).round() * (1.0 - 0.08 * press.down);
+        let size = ((box_size * 0.5).round() * (1.0 - 0.08 * press.down)).round();
         paint(ui, rect.translate(press.offset()), name, size, tint);
     }
     let resp = theme::hand(resp);

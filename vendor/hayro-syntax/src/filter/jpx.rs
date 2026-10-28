@@ -21,7 +21,13 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
-        resolve_palette_indices: false,
+        // PdfCraft patch: (#3179) with no /ColorSpace in the image dictionary the colours come from
+        // the JP2 header (ISO 32000-2 §7.4.9), so its palette (`pclr`) is applied here; with a
+        // /ColorSpace the header colour data is ignored, and an /Indexed space takes the raw indices.
+        // A /ColorSpace that does not resolve also leaves `num_components` unset: the header's
+        // colours are then the only ones there are, so the palette is applied too (raw indices
+        // would be drawn as gray).
+        resolve_palette_indices: params.num_components.is_none(),
         strict: false,
         target_resolution: params.target_dimension,
     };
@@ -41,7 +47,13 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
 
     let width = image.width();
     let height = image.height();
-    let bpc = params.bpc.unwrap_or(image.original_bit_depth());
+    // PdfCraft patch: (#3179) a resolved palette gives colours, decoded to 8 bits like every
+    // sample; the codestream's precision is that of the indices (1 bit, say), and rescaling the
+    // colours to it kept only 0 or 255 per channel (review on #3184).
+    let palette_resolved = settings.resolve_palette_indices && has_palette(data);
+    let bpc = params
+        .bpc
+        .unwrap_or(if palette_resolved { 8 } else { image.original_bit_depth() });
     let cs = match image.color_space() {
         ColorSpace::Gray => ImageColorSpace::Gray,
         ColorSpace::RGB => ImageColorSpace::Rgb,
@@ -96,6 +108,15 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
             height,
         }),
     })
+}
+
+/// PdfCraft patch: (#3179) whether JP2 file `data` has a palette box (`pclr`) in its header box
+/// (`jp2h`, ISO 15444-1 I.5.3.4). A raw codestream has none.
+fn has_palette(data: &[u8]) -> bool {
+    boxes(data)
+        .find(|&(kind, _, _)| kind == *b"jp2h")
+        .and_then(|(_, start, end)| data.get(start..end))
+        .is_some_and(|header| boxes(header).any(|(kind, _, _)| kind == *b"pclr"))
 }
 
 /// The enumerated colour spaces (`EnumCS`, ISO 15444-1 I.5.3.3 and 15444-2 M.11.7.2) the decoder
@@ -221,8 +242,9 @@ fn scale(
 
 #[cfg(test)]
 mod tests {
-    use super::{scale, without_refused_enumerated_colour};
+    use super::{decode, scale, without_refused_enumerated_colour};
     use crate::bit_reader::{BitReader, bit_mask};
+    use crate::object::stream::{ImageColorSpace, ImageDecodeParams};
     use alloc::vec::Vec;
 
     #[test]
@@ -357,5 +379,105 @@ mod tests {
             data[at..at + 4].copy_from_slice(&bad.to_be_bytes());
             assert_eq!(without_refused_enumerated_colour(&data), None, "{bad:#x}");
         }
+    }
+
+    /// A 4x2 JP2 written for this test: one 8-bit component whose samples (0, 1) index a
+    /// two-entry sRGB palette (`pclr` + `cmap`): red, then blue. Rows: 0 1 0 1 / 1 0 1 0.
+    const PALETTE_JP2: &[u8] = &[
+        0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a, 0x00, 0x00, 0x00,
+        0x14, 0x66, 0x74, 0x79, 0x70, 0x6a, 0x70, 0x32, 0x20, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x70,
+        0x32, 0x20, 0x00, 0x00, 0x00, 0x55, 0x6a, 0x70, 0x32, 0x68, 0x00, 0x00, 0x00, 0x16, 0x69,
+        0x68, 0x64, 0x72, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x07, 0x07,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x63, 0x6f, 0x6c, 0x72, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x14, 0x70, 0x63, 0x6c, 0x72, 0x00, 0x02, 0x03, 0x07, 0x07,
+        0x07, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x14, 0x63, 0x6d, 0x61, 0x70,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00,
+        0x8c, 0x6a, 0x70, 0x32, 0x63, 0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x07, 0x01, 0x01, 0xff, 0x52, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x04, 0x04, 0x00, 0x01, 0xff, 0x5c, 0x00, 0x07, 0x40, 0x40, 0x48, 0x48, 0x50, 0xff, 0x64,
+        0x00, 0x25, 0x00, 0x01, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20,
+        0x4f, 0x70, 0x65, 0x6e, 0x4a, 0x50, 0x45, 0x47, 0x20, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f,
+        0x6e, 0x20, 0x32, 0x2e, 0x35, 0x2e, 0x34, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x17, 0x00, 0x01, 0xff, 0x93, 0xcf, 0xb4, 0x08, 0x08, 0x67, 0x90, 0x07, 0x41, 0x08,
+        0xff, 0xd9,
+    ];
+
+    /// #3179: with no `/ColorSpace` in the image dictionary, the JP2 palette gives the colours. The
+    /// raw indices (0 and 1) used to come back as a gray image, drawn as noise.
+    #[test]
+    fn jpx_palette_is_applied_without_a_color_space() {
+        let params = ImageDecodeParams {
+            width: 4,
+            height: 2,
+            ..ImageDecodeParams::default()
+        };
+        let result = decode(PALETTE_JP2, &params).unwrap();
+        let image = result.image_data.unwrap();
+        assert!(matches!(image.color_space, Some(ImageColorSpace::Rgb)));
+        let red = [255, 0, 0];
+        let blue = [0, 0, 255];
+        let expected: Vec<u8> = [red, blue, red, blue, blue, red, blue, red].concat();
+        assert_eq!(&*result.data, &expected[..]);
+    }
+
+    /// With an `/Indexed` colour space in the dictionary, the PDF supplies the palette, so the raw
+    /// indices are what the image holds.
+    #[test]
+    fn jpx_palette_indices_stay_raw_for_an_indexed_color_space() {
+        let params = ImageDecodeParams {
+            is_indexed: true,
+            num_components: Some(1),
+            width: 4,
+            height: 2,
+            ..ImageDecodeParams::default()
+        };
+        let result = decode(PALETTE_JP2, &params).unwrap();
+        assert_eq!(&*result.data, &[0, 1, 0, 1, 1, 0, 1, 0][..]);
+    }
+
+    /// A 1x1, 1-bit codestream (one empty packet, so its sample is the midpoint 1) as a JP2 file
+    /// whose header holds `extra` boxes after `ihdr` and `colr`.
+    fn one_bit_jp2(extra: &[u8]) -> Vec<u8> {
+        let jp2_box = |kind: &[u8], body: &[u8]| {
+            let mut b = ((8 + body.len()) as u32).to_be_bytes().to_vec();
+            b.extend_from_slice(kind);
+            b.extend_from_slice(body);
+            b
+        };
+        let mut codestream = alloc::vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0];
+        for value in [1_u32, 1, 0, 0, 1, 1, 0, 0] {
+            codestream.extend_from_slice(&value.to_be_bytes());
+        }
+        codestream.extend_from_slice(&[0, 1, 0, 1, 1]);
+        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+        codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 15, 0, 1, 0xff, 0x93, 0]);
+        codestream.extend_from_slice(&[0xff, 0xd9]);
+        let mut header = jp2_box(b"ihdr", &[0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 7, 0, 0]);
+        header.extend(jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 16]));
+        header.extend_from_slice(extra);
+        let mut out = alloc::vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+        out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+        out.extend(jp2_box(b"jp2h", &header));
+        out.extend(jp2_box(b"jp2c", &codestream));
+        out
+    }
+
+    /// Review on #3184: resolved palette colours are 8-bit samples whatever the indices'
+    /// precision; an image without a palette keeps its own (1 bit here).
+    #[test]
+    fn palette_colours_are_eight_bit_and_other_samples_keep_their_precision() {
+        let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
+        let bpc = |data: &[u8]| decode(data, &params).and_then(|r| r.image_data).map(|d| d.bits_per_component);
+        let mut palette = Vec::new();
+        for (kind, body) in [(&b"pclr"[..], &[0, 2, 3, 7, 7, 7, 255, 0, 0, 64, 128, 192][..]), (b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2])] {
+            palette.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
+            palette.extend_from_slice(kind);
+            palette.extend_from_slice(body);
+        }
+        assert_eq!(bpc(&one_bit_jp2(&palette)), Some(8));
+        assert_eq!(bpc(&one_bit_jp2(&[])), Some(1));
     }
 }

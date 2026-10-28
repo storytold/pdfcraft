@@ -1,16 +1,27 @@
-<!-- Document outline: Lucide file-text, lucide-static 1.49.0, ISC.
-     PDF badge and outlined lettering: PdfCraft contributors, MIT OR Apache-2.0.
-     No fonts or external images. See LICENSE-document.txt and ATTRIBUTION.toml. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <g transform="translate(-2 -2) scale(2.8)" stroke="#0b0b0c" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
-    <path fill="#efe9dc" d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
-    <path fill="#c8ece4" d="M14 2v5a1 1 0 0 0 1 1h5" />
-    <path fill="none" stroke="#12a58a" d="M8 12h8M8 15h5" />
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">PdfCraft PDF document</title>
+  <desc id="desc">Cream document with a mint folded corner, charcoal outline, teal text lines and deep-teal PDF badge.</desc>
+  <defs>
+    <linearGradient id="paperShade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#efe9dc"/>
+      <stop offset="1" stop-color="#efe9dc"/>
+    </linearGradient>
+  </defs>
+  <!-- Document silhouette: original PdfCraft charcoal and cream palette -->
+  <path d="M15.1 4.1H36.6c1.8 0 3.1.6 4.4 1.9l13.1 13.2c1.4 1.4 2 2.9 2 4.9v28.1c0 3.7-2.3 6-6 6H15.2c-3.8 0-6.1-2.3-6.1-6V10.2c0-3.8 2.3-6.1 6-6.1Z"
+        fill="url(#paperShade)" stroke="#0b0b0c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Mint folded corner -->
+  <path d="M37.1 5.1v10.1c0 3.4 2 5.5 5.5 5.5h12.3L37.1 5.1Z" fill="#c8ece4"/>
+  <path d="M37.1 5.1v10.1c0 3.4 2 5.5 5.5 5.5h12.3" fill="none" stroke="#0b0b0c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Teal document lines -->
+  <g fill="none" stroke="#12a58a" stroke-width="1.65" stroke-linecap="round">
+    <path d="M16.2 27.0H49.5"/>
+    <path d="M16.2 31.0H49.5"/>
+    <path d="M16.2 35.0H49.5"/>
+    <path d="M16.2 39.0H49.5"/>
   </g>
-  <rect x="3" y="34" width="56" height="23" rx="4" fill="#087f6b" />
-  <g fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M13 50V41h5a3 3 0 0 1 0 6h-5" />
-    <path d="M27 41v9h3a4.5 4.5 0 0 0 0-9z" />
-    <path d="M42 50V41h8M42 45h6" />
-  </g>
+  <!-- Original deep-teal PDF label -->
+  <rect x="4.2" y="39.0" width="37.6" height="15.4" rx="2.15" fill="#087f6b" stroke="#0b0b0c" stroke-width="1.15" stroke-linejoin="round"/>
+  <text x="22.9" y="50.55" text-anchor="middle" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-size="11.7" font-weight="700" letter-spacing="0.08" fill="#ffffff">PDF</text>
 </svg>

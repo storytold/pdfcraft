@@ -73,7 +73,9 @@ pub(crate) fn thumbnail_rows(top: f32, bottom: f32, row_height: f32, rows: usize
     first.saturating_sub(1).min(rows)..end.saturating_add(1).min(rows)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub const THUMBNAIL_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Fit {
     Width,
     Page,
@@ -83,7 +85,7 @@ pub enum Fit {
 
 /// The base page display: one page across, or a two-page spread. Whether it scrolls continuously
 /// is a separate flag (`continuous`), as in Acrobat, so every combination is reachable (#752).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PageLayout {
     Single,
     TwoUp,
@@ -162,6 +164,39 @@ pub fn parse_display_token(value: &str) -> Option<(PageLayout, bool)> {
     }
 }
 
+/// Visual color filter applied to rendered document pages during reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PageFilter {
+    #[default]
+    Normal,
+    Invert,
+    Sepia,
+    Night,
+    Grayscale,
+}
+
+impl PageFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Default colors",
+            Self::Invert => "Invert (Dark page)",
+            Self::Sepia => "Sepia (Warm reading)",
+            Self::Night => "Night (High contrast)",
+            Self::Grayscale => "Grayscale (Monochrome)",
+        }
+    }
+
+    pub fn dot_color(self) -> (Color32, Option<Color32>) {
+        match self {
+            Self::Normal => (Color32::WHITE, Some(Color32::from_gray(160))),
+            Self::Invert => (Color32::BLACK, Some(Color32::from_gray(200))),
+            Self::Sepia => (Color32::from_rgb(0xF5, 0xEE, 0xDC), Some(Color32::from_rgb(0x8B, 0x69, 0x47))),
+            Self::Night => (Color32::from_rgb(0x1E, 0x1E, 0x24), Some(Color32::from_rgb(0xE0, 0xE0, 0xE4))),
+            Self::Grayscale => (Color32::from_gray(128), None),
+        }
+    }
+}
+
 /// How a newly opened document is shown (Preferences ▸ Documents and view). A PDF that asks
 /// for its own layout or zoom gets that instead.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -176,12 +211,14 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session.
     pub highlight_fields: bool,
+    /// Visual color filter applied to document pages during reading.
+    pub page_filter: PageFilter,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
+        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false, page_filter: PageFilter::Normal }
     }
 }
 
@@ -378,6 +415,7 @@ pub struct DocView {
     pub rotation: u16,
     pub current: usize,
     pub organize: bool,
+    pub thumbnail_zoom: f32,
     pub highlight_fields: bool,
     pub page_input: String,
     /// Select the replacement page label once if its editor remains focused.
@@ -438,6 +476,14 @@ pub struct DocView {
     print_pages: HashMap<usize, (u64, TextureHandle)>,
     /// Print dialog: preview rasters become luminance when Print ▸ Print in grayscale is on.
     grayscale: bool,
+    /// Visual color filter applied to document pages during reading.
+    pub page_filter: PageFilter,
+    /// Whether page gutters (gaps between pages) are shown. Defaults to true.
+    pub show_gutters: bool,
+    /// Automated scrolling speed in points/sec (0.0 when off).
+    pub autoscroll_speed: f32,
+    /// Whether text reflow mode is active.
+    pub reflow: bool,
     /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
     /// earlier zoom stay, drawn stretched, until those of the current one cover the page.
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
@@ -463,8 +509,9 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page widths and heights in points (view space), for mapping positions to scroll offsets.
+    pub(crate) page_widths: Vec<f32>,
+    pub(crate) page_heights: Vec<f32>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
@@ -499,9 +546,13 @@ pub struct DocView {
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
+    /// The paragraph editor whose edit was just queued. It opens again with its typing if the
+    /// edit fails, as a refused form field does.
+    pub(crate) applied_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The box a click switched to while another paragraph was being edited: it opens once the
     /// queued edit has applied, so its index and geometry come from the document it now is (#2022).
-    pub(crate) pending_text_open: Option<(usize, usize)>,
+    /// It is held as the paragraph's text and box, not an index: the edit can regroup the page.
+    pub(crate) pending_text_open: Option<(usize, pdfcraft_engine::BlockKey)>,
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
@@ -519,6 +570,8 @@ pub struct DocView {
     pub forms: crate::forms_ui::FormView,
     /// Prepare a form: the selected field and the gesture in progress.
     pub prepare: crate::prepare::PrepareView,
+    /// Prepare a form ▸ Calculation order.
+    pub(crate) calc_order: crate::calc_order_ui::CalcOrderView,
     /// Edit a PDF: the selected added item, the text being typed.
     pub content: crate::content_ui::ContentView,
     /// Edit a PDF ▸ Link tool state.
@@ -654,6 +707,17 @@ pub enum ViewAction {
 }
 
 impl DocView {
+    pub fn thumbnail_zoom(&self) -> f32 {
+        self.thumbnail_zoom
+    }
+
+    pub fn set_thumbnail_zoom(&mut self, zoom: f32) {
+        let zoom = zoom.clamp(*THUMBNAIL_ZOOM_RANGE.start(), *THUMBNAIL_ZOOM_RANGE.end());
+        if zoom != self.thumbnail_zoom {
+            self.thumbnail_zoom = zoom;
+        }
+    }
+
     pub fn raster_memory(&self) -> RasterMemory {
         RasterMemory {
             thumbnail_count: self.thumbs.len(),
@@ -706,6 +770,7 @@ impl DocView {
             rotation: 0,
             current: 0,
             organize: false,
+            thumbnail_zoom: 1.0,
             highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),
             page_input_reselect: false,
@@ -736,6 +801,10 @@ impl DocView {
             current_scale_tag: 0,
             print_pages: HashMap::new(),
             grayscale: false,
+            page_filter: defaults.page_filter,
+            show_gutters: true,
+            autoscroll_speed: 0.0,
+            reflow: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_failed: HashSet::new(),
@@ -751,6 +820,7 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
+            page_widths: info.pages.iter().map(|p| p.width).collect(),
             page_heights: info.pages.iter().map(|p| p.height).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
@@ -769,6 +839,7 @@ impl DocView {
             pending_edit: None,
             edit_lines: HashMap::new(),
             line_editor: None,
+            applied_editor: None,
             pending_text_open: None,
             text_background: Default::default(),
             move_background: Default::default(),
@@ -799,6 +870,7 @@ impl DocView {
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
+            calc_order: Default::default(),
             content: Default::default(),
             links: Default::default(),
             redact_drag: None,
@@ -823,6 +895,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
+        self.page_widths = info.pages.iter().map(|p| p.width).collect();
         self.page_heights = info.pages.iter().map(|p| p.height).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
@@ -1046,6 +1119,16 @@ impl DocView {
         self.pages.get(&page).map(|p| p.tex.id())
     }
 
+    pub(crate) fn page_raster_out_of_date(&self, page: usize) -> bool {
+        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG)
+    }
+
+    /// Whether `page` is still drawn, somewhere, as it was before its last change: its whole-page
+    /// raster (a tiled page's backdrop too) or any of its tiles waits for a replacement.
+    pub(crate) fn page_out_of_date(&self, page: usize) -> bool {
+        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG) || self.stale_tiles.iter().any(|k| k.0 == page)
+    }
+
     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
     /// thumbnail.
     pub(crate) fn page_preview(&self, page: usize) -> Option<egui::TextureId> {
@@ -1207,6 +1290,21 @@ impl DocView {
         self.current = page;
     }
 
+    /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
+    pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
+        self.go_to_page(page);
+        self.goto_point = None;
+        let Some(p) = info.pages.get(self.current) else { return };
+        if !rect.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        // Halve before adding so even large finite coordinates cannot overflow the midpoint.
+        let x = rect[0] * 0.5 + rect[2] * 0.5;
+        let y = rect[1] * 0.5 + rect[3] * 0.5;
+        let [fx, fy] = p.dest_fraction(Some(x), Some(y), self.rotation);
+        self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
+    }
+
     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
     /// and zoomed as `dest` asks, as Acrobat does. `/XYZ` puts (left, top) at the window's
     /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit
@@ -1215,6 +1313,13 @@ impl DocView {
     /// coordinate keeps that scroll position (null `top` on a new page: its top), and a point
     /// past the end of the document scrolls as far as it can.
     pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        if self.back.last() != Some(&self.current) {
+            self.back.push(self.current);
+            if self.back.len() > 200 {
+                self.back.remove(0);
+            }
+        }
+        self.forward.clear();
         self.go_to_page(page);
         let page = self.current;
         self.goto_point = None;
@@ -1363,6 +1468,16 @@ impl DocView {
         self.rotation = (self.rotation + if clockwise { 90 } else { 270 }) % 360;
         self.goto = Some((self.current, 0.0));
         self.reset_coarse_state();
+    }
+
+    /// Sets the visual reading color filter and invalidates page textures for immediate update.
+    pub fn set_page_filter(&mut self, f: PageFilter) {
+        if self.page_filter != f {
+            self.page_filter = f;
+            self.pages.clear();
+            self.tiles.clear();
+            self.last_queue.clear();
+        }
     }
 
     /// Switch the zoom mode, keeping the current page in view.
@@ -1872,7 +1987,11 @@ impl DocView {
         let img = texture_image([r.width as usize, r.height as usize], r.rgba);
         if let Some(t) = r.request.tile {
             let key = (page, r.request.tag, t.x, t.y);
-            let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
+            let tex = ctx.load_texture(
+                format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y),
+                apply_page_filter(img, self.page_filter),
+                TextureOptions::LINEAR,
+            );
             self.tiles.insert(key, tex);
             self.stale_tiles.remove(&key);
             if !self.stale_tiles.iter().any(|k| k.0 == page) {
@@ -1894,7 +2013,11 @@ impl DocView {
             self.thumbs.insert(page, PageTex { tag: r.request.tag, tex });
             self.stale_thumbs.remove(&page);
         } else {
-            let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
+            let tex = ctx.load_texture(
+                format!("page-{:?}-{page}", self.id),
+                apply_page_filter(img, self.page_filter),
+                TextureOptions::LINEAR,
+            );
             self.pages.insert(page, PageTex { tag: r.request.tag, tex });
             self.signature_drag.page_received(page);
             self.move_background.page_received(page);
@@ -1941,7 +2064,17 @@ impl DocView {
         }
     }
 
+    /// Page gutter in points: 14.0 when Show page gutters is on, 0.0 when off.
+    pub fn gap(&self) -> f32 {
+        if self.show_gutters { GAP } else { 0.0 }
+    }
+
     fn fit_zoom(&mut self, info: &DocInfo) {
+        if self.reflow {
+            self.fit = Fit::Width;
+            self.layout = PageLayout::Single;
+            self.continuous = true;
+        }
         let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().map(|p| side(self.display_size(p))).fold(1.0, f32::max);
         let max_w = largest(|s| s.0);
         // A single page shown on its own fits that page. Every other display (scrolling, or a
@@ -1952,12 +2085,13 @@ impl DocView {
         } else {
             (max_w, largest(|s| s.1))
         };
+        let gap = self.gap();
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - gap * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
-                let zw = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row);
+                let zw = (avail_w - gap * (per_row - 1.0)) / (w * PT * per_row);
                 let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
                 self.zoom = zw.min(zh);
             }
@@ -1982,13 +2116,14 @@ impl DocView {
         let s = self.zoom * PT;
         let mut rects = Vec::with_capacity(info.pages.len());
         let mut y = MARGIN;
+        let gap = self.gap();
         match self.layout {
             PageLayout::Single => {
                 for p in &info.pages {
                     let (w, h) = self.display_size(p);
                     let size = vec2(w * s, h * s);
                     rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(SIDE), y), size));
-                    y += size.y + GAP;
+                    y += size.y + gap;
                 }
             }
             PageLayout::TwoUp => {
@@ -2000,14 +2135,14 @@ impl DocView {
                 };
                 for (ri, pair) in rows.into_iter().enumerate() {
                     let sizes: Vec<Vec2> = pair.iter().map(|p| self.display_size(p)).map(|(w, h)| vec2(w * s, h * s)).collect();
-                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + GAP * (sizes.len() as f32 - 1.0);
+                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + GAP / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
                     for size in sizes {
                         rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + GAP;
+                        x += size.x + gap;
                     }
-                    y += row_h + GAP;
+                    y += row_h + gap;
                 }
             }
         }
@@ -2278,10 +2413,12 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         view.fit = Fit::Width;
         view.goto = Some((view.current, 0.0));
     }
-    if pressed(cmd(Key::OpenBracket)) {
+    let alt_left = ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::ArrowLeft)));
+    let alt_right = ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::ArrowRight)));
+    if pressed(cmd(Key::OpenBracket)) || alt_left {
         view.view_history(false);
     }
-    if pressed(cmd(Key::CloseBracket)) {
+    if pressed(cmd(Key::CloseBracket)) || alt_right {
         view.view_history(true);
     }
     let key = |k| ctx.input(|i| i.key_pressed(k));
@@ -2303,11 +2440,12 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
     let command = ctx.input(|i| i.modifiers.command);
+    let no_arrow_modifiers = ctx.input(|i| !i.modifiers.alt && !i.modifiers.command && !i.modifiers.ctrl);
     let scrolls = view.continuous;
-    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    if (key(Key::ArrowRight) && no_arrow_modifiers) || (key(Key::PageDown) && (command || !scrolls)) {
         view.step_page(true);
     }
-    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    if (key(Key::ArrowLeft) && no_arrow_modifiers) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
     }
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
@@ -2403,6 +2541,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
     let preparing = app.is_preparing();
+    // Prepare a form ▸ Calculation order: the order's steps and links on the page.
+    let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
     // Edit a PDF: added text and images can be selected, moved and edited.
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
@@ -2763,6 +2903,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut copy_selected = false;
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
+    let generation = doc.edit_generation();
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
     let mut open_boxes = false;
@@ -2800,6 +2941,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_props: Option<(usize, usize)> = None;
     let mut field_props = false;
     let mut field_placed = false;
+    let mut open_table: Option<(usize, [f64; 4])> = None;
+    let mut calc_hover: Option<String> = None;
+    // The table being set up in its window, shown on its own document's page.
+    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
     if preparing {
         crate::prepare::after_refresh(view, &form);
@@ -2846,7 +2991,26 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
         // until after the text widgets when a selection owns that drag.
         let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
-        let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
+        let autoscroll_delta = if unobstructed && view.autoscroll_speed != 0.0 {
+            let dt = ui.input(|i| i.stable_dt);
+            let interrupted = ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape));
+            if interrupted {
+                view.autoscroll_speed = 0.0;
+                Vec2::ZERO
+            } else {
+                if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                    view.autoscroll_speed = (view.autoscroll_speed - 20.0).max(-300.0);
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                    view.autoscroll_speed = (view.autoscroll_speed + 20.0).min(300.0);
+                }
+                ui.ctx().request_repaint();
+                vec2(0.0, -view.autoscroll_speed * dt)
+            }
+        } else {
+            Vec2::ZERO
+        };
+        let delta = auto_delta + edge_delta + autoscroll_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
         if delta != Vec2::ZERO && delta.is_finite() {
             ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
         }
@@ -2915,9 +3079,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 current = i;
             }
             let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
-            // Soft shadow + paper.
-            painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
-            painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+            // Two-layer ambient elevation: soft wide penumbra + crisp contact shadow.
+            painter.add(egui::epaint::Shadow { offset: [0, 6], blur: 22, spread: 1, color: t.page_shadow.gamma_multiply(0.45) }.as_shape(r, CornerRadius::ZERO));
+            painter.add(egui::epaint::Shadow { offset: [0, 2], blur: 8, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
+            let page_bg = match view.page_filter {
+                PageFilter::Normal | PageFilter::Grayscale => Color32::WHITE,
+                PageFilter::Invert => Color32::BLACK,
+                PageFilter::Night => Color32::from_rgb(0x1E, 0x1E, 0x24),
+                PageFilter::Sepia => Color32::from_rgb(0xF5, 0xEE, 0xDC),
+            };
+            painter.rect_filled(r, CornerRadius::ZERO, page_bg);
             if let Some(err) = view.errors.get(&i) {
                 painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
                 icons::paint(
@@ -3141,9 +3312,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     QuickTool::Field(f) => Some(f),
                     _ => None,
                 };
-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, can_modify, view);
+                // While a table is being set up, nothing else is drawn or moved.
+                let allowed = can_modify && table_preview.is_none() && open_table.is_none();
+                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, allowed, view);
                 field_props |= o.properties;
                 field_placed |= o.placed;
+                open_table = open_table.or(o.table);
                 (o.consumed || field_tool.is_some(), false)
             } else {
                 use crate::forms_ui::FieldPointer;
@@ -3302,11 +3476,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     let column = tool == QuickTool::ColumnSelect || ui.input(|inp| inp.modifiers.alt);
                     // A link or a form field under the pointer keeps its own cursor: a check box
                     // drawn with a glyph, or set on printed text, shows the hand, not the I-beam.
-                    let cursor_free = !over_link && !over_field;
-                    if column && cursor_free {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                    } else if over_text && cursor_free {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                    if !hand {
+                        let cursor_free = !over_link && !over_field;
+                        if column && cursor_free {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                        } else if over_text && cursor_free {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                        }
+                    } else {
+                        if ui.input(|inp| inp.pointer.button_down(egui::PointerButton::Primary)) {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        } else {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
                     }
                     let press_here = ui
                         .input(|inp| {
@@ -3456,14 +3638,27 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if preparing {
                 crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
+                if let Some(preview) = &table_preview {
+                    crate::field_table_ui::paint_preview(painter, &xf, i, preview);
+                }
+                if calc_order {
+                    let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+                    if let Some(name) = crate::calc_order_ui::paint_page(ui, painter, &xf, i, info, &form, &view.calc_order, generation, selected) {
+                        calc_hover = Some(name);
+                    }
+                }
             } else {
                 crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
             // red border. Radio buttons are round, and so is theirs (as in Acrobat).
+            // Only fields that can be filled are marked; read-only ones stay as drawn (#3584).
             if view.highlight_fields {
                 for f in form.iter() {
+                    if f.has(pdfcraft_engine::field_flags::READ_ONLY) {
+                        continue;
+                    }
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
                     let round = f.kind == pdfcraft_engine::FormFieldKind::Radio;
                     for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden) {
@@ -3514,7 +3709,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 for a in info.annotations.iter().filter(|a| a.page == i && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
                     let hidden = prefs.hide_empty_highlight_hover && a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty);
-                    if sr.contains(p)
+                    let hit = if !a.quads.is_empty() && matches!(a.subtype.as_str(), "Highlight" | "Underline" | "StrikeOut" | "Squiggly") {
+                        a.quads.iter().any(|q| {
+                            let min_x = q[0].min(q[2]).min(q[4]).min(q[6]);
+                            let max_x = q[0].max(q[2]).max(q[4]).max(q[6]);
+                            let min_y = q[1].min(q[3]).min(q[5]).min(q[7]);
+                            let max_y = q[1].max(q[3]).max(q[5]).max(q[7]);
+                            xf.user_rect(info, i, [min_x, min_y, max_x, max_y]).contains(p)
+                        })
+                    } else {
+                        sr.contains(p)
+                    };
+                    if hit
                         && hover_text.is_none()
                         && !hidden
                         && let Some(text) = annotation_hover_text(a)
@@ -3577,6 +3783,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 hover_text = badge_hover.take();
             }
         }
+        if calc_order {
+            view.calc_order.set_hover_page(calc_hover);
+            let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+            crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
+        }
         // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
         // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
         // pointer leaves the selection's page for the gap or the next page; over the whole
@@ -3616,8 +3827,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         if let Some(p) = pressed_page {
             current = p;
         }
-        if view.continuous {
+        if view.continuous && view.current != current {
             view.current = current;
+            ui.ctx().request_repaint();
         }
         resp.context_menu(|ui| {
             // Preparing a form: the selected field's menu.
@@ -3634,21 +3846,27 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         }
                     };
                     ui.menu_button(tl!("Align"), |ui| {
-                        pick(ui, A::AlignLeft, "Left");
-                        pick(ui, A::AlignRight, "Right");
-                        pick(ui, A::AlignTop, "Top");
-                        pick(ui, A::AlignBottom, "Bottom");
-                        pick(ui, A::AlignCenterV, "Center vertically");
-                        pick(ui, A::AlignCenterH, "Center horizontally");
+                        crate::chrome::scroll_menu(ui, |ui| {
+                            pick(ui, A::AlignLeft, "Left");
+                            pick(ui, A::AlignRight, "Right");
+                            pick(ui, A::AlignTop, "Top");
+                            pick(ui, A::AlignBottom, "Bottom");
+                            pick(ui, A::AlignCenterV, "Center vertically");
+                            pick(ui, A::AlignCenterH, "Center horizontally");
+                        });
                     });
                     ui.menu_button(tl!("Distribute"), |ui| {
-                        pick(ui, A::DistributeH, "Horizontally");
-                        pick(ui, A::DistributeV, "Vertically");
+                        crate::chrome::scroll_menu(ui, |ui| {
+                            pick(ui, A::DistributeH, "Horizontally");
+                            pick(ui, A::DistributeV, "Vertically");
+                        });
                     });
                     ui.menu_button(tl!("Set Fields to Same Size"), |ui| {
-                        pick(ui, A::SameHeight, "Height");
-                        pick(ui, A::SameWidth, "Width");
-                        pick(ui, A::SameSize, "Both");
+                        crate::chrome::scroll_menu(ui, |ui| {
+                            pick(ui, A::SameHeight, "Height");
+                            pick(ui, A::SameWidth, "Width");
+                            pick(ui, A::SameSize, "Both");
+                        });
                     });
                     ui.separator();
                 }
@@ -4058,6 +4276,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.boxes_draft.seeded = None;
         app.dialog = Some(crate::Dialog::PageBoxes);
     }
+    if let Some((page, rect)) = open_table {
+        app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
+        app.dialog = Some(crate::Dialog::FieldTable);
+        // The window lasts while the form is prepared. Drawn with the tool picked but its panel
+        // closed, the tool goes back to Select above, so the panel opens to keep it prepared.
+        app.left = crate::LeftPanel::Tool("form");
+        app.reveal_tools();
+    }
     if let Some(n) = form_notice {
         match n {
             crate::forms_ui::FormNotice::Security => app.notify_tr("The document's security settings don't allow filling in form fields"),
@@ -4071,12 +4297,457 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if copy_selected {
         app.execute("edit.copy");
     }
-    // Read mode hides the tools (#2646).
-    if app.mode != crate::Mode::Read {
-        quick_bar(app, avail, ui);
+    // Floating action pills and toolbars hidden in Full Screen mode and Read mode for clean viewing.
+    if !app.full_screen {
+        if app.mode != crate::Mode::Read {
+            page_action_pill(app, avail, ui);
+            quick_bar(app, avail, ui);
+        }
+        modern_floating_bar(app, avail, ui);
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
+    }
+}
+
+/// Floating action pill on the right margin of the active page.
+/// Appears only when the mouse hovers over the active page or the pill itself.
+fn page_action_pill(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui) {
+    if app.full_screen || app.mode == crate::Mode::Read {
+        return;
+    }
+    let Some(index) = app.active else { return };
+    let Some(view) = app.views.get(index) else { return };
+    if view.organize {
+        return;
+    }
+    let cur_page = view.current;
+    let Some(xf) = view.page_xform(cur_page) else { return };
+    let page_rect = xf.rect;
+    if !viewport.intersects(page_rect) {
+        return;
+    }
+
+    // Only appear when the pointer is hovering over this page or the pill zone!
+    let hover_pos = ui.input(|i| i.pointer.hover_pos());
+    let pill_zone = Rect::from_min_max(
+        pos2(page_rect.left() - 20.0, page_rect.top() - 20.0),
+        pos2(page_rect.right() + 90.0, page_rect.bottom() + 20.0),
+    );
+    let is_hovered = hover_pos.is_some_and(|p| pill_zone.contains(p));
+    if !is_hovered {
+        return;
+    }
+
+    // Position outside the right border of the page, vertically near the top of the page
+    let x = (page_rect.right() + 10.0).clamp(viewport.left() + 6.0, (viewport.right() - 56.0).max(viewport.left() + 6.0));
+    let has_find_bar = view.find.as_ref().is_some_and(|f| !f.in_panel);
+    let min_y = if has_find_bar && x > viewport.right() - 440.0 {
+        viewport.top() + 66.0
+    } else {
+        viewport.top() + 6.0
+    };
+    let y = (page_rect.top() + 20.0).clamp(min_y, (viewport.bottom() - 220.0).max(min_y));
+
+    enum PillAction {
+        RotateCw,
+        Delete,
+        Insert,
+        Extract,
+    }
+    let mut chosen = None;
+
+    let t = Tokens::get(ui.ctx());
+    egui::Area::new(egui::Id::new(("page-action-pill", view.id.0)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos2(x, y))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(t.card)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(18))
+                .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.page_shadow })
+                .inner_margin(egui::Margin::symmetric(6, 8))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.vertical(|ui| {
+                        if icons::button(ui, "rotate-cw", 34.0, false, "Rotate page clockwise 90°").clicked() {
+                            chosen = Some(PillAction::RotateCw);
+                        }
+                        if icons::button(ui, "trash-2", 34.0, false, "Delete current page").clicked() {
+                            chosen = Some(PillAction::Delete);
+                        }
+                        if icons::button(ui, "file-plus-2", 34.0, false, tl!("Insert pages from file…")).clicked() {
+                            chosen = Some(PillAction::Insert);
+                        }
+                        if icons::button(ui, "file-output", 34.0, false, "Extract page…").clicked() {
+                            chosen = Some(PillAction::Extract);
+                        }
+                    });
+                });
+        });
+
+    match chosen {
+        Some(PillAction::RotateCw) => {
+            app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![cur_page], degrees: 90 });
+        }
+        Some(PillAction::Delete) => {
+            app.apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![cur_page] });
+        }
+        Some(PillAction::Insert) => {
+            app.insert_from_file_dialog();
+        }
+        Some(PillAction::Extract) => {
+            app.open_extract_dialog();
+        }
+        None => {}
+    }
+}
+
+/// Floating toolbar: page navigation, view options, and zoom slider.
+/// Positioned at the upper part in Read mode, and at the bottom in Normal mode.
+fn modern_floating_bar(app: &mut PdfCraftApp, viewport: Rect, ui: &mut egui::Ui) {
+    let Some(index) = app.active else { return };
+    let (view_id, page_count, labels) = {
+        let Some(view) = app.views.get(index) else { return };
+        if view.organize {
+            return;
+        }
+        let Some(doc) = app.session.get(view.id) else { return };
+        let count = doc.info.pages.len();
+        if count == 0 {
+            return;
+        }
+        let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+        (view.id, count, labels)
+    };
+    let is_read = app.mode == crate::Mode::Read;
+    // In Full Screen mode and Read mode, keep canvas free from floating overlays.
+    if app.full_screen || is_read {
+        return;
+    }
+    let view = &mut app.views[index];
+    let t = Tokens::get(ui.ctx());
+
+    let page_input_id = ui.make_persistent_id(("floating_bar_page_input", view.id.0));
+    let page_focused = ui.ctx().memory(|m| m.has_focus(page_input_id));
+    let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+    let in_view = pointer.is_some_and(|p| viewport.expand(20.0).contains(p));
+    if !in_view && !page_focused {
+        return;
+    }
+
+    let bar_w = 520.0;
+    let x = (viewport.center().x - bar_w / 2.0).clamp(viewport.left() + 10.0, (viewport.right() - bar_w - 10.0).max(viewport.left() + 10.0));
+    let y = (viewport.bottom() - 48.0).clamp(viewport.top() + 60.0, viewport.bottom() - 44.0);
+
+    let mut goto_page = None;
+    let mut step_dir = None;
+    let mut rotate = false;
+    let mut toggle_fit = false;
+    let mut zoom_step_dir = None;
+    let mut set_zoom_val = None;
+
+    egui::Area::new(egui::Id::new(("floating-bottom-bar", view_id.0)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos2(x, y))
+        .show(ui.ctx(), |ui| {
+            let is_dark = t.dark();
+            let bg_fill = if is_dark { t.card } else { Color32::from_rgb(255, 255, 255) };
+            let border_stroke = Stroke::new(1.0, if is_dark { t.border } else { Color32::from_gray(215) });
+            let shadow_color = if is_dark { Color32::from_black_alpha(110) } else { Color32::from_black_alpha(24) };
+            egui::Frame::NONE
+                .fill(bg_fill)
+                .stroke(border_stroke)
+                .corner_radius(CornerRadius::same(24))
+                .shadow(egui::Shadow {
+                    offset: [0, 4],
+                    blur: 18,
+                    spread: 1,
+                    color: shadow_color,
+                })
+                .inner_margin(egui::Margin::symmetric(14, 5))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.horizontal_centered(|ui| {
+                        // First page [ |< ]
+                        let can_prev = view.current > 0;
+                        if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevrons-left", 24.0, false, "First page")).inner.clicked() {
+                            goto_page = Some(0);
+                        }
+
+                        // Prev page [ < ]
+                        if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevron-left", 24.0, false, tl!("Previous page"))).inner.clicked() {
+                            step_dir = Some(false);
+                        }
+
+                        // Page indicator: [ 1 ] / N
+                        let cur_label = view.current_page_label(labels.get(view.current).map(String::as_str));
+                        let has_focus = ui.ctx().memory(|m| m.has_focus(page_input_id));
+
+                        // Navigation updates the idle display, never the text being edited.
+                        if !has_focus {
+                            view.page_input = cur_label.clone();
+                        }
+
+                        let input_w = if page_count >= 1000 { 42.0 } else if page_count >= 100 { 36.0 } else { 30.0 };
+                        let edit = egui::TextEdit::singleline(&mut view.page_input)
+                            .id(page_input_id)
+                            .desired_width(input_w)
+                            .horizontal_align(egui::Align::Center)
+                            .font(theme::medium(11.5))
+                            .frame(egui::Frame::NONE)
+                            .margin(vec2(2.0, 2.0));
+                        let r = egui::Frame::NONE
+                            .fill(if is_dark { t.field } else { Color32::from_gray(245) })
+                            .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
+                            .corner_radius(CornerRadius::same(5))
+                            .inner_margin(egui::Margin::symmetric(4, 2))
+                            .show(ui, |ui| ui.add(edit))
+                            .inner;
+
+                        // When user clicks or focuses the input, auto-select current text for immediate replacement
+                        if r.gained_focus() {
+                            let mut state = egui::TextEdit::load_state(ui.ctx(), page_input_id).unwrap_or_default();
+                            let end = egui::text::CCursor::new(view.page_input.chars().count());
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                            state.store(ui.ctx(), page_input_id);
+                            ui.ctx().request_repaint();
+                        }
+
+                        let esc_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if esc_pressed {
+                            ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
+                            view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                            ui.ctx().request_repaint();
+                        } else {
+                            let enter_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if enter_pressed {
+                                let typed = view.page_input.trim().to_string();
+                                if !typed.is_empty() {
+                                    view.go_to_typed(&typed, &labels);
+                                }
+                                ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
+                                view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                                ui.ctx().request_repaint();
+                            } else if r.lost_focus() {
+                                let typed = view.page_input.trim().to_string();
+                                if !typed.is_empty() {
+                                    view.go_to_typed(&typed, &labels);
+                                }
+                                view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                        ui.add_space(2.0);
+                        ui.label(egui::RichText::new(format!("/ {page_count}")).font(theme::regular(11.5)).color(t.text_muted));
+                        ui.add_space(3.0);
+
+                        // Next page [ > ]
+                        let can_next = view.current + 1 < page_count;
+                        if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevron-right", 24.0, false, tl!("Next page"))).inner.clicked() {
+                            step_dir = Some(true);
+                        }
+
+                        // Last page [ >| ]
+                        if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevrons-right", 24.0, false, "Last page")).inner.clicked() {
+                            goto_page = Some(page_count.saturating_sub(1));
+                        }
+
+                        // Divider
+                        ui.add_space(3.0);
+                        let (sep1, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
+                        ui.painter().vline(sep1.center().x, (sep1.top())..=(sep1.bottom()), Stroke::new(1.0, if is_dark { Color32::from_gray(80) } else { Color32::from_gray(210) }));
+                        ui.add_space(3.0);
+
+                        // Page display layout quick toggle (Single-page <-> Two-page)
+                        let is_two_up = view.layout == PageLayout::TwoUp;
+                        let layout_tip = if is_two_up {
+                            "Switch to single-page view"
+                        } else {
+                            "Switch to two-page view"
+                        };
+                        let layout_resp = icons::button(ui, view.layout.icon(), 24.0, is_two_up, &layout_tip);
+                        if layout_resp.clicked() {
+                            view.layout = if is_two_up {
+                                PageLayout::Single
+                            } else {
+                                PageLayout::TwoUp
+                            };
+                            view.goto = Some((view.current, 0.0));
+                        }
+
+                        // Page colour filters menu
+                        let filter_tip = format!("Page color filter: {}", tl!(view.page_filter.label()));
+                        let filter_resp = icons::button(ui, "contrast", 24.0, view.page_filter != PageFilter::Normal, &filter_tip);
+                        let mut change_filter = None;
+                        egui::Popup::menu(&filter_resp)
+                            .align(egui::RectAlign::TOP_START)
+                            .gap(6.0)
+                            .show(|ui| {
+                                ui.set_min_width(180.0);
+                                for f in [PageFilter::Normal, PageFilter::Invert, PageFilter::Sepia, PageFilter::Night, PageFilter::Grayscale] {
+                                    let on = view.page_filter == f;
+                                    let (fill, stroke) = f.dot_color();
+                                    let resp = ui.horizontal(|ui| {
+                                        let (slot, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                                        ui.painter().circle_filled(slot.center(), 6.0, fill);
+                                        if let Some(s) = stroke {
+                                            ui.painter().circle_stroke(slot.center(), 6.0, Stroke::new(1.0, s));
+                                        }
+                                        ui.selectable_label(on, tl!(f.label()))
+                                    }).inner;
+                                    if resp.clicked() {
+                                        change_filter = Some(f);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        if let Some(f) = change_filter {
+                            view.set_page_filter(f);
+                            ui.ctx().request_repaint();
+                        }
+
+                        // Rotate CW
+                        let rotate_tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
+                        if icons::button(ui, "rotate-cw", 24.0, false, &rotate_tip).clicked() {
+                            rotate = true;
+                        }
+
+                        // Fit toggle
+                        let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
+                        if icons::button(ui, fit_icon, 24.0, false, tl!("Toggle fit page / fit width")).clicked() {
+                            toggle_fit = true;
+                        }
+
+                        // Divider
+                        ui.add_space(3.0);
+                        let (sep1, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
+                        ui.painter().vline(sep1.center().x, (sep1.top())..=(sep1.bottom()), Stroke::new(1.0, if is_dark { Color32::from_gray(80) } else { Color32::from_gray(210) }));
+                        ui.add_space(3.0);
+
+                        // Zoom out [-]
+                        let zoom_out_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
+                        if icons::button(ui, "zoom-out", 24.0, false, &zoom_out_tip).clicked() {
+                            zoom_step_dir = Some(false);
+                        }
+
+                        // Sleek capsule zoom slider matching Acrobat floating bar
+                        let slider_w = 88.0_f32;
+                        let slider_h = 20.0_f32;
+                        let (slider_rect, slider_resp) = ui.allocate_exact_size(vec2(slider_w, slider_h), Sense::click_and_drag());
+                        let track_color = if is_dark { Color32::from_gray(75) } else { Color32::from_gray(212) };
+                        let track_y = slider_rect.center().y;
+                        let track_inset = 8.0_f32;
+                        let track_x0 = slider_rect.left() + track_inset;
+                        let track_x1 = slider_rect.right() - track_inset;
+                        let track_len = (track_x1 - track_x0).max(1.0);
+
+                        // Draw thin horizontal track rail (no thick filled bar)
+                        ui.painter().line_segment([pos2(track_x0, track_y), pos2(track_x1, track_y)], Stroke::new(1.0, track_color));
+
+                        let zoom_min = 0.25_f32;
+                        let zoom_max = 4.0_f32;
+                        let cur_zoom = view.zoom.clamp(zoom_min, zoom_max);
+                        // Logarithmic mapping: 25% .. 100% .. 400%
+                        let t_val = ((cur_zoom / zoom_min).ln() / (zoom_max / zoom_min).ln()).clamp(0.0, 1.0);
+
+                        if slider_resp.dragged() || slider_resp.clicked() {
+                            if let Some(mouse_pos) = slider_resp.interact_pointer_pos() {
+                                let frac = ((mouse_pos.x - track_x0) / track_len).clamp(0.0, 1.0);
+                                let new_zoom = zoom_min * (zoom_max / zoom_min).powf(frac);
+                                set_zoom_val = Some((new_zoom * 100.0).round() / 100.0);
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                        if slider_resp.hovered() && scroll.abs() > 0.0 {
+                            let factor = if scroll > 0.0 { 1.1 } else { 0.9 };
+                            set_zoom_val = Some((cur_zoom * factor).clamp(zoom_min, zoom_max));
+                            ui.ctx().request_repaint();
+                        }
+
+                        // Render vertical capsule thumb: width 12px x height 18px, corner radius 6px
+                        let thumb_x = track_x0 + t_val * track_len;
+                        let thumb_rect = Rect::from_center_size(pos2(thumb_x, track_y), vec2(12.0, 18.0));
+                        let thumb_bg = if is_dark { t.card } else { Color32::WHITE };
+                        let thumb_stroke_color = if slider_resp.hovered() || slider_resp.dragged() {
+                            t.accent
+                        } else if is_dark {
+                            Color32::from_gray(140)
+                        } else {
+                            Color32::from_gray(145)
+                        };
+                        ui.painter().rect(
+                            thumb_rect,
+                            CornerRadius::same(6),
+                            thumb_bg,
+                            Stroke::new(1.2, thumb_stroke_color),
+                            egui::StrokeKind::Inside,
+                        );
+
+                        // Zoom in [+]
+                        let zoom_in_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
+                        if icons::button(ui, "zoom-in", 24.0, false, &zoom_in_tip).clicked() {
+                            zoom_step_dir = Some(true);
+                        }
+
+                        // Zoom percentage text & quick presets
+                        let zoom_str = format!("{:.0}%", view.zoom * 100.0);
+                        let zoom_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(&zoom_str)
+                                    .font(theme::semibold(11.0))
+                                    .color(t.text_muted),
+                            )
+                            .frame(false)
+                            .min_size(vec2(36.0, 20.0)),
+                        ).on_hover_text("Zoom presets");
+
+                        egui::Popup::menu(&zoom_btn)
+                            .align(egui::RectAlign::RIGHT_START)
+                            .show(|ui| {
+                                ui.set_min_width(130.0);
+                                for (label, val) in [
+                                    ("Actual size (100%)", 1.0),
+                                    ("50%", 0.5),
+                                    ("75%", 0.75),
+                                    ("125%", 1.25),
+                                    ("150%", 1.5),
+                                    ("175%", 1.75),
+                                    ("200%", 2.0),
+                                    ("250%", 2.5),
+                                    ("300%", 3.0),
+                                    ("400%", 4.0),
+                                ] {
+                                    if ui.button(tl!(label)).clicked() {
+                                        set_zoom_val = Some(val);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                    });
+                });
+        });
+
+    if let Some(target) = goto_page {
+        view.go_to_page(target);
+    }
+    if let Some(forward) = step_dir {
+        view.step_page(forward);
+    }
+    if rotate {
+        view.rotate_view(true);
+    }
+    if toggle_fit {
+        view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
+        view.goto = Some((view.current, 0.0));
+    }
+    if let Some(dir) = zoom_step_dir {
+        view.zoom_step(dir);
+    }
+    if let Some(z) = set_zoom_val {
+        view.set_zoom(z);
     }
 }
 
@@ -4626,6 +5297,9 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
 
 /// The floating quick-action bar at the left edge of the document area.
 fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
+    if app.full_screen || app.mode == crate::Mode::Read {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let pos = area.left_top() + vec2(14.0, 14.0);
     egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
@@ -4650,10 +5324,6 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         let current = app.comment_prefs.group_tool[g];
                         let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
                         let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
-                        // A small corner triangle marks the flyout.
-                        let r = resp.rect;
-                        let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
-                        ui.painter().add(egui::Shape::convex_polygon(tri.to_vec(), if active { t.accent } else { t.text_faint }, Stroke::NONE));
                         let open = (resp.clicked() && active) || resp.secondary_clicked();
                         if resp.clicked() && !active {
                             app.execute(current.command());
@@ -4723,17 +5393,15 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         current_fill.is_some(),
                         tl!("Fill & Sign"),
                     );
-                    let r = resp.rect;
-                    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        tri.to_vec(),
-                        if current_fill.is_some() { t.accent } else { t.text_faint },
-                        Stroke::NONE,
-                    ));
                     if resp.clicked() && current_fill.is_none() {
                         app.execute(shown.command());
                     }
-                    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
+                    ui.add_space(2.0);
+                    let (sep, _) = ui.allocate_exact_size(vec2(28.0, 1.0), Sense::hover());
+                    ui.painter().hline((sep.left())..=(sep.right()), sep.center().y, Stroke::new(1.0, t.divider));
+                    ui.add_space(2.0);
+                    let arrow_resp = icons::button(ui, "chevron-down", 32.0, false, "More tools");
+                    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked() || arrow_resp.clicked();
                     egui::Popup::menu(&resp)
                         .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
                         .align(egui::RectAlign::RIGHT_START)
@@ -4776,20 +5444,39 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 }
                             }
                             ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label(tl!("Font size:"));
+                                if ui.add_sized([18.0, 18.0], egui::Button::new("−")).on_hover_text("Decrease font size").clicked() {
+                                    app.fill_text_size = (app.fill_text_size - 1.0).max(crate::fill_sign::MIN_TEXT_SIZE);
+                                    ui.ctx().request_repaint();
+                                }
+                                let mut val = app.fill_text_size;
+                                let drag = egui::DragValue::new(&mut val)
+                                    .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
+                                    .speed(0.25)
+                                    .suffix(" pt");
+                                let resp = ui.add(drag);
+                                if resp.clicked() {
+                                    resp.request_focus();
+                                }
+                                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                                if resp.hovered() && scroll.abs() > 0.0 {
+                                    let step = if scroll > 0.0 { 0.5 } else { -0.5 };
+                                    val = (val + step).clamp(crate::fill_sign::MIN_TEXT_SIZE, crate::fill_sign::MAX_TEXT_SIZE);
+                                    ui.ctx().request_repaint();
+                                }
+                                app.fill_text_size = val;
+                                if ui.add_sized([18.0, 18.0], egui::Button::new("+")).on_hover_text("Increase font size").clicked() {
+                                    app.fill_text_size = (app.fill_text_size + 1.0).min(crate::fill_sign::MAX_TEXT_SIZE);
+                                    ui.ctx().request_repaint();
+                                }
+                            });
+                            ui.separator();
                             if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
                                 app.execute(command);
                                 ui.close();
                             }
                         });
-                    if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
-                        ui.label(tl!("Font size:"));
-                        ui.add(
-                            egui::DragValue::new(&mut app.fill_text_size)
-                                .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
-                                .speed(0.25)
-                                .suffix(" pt"),
-                        );
-                    }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
                         ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
@@ -5289,6 +5976,82 @@ pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -
         Ok(px) if px.len() == size[0].saturating_mul(size[1]) => egui::ColorImage::new(size, px),
         Ok(px) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&px)),
         Err((_, words)) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&words)),
+    }
+}
+
+/// Apply a reading color filter to a rendered page raster.
+pub(crate) fn apply_page_filter(mut img: egui::ColorImage, filter: PageFilter) -> egui::ColorImage {
+    match filter {
+        PageFilter::Normal => img,
+        PageFilter::Grayscale => grayscale(img),
+        PageFilter::Invert => {
+            for c in img.pixels.iter_mut() {
+                let a = c.a();
+                if a == 0 {
+                    continue;
+                }
+                if a == 255 {
+                    *c = Color32::from_rgba_premultiplied(255 - c.r(), 255 - c.g(), 255 - c.b(), 255);
+                } else {
+                    let f = f32::from(a) / 255.0;
+                    let r = (255.0 - (f32::from(c.r()) / f)).clamp(0.0, 255.0);
+                    let g = (255.0 - (f32::from(c.g()) / f)).clamp(0.0, 255.0);
+                    let b = (255.0 - (f32::from(c.b()) / f)).clamp(0.0, 255.0);
+                    *c = Color32::from_rgba_premultiplied((r * f).round() as u8, (g * f).round() as u8, (b * f).round() as u8, a);
+                }
+            }
+            img
+        }
+        PageFilter::Sepia => {
+            for c in img.pixels.iter_mut() {
+                let a = c.a();
+                if a == 0 {
+                    continue;
+                }
+                let (r, g, b) = if a == 255 {
+                    (f32::from(c.r()), f32::from(c.g()), f32::from(c.b()))
+                } else {
+                    let f = f32::from(a) / 255.0;
+                    (f32::from(c.r()) / f, f32::from(c.g()) / f, f32::from(c.b()) / f)
+                };
+                let sr = (r * 0.393 + g * 0.769 + b * 0.189).min(255.0);
+                let sg = (r * 0.349 + g * 0.686 + b * 0.168).min(255.0);
+                let sb = (r * 0.272 + g * 0.534 + b * 0.131).min(255.0);
+                if a == 255 {
+                    *c = Color32::from_rgba_premultiplied(sr.round() as u8, sg.round() as u8, sb.round() as u8, 255);
+                } else {
+                    let f = f32::from(a) / 255.0;
+                    *c = Color32::from_rgba_premultiplied((sr * f).round() as u8, (sg * f).round() as u8, (sb * f).round() as u8, a);
+                }
+            }
+            img
+        }
+        PageFilter::Night => {
+            for c in img.pixels.iter_mut() {
+                let a = c.a();
+                if a == 0 {
+                    continue;
+                }
+                let (r, g, b) = if a == 255 {
+                    (f32::from(c.r()), f32::from(c.g()), f32::from(c.b()))
+                } else {
+                    let f = f32::from(a) / 255.0;
+                    (f32::from(c.r()) / f, f32::from(c.g()) / f, f32::from(c.b()) / f)
+                };
+                let lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255.0;
+                let inv = 1.0 - lum;
+                let nr = (30.0 + inv * 194.0).clamp(0.0, 255.0);
+                let ng = (30.0 + inv * 194.0).clamp(0.0, 255.0);
+                let nb = (34.0 + inv * 194.0).clamp(0.0, 255.0);
+                if a == 255 {
+                    *c = Color32::from_rgba_premultiplied(nr.round() as u8, ng.round() as u8, nb.round() as u8, 255);
+                } else {
+                    let f = f32::from(a) / 255.0;
+                    *c = Color32::from_rgba_premultiplied((nr * f).round() as u8, (ng * f).round() as u8, (nb * f).round() as u8, a);
+                }
+            }
+            img
+        }
     }
 }
 
@@ -6444,6 +7207,13 @@ trailer << /Root 1 0 R >>
         let empty = pdfcraft_render::DocInfo::default();
         v.go_to_dest(1, DestView::FitH { top: Some(100.0) }, &empty);
         assert_eq!((v.current, v.goto_point), (1, None));
+        // Following destinations records history so view_history (Alt+Left / Alt+Right) can navigate back and forward.
+        assert!(v.view_history(false));
+        assert_eq!(v.current, 2);
+        assert!(v.view_history(false));
+        assert_eq!(v.current, 0);
+        assert!(v.view_history(true));
+        assert_eq!(v.current, 2);
     }
 
     #[test]

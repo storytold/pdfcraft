@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-pdf-ua-remediation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ISO 14289 PDF/UA 32-rule validator, auto-tagger, TouchUp reading order, and table remediation engine"
+
+[dependencies]

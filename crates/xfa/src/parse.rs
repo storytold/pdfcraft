@@ -40,10 +40,20 @@ pub fn measure(s: &str) -> Option<f64> {
     Some((v * k).clamp(-100_000.0, 100_000.0))
 }
 
+/// The attribute `name` of `n` read as a measurement in points (see [`measure`]); `None`
+/// when it is missing or unreadable.
 fn attr_measure(n: XmlNode, name: &str) -> Option<f64> {
     n.attribute(name).and_then(measure)
 }
 
+/// A horizontal scale such as `90%` (a bare number is a percentage too), as a fraction, within
+/// 1% and 1000%; `None` when it isn't a positive number.
+fn scale(v: &str) -> Option<f64> {
+    let v: f64 = v.trim().trim_end_matches('%').trim().parse().ok()?;
+    (v.is_finite() && v > 0.0).then(|| (v / 100.0).clamp(0.01, 10.0))
+}
+
+/// The first child element of `n` named `name` (by local name, in any namespace).
 fn child<'a, 'd>(n: XmlNode<'a, 'd>, name: &str) -> Option<XmlNode<'a, 'd>> {
     n.children().find(|c| c.is_element() && c.tag_name().name() == name)
 }
@@ -139,6 +149,8 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
     Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, fill: parse_fill(child(n, "fill")) })
 }
 
+/// `<font>`: typeface, size, weight, posture, underline, fill color and horizontal scale.
+/// What the element doesn't set, or a missing element, is left `None` to inherit.
 fn parse_font(n: Option<XmlNode>) -> FontSpec {
     let Some(n) = n else { return FontSpec::default() };
     FontSpec {
@@ -148,6 +160,7 @@ fn parse_font(n: Option<XmlNode>) -> FontSpec {
         italic: n.attribute("posture").map(|p| p == "italic"),
         underline: n.attribute("underline").map(|u| u != "0"),
         color: parse_color(child(n, "fill").and_then(|f| child(f, "color"))),
+        h_scale: n.attribute("fontHorizontalScale").and_then(scale),
     }
 }
 
@@ -196,7 +209,10 @@ fn parse_rich(body: XmlNode) -> RichText {
         italic: Option<bool>,
         underline: Option<bool>,
         size: Option<f64>,
+        h_scale: Option<f64>,
     }
+    /// `base` with the CSS declarations in `css` applied: weight, style, underline, size and
+    /// `xfa-font-horizontal-scale`. Anything else is ignored.
     fn styled(base: &Style, css: Option<&str>) -> Style {
         let mut s = base.clone();
         for decl in css.unwrap_or("").split(';') {
@@ -207,6 +223,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                 "font-style" => s.italic = Some(v == "italic" || v == "oblique"),
                 "text-decoration" => s.underline = Some(v.contains("underline")),
                 "font-size" => s.size = measure(v).filter(|x| *x > 0.0),
+                "xfa-font-horizontal-scale" => s.h_scale = scale(v),
                 _ => {}
             }
         }
@@ -214,6 +231,9 @@ fn parse_rich(body: XmlNode) -> RichText {
     }
     // Paragraph boundaries from `p` are implicit (dropped when empty); `br` makes an explicit
     // line break that stays even when the line is blank.
+    /// Add the text under `n` to `out` as runs in `style`, as the elements it meets restyle it;
+    /// `p` and `br` start paragraphs (`explicit` marks the `br` ones) and `embed` spans add
+    /// embedded fields. Nothing deeper than `MAX_DEPTH` is read.
     fn walk(n: XmlNode, style: &Style, out: &mut RichText, explicit: &mut Vec<bool>, depth: usize) {
         if depth > MAX_DEPTH {
             return;
@@ -232,6 +252,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                             italic: style.italic,
                             underline: style.underline,
                             size: style.size,
+                            h_scale: style.h_scale,
                             embed: None,
                         },
                     );
@@ -271,7 +292,15 @@ fn parse_rich(body: XmlNode) -> RichText {
                         push_run(
                             out,
                             explicit,
-                            Run { text: String::new(), bold: st.bold, italic: st.italic, underline: st.underline, size: st.size, embed: Some(e) },
+                            Run {
+                                text: String::new(),
+                                bold: st.bold,
+                                italic: st.italic,
+                                underline: st.underline,
+                                size: st.size,
+                                h_scale: st.h_scale,
+                                embed: Some(e),
+                            },
                         );
                     }
                     walk(c, &st, out, explicit, depth + 1);
@@ -407,6 +436,8 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
     (shown, saved)
 }
 
+/// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
+/// pictures (edit and data), scripts and access.
 fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let ui = child(n, "ui");
     let ui_el = ui.and_then(|u| u.children().find(|c| c.is_element() && c.tag_name().name() != "extras" && c.tag_name().name() != "picture"));
@@ -424,8 +455,14 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         Some(_) => Ui::Unknown,
     };
     let value_el = child(n, "value");
-    let max_chars =
-        value_el.and_then(|v| child(v, "text")).and_then(|t| t.attribute("maxChars")).and_then(|m| m.trim().parse::<usize>().ok()).filter(|m| *m > 0);
+    let max_chars = value_el
+        .and_then(|v| child(v, "text"))
+        .and_then(|t| t.attribute("maxChars"))
+        .and_then(|m| m.trim().parse::<usize>().ok())
+        // XFA 3.3, exData/maxLength: a character limit excluding markup; -1 is unlimited.
+        .or_else(|| value_el.and_then(|v| child(v, "exData")).and_then(|e| e.attribute("maxLength")).and_then(|m| m.trim().parse::<usize>().ok()))
+        // Preserve the existing zero/unbounded convention of generated form fields.
+        .filter(|m| *m > 0);
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
@@ -470,11 +507,13 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
             _ => Access::Open,
         },
         picture: ui.and_then(|u| child(u, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        data_picture: child(n, "bind").and_then(|b| child(b, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         scripts,
         calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
         validate_message,
         numeric,
+        display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
     }
 }
 

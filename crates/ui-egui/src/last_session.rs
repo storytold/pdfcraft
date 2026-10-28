@@ -24,6 +24,9 @@ pub struct SessionFile {
     pub path: String,
     /// The page the tab showed (0-based).
     pub page: usize,
+    /// Vertical scroll offset in points, remembering where the reader was (#3555).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_y: Option<u32>,
 }
 
 impl LastSession {
@@ -39,7 +42,8 @@ impl LastSession {
                         let path = f["path"].as_str().filter(|p| !p.is_empty())?.to_string();
                         // `go_to_page` clamps a page past the end.
                         let page = f["page"].as_u64().and_then(|p| usize::try_from(p).ok()).unwrap_or(0);
-                        Some(SessionFile { path, page })
+                        let scroll_y = f["scroll_y"].as_u64().and_then(|y| u32::try_from(y).ok());
+                        Some(SessionFile { path, page, scroll_y })
                     })
                     .take(MAX_FILES)
                     .collect()
@@ -63,7 +67,16 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let path = |v: &crate::DocView| self.session.get(v.id).and_then(|d| d.path.as_deref()).map(absolute);
-            let files = self.views.iter().filter_map(|v| Some(SessionFile { path: path(v)?, page: v.current })).take(MAX_FILES).collect();
+            let files = self
+                .views
+                .iter()
+                .filter_map(|v| {
+                    let p = path(v)?;
+                    let y = (v.last_scroll.y > 1.0 && v.last_scroll.y.is_finite()).then_some(v.last_scroll.y as u32);
+                    Some(SessionFile { path: p, page: v.current, scroll_y: y })
+                })
+                .take(MAX_FILES)
+                .collect();
             let active = self.active.and_then(|i| self.views.get(i)).and_then(path);
             LastSession { files, active }
         }
@@ -123,6 +136,10 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.last_mut()
                 {
                     view.go_to_page(f.page);
+                    if let Some(y) = f.scroll_y {
+                        let h = view.page_heights.get(f.page).copied().unwrap_or(800.0).max(1.0);
+                        view.goto = Some((f.page, (y as f32 / h).clamp(0.0, 1.0)));
+                    }
                     if last.active.as_ref() == Some(&f.path) {
                         active = Some(self.views.len() - 1);
                     }
@@ -155,5 +172,17 @@ mod tests {
         let many: Vec<serde_json::Value> = (0..1000).map(|i| serde_json::json!({"path": format!("/{i}.pdf")})).collect();
         assert_eq!(LastSession::from_json(&serde_json::json!({"files": many})).files.len(), MAX_FILES);
         assert_eq!(LastSession::from_json(&serde_json::json!("garbage")), LastSession::default());
+    }
+
+    #[test]
+    fn scroll_position_is_preserved_in_session() {
+        let v = serde_json::json!({
+            "files": [{"path": "/a.pdf", "page": 2, "scroll_y": 1420}],
+            "active": "/a.pdf",
+        });
+        let s = LastSession::from_json(&v);
+        assert_eq!(s.files.len(), 1);
+        assert_eq!(s.files[0].scroll_y, Some(1420));
+        assert_eq!(s.files[0].page, 2);
     }
 }

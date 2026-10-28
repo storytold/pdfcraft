@@ -309,6 +309,37 @@ fn xfdf_round_trips_comments_and_values() {
 }
 
 #[test]
+fn xfdf_round_trip_keeps_zero_flags() {
+    let square = |doc: &Document| {
+        let page = pdfcraft_model::pages(doc)[0].obj;
+        let annots = doc.get(page).as_dict().unwrap().get(b"Annots").map(|a| doc.resolve(a)).unwrap();
+        annots
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Object::as_ref)
+            .find(|r| doc.get(*r).as_dict().unwrap().name(b"Subtype") == Some(b"Square"))
+            .unwrap()
+    };
+    let mut src = blank();
+    let shape = Shape::Rectangle { rect: [10.0, 10.0, 100.0, 60.0] };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "A".into() },
+        &Meta { id: "s1".into(), date: None },
+    )
+    .unwrap();
+    let annot = square(&src);
+    src.update_dict(annot, |d| d.set(b"F".to_vec(), Object::Int(0))).unwrap();
+    let xfdf = export_xfdf(&src, true, false, "a.pdf");
+    let mut dst = blank();
+    import(&mut dst, xfdf.as_bytes()).unwrap();
+    let imported = square(&dst);
+    let flags = dst.get(imported).as_dict().unwrap().get(b"F").and_then(|f| dst.resolve(f).as_int());
+    assert_eq!(flags, Some(0), "flags after round trip: {xfdf}");
+}
+
+#[test]
 fn fdf_round_trips_values_and_comments() {
     let src = filled();
     let fdf = export_fdf(&src, true, true, "form.pdf").unwrap();
@@ -1104,6 +1135,45 @@ fn wide_or_commented_xml_is_not_mistaken_for_deep() {
     assert!(check_form_xml_depth(&nested(MAX_XML_DEPTH + 1)).is_err());
 }
 
+/// [`one_field`] with its field's `/T` set to `name`, periods and all, holding `value`.
+fn one_field_named(name: &str, value: &str) -> Document {
+    let mut doc = one_field();
+    let r = fields(&doc).into_iter().find(|f| f.name == "Name").unwrap().obj;
+    doc.update_dict(r, |d| {
+        d.set(b"T".to_vec(), Object::String(PdfString::text(name)));
+        d.set(b"V".to_vec(), Object::String(PdfString::text(value)));
+    })
+    .unwrap();
+    doc
+}
+
+/// A `/T` can hold periods of its own, so a field name can split into more parts than the field
+/// tree has levels. The XFDF export nested one `<field>` per part, and the import refuses more
+/// than 64 levels, so the form's own export could not be read back.
+#[test]
+fn field_names_with_more_parts_than_the_import_reads_still_round_trip() {
+    for parts in [1, 2, 63, 64, 65, 66, 100, 1_000] {
+        let name = (0..parts).map(|i| format!("p{i}")).collect::<Vec<_>>().join(".");
+        let doc = one_field_named(&name, "v");
+        assert_eq!(values(&doc), vec![(name.clone(), vec!["v".to_string()])], "{parts} parts");
+        let xfdf = export_xfdf(&doc, false, true, "form.pdf");
+        assert_eq!(data_values(xfdf.as_bytes()), Ok(vec![(name.clone(), vec!["v".to_string()])]), "{parts} parts");
+        let mut back = one_field_named(&name, "old");
+        let report = import(&mut back, xfdf.as_bytes()).unwrap();
+        assert_eq!((report.fields, values(&back)), (1, vec![(name.clone(), vec!["v".to_string()])]), "{parts} parts");
+    }
+}
+
+/// A name of a hundred thousand parts nested as deep, and writing it out recursed once per level
+/// until the stack overflowed, which aborts the process.
+#[test]
+fn a_field_name_of_many_parts_exports_without_overflowing_the_stack() {
+    let name = vec!["p"; 100_000].join(".");
+    let want = vec![(name.clone(), vec!["v".to_string()])];
+    let read = on_small_stack(move || data_values(export_xfdf(&one_field_named(&name, "v"), false, true, "form.pdf").as_bytes()));
+    assert_eq!(read, Ok(want));
+}
+
 #[test]
 fn duplicate_xfdf_annotation_flags_do_not_turn_on_unrelated_bits() {
     // Flags are a set of bit masks, not additive integers. A repeated "print" flag
@@ -1589,4 +1659,102 @@ fn tabular_import_keeps_tsv_quotes_literal_and_csv_value_tabs() {
     add_field(&mut doc, 0, [50.0, 650.0, 250.0, 670.0], &NewField::Text { multiline: false }, Some("Other")).unwrap();
     import(&mut doc, b"Name,Other\r\n\"Ada\tLovelace\",other field\r\n").unwrap();
     assert_eq!(fields(&doc).into_iter().find(|f| f.name == "Name").unwrap().value, vec!["Ada\tLovelace"]);
+}
+
+#[test]
+fn a_same_named_comment_import_never_replaces_a_form_widget() {
+    let mut doc = blank();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let widget = doc
+        .resolve(page.dict.get(b"Annots").unwrap())
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Object::as_ref)
+        .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget".as_slice())))
+        .unwrap();
+    doc.update_dict(widget, |d| d.set(b"NM".to_vec(), PdfString::text("w1"))).unwrap();
+    let before = doc.get(widget);
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Text /NM (w1) /Page 0 /Rect [0 0 1 1] /FT /Tx /T (Name) /V (forged) >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    assert_eq!(import(&mut doc, fdf).unwrap().comments, 1);
+    assert_eq!(doc.get(widget), before, "the widget was overwritten by an imported comment");
+}
+
+#[test]
+fn an_imported_rect_only_or_transparent_redaction_mark_is_drawn_for_review() {
+    let xfdf = br#"<xfdf><annots><redact page="0" name="r1" rect="60,600,560,620" opacity="0"/></annots></xfdf>"#;
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Redact /NM (r1) /Page 0 /Rect [60 600 560 620] /CA 0 /ca 0 >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    for data in [xfdf.as_slice(), fdf.as_slice()] {
+        let mut doc = blank();
+        assert_eq!(import(&mut doc, data).unwrap().comments, 1);
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let mark = doc
+            .resolve(page.dict.get(b"Annots").unwrap())
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a.as_ref().and_then(|r| doc.get(r).as_dict().cloned()))
+            .find(|d| d.name(b"Subtype") == Some(b"Redact".as_slice()))
+            .unwrap();
+        assert_eq!(nums_of(&doc, mark.get(b"QuadPoints")), vec![60.0, 620.0, 560.0, 620.0, 60.0, 600.0, 560.0, 600.0]);
+        let ap = mark.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned());
+        assert!(ap.is_some_and(|ap| ap.get(b"N").is_some()), "the mark has no review appearance: {mark:?}");
+        assert!(mark.get(b"CA").is_none() && mark.get(b"ca").is_none(), "the mark can be drawn transparent: {mark:?}");
+    }
+}
+
+#[test]
+fn merged_spreadsheet_cells_never_start_a_formula() {
+    let row = vec![
+        ("=HYPERLINK(\"http://x\")".to_string(), vec!["@SUM(A1)".to_string()]),
+        ("Total".to_string(), vec!["-2+3".to_string()]),
+        ("Plus".to_string(), vec!["\t+1+cmd".to_string()]),
+        ("Balance".to_string(), vec!["-12.5".to_string()]),
+        ("\tName".to_string(), vec!["Ada".to_string()]),
+    ];
+    let csv = merge_csv(&[row]);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "\"'=HYPERLINK(\"\"http://x\"\")\",Total,Plus,Balance,\"\tName\"");
+    assert_eq!(lines[1], "'@SUM(A1),'-2+3,\"'\t+1+cmd\",-12.5,Ada");
+}
+
+fn imported_redact_mark(data: &[u8]) -> Dict {
+    let mut doc = blank();
+    assert_eq!(import(&mut doc, data).unwrap().comments, 1);
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    doc.resolve(page.dict.get(b"Annots").unwrap())
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a.as_ref().and_then(|r| doc.get(r).as_dict().cloned()))
+        .find(|d| d.name(b"Subtype") == Some(b"Redact".as_slice()))
+        .unwrap()
+}
+
+#[test]
+fn an_imported_redaction_mark_with_zero_area_quads_falls_back_to_its_rect() {
+    let rect_quads = vec![60.0, 620.0, 560.0, 620.0, 60.0, 600.0, 560.0, 600.0];
+    let fdf = |quads: &str| {
+        format!(
+            "%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Redact /NM (r1) /Page 0 /Rect [60 600 560 620] /QuadPoints [{quads}] >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n"
+        )
+    };
+    let cases = [
+        fdf("100 100 100 100 100 100 100 100").into_bytes(),
+        // A good quad beside one that is a line (all four corners collinear).
+        fdf("60 620 560 620 60 600 560 600 10 10 20 20 30 30 40 40").into_bytes(),
+        br#"<xfdf><annots><redact page="0" name="r1" rect="60,600,560,620" coords="5,5,5,5,5,5,5,5"/></annots></xfdf>"#.to_vec(),
+    ];
+    for data in cases {
+        let mark = imported_redact_mark(&data);
+        let quads: Vec<f64> = mark.get(b"QuadPoints").and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+        assert_eq!(quads, rect_quads, "zero-area quads were kept: {mark:?}");
+    }
+}
+
+#[test]
+fn an_imported_redaction_rect_with_a_non_number_is_not_used() {
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Redact /NM (r1) /Page 0 /Rect [0 0 /Bad 100 100] >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mark = imported_redact_mark(fdf);
+    assert!(mark.get(b"QuadPoints").is_none(), "quads were drawn from a malformed /Rect: {mark:?}");
 }

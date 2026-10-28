@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-scan-cleanup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clean-room scan preprocessing, Hough transform deskewing, despeckling, and adaptive background binarization"
+
+[dependencies]

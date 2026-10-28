@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-subsetter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clean-room OpenType/TrueType font subset expander, glyph injector, and /ToUnicode CMap updater"
+
+[dependencies]

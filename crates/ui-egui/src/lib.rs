@@ -31,6 +31,9 @@ macro_rules! tl_ctx {
 mod a11y_ui;
 mod actions_ui;
 mod appearance;
+mod calc_order_ui;
+pub mod field_table_ui;
+mod format_text_ui;
 pub mod canvas;
 mod chrome;
 mod combine_grid;
@@ -152,6 +155,7 @@ mod open_worker_tests;
 use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
+pub use chrome::RailConfig;
 pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
@@ -187,10 +191,112 @@ impl Mode {
 pub enum LeftPanel {
     AllTools,
     Tool(&'static str),
+    CalculationOrder,
+}
+
+#[derive(Clone)]
+pub struct InsertPreviewCache {
+    pub bytes_len: usize,
+    pub start_page: usize,
+    pub end_page: usize,
+    pub start_tex: egui::TextureHandle,
+    pub end_tex: egui::TextureHandle,
+    pub start_aspect: f32,
+    pub end_aspect: f32,
+}
+
+/// Category tabs in the All Tools sidebar panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ToolCategory {
+    #[default]
+    All,
+    Create,
+    Edit,
+    Convert,
+    Forms,
+}
+
+impl ToolCategory {
+    pub const ALL: &'static [ToolCategory] = &[
+        ToolCategory::All,
+        ToolCategory::Create,
+        ToolCategory::Edit,
+        ToolCategory::Convert,
+        ToolCategory::Forms,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Create => "Create",
+            Self::Edit => "Edit",
+            Self::Convert => "Convert",
+            Self::Forms => "Forms",
+        }
+    }
+
+    pub fn matches(self, id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Create => matches!(id, "create" | "combine" | "scan"),
+            Self::Edit => matches!(id, "edit" | "organize" | "comment" | "redact" | "stamp" | "compress" | "measure" | "compare"),
+            Self::Convert => matches!(id, "export" | "scan" | "compress" | "standards" | "print_production"),
+            Self::Forms => matches!(id, "fill_sign" | "form" | "certificate" | "protect" | "accessibility"),
+        }
+    }
+}
+
+/// Category sections in the Preferences dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PrefCategory {
+    #[default]
+    General,
+    Appearance,
+    DocumentsView,
+    ReadingColors,
+    Commenting,
+    FormsSign,
+    JavaScript,
+}
+
+impl PrefCategory {
+    pub const ALL: &'static [PrefCategory] = &[
+        PrefCategory::General,
+        PrefCategory::Appearance,
+        PrefCategory::DocumentsView,
+        PrefCategory::ReadingColors,
+        PrefCategory::Commenting,
+        PrefCategory::FormsSign,
+        PrefCategory::JavaScript,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Appearance => "Appearance",
+            Self::DocumentsView => "Documents & View",
+            Self::ReadingColors => "Reading Colours",
+            Self::Commenting => "Commenting & Identity",
+            Self::FormsSign => "Forms & Sign",
+            Self::JavaScript => "JavaScript",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::General => "settings-2",
+            Self::Appearance => "palette",
+            Self::DocumentsView => "layout-grid",
+            Self::ReadingColors => "eye",
+            Self::Commenting => "message-square-text",
+            Self::FormsSign => "pen-line",
+            Self::JavaScript => "braces",
+        }
+    }
 }
 
 /// Right-hand panels, opened from the rail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RightPanel {
     Comments,
     Bookmarks,
@@ -273,6 +379,65 @@ struct GridDrop {
     deadline: f64,
 }
 
+/// Supported third-party AI assistant services for intelligent PDF Q&A and analysis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AiProvider {
+    ChatGpt,
+    Gemini,
+    Grok,
+    Claude,
+}
+
+impl AiProvider {
+    pub const ALL: [Self; 4] = [Self::ChatGpt, Self::Gemini, Self::Grok, Self::Claude];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::ChatGpt => "ChatGPT",
+            Self::Gemini => "Gemini",
+            Self::Grok => "Grok",
+            Self::Claude => "Claude",
+        }
+    }
+
+    pub fn action_label(self) -> &'static str {
+        match self {
+            Self::ChatGpt => "Ask ChatGPT",
+            Self::Gemini => "Ask Gemini",
+            Self::Grok => "Ask Grok",
+            Self::Claude => "Ask Claude",
+        }
+    }
+
+    pub fn url(self) -> &'static str {
+        match self {
+            Self::ChatGpt => "https://chatgpt.com/",
+            Self::Gemini => "https://gemini.google.com/app",
+            Self::Grok => "https://grok.com/",
+            Self::Claude => "https://claude.ai/new",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "chatgpt" => Some(Self::ChatGpt),
+            "gemini" => Some(Self::Gemini),
+            "grok" => Some(Self::Grok),
+            "claude" => Some(Self::Claude),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChatGpt => "chatgpt",
+            Self::Gemini => "gemini",
+            Self::Grok => "grok",
+            Self::Claude => "claude",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
     WordCount,
@@ -297,6 +462,8 @@ pub enum Dialog {
     CommentProps,
     /// Replace Pages (after choosing the file).
     ReplacePages,
+    /// Insert Pages (after choosing the file, asking for range and location details).
+    InsertPages,
     /// Prepare a form ▸ Field Properties.
     FieldProps,
     /// Shared properties of several selected form fields.
@@ -324,12 +491,16 @@ pub enum Dialog {
     Recovery,
     /// Comments ▸ Summarize comments (options).
     SummarizeComments,
+    /// Ask AI Assistant selection dialog.
+    AiService,
     /// Sign with a Digital ID ▸ Configure ▸ Sign as.
     Sign,
     /// Optimize PDF ▸ Advanced optimization.
     Optimize,
     /// Prepare a form ▸ right-click a field ▸ Duplicate.
     DuplicateField,
+    /// Prepare a form ▸ Text field table: a movable window rather than a modal (`field_table_ui`).
+    FieldTable,
     /// Check for accessibility ▸ Accessibility Checker Options.
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
@@ -483,6 +654,48 @@ pub struct RecentFile {
     pub size: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DocLastView {
+    pub page: usize,
+    #[serde(default)]
+    pub frac: f32,
+    #[serde(default = "default_last_view_zoom")]
+    pub zoom: f32,
+    #[serde(default = "default_last_view_fit")]
+    pub fit: canvas::Fit,
+    #[serde(default = "default_last_view_layout")]
+    pub layout: canvas::PageLayout,
+    #[serde(default = "default_last_view_continuous")]
+    pub continuous: bool,
+}
+
+const fn default_last_view_zoom() -> f32 {
+    1.0
+}
+const fn default_last_view_fit() -> canvas::Fit {
+    canvas::Fit::Page
+}
+const fn default_last_view_layout() -> canvas::PageLayout {
+    canvas::PageLayout::Single
+}
+const fn default_last_view_continuous() -> bool {
+    true
+}
+
+/// Normalizes a document path for reliable map lookups across Windows/Unix platforms.
+pub fn normalize_doc_path(p: &str) -> String {
+    let clean = p.replace('\\', "/");
+    let clean = clean.strip_prefix("//?/").unwrap_or(&clean);
+    #[cfg(windows)]
+    {
+        clean.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        clean.to_string()
+    }
+}
+
 pub struct PdfCraftApp {
     pub docking: docking::Workspace,
     pub(crate) pending_panel_reveals: Vec<docking::Panel>,
@@ -508,6 +721,8 @@ pub struct PdfCraftApp {
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
+    /// Which items are shown in the right-hand sidebar (rail).
+    pub rail_config: RailConfig,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.
@@ -518,6 +733,8 @@ pub struct PdfCraftApp {
     /// The user closed the right panel, so opening a document leaves it closed instead of
     /// showing its comments or bookmarks (#1590). Remembered across restarts.
     pub right_panel_closed: bool,
+    /// Right panels that have been opened/visited for the active document, so unread dots clear.
+    pub visited_right_panels: std::collections::HashSet<RightPanel>,
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
@@ -544,6 +761,9 @@ pub struct PdfCraftApp {
     pub language: String,
     /// Preferences ▸ Interface size as a factor, or `None` to follow [`Self::system_text_scale`].
     pub ui_scale: Option<f32>,
+    pub custom_scale_prompt: bool,
+    pub custom_scale_input: String,
+    pub remember_all_tools_state: bool,
     /// The desktop's text scaling (GNOME's text scaling factor), which the desktop app reads at
     /// launch. 1.0 elsewhere, so tests and screenshots don't depend on the machine.
     pub system_text_scale: f32,
@@ -566,7 +786,16 @@ pub struct PdfCraftApp {
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
+    pub tool_category: ToolCategory,
+    pub pref_category: PrefCategory,
+    pub is_nightly: bool,
     pub recent: Vec<RecentFile>,
+    /// Selected third-party AI service provider (e.g. ChatGPT, Gemini, Grok).
+    pub ai_provider: Option<AiProvider>,
+    /// Preferences: restore last view settings (page, zoom, fit, layout) when reopening documents.
+    pub restore_last_view: bool,
+    /// Remembered view settings per document path.
+    pub doc_last_views: std::collections::HashMap<String, DocLastView>,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
     /// The files open when PdfCraft last closed, read from the settings for
@@ -591,6 +820,7 @@ pub struct PdfCraftApp {
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
     pub toast: Option<(String, f64)>,
+    pub insert_preview_cache: Option<InsertPreviewCache>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
     /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
@@ -729,6 +959,8 @@ pub struct PdfCraftApp {
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.
     pub duplicate_draft: Option<DuplicateDraft>,
+    /// Text field table: the table being set up, and the page it goes on.
+    pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
@@ -805,6 +1037,8 @@ pub struct PdfCraftApp {
     pub text_style: pdfcraft_engine::AddedText,
     /// The Replace Pages dialog's state.
     pub replace_draft: Option<files::ReplaceDraft>,
+    /// The Insert Pages dialog's state.
+    pub insert_draft: Option<files::InsertDraft>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
@@ -906,8 +1140,10 @@ impl PdfCraftApp {
             left_open: true,
             right: None,
             right_before_read: None,
+            rail_config: RailConfig::default(),
             comments_panel_closed: false,
             right_panel_closed: false,
+            visited_right_panels: std::collections::HashSet::new(),
             quick_tool: QuickTool::Select,
             space_hand: None,
             comment_prefs: Default::default(),
@@ -923,6 +1159,8 @@ impl PdfCraftApp {
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
+            custom_scale_prompt: false,
+            custom_scale_input: "100".to_string(),
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
@@ -935,7 +1173,14 @@ impl PdfCraftApp {
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
+            tool_category: ToolCategory::All,
+            pref_category: PrefCategory::General,
+            is_nightly: false,
             recent: Vec::new(),
+            ai_provider: None,
+            restore_last_view: true,
+            remember_all_tools_state: true,
+            doc_last_views: std::collections::HashMap::new(),
             reopen_last_session: false,
             last_session: Default::default(),
             quit_session: None,
@@ -952,6 +1197,7 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             toast: None,
+            insert_preview_cache: None,
             integrated_titlebar: false,
             window_controls: None,
             system_title_bar: false,
@@ -1028,6 +1274,7 @@ impl PdfCraftApp {
             system_clipboard: true,
             attach_override: None,
             duplicate_draft: None,
+            field_table_draft: None,
             form_preview: false,
             window_title: String::new(),
             recovery: None,
@@ -1078,8 +1325,17 @@ impl PdfCraftApp {
             link_draft: None,
             text_style: content_ui::default_style(),
             replace_draft: None,
+            insert_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
+        }
+    }
+
+    pub fn app_display_name(&self) -> &'static str {
+        if self.is_nightly {
+            "PdfCraft EVO"
+        } else {
+            "PdfCraft"
         }
     }
 
@@ -1338,11 +1594,28 @@ impl PdfCraftApp {
             };
         }
         let initial = doc.initial_view();
-        self.views.push(DocView::new(id, &doc.info, self.view_defaults));
+        let mut new_view = DocView::new(id, &doc.info, self.view_defaults);
+        let mut restored = false;
+        if self.restore_last_view
+            && let Some(p) = path.as_deref()
+            && let Some(saved) = self.doc_last_views.get(&normalize_doc_path(p))
+        {
+            let page = saved.page.min(pages.saturating_sub(1));
+            new_view.current = page;
+            new_view.goto = Some((page, saved.frac));
+            new_view.zoom = saved.zoom;
+            new_view.fit = saved.fit;
+            new_view.layout = saved.layout;
+            new_view.continuous = saved.continuous;
+            restored = true;
+        }
+        self.views.push(new_view);
         if activate {
             self.active = Some(self.views.len() - 1);
         }
-        self.apply_initial_view(self.views.len() - 1, &initial);
+        if !restored {
+            self.apply_initial_view(self.views.len() - 1, &initial);
+        }
         // Full screen is asked for, never taken: a document can't put the app in full screen on
         // its own (the prompt is `dialogs::full_screen_prompt`).
         if activate && initial.full_screen {
@@ -1358,12 +1631,20 @@ impl PdfCraftApp {
         if activate && let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
             self.mode = mode;
-        } else if activate && self.mode != self.default_mode {
-            // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
-            // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
-            let left_open = self.left_open;
-            self.select_mode(self.default_mode);
-            self.left_open = left_open;
+        } else if activate {
+            // Always start newly opened documents in normal mode, never Read mode
+            if self.mode == Mode::Read || self.default_mode == Mode::Read {
+                self.default_mode = Mode::AllTools;
+                self.select_mode(Mode::AllTools);
+            } else if self.mode != self.default_mode {
+                // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
+                // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
+                if !self.remember_all_tools_state {
+                    let left_open = self.left_open;
+                    self.select_mode(self.default_mode);
+                    self.left_open = left_open;
+                }
+            }
         }
         if let Some(p) = path {
             self.recent.retain(|r| r.path != p);
@@ -1892,17 +2173,41 @@ impl PdfCraftApp {
         }
     }
 
+    pub fn record_doc_view(&mut self, path: String, view: &DocView) {
+        if path.is_empty() {
+            return;
+        }
+        self.doc_last_views.insert(
+            normalize_doc_path(&path),
+            DocLastView {
+                page: view.current,
+                frac: 0.0,
+                zoom: view.zoom,
+                fit: view.fit,
+                layout: view.layout,
+                continuous: view.continuous,
+            },
+        );
+        if self.doc_last_views.len() > 100 {
+            if let Some(first_key) = self.doc_last_views.keys().next().cloned() {
+                self.doc_last_views.remove(&first_key);
+            }
+        }
+    }
+
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.views.len() {
             return;
         }
-        let id = self.views.remove(index).id;
+        let view = self.views.remove(index);
+        let id = view.id;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {
                 self.closed_tabs.remove(0);
             }
-            self.closed_tabs.push(path);
+            self.closed_tabs.push(path.clone());
+            self.record_doc_view(path, &view);
         }
         self.forget_recovery(id);
         self.session.close(id);
@@ -1959,6 +2264,54 @@ impl PdfCraftApp {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.last_opened_url = Some(url.to_string());
+    }
+
+    /// Open the selected AI assistant service in the default browser, copying the active document (or
+    /// chosen custom PDF) directly onto the clipboard as a file drop (CF_HDROP) so pressing Ctrl+V
+    /// in the chat automatically uploads and attaches the PDF document.
+    pub fn open_ai_assistant(&mut self, provider: AiProvider, custom_pdf: Option<std::path::PathBuf>) {
+        let url = provider.url();
+        let target_path = if let Some(p) = custom_pdf {
+            Some(p)
+        } else if let Some((_, id)) = self.active_ids()
+            && let Some(doc) = self.session.get(id)
+        {
+            if let Some(ref path) = doc.path {
+                Some(std::path::PathBuf::from(path))
+            } else if let Ok(bytes) = self.session.save_bytes(id) {
+                let temp_pdf = std::env::temp_dir().join("PdfCraft_Active_Document.pdf");
+                if std::fs::write(&temp_pdf, &*bytes).is_ok() {
+                    Some(temp_pdf)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(ref path) = target_path {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Native OS clipboard file attachment via arboard (sets genuine CF_HDROP):
+                // Chromium/Edge/Firefox and web chats (ChatGPT, Claude, Gemini) recognize this as a real file paste!
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let _ = cb.set().file_list(&[path.clone()]);
+                }
+            }
+
+            let file_name = path.file_name().map_or("PDF", |n| n.to_str().unwrap_or("PDF"));
+            self.notify(format!(
+                "✓ '{file_name}' attached to clipboard! Press Ctrl+V in {} to upload/attach the PDF.",
+                provider.display_name()
+            ));
+        } else {
+            self.notify_fmt("Opening {provider}", &[("provider", provider.display_name())]);
+        }
+
+        self.open_url(url);
     }
 
     /// A document asks to open `url` (a link, a button's URI action or `app.launchURL`). Web and
@@ -2034,6 +2387,21 @@ impl PdfCraftApp {
                 self.views[i].invalidate_content();
             }
         }
+    }
+
+    /// Whether a high-contrast or custom reading color mapping is currently active.
+    pub fn active_reading_colors(&self) -> bool {
+        self.reading_colors.params.is_some()
+    }
+
+    /// Toggle high-contrast reading colors on or off.
+    pub fn toggle_reading_colors(&mut self) {
+        let new_val = if self.reading_colors.params.is_some() {
+            pdfcraft_render::ReadingColors::default()
+        } else {
+            pdfcraft_render::ReadingColors::WHITE_ON_BLACK
+        };
+        self.set_reading_colors(new_val);
     }
 
     /// Enable the Linux desktop portal in a native window. Headless contexts keep
@@ -2223,6 +2591,9 @@ impl PdfCraftApp {
     /// keeps comment tools from reopening it; opening it again lets them (#225). A choice made in
     /// Read mode replaces the pane saved on the way in, so leaving Read mode doesn't undo it.
     pub fn choose_right_panel(&mut self, panel: Option<RightPanel>) {
+        if let Some(p) = panel {
+            self.visited_right_panels.insert(p);
+        }
         if self.mode == Mode::Read {
             self.right_before_read = None;
         }
@@ -2306,9 +2677,38 @@ impl PdfCraftApp {
             "right_panel_closed": self.right_panel_closed,
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
+        // Capture current view settings of all open documents
+        let mut views_to_save = self.doc_last_views.clone();
+        for v in &self.views {
+            if let Some(path) = self.session.get(v.id).and_then(|d| d.path.clone()) {
+                if !path.is_empty() {
+                    views_to_save.insert(
+                        normalize_doc_path(&path),
+                        DocLastView {
+                            page: v.current,
+                            frac: 0.0,
+                            zoom: v.zoom,
+                            fit: v.fit,
+                            layout: v.layout,
+                            continuous: v.continuous,
+                        },
+                    );
+                }
+            }
+        }
+        v["restore_last_view"] = serde_json::Value::Bool(self.restore_last_view);
+        v["remember_all_tools_state"] = serde_json::Value::Bool(self.remember_all_tools_state);
+        v["tool_category"] = serde_json::Value::String(self.tool_category.label().to_string());
+        v["all_tools_expanded"] = serde_json::Value::Bool(self.all_tools_expanded);
+        v["mode"] = serde_json::to_value(&self.mode).unwrap_or_default();
+        v["doc_last_views"] = serde_json::to_value(&views_to_save).unwrap_or_default();
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["rail_config"] = serde_json::to_value(&self.rail_config).unwrap_or_default();
+        if let Some(p) = self.ai_provider {
+            v["ai_provider"] = serde_json::Value::String(p.as_str().to_string());
+        }
         v.to_string()
     }
 
@@ -2336,6 +2736,32 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
+        }
+        if let Some(on) = v["restore_last_view"].as_bool() {
+            self.restore_last_view = on;
+        }
+        if let Some(on) = v["remember_all_tools_state"].as_bool() {
+            self.remember_all_tools_state = on;
+        }
+        if let Some(cat_name) = v["tool_category"].as_str() {
+            if let Some(cat) = crate::ToolCategory::ALL.iter().find(|c| c.label() == cat_name) {
+                self.tool_category = *cat;
+            }
+        }
+        if let Ok(m) = serde_json::from_value::<Mode>(v["mode"].clone()) {
+            self.mode = m;
+        }
+        if let Some(exp) = v["all_tools_expanded"].as_bool() {
+            self.all_tools_expanded = exp;
+        }
+        if let Some(obj) = v.get("doc_last_views").and_then(|val| val.as_object()) {
+            let mut views = std::collections::HashMap::new();
+            for (k, val) in obj {
+                if let Ok(dlv) = serde_json::from_value::<DocLastView>(val.clone()) {
+                    views.insert(normalize_doc_path(k), dlv);
+                }
+            }
+            self.doc_last_views = views;
         }
         if let Some(on) = v["reopen_last_session"].as_bool() {
             self.reopen_last_session = on;
@@ -2375,6 +2801,9 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
+        if let Some(ai) = v["ai_provider"].as_str() {
+            self.ai_provider = AiProvider::parse(ai);
+        }
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
@@ -2412,6 +2841,9 @@ impl PdfCraftApp {
         }
         if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
             self.comment_prefs.hide_empty_highlight_hover = hide;
+        }
+        if let Ok(rc) = serde_json::from_value::<RailConfig>(v["rail_config"].clone()) {
+            self.rail_config = rc;
         }
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
@@ -2851,6 +3283,13 @@ impl PdfCraftApp {
             {
                 object_ui::nudge_keys(ctx, &mut self.views[i], doc);
             }
+            // A selected field moves with the arrows too (Prepare a form, #2608), before the view
+            // turns the page with them.
+            if self.is_preparing()
+                && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
+            {
+                prepare::nudge_keys(ctx, &mut self.views[i], doc);
+            }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
             self.copy_key(i, ctx);
             self.image_pick_keys(i, ctx);
@@ -3133,7 +3572,7 @@ impl eframe::App for PdfCraftApp {
             .active
             .and_then(|i| crate::canvas::tab_label(self, i))
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
-            .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
+            .map_or_else(|| self.app_display_name().to_owned(), |name| format!("{name} — {}", self.app_display_name()));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
@@ -3167,14 +3606,11 @@ impl eframe::App for PdfCraftApp {
         chrome::mode_bar(self, ui);
         if self.active.is_some() {
             chrome::right_rail(self, ui);
-            // Read mode hides the tools, not the navigation panes: the rail stays visible
-            // there, so its buttons (Bookmarks, Page thumbnails, ...) must open their panels.
-            // Outside Read mode the docking workspace draws the inspector.
             if self.mode == Mode::Read && self.right.is_some() {
                 egui::Panel::right("read_right_panel")
                     .resizable(true)
-                    .default_size(330.0)
-                    .size_range(260.0..=520.0)
+                    .default_size(340.0)
+                    .size_range(280.0..=560.0)
                     .frame(egui::Frame::NONE)
                     .show(ui, |ui| panels::right_panel(self, ui));
             }

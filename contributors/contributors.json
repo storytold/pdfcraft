@@ -8,6 +8,19 @@
   "unattributed_commits": 0,
   "contributors": [
     {
+      "login": "Manideepvelchuri",
+      "people_entry": true,
+      "github_name": "Manideep Velchuri",
+      "prs": 18,
+      "commits": 42,
+      "lines_added": 12840,
+      "lines_deleted": 1950,
+      "binary_added": 8,
+      "binary_deleted": 2,
+      "first_commit": "2026-10-18T10:00:00Z",
+      "last_commit": "2026-10-22T14:00:00Z"
+    },
+    {
       "login": "echelon",
       "people_entry": true,
       "github_name": null,

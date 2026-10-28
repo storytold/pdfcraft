@@ -383,10 +383,17 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
             Some(b"CalGray") => Ok(Space::Gray),
             Some(b"CalRGB") => Ok(Space::Rgb),
             Some(b"Indexed" | b"I") => {
-                let base = space(doc, a.get(1))?;
-                if matches!(base, Space::Indexed(..)) {
+                // Checked before recursing: Indexed is the only space that recurses, so refusing
+                // an Indexed base here also ends a cyclic base reference.
+                let nested = match a.get(1).map(|b| doc.resolve(b)).as_deref() {
+                    Some(Object::Array(b)) => matches!(b.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+                    Some(Object::Name(n)) => matches!(n.as_slice(), b"Indexed" | b"I"),
+                    _ => false,
+                };
+                if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
+                let base = space(doc, a.get(1))?;
                 let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),

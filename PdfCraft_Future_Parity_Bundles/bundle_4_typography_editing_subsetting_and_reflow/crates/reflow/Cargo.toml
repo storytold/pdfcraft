@@ -1,0 +1,9 @@
+[package]
+name = "pdfcraft-reflow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-place paragraph reflow, line spacing, bi-directional (RTL/CJK) layout, and bulleted lists"
+
+[dependencies]
+pdfcraft-subsetter = { path = "../subsetter" }

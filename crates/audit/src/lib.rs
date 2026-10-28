@@ -12,8 +12,9 @@
 //! Detection limits (documented, not hidden): `re` rectangles and single closed `m`/`l`
 //! subpaths whose four corners form an axis-aligned rectangle in user space (#1510) are
 //! considered when closed by a fill operator — other filled paths, shadings and patterns are
-//! not; a rectangle drawn with a translucent ExtGState (`/ca < 1`) is not flagged; annotation
-//! rectangles are compared in unrotated user space, so pages with `/Rotate` may misalign;
+//! not; a rectangle drawn with a translucent ExtGState (`/ca < 1`) is not flagged; opaque
+//! filled `/Square` annotations count as covers, but annotation rectangles are compared in
+//! unrotated user space, so pages with `/Rotate` may misalign;
 //! covers inside form XObjects are found, but only text drawn directly in the page content
 //! is checked under them, so text inside a form XObject is not audited.
 //!
@@ -114,11 +115,15 @@ pub fn audit_redactions(doc: &Document) -> Result<Vec<AuditFinding>, AuditError>
                 out.push(AuditFinding { page: n, kind: FindingKind::CoveredText, rect: r.rect, covered_text: covered });
             }
         }
-        // 2. Redact annotations that were never applied.
+        // 2. Annotation covers over extractable text.
         for annot in annots(doc, &page.dict)? {
             let mut covered = String::new();
             for line in &lines {
-                if covers(&annot, line) {
+                let hidden = match &annot {
+                    AnnotationCover::Redact(rect) => covers(rect, line),
+                    AnnotationCover::Square { rect, rgb } => covers(rect, line) && contrast(line.color, *rgb) < COVER_CONTRAST,
+                };
+                if hidden {
                     if !covered.is_empty() {
                         covered.push(' ');
                     }
@@ -126,7 +131,11 @@ pub fn audit_redactions(doc: &Document) -> Result<Vec<AuditFinding>, AuditError>
                 }
             }
             if !covered.trim().is_empty() {
-                out.push(AuditFinding { page: n, kind: FindingKind::UnappliedMark, rect: annot, covered_text: covered });
+                let (kind, rect) = match annot {
+                    AnnotationCover::Redact(rect) => (FindingKind::UnappliedMark, rect),
+                    AnnotationCover::Square { rect, .. } => (FindingKind::CoveredText, rect),
+                };
+                out.push(AuditFinding { page: n, kind, rect, covered_text: covered });
             }
         }
     }
@@ -191,9 +200,14 @@ fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-/// Rectangles of `/Redact` annotations on a page (unrotated user space). A missing `/Annots`
-/// means no marks; a malformed one fails the audit rather than silently passing.
-fn annots(doc: &Document, page: &Dict) -> Result<Vec<[f64; 4]>, AuditError> {
+enum AnnotationCover {
+    Redact([f64; 4]),
+    Square { rect: [f64; 4], rgb: [f64; 3] },
+}
+
+/// Opaque annotation covers on a page (unrotated user space). A missing `/Annots` means no
+/// covers; a malformed one fails the audit rather than silently passing.
+fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditError> {
     let Some(a) = page.get(b"Annots") else { return Ok(Vec::new()) };
     let resolved = doc.resolve(a);
     let items: Vec<pdfcraft_cos::Object> = match &*resolved {
@@ -207,16 +221,46 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<[f64; 4]>, AuditError> {
             pdfcraft_cos::Object::Dict(d) => d.clone(),
             _ => continue,
         };
-        if dict.name(b"Subtype") != Some(b"Redact") {
-            continue;
-        }
         let v: Vec<f64> = match dict.get(b"Rect") {
             None => continue,
             Some(r) => doc.resolve(r).as_array().map(|arr| arr.iter().filter_map(|o| doc.resolve(o).as_f64()).collect()).unwrap_or_default(),
         };
-        if v.len() == 4 && v.iter().all(|x| x.is_finite()) {
-            out.push([v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]);
+        if v.len() != 4 || !v.iter().all(|x| x.is_finite()) {
+            continue;
+        }
+        let rect = [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])];
+        match dict.name(b"Subtype") {
+            Some(b"Redact") => out.push(AnnotationCover::Redact(rect)),
+            Some(b"Square") => {
+                let flags = dict.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+                if flags & 2 != 0 || flags & 32 != 0 {
+                    continue;
+                }
+                let alpha = dict.get(b"CA").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
+                if alpha >= 1.0
+                    && let Some(rgb) = annotation_color(doc, &dict, b"IC")
+                {
+                    out.push(AnnotationCover::Square { rect, rgb });
+                }
+            }
+            _ => {}
         }
     }
     Ok(out)
+}
+
+fn annotation_color(doc: &Document, dict: &Dict, key: &[u8]) -> Option<[f64; 3]> {
+    let values: Vec<f64> = dict.get(key).map(|o| doc.resolve(o))?.as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect::<Option<_>>()?;
+    if !values.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    match values.as_slice() {
+        [g] => Some([g.clamp(0.0, 1.0); 3]),
+        [r, g, b] => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
+        [c, m, y, k] => {
+            let (c, m, y, k) = (c.clamp(0.0, 1.0), m.clamp(0.0, 1.0), y.clamp(0.0, 1.0), k.clamp(0.0, 1.0));
+            Some([(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)])
+        }
+        _ => None,
+    }
 }

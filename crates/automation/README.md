@@ -15,6 +15,12 @@ tools() -> Vec<ToolDef>                                  // name, title, descrip
 mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JSON-RPC 2.0
 ```
 
+`content_update.rotate` rotates an added image counter-clockwise by an integer multiple of
+90 degrees. Large positive and negative signed 64-bit angles are normalized before combining
+them with the image's current orientation. Full turns retain its appearance, rectangle, crop
+and flips. Angles that are not multiples of 90 are refused without changing the document or
+its undo/redo history.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
@@ -122,7 +128,7 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 1. Add the engine capability first, with its tests (the tool is a thin adapter).
 2. Add a `ToolDef` in `src/tools.rs`: a precise description, the schema, `ro()`/`destructive()`, and `cmd()` if a registry command exists.
 3. Handle it in `Automation::call`, validating pages and positions with the existing helpers.
-4. Add an end-to-end test in `tests/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
+4. Add an end-to-end test in `tests/it/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
 
 
 ## Moving several page objects

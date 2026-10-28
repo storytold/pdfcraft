@@ -9,3 +9,15 @@ plan/
 /assets/models
 # A craft-fonts checkout used as the optional CRAFT_FONTS_DIR build input (CI and releases put it here).
 /craft-fonts
+/Pdf craft modified bundles
+/Pdf nightly assets
+/future devlopment reports
+/delegation_bundles
+/portable-*
+/ctrl.json
+/issues_summary.json
+
+
+*.zip
+
+**/target/

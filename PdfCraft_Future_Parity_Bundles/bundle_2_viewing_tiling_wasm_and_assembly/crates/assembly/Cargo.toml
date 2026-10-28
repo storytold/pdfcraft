@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-assembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Page organization, crash recovery session journal, drag-and-drop page assembly, and bookmark actions"
+
+[dependencies]

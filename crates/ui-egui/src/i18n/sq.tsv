@@ -1,0 +1,2502 @@
+# Albanian (sq) catalog. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_one_other` in i18n/mod.rs): one (1) | other (0, 2 and above).
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Albanian computing vocabulary. No proprietary localisation resource, string table or product UI
+# (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# the trailing "…" of dialog commands is kept.
+
+	Menu	Menyja
+	File	Skedari
+	Edit	Redakto
+	Pages	Faqet
+	View	Pamja
+	Help	Ndihma
+	Preferences	Preferencat
+	Preferences…	Preferencat…
+	Interface language	Gjuha e ndërfaqes
+@plural	{n} page|{n} pages	{n} faqe|{n} faqe
+	  · not fixable here	  · nuk mund të rregullohet këtu
+	 (page {p})	 (faqja {p})
+	 (searching… {s} of {p} pages)	 (duke kërkuar… {s} nga {p} faqe)
+	 ({s} not exported: {first})	 ({s} nuk u eksportuan: {first})
+	 on page {p}	 në faqen {p}
+	 · password-protected	 · e mbrojtur me fjalëkalim
+	% of all commits	% e të gjitha commit-eve
+	(none)	(asnjë)
+	+Bin	+Bin
+	+LOC	+LOC
+	, Expires: 	, Skadon:
+	1 difference found	U gjet 1 ndryshim
+	1 file	1 skedar
+	1 file done	1 skedar u krye
+	1 file needs attention	1 skedar kërkon vëmendje
+	1 instance	1 rast
+	1 issue	1 problem
+	1 mark	1 shenjë
+	1 page	1 faqe
+	1 page selected	1 faqe e zgjedhur
+	1 page selected.	1 faqe e zgjedhur.
+	180 degrees	180 gradë
+	9 digit, A letter, O letter or digit, X any character	9 shifër, A shkronjë, O shkronjë ose shifër, X çdo karakter
+	; 1 page already had text	; 1 faqe kishte tashmë tekst
+	; failed: {list}	; dështoi: {list}
+	; {n} pages already had text	; {n} faqe kishin tashmë tekst
+	? of {n}	? nga {n}
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} rreshta (Δ {delta}), +{bin_added} / −{bin_deleted} burime binare, {first} – {last}
+	A button	Një buton
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Një aplikacion PDF me kod të hapur, i zhvilluar në mënyrë clean-room dhe i shkruar në Rust. MIT OR Apache-2.0.
+	A diagonal CONFIDENTIAL watermark on every page.	Një watermark diagonal CONFIDENTIAL në çdo faqe.
+	A document needs at least one page: copy instead	Një dokument ka nevojë për të paktën një faqe: kopjoje në vend të kësaj
+	A form field has additional actions	Një fushë formulari ka veprime shtesë
+	A link	Një lidhje
+	A script	Një skript
+	A stream refers to an external file	Një rrjedhë i referohet një skedari të jashtëm
+	A stream uses LZW compression	Një rrjedhë përdor kompresimin LZW
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Një përmbledhje përshkruan qëllimin dhe strukturën e tabelës. Shtoni atributin Summary në çdo tabelë.
+	AI assistant	Asistenti AI
+	About	Rreth
+	About PdfCraft	Rreth PdfCraft
+	Accepted	Pranuar
+	Accessibility	Qasshmëria
+	Accessibility Checker	Kontrolluesi i qasshmërisë
+	Accessibility Checker Options	Opsionet e kontrolluesit të qasshmërisë
+	Accessibility permission flag	Flamuri i lejes së qasshmërisë
+	Accessibility permission flag is set	Flamuri i lejes së qasshmërisë është vendosur
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 e më vonë (RC4 40-bit)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 e më vonë (RC4 128-bit)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 e më vonë (AES 128-bit)
+	Acrobat X and later (256-bit AES)	Acrobat X e më vonë (AES 256-bit)
+	Action Wizard	Asistenti i veprimeve
+	Action Wizard…	Asistenti i veprimeve…
+	Action name:	Emri i veprimit:
+	Actions	Veprimet
+	Actions list	Lista e veprimeve
+	Actual Size	Madhësia aktuale
+	Actual size	Madhësia aktuale
+	Add	Shto
+	Add Bates numbering…	Shto numërtimin Bates…
+	Add Page Numbers	Shto numrat e faqeve
+	Add Step	Shto hap
+	Add a button	Shto një buton
+	Add a callout	Shto një përmendje
+	Add a checkbox	Shto një kuti zgjedhjeje
+	Add a comment	Shto një koment
+	Add a date field	Shto një fushë date
+	Add a digital signature field	Shto një fushë nënshkrimi dixhital
+	Add a drop-down list	Shto një listë zbritëse
+	Add a list box	Shto një kuti liste
+	Add a radio button	Shto një buton radio
+	Add a reply	Shto një përgjigje
+	Add a stamp	Shto një vulë
+	Add a sticky note	Shto një shënim ngjitës
+	Add a sticky note here	Shto një shënim ngjitës këtu
+	Add a text box	Shto një kuti teksti
+	Add a text field	Shto një fushë teksti
+	Add alternate text	Shto tekst alternativ
+	Add alternate text…	Shto tekst alternativ…
+	Add an Action	Shto një veprim
+	Add an image field	Shto një fushë imazhi
+	Add arrow	Shto shigjetë
+	Add at least two files	Shto të paktën dy skedarë
+	Add background	Shto sfond
+	Add background…	Shto sfond…
+	Add bookmark	Shto libërshënues
+	Add callout	Shto përmendje
+	Add checkmark	Shto shenjë vlefshmërie
+	Add cloud	Shto re
+	Add comments	Shto komente
+	Add connected lines	Shto vija të lidhura
+	Add content	Shto përmbajtje
+	Add cross	Shto kryq
+	Add dot	Shto pikë
+	Add drawing	Shto vizatim
+	Add field	Shto fushë
+	Add file attachment	Shto bashkëngjitje skedari
+	Add files to combine	Shto skedarë për t'u bashkuar
+	Add files…	Shto skedarë…
+	Add folder	Shto dosje
+	Add folder and subfolders	Shto dosjen dhe nëndosjet
+	Add folder and subfolders…	Shto dosjen dhe nëndosjet…
+	Add folder…	Shto dosje…
+	Add footer	Shto fund faqeje
+	Add form components	Shto komponentë formulari
+	Add header	Shto krye faqeje
+	Add header & footer	Shto krye dhe fund faqeje
+	Add header & footer…	Shto krye dhe fund faqeje…
+	Add highlight	Shto theksim
+	Add image	Shto imazh
+	Add image…	Shto imazh…
+	Add inserted text	Shto tekst të futur
+	Add line	Shto vijë
+	Add link	Shto lidhje
+	Add open documents	Shto dokumentet e hapura
+	Add or edit links	Shto ose redakto lidhje
+	Add oval	Shto oval
+	Add polygon	Shto shumëkëndësh
+	Add printer marks	Shto shenja shtypjeje
+	Add rectangle	Shto drejtkëndësh
+	Add redaction mark	Shto shenjë redaktimi
+	Add search index	Shto indeks kërkimi
+	Add signature	Shto nënshkrim
+	Add squiggly underline	Shto nënvizim të valëzuar
+	Add stamp	Shto vulë
+	Add sticky note	Shto shënim ngjitës
+	Add strikethrough	Shto vijëzim
+	Add text	Shto tekst
+	Add text box	Shto kuti teksti
+	Add the PDFs to combine	Shto PDF-të për t'u bashkuar
+	Add the choices people pick from.	Shto zgjedhjet nga të cilat zgjedhin përdoruesit.
+	Add the steps this action runs, in order.	Shto hapat që ekzekuton ky veprim, sipas radhës.
+	Add to Trusted Certificates	Shto te certifikatat e besuara
+	Add to trusted certificates	Shto te certifikatat e besuara
+	Add underline	Shto nënvizim
+	Add watermark	Shto watermark
+	Add watermark…	Shto watermark…
+	Add {what}	Shto {what}
+	Added 1 comment	U shtua 1 koment
+	Added more than once	Shtuar më shumë se një herë
+	Added the first {n} PDFs in {folder}	U shtuan {n} PDF-të e para në {folder}
+	Added {n} comments	U shtuan {n} komente
+	Adding images arrives on the web with file pickers for images	Shtimi i imazheve vjen në ueb me zgjedhës skedarësh për imazhe
+	Adds invisible text over each word; the page image is not changed	Shton tekst të padukshëm mbi çdo fjalë; imazhi i faqes nuk ndryshon
+	Advanced	Të avancuara
+	Advanced Options {chevron}	Opsione të avancuara {chevron}
+	Advanced optimization	Optimizim i avancuar
+	Advanced options	Opsione të avancuara
+	Advanced search…	Kërkim i avancuar…
+	Algorithm	Algoritmi
+	Align	Rreshto
+	Align fields	Rreshto fushat
+	Align left	Rreshto majtas
+	Align right	Rreshto djathtas
+	Alignment:	Rreshtimi:
+	All	Të gjitha
+	All annotations are tagged	Të gjitha shënimet janë të etiketuara
+	All document contents	I gjithë përmbajtja e dokumentit
+	All document contents except metadata	I gjithë përmbajtja e dokumentit përveç metadatave
+	All form fields are tagged	Të gjitha fushat e formularit janë të etiketuara
+	All form fields have description	Të gjitha fushat e formularit kanë përshkrim
+	All multimedia objects are tagged	Të gjitha objektet multimediale janë të etiketuara
+	All open documents	Të gjitha dokumentet e hapura
+	All page content is tagged	I gjithë përmbajtja e faqes është e etiketuar
+	All pages	Të gjitha faqet
+	All pages in document	Të gjitha faqet në dokument
+	All pages in range	Të gjitha faqet në interval
+	All tools	Të gjitha mjetet
+	Allow Rich Text Formatting	Lejo formatimin e tekstit të pasur
+	Allow user to enter custom text	Lejo përdoruesin të shkruajë tekst të personalizuar
+	Allowed	Lejuar
+	Alternate Text	Tekst alternativ
+	Alternate text	Tekst alternativ
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	Teksti alternativ brenda një elementi që ka tashmë tekst alternativ nuk lexohet kurrë. Hiqni tekstin alternativ të brendshëm.
+	Alternate text must be associated with some content	Teksti alternativ duhet të lidhet me një përmbajtje
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	Teksti alternativ në një element që përmban lidhje ose fushë e fsheh atë shënim nga teknologjia ndihmëse. Zhvendoseni tekstin alternativ.
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	Teksti alternativ në një element pa përmbajtje faqeje nuk arrihet kurrë. Hiqeni ose lidheni elementin me përmbajtje.
+	Alternate text should not hide annotation	Teksti alternativ nuk duhet ta fshehë shënimin
+	Alternate text that will never be read	Tekst alternativ që nuk do të lexohet kurrë
+	An action is already running	Një veprim po ekzekutohet tashmë
+	An action with this name already exists.	Ekziston tashmë një veprim me këtë emër.
+	An embedded file has no AFRelationship	Një skedar i ngulitur nuk ka AFRelationship
+	An image asks to be interpolated	Një imazh kërkon të interpolohet
+	An image has alternates or OPI information	Një imazh ka alternativa ose informacion OPI
+	An open-source PDF workbench — local, private, and scriptable.	Një hapësirë pune PDF me kod të hapur — lokale, private dhe e programueshme me skripte.
+	Angle	Këndi
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Animacioni që xixëllon mund të shkaktojë kriza. Kontrolloni skriptet dhe median për dridhje.
+	Annotations, form fill-in, and digital signatures	Shënime, plotësim formularësh dhe nënshkrime dixhitale
+	Another file dialog is still open. Finish with it first.	Një dialog tjetër skedari është ende i hapur. Përfundoni fillimisht me të.
+	Any	Çfarëdo
+	Any except extracting pages	Çfarëdo përveç nxjerrjes së faqeve
+	Anyone opening the document will need this password. It's applied when you save.	Kushdo që hap dokumentin do të ketë nevojë për këtë fjalëkalim. Zbatohet kur ruani.
+	Appear behind page	Shfaqet pas faqes
+	Appear on top of page	Shfaqet mbi faqe
+	Appearance	Pamja
+	Application	Aplikacioni
+	Applied 1 redaction mark. Save to remove the content from the file.	U zbatua 1 shenjë redaktimi. Ruani për ta hequr përmbajtjen nga skedari.
+	Applied {n} redaction marks. Save to remove the content from the file.	U zbatuan {n} shenja redaktimi. Ruani për ta hequr përmbajtjen nga skedari.
+	Applies to 1 page	Zbatohet në 1 faqe
+	Applies to {n} pages	Zbatohet në {n} faqe
+	Apply	Zbato
+	Apply PDF standards	Zbato standardet PDF
+	Apply redactions	Zbato redaktimet
+	Apply redactions…	Zbato redaktimet…
+	Apply scale	Zbato shkallën
+	Appropriate nesting	Fole e përshtatshme
+	April	Prill
+	Arbitrary Mask	Maskë arbitrare
+	Archive documents	Arkivo dokumentet
+	Area	Sipërfaqja
+	Arrow	Shigjetë
+	ArtCraft website	Faqja e internetit e ArtCraft
+	Ask about this document	Pyet për këtë dokument
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	I kërkon GitHub-it versionin më të fundit. Asgjë nuk shkarkohet ose instalohet automatikisht.
+	Associated with content	E lidhur me përmbajtjen
+	At least one signature has problems.	Të paktën një nënshkrim ka probleme.
+	At least one signature is invalid.	Të paktën një nënshkrim është i pavlefshëm.
+	At most	Më së shumti
+	Attach a file	Bashkëngjit një skedar
+	Attach file	Bashkëngjit skedar
+	Attachment	Bashkëngjitje
+	Attachments	Bashkëngjitjet
+	Attachments Panel and Page	Paneli i bashkëngjitjeve dhe faqja
+	Audit space usage	Audito përdorimin e hapësirës
+	Audit space usage…	Audito përdorimin e hapësirës…
+	August	Gusht
+	Author	Autori
+	Auto	Automatik
+	Auto portrait/landscape	Portret/peizazh automatik
+	Auto-rotate pages	Rrotullo faqet automatikisht
+	Auto-size text to fit redaction region	Përshtat madhësinë e tekstit automatikisht me zonën e redaktimit
+	Automatically tag PDF	Etiketo PDF automatikisht
+	Available	Në dispozicion
+	Back	Mbrapa
+	Back side only	Vetëm ana e pasme
+	Back to all tools	Kthehu te të gjitha mjetet
+	Back to the document	Kthehu te dokumenti
+	Background	Sfondi
+	Basic constraints	Kufizime bazë
+	Bates numbering	Numërtim Bates
+	Before each selected page (select pages in Organize)	Para çdo faqeje të zgjedhur (zgjidhni faqet te Organizo)
+	Before the number	Para numrit
+	Beveled	Me anë të pjerrëta
+	Bicubic downsampling to	Ulje bikubike e mostrimit në
+	Binary assets added	Burime binare të shtuara
+	Binary assets removed	Burime binare të hequra
+	Binding	Lidhja
+	Binding:	Lidhja:
+	Black	E zezë
+	Blank page	Faqe boshe
+	Blue	Blu
+	Bold	Të trasha
+	Booklet	Broshurë
+	Booklet subset:	Nënbashkësia e broshurës:
+	Bookmark options	Opsionet e libërshënuesit
+	Bookmarks	Libërshënuesit
+	Bookmarks Panel and Page	Paneli i libërshënuesve dhe faqja
+	Bookmarks are present in large documents	Libërshënuesit ekzistojnë në dokumentet e mëdha
+	Border Color:	Ngjyra e kornizës:
+	Borders and Colors	Kornizat dhe ngjyrat
+	Both	Të dyja
+	Both sides	Të dyja anët
+	Bottom	Poshtë
+	Bottom:	Poshtë:
+	Box	Kuti
+	Bring your own model (off by default)	Sill modelin tënd (joaktiv si parazgjedhje)
+	Browse…	Shfleto…
+	Button	Buton
+	Button Properties	Vetitë e butonit
+	Button Style:	Stili i butonit:
+	Button is checked by default	Butoni është i zgjedhur si parazgjedhje
+	Buttons with the same name and value are selected in unison	Butonat me të njëjtin emër dhe vlerë zgjidhen së bashku
+	Bytes	Bajte
+	Calculate	Llogarit
+	Calibrate from two points	Kalibro nga dy pika
+	Callout	Përmendje
+	Can't be read: {e}	Nuk mund të lexohet: {e}
+	Cancel	Anulo
+	Cancelled	Anuluar
+	Cancelling…	Duke anuluar…
+	Case-sensitive	Dallon shkronjat e mëdha
+	Category:	Kategoria:
+	Center	Qendër
+	Center Footer Text	Teksti qendror i fundit të faqes
+	Center Header Text	Teksti qendror i kreut të faqes
+	Center horizontally	Qendro horizontalisht
+	Center vertically	Qendro vertikalisht
+	Center window on screen	Qendro dritaren në ekran
+	Centre	Qendër
+	Certificate Viewer	Shikuesi i certifikatave
+	Certificates	Certifikatat
+	Certified by {by}	Certifikuar nga {by}
+	Certify	Certifiko
+	Certify (invisible signature)	Certifiko (nënshkrim i padukshëm)
+	Certify (visible signature)	Certifiko (nënshkrim i dukshëm)
+	Change comment properties	Ndrysho vetitë e komentit
+	Change document properties	Ndrysho vetitë e dokumentit
+	Change field properties	Ndrysho vetitë e fushës
+	Change initial view	Ndrysho pamjen fillestare
+	Change initials	Ndrysho inicialet
+	Change link properties	Ndrysho vetitë e lidhjes
+	Change reading options	Ndrysho opsionet e leximit
+	Change reading options…	Ndrysho opsionet e leximit…
+	Change settings…	Ndrysho cilësimet…
+	Change signature	Ndrysho nënshkrimin
+	Change {key}	Ndrysho {key}
+	Change {what}	Ndrysho {what}
+	Changes allowed	Ndryshimet e lejuara
+	Changing the document	Ndryshimi i dokumentit
+	Character encoding	Kodimi i karaktereve
+	Character spacing	Hapësira mes karaktereve
+	Check	Kontrollo
+	Check Again	Kontrollo përsëri
+	Check Box Properties	Vetitë e kutisë së zgjedhjes
+	Check Box Style:	Stili i kutisë së zgjedhjes:
+	Check again	Kontrollo përsëri
+	Check box is checked by default	Kutia e zgjedhjes është e zgjedhur si parazgjedhje
+	Check for accessibility	Kontrollo qasshmërinë
+	Check for accessibility…	Kontrollo qasshmërinë…
+	Check for updates	Kontrollo për përditësime
+	Check for updates…	Kontrollo për përditësime…
+	Check spelling	Kontrollo drejtshkrimin
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Kontrolloni që etiketat lexohen në radhën që do t'i lexonte një lexues që sheh. Përdorni mjetin e radhës së leximit ose panelin e etiketave për ta korrigjuar.
+	Check the pages of {name}: {why}	Kontrolloni faqet e {name}: {why}
+	CheckBox	Kuti zgjedhjeje
+	Checkbox	Kuti zgjedhjeje
+	Checked	E zgjedhur
+	Checking Options ({on} of 32 in all categories)	Opsionet e kontrollit ({on} nga 32 në të gjitha kategoritë)
+	Checking for a newer version…	Duke kontrolluar për një version më të ri…
+	Checkmark	Shenjë vlefshmërie
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Zgjidhni një imazh PNG ose JPEG (deri në 4 MiB). Transparenca ruhet.
+	Choose a folder for the exported files	Zgjidhni një dosje për skedarët e eksportuar
+	Choose a folder for the extracted pages	Zgjidhni një dosje për faqet e nxjerra
+	Choose a folder for the results	Zgjidhni një dosje për rezultatet
+	Choose a folder for the searchable files	Zgjidhni një dosje për skedarët e kërkueshëm
+	Choose a folder for the split files	Zgjidhni një dosje për skedarët e ndarë
+	Choose a folder on this computer to pin	Zgjidhni një dosje në këtë kompjuter për ta fiksuar
+	Choose a layout:	Zgjidhni një paraqitje:
+	Choose a stamp, then click on the page to place it.	Zgjidhni një vulë, pastaj klikoni në faqe për ta vendosur.
+	Choose an image	Zgjidhni një imazh
+	Choose images	Zgjidhni imazhe
+	Choose the digital ID that you want to use for signing:	Zgjidhni identitetin dixhital që dëshironi të përdorni për nënshkrim:
+	Circle	Rreth
+	Clean Up	Pastro
+	Clear	Pastro
+	Clear All	Pastro të gjitha
+	Clear Recent Files	Pastro skedarët e fundit
+	Clear all	Pastro të gjitha
+	Clear form	Pastro formularin
+	Clear redaction marks	Pastro shenjat e redaktimit
+	Clear selection / close find	Pastro përzgjedhjen / mbyll kërkimin
+	Click on the page to add a {tool}, or drag to set its size	Klikoni në faqe për të shtuar {tool}, ose tërhiqni për të caktuar madhësinë
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Klikoni në faqe për të shtuar tekst; çdo klikim nis një kuti të re dhe ✓ përfundon. Tërhiqni elementet për t'i lëvizur, tërhiqni një qoshe për të ndryshuar madhësinë, klikoni dyfish te teksti për ta redaktuar.
+	Click text or an image to edit it	Klikoni një tekst ose një imazh për ta redaktuar
+	Click the first point to begin.	Klikoni pikën e parë për të filluar.
+	Click to sort, drag to move the column. Drag its edge to resize it.	Klikoni për të renditur, tërhiqni për të lëvizur kolonën. Tërhiqni skajin e saj për të ndryshuar madhësinë.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Klikoni kulmet. Enter ose klikimi dyfish përfundon një perimetër ose sipërfaqe. Klikoni pikën e parë për të mbyllur një sipërfaqe.
+	Clipboard	Clipboard
+	Clockwise 90 degrees	90 gradë në drejtim orar
+	Close	Mbyll
+	Close (Esc)	Mbyll (Esc)
+	Close all	Mbyll të gjitha
+	Close file	Mbyll skedarin
+	Close panel	Mbyll panelin
+	Cloud	Re
+	Collapse	Palos
+	Collapse all bookmarks	Palos të gjithë libërshënuesit
+	Collate	Rendit kopjet
+	Color Images	Imazhe me ngjyra
+	Color Spaces	Hapësirat e ngjyrave
+	Color contrast	Kontrasti i ngjyrave
+	Color:	Ngjyra:
+	Colour	Ngjyra
+	Comb of	Krehër me
+	Combine	Bashko
+	Combine files	Bashko skedarët
+	Combine files…	Bashko skedarët…
+	Combined {n} files	U bashkuan {n} skedarë
+	Combo	Kombinim
+	Coming in milestone	Vjen në etapën
+	Coming in milestone {m}. Items marked Ready work today.	Vjen në etapën {m}. Elementët e shënuar Gati funksionojnë sot.
+	Command	Komandë
+	Comment and form data	Të dhënat e komenteve dhe formularëve
+	Comment list	Lista e komenteve
+	Commenting	Komentim
+	Commenting, filling in form fields, and signing existing signature fields	Komentim, plotësim i fushave të formularit dhe nënshkrim i fushave ekzistuese të nënshkrimit
+	Comments	Komente
+	Comments & Forms	Komente dhe formularë
+	Comments and markups	Komente dhe shënime
+	Comments only	Vetëm komente
+	Comments panel	Paneli i komenteve
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Komentet, lidhjet dhe fushat duhet të jenë në pemën e etiketave për t'u lexuar me zë. Etiketo shënimet.
+	Commit selected value immediately	Konfirmo menjëherë vlerën e zgjedhur
+	Commits	Ndryshimet
+	Common Properties	Veti të përbashkëta
+	Company	Kompania
+	Compare	Krahaso
+	Compare Files	Krahaso skedarët
+	Compare files	Krahaso skedarët
+	Compare files…	Krahaso skedarët…
+	Compare this file with an older version: Compare files… in All tools.	Krahaso këtë skedar me një version më të vjetër: Krahaso skedarët… te Të gjitha mjetet.
+	Compatibility	Përputhshmëria
+	Completed	Përfunduar
+	Compress a PDF	Ngjeshe një PDF
+	Compress document structure (object streams)	Ngjeshe strukturën e dokumentit (rrjedhat e objekteve)
+	Compression	Ngjeshja
+	Configure New Digital ID	Konfiguro ID të re dixhitale
+	Configure a Digital ID for Signing	Konfiguro një ID dixhitale për nënshkrim
+	Confirm Password	Konfirmo fjalëkalimin
+	Conformance level:	Niveli i përputhshmërisë:
+	Connected lines	Vija të lidhura
+	Console	Konsola
+	Content Streams	Rrjedhat e përmbajtjes
+	Content copying	Kopjimi i përmbajtjes
+	Content copying for accessibility	Kopjimi i përmbajtjes për qasshmëri
+	Continue	Vazhdo
+	Continuous scrolling	Lëvizje e vazhdueshme
+	Show gaps between pages	Shfaq hapësirat midis faqeve
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Fshih hapësirat për të bashkuar skajet e faqeve. Kufijtë brenda PDF-së mbeten të pandryshuar.
+	Contributors	Kontribuesit
+	Convert	Konverto
+	Convert colors	Konverto ngjyrat
+	Copied {what}	U kopjua {what}
+	Copies:	Kopje:
+	Copy	Kopjo
+	Copy or cut pages first	Kopjo ose preji faqet së pari
+	Copy pages	Kopjo faqet
+	Copy selected text	Kopjo tekstin e zgjedhur
+	Copy text	Kopjo tekstin
+	Correct recognized text	Korrigjo tekstin e njohur
+	Could not save: {e}	Nuk u ruajt: {e}
+	Couldn't add {name}: {e}	Nuk u shtua {name}: {e}
+	Couldn't check for updates: {e}	Nuk u kontrollua për përditësime: {e}
+	Couldn't combine files: {e}	Nuk u bashkuan skedarët: {e}
+	Couldn't create a PDF: {e}	Nuk u krijua dot një PDF: {e}
+	Couldn't download {name}: {e}	Nuk u shkarkua {name}: {e}
+	Couldn't extract pages: {e}	Nuk u nxorën faqet: {e}
+	Couldn't fit the visible content: {e}	Nuk u përshtat përmbajtja e dukshme: {e}
+	Couldn't import the signature image: {e}	Nuk u importua dot imazhi i nënshkrimit: {e}
+	Couldn't open revision {n}: {e}	Nuk u hap rishikimi {n}: {e}
+	Couldn't open the result: {e}	Nuk u hap dot rezultati: {e}
+	Couldn't open the signed version: {e}	Nuk u hap dot versioni i nënshkruar: {e}
+	Couldn't open {name}: {e}	Nuk u hap {name}: {e}
+	Couldn't optimize the file	Nuk u optimizua dot skedari
+	Couldn't optimize the file: {e}	Nuk u optimizua dot skedari: {e}
+	Couldn't read {name}: {e}	Nuk u lexua {name}: {e}
+	Couldn't recover {name}: {e}	Nuk u rikuperua {name}: {e}
+	Couldn't save the image: {e}	Nuk u ruajt dot imazhi: {e}
+	Couldn't save {name}: {e}	Nuk u ruajt {name}: {e}
+	Couldn't save: {e}	Nuk u ruajt: {e}
+	Couldn't show the file picker. Please try again.	Nuk u shfaq dot zgjedhësi i skedarëve. Provo përsëri.
+	Couldn't split: {e}	Nuk u nda dot: {e}
+	Couldn't summarize comments: {e}	Nuk u përmblodhën dot komentet: {e}
+	Couldn't take the snapshot: {e}	Nuk u bë dot pamja e çastit: {e}
+	Couldn't use {name}: {e}	Nuk u përdor dot {name}: {e}
+	Couldn't write {name}: {e}	Nuk u shkrua {name}: {e}
+	Couldn't write {path}: {e}	Nuk u shkrua {path}: {e}
+	Counterclockwise 90 degrees	90 gradë në të kundërt të akrepave të orës
+	Country/Region	Shteti/Rajoni
+	Create	Krijo
+	Create Custom Stamp	Krijo vulë të personalizuar
+	Create Link	Krijo lidhje
+	Create PDF Comment Summary	Krijo përmbledhje komentesh të PDF
+	Create PDF comment summary…	Krijo përmbledhje komentesh të PDF…
+	Create PDF from clipboard	Krijo PDF nga clipboard
+	Create PDF from file…	Krijo PDF nga skedari…
+	Create PDF from images	Krijo PDF nga imazhet
+	Create PDF from images…	Krijo PDF nga imazhet…
+	Create PDF from multiple files…	Krijo PDF nga disa skedarë…
+	Create separate PDFs…	Krijo PDF të veçanta…
+	Create a PDF	Krijo një PDF
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Krijo një ID të re dixhitale (e vetënënshkruar, e ruajtur në një skedar të mbrojtur me fjalëkalim)
+	Create accessibility report	Krijo raport qasshmërie
+	Create custom stamp…	Krijo vulë të personalizuar…
+	Create from	Krijo nga
+	Create link	Krijo lidhje
+	Create links from URLs	Krijo lidhje nga URL-të
+	Create {what}	Krijo {what}
+	Created 1 link	U krijua 1 lidhje
+	Created a PDF from the first {n} files	U krijua një PDF nga {n} skedarët e parë
+	Created a PDF from {n} files	U krijua një PDF nga {n} skedarë
+	Created a PDF from {n} files; left out: {names}	U krijua një PDF nga {n} skedarë; të lënë jashtë: {names}
+	Created a comment summary	U krijua një përmbledhje komentesh
+	Created {n} links	U krijuan {n} lidhje
+	Creates 1 file from {n} pages.	Krijon 1 skedar nga {n} faqe.
+	Creates {f} files from {n} pages.	Krijon {f} skedarë nga {n} faqe.
+	Credit Cards	Kartat e kreditit
+	Crop (% trimmed from each side)	Prit (% e prerë nga secila anë)
+	Crop page	Prit faqen
+	Crop pages	Prit faqet
+	Cross	Kryq
+	Currency symbol:	Simboli i monedhës:
+	Current page	Faqja aktuale
+	Current page ({n})	Faqja aktuale ({n})
+	Current page — type a page number or label (such as iv) and press Enter	Faqja aktuale — shkruaj një numër ose etiketë faqeje (p.sh. iv) dhe shtyp Enter
+	Custom	E personalizuar
+	Custom scale:	Shkallë e personalizuar:
+	Custom stamps arrive on the web with file pickers for images	Vulat e personalizuara vijnë në uebin me zgjedhës skedarësh për imazhe
+	Custom text:	Tekst i personalizuar:
+	Custom:	E personalizuar:
+	Cut	Preji
+	Cut and stack	Preji dhe grumbulloji
+	Cut marks	Shenja prerjeje
+	Cut pages	Preji faqet
+	Cut {what}	Preji {what}
+	DPI sets the printed page size without resampling the image.	DPI cakton madhësinë e faqes së printuar pa e rimostruar imazhin.
+	Dark gray	Gri e errët
+	Dark gray theme	Tema gri e errët
+	Dashed	Me vija të ndërprera
+	Date	Data
+	Date field	Fusha e datës
+	Dates	Datat
+	December	Dhjetor
+	Decimal places:	Shifra dhjetore:
+	Decimals	Dhjetore
+	Declared conformance: {shown}	Përputhshmëria e deklaruar: {shown}
+	Decorative figure	Figurë dekorative
+	Default	Parazgjedhja
+	Default Value:	Vlera e parazgjedhur:
+	Default page display	Shfaqja e parazgjedhur e faqes
+	Default workspace mode	Mënyra e parazgjedhur e hapësirës së punës
+	Default zoom	Zmadhimi i parazgjedhur
+	Default:	Parazgjedhja:
+	Delete	Fshi
+	Delete bookmark	Fshi libërshënuesin
+	Delete comment	Fshi komentin
+	Delete content	Fshi përmbajtjen
+	Delete document JavaScript	Fshi JavaScript-in e dokumentit
+	Delete field	Fshi fushën
+	Delete image	Fshi imazhin
+	Delete link	Fshi lidhjen
+	Delete page	Fshi faqen
+	Delete pages	Fshi faqet
+	Delete pages (Delete)	Fshi faqet (Delete)
+	Delete pages after extracting	Fshi faqet pas nxjerrjes
+	Delete selected fields	Fshi fushat e zgjedhura
+	Delete selected pages (Organize)	Fshi faqet e zgjedhura (Organizo)
+	Delete stamp	Fshi vulën
+	Delete {o}	Fshi {o}
+	Deleted	U fshi
+	Describe the figure	Përshkruaj figurën
+	Description	Përshkrimi
+	Description:	Përshkrimi:
+	Details	Detajet
+	Detect form fields	Zbulo fushat e formularit
+	Detected 1 form field	U zbulua 1 fushë formulari
+	Detected {n} form fields	U zbuluan {n} fusha formulari
+	Device colour is used, but there is no PDF/A output intent	Përdoret ngjyra e pajisjes, por nuk ka synim dalje (output intent) PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Përdoret DeviceCMYK: kërkon një synim dalje CMYK (nuk shtohet automatikisht)
+	Diagnostic details	Detaje diagnostikimi
+	Diamond	Romb
+	Digital ID	ID dixhitale
+	Digital ID password	Fjalëkalimi i ID-së dixhitale
+	Digital Signature Properties	Vetitë e nënshkrimit dixhital
+	Digital signature	Nënshkrim dixhital
+	Digitally sign	Nënshkruaj dixhitalisht
+	Direction:	Drejtimi:
+	Discard	Hidhe tej
+	Discard Objects	Hidh tej objektet
+	Discard User Data	Hidh tej të dhënat e përdoruesit
+	Discard all comments, forms and multimedia	Hidh tej të gjitha komentet, formularët dhe multimedian
+	Discard all links, actions and JavaScript	Hidh tej të gjitha lidhjet, veprimet dhe JavaScript-in
+	Discard all object data (file attachments)	Hidh tej të gjitha të dhënat e objekteve (bashkëngjitjet e skedarëve)
+	Discard alternate images	Hidh tej imazhet alternative
+	Discard bookmarks	Hidh tej libërshënuesit
+	Discard document information and metadata	Hidh tej informacionin e dokumentit dhe metadatat
+	Discard document tags	Hidh tej etiketat e dokumentit
+	Discard embedded page thumbnails	Hidh tej miniaturat e faqeve të ngulitura
+	Discard embedded print settings	Hidh tej cilësimet e printimit të ngulitura
+	Discard hidden layer content	Hidh tej përmbajtjen e shtresave të fshehura
+	Discard hidden text	Hidh tej tekstin e fshehur
+	Discard private data of other applications	Hidh tej të dhënat private të aplikacioneve të tjera
+	Dismiss	Mbylle
+	Display name	Emri i shfaqur
+	Display theme	Tema e shfaqjes
+	Distance	Distanca
+	Distinguished name	Emri dallues
+	Distribute	Shpërndaj
+	Distribute fields	Shpërndaj fushat
+	Document	Dokumenti
+	Document JavaScripts	JavaScript-et e dokumentit
+	Document JavaScripts…	JavaScript-et e dokumentit…
+	Document Overhead	Ngarkesa e dokumentit
+	Document Properties	Vetitë e dokumentit
+	Document Title	Titulli i dokumentit
+	Document actions	Veprimet e dokumentit
+	Document and markups	Dokumenti dhe shënimet
+	Document and stamps	Dokumenti dhe vulat
+	Document assembly	Montimi i dokumentit
+	Document has appropriate color contrast	Dokumenti ka kontrast të përshtatshëm ngjyrash
+	Document is not image-only PDF	Dokumenti nuk është PDF vetëm me imazhe
+	Document is tagged PDF	Dokumenti është PDF i etiketuar
+	Document language	Gjuha e dokumentit
+	Document properties (⌘D)	Vetitë e dokumentit (⌘D)
+	Document properties…	Vetitë e dokumentit…
+	Document sanitized. Save to finish: saving rewrites the whole file.	Dokumenti u pastrua. Ruaje për ta përfunduar: ruajtja e rishkruan gjithë skedarin.
+	Document structure provides a logical reading order	Struktura e dokumentit jep një rend logjik leximi
+	Document title is showing in title bar	Titulli i dokumentit shfaqet në shiritin e titullit
+	Documents and view	Dokumentet dhe pamja
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Dokumentet me më shumë se 20 faqe kanë nevojë për libërshënues për lundrim. Shto libërshënues për seksionet kryesore.
+	Don't save	Mos e ruaj
+	Done	U krye
+	Dot	Pikë
+	Double-click	Klikim i dyfishtë
+	Download	Shkarko
+	Downloaded {name}	U shkarkua {name}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Shkarkimi i bashkëngjitjeve në ueb vjen me M3.10 ({n} bajte gati)
+	Downsample to	Zvogëlo rezolucionin në
+	Also recognize pages that already have text	Njih edhe faqet që kanë tashmë tekst
+	Pictures on those pages are recognized too; words already in the page's text are not added again	Edhe figurat në ato faqe njihen; fjalët që ekzistojnë tashmë në tekstin e faqes nuk shtohen përsëri
+	Drag a rectangle around the area to copy	Tërhiq një drejtkëndësh rreth zonës që do të kopjohet
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Tërhiq një drejtkëndësh mbi një faqe për ta prerë; kliko dyfish një faqe për Cakto kutitë e faqes
+	Drag a rectangle to create a link; double-click a link to edit it	Tërhiq një drejtkëndësh për të krijuar një lidhje; kliko dyfish një lidhje për ta ndryshuar
+	Drag to draw the area where the signature should appear.	Tërhiq për të vizatuar zonën ku duhet të shfaqet nënshkrimi.
+	Drag to reorder	Tërhiq për ta renditur
+	Draw	Vizato
+	Draw a cloud	Vizato një re
+	Draw a line	Vizato një vijë
+	Draw a polygon	Vizato një shumëkëndësh
+	Draw a rectangle	Vizato një drejtkëndësh
+	Draw an arrow	Vizato një shigjetë
+	Draw an oval	Vizato një oval
+	Draw connected lines	Vizato vija të lidhura
+	Draw freehand	Vizato lirisht
+	Draw your {what} below.	Vizato {what} më poshtë.
+	Drawing	Vizatim
+	Drawing scale	Shkalla e vizatimit
+	Drop PDFs or folders here, or choose them.	Hidh PDF ose dosje këtu, ose zgjidh ato.
+	Drop-down list	Listë rënëse
+	Dropdown Properties	Vetitë e listës rënëse
+	Duplicate "{name}" onto:	Dyfisho "{name}" në:
+	Duplicate Field	Dyfisho fushën
+	Duplicate field	Dyfisho fushën
+	Duplicate page	Dyfisho faqen
+	Duplicate pages	Dyfisho faqet
+	Duplicate…	Dyfisho…
+	Dynamic	Dinamike
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formular dinamik XFA i ndërtuar nga shablloni i tij: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skriptet e këtij formulari janë çaktivizuar sepse njëri u ekzekutua shumë gjatë. Rihape dokumentin për t'i ekzekutuar përsëri.
+	E-Sign	Nënshkrim elektronik
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Çdo fushë ka nevojë për një këshillë që tregon çfarë të shkruhet. Shtoje te Vetitë e fushës > Të përgjithshme > Këshilla.
+	Each file holds as many of the {n} pages as fit.	Çdo skedar mban aq nga {n} faqet sa përshtaten.
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Çdo imazh matet aty ku e vizatojnë faqet; një imazh zëvendësohet vetëm nëse rezultati është më i vogël.
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Çdo imazh një herë, me emrin e dokumentit dhe të faqes. Imazhet JPEG ruhen të pandryshuara; të tjerat si PNG.
+	Earlier in tab order	Më herët në rendin e tabit
+	Edit Action	Ndrysho veprimin
+	Edit a PDF	Redakto një PDF
+	Edit comment	Ndrysho komentin
+	Edit content	Ndrysho përmbajtjen
+	Edit document JavaScript	Ndrysho JavaScript-in e dokumentit
+	Edit fields	Ndrysho fushat
+	Edit image	Ndrysho imazhin
+	Edit script of {name}	Ndrysho skriptin e {name}
+	Edit text	Ndrysho tekstin
+	Load document font	Ngarko shkronjën e dokumentit
+	Edit text & images	Ndrysho tekstin dhe imazhet
+	Edit text…	Ndrysho tekstin…
+	Editing	Redaktim
+	Edit…	Ndrysho…
+	Email Address	Adresa e email-it
+	Email Addresses	Adresat e email-it
+	Embedded Files	Skedarët e ngulitur
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Skedarët e ngulitur duhet të jenë vetë skedarë PDF/A (përdor PDF/A-3 për të tjerët)
+	Enable Acrobat JavaScript	Aktivizo Acrobat JavaScript
+	Enable copying of text, images, and other content	Lejo kopjimin e tekstit, imazheve dhe përmbajtjes tjetër
+	Enable text access for screen reader devices for the visually impaired	Lejo qasjen në tekst për lexuesit e ekranit për personat me shikim të dobët
+	Encrypt	Enkripto
+	Encrypt with certificate	Enkripto me certifikatë
+	Encryption	Enkriptimi
+	Endpoint	Pika fundore
+	Endpoints	Pikat fundore
+	Enhance scanned file	Përmirëso skedarin e skanuar
+	Enter the password that opens it	Shkruaj fjalëkalimin që e hap
+	Enter the permissions password to allow combining	Shkruaj fjalëkalimin e lejeve për të lejuar bashkimin
+	Entire page	Gjithë faqja
+	Erase	Fshi
+	Erase drawings	Fshi vizatimet
+	Eraser	Gomë
+	Even Pages Only	Vetëm faqet çifte
+	Even and Odd Pages	Faqet çifte dhe tek
+	Even pages	Faqet çifte
+	Even pages only	Vetëm faqet çifte
+	Every PDF in the folder	Çdo PDF në dosje
+	Every PDF in the folder and the folders inside it	Çdo PDF në dosje dhe në nëndosjet e saj
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Gjithçka në një faqe duhet të jetë e etiketuar ose e shënuar si artefakt (dekor, kokë, fund faqeje). Etiketo përmbajtjen e paetiketuar.
+	Example: {sample}	Shembull: {sample}
+	Exclude images smaller than	Përjashto imazhet më të vogla se
+	Execute a menu item	Ekzekuto një element menuje
+	Expand	Zgjero
+	Expand all bookmarks	Zgjero të gjithë libërshënuesit
+	Expand top-level bookmarks	Zgjero libërshënuesit e nivelit të parë
+	Explain	Shpjego
+	Export	Eksporto
+	Export All Images	Eksporto të gjitha imazhet
+	Export Value: {on}	Vlera e eksportit: {on}
+	Export a PDF	Eksporto një PDF
+	Export all comments to data file…	Eksporto të gjitha komentet në skedar të dhënash…
+	Export all images	Eksporto të gjitha imazhet
+	Export all images…	Eksporto të gjitha imazhet…
+	Export all to data file…	Eksporto gjithçka në skedar të dhënash…
+	Export certificate	Eksporto certifikatën
+	Export certificate…	Eksporto certifikatën…
+	Export comments	Eksporto komentet
+	Export data	Eksporto të dhënat
+	Export form data	Eksporto të dhënat e formularit
+	Export form data…	Eksporto të dhënat e formularit…
+	Export measurements	Eksporto matjet
+	Export measurements as CSV	Eksporto matjet si CSV
+	Export stopped: {e}	Eksporti u ndal: {e}
+	Export to	Eksporto në
+	Export to HTML…	Eksporto në HTML…
+	Export to Image	Eksporto si imazh
+	Export to RTF…	Eksporto në RTF…
+	Export to Text	Eksporto si tekst
+	Export to Word…	Eksporto në Word…
+	Export to PowerPoint…	Eksporto në PowerPoint…
+	Export to image…	Eksporto si imazh…
+	Export to text…	Eksporto si tekst…
+	Exported 1 image	U eksportua 1 imazh
+	Exported the text of 1 page	U eksportua teksti i 1 faqeje
+	Exported the text of {n} pages	U eksportua teksti i {n} faqeve
+	Exported to {path}	U eksportua te {path}
+	Exported {n} images	U eksportuan {n} imazhe
+	Exporting… {d} of {t}	Po eksportohet… {d} nga {t}
+	Export…	Eksporto…
+	Extended Graphics States	Gjendjet grafike të zgjeruara
+	Extract	Nxirr
+	Extract pages	Nxirr faqet
+	Extract pages as separate files	Nxirr faqet si skedarë të veçantë
+	Extract pages to a new document	Nxirr faqet në një dokument të ri
+	Extract pages…	Nxirr faqet…
+	Extracted 1 page	U nxor 1 faqe
+	Extracted {n} pages	U nxorën {n} faqe
+	Failed	Dështoi
+	February	Shkurt
+	Field	Fusha
+	Field descriptions	Përshkrimet e fushave
+	Field is used for file selection	Fusha përdoret për zgjedhjen e skedarit
+	Field list	Lista e fushave
+	Field names (comma-separated)	Emrat e fushave (të ndarë me presje)
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Emrat e fushave me + - * / dhe kllapa; vendos \\ para hapësirave në emra.
+	Field properties	Vetitë e fushës
+	Field properties…	Vetitë e fushës…
+	Field value is in range:	Vlera e fushës është brenda intervalit:
+	Field value is not validated	Vlera e fushës nuk vlerësohet
+	Field: {field} on page {p}	Fusha: {field} në faqen {p}
+	Fields	Fushat
+	Fields to reset (comma-separated; empty: all)	Fushat që do të rivendosen (të ndara me presje; bosh: të gjitha)
+	Figure {i} of {n}{page}	Figura {i} nga {n}{page}
+	Figures alternate text	Teksti alternativ i figurave
+	Figures require alternate text	Figurat kërkojnë tekst alternativ
+	File (.p12, .pfx)	Skedar (.p12, .pfx)
+	File Name	Emri i skedarit
+	File attachments	Bashkëngjitjet e skedarëve
+	File name	Emri i skedarit
+	File size	Madhësia e skedarit
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Skedarët bashkohen nga lart poshtë. Lëre Faqet bosh për të marrë çdo faqe.
+	Files are combined in this order. Leave Pages empty to take every page.	Skedarët bashkohen sipas këtij rendi. Lëre Faqet bosh për të marrë çdo faqe.
+	Files for {name}	Skedarët për {name}
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Skedarët që hap në PdfCraft shfaqen këtu. Hidh një PDF kudo për ta hapur.
+	Fill	Plotëso
+	Fill & Sign	Plotëso dhe nënshkruaj
+	Fill & Sign: add text	Plotëso dhe nënshkruaj: shto tekst
+	Fill & Sign: change initials	Plotëso dhe nënshkruaj: ndrysho inicialet
+	Fill & Sign: change signature	Plotëso dhe nënshkruaj: ndrysho nënshkrimin
+	Fill & Sign: checkmark	Plotëso dhe nënshkruaj: shenjë vlefshmërie
+	Fill & Sign: cross	Plotëso dhe nënshkruaj: kryq
+	Fill & Sign: date	Plotëso dhe nënshkruaj: data
+	Fill & Sign: dot	Plotëso dhe nënshkruaj: pikë
+	Fill & Sign: initials	Plotëso dhe nënshkruaj: inicialet
+	Fill & Sign: line	Plotëso dhe nënshkruaj: vijë
+	Fill & Sign: remove saved initials	Plotëso dhe nënshkruaj: hiq inicialet e ruajtura
+	Fill & Sign: remove saved signature	Plotëso dhe nënshkruaj: hiq nënshkrimin e ruajtur
+	Fill & Sign: sign	Plotëso dhe nënshkruaj: nënshkruaj
+	Fill Color:	Ngjyra e mbushjes:
+	Fill in {name}	Plotëso {name}
+	Filling in form fields and signing existing signature fields	Plotësimi i fushave të formularit dhe nënshkrimi i fushave ekzistuese të nënshkrimit
+	Filling of form fields	Plotësimi i fushave të formularit
+	Filter comments	Filtro komentet
+	Find options	Opsionet e kërkimit
+	Find text	Gjej tekst
+	Find text and redact	Gjej tekst dhe redakto
+	Find text and redact…	Gjej tekst dhe redakto…
+	Find tools and commands	Gjej mjete dhe komanda
+	Find tools and commands…	Gjej mjete dhe komanda…
+	Find…	Gjej…
+	First	I pari
+	First / last page	Faqja e parë / e fundit
+	First commit	Commit-i i parë
+	Fit	Përshtat
+	Fit Height	Përshtat lartësinë
+	Fit Page	Përshtat faqen
+	Fit Visible	Përshtat pjesën e dukshme
+	Fit Width	Përshtat gjerësinë
+	Fit one full page	Përshtat një faqe të plotë
+	Fit to height	Përshtat sipas lartësisë
+	Fit to page	Përshtat sipas faqes
+	Fit to width	Përshtat sipas gjerësisë
+	Fit to width scrolling	Përshtat sipas gjerësisë me rrëshqitje
+	Fit visible	Përshtat pjesën e dukshme
+	Fix	Ndrysho
+	Fix hairlines	Ndrysho vijat e holla
+	Fix reading order	Ndrysho renditjen e leximit
+	Fixed what could be fixed; 1 problem remains	U ndreqën ato që mund të ndreqeshin; mbetet 1 problem
+	Fixed what could be fixed; {n} problems remain	U ndreqën ato që mund të ndreqeshin; mbeten {n} probleme
+	Flatten	Rrafshoje
+	Flatten comments	Rrafshoji komentet
+	Flatten form fields	Rrafshoji fushat e formularit
+	Flip Horizontal	Përmbys horizontalisht
+	Flip Vertical	Përmbys vertikalisht
+	Flip horizontal	Përmbys horizontalisht
+	Flip image	Përmbys imazhin
+	Flip on long edge	Përmbys sipas anës së gjatë
+	Flip on short edge	Përmbys sipas anës së shkurtër
+	Flip vertical	Përmbys vertikalisht
+	Folders	Dosjet
+	Font Size:	Madhësia e shkronjave:
+	Font colour:	Ngjyra e shkronjave:
+	Font size:	Madhësia e shkronjave:
+	Font:	Shkronja:
+	Font: Helvetica	Shkronja: Helvetica
+	Fonts	Shkronjat
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Shkronjat duhet t'i lidhin karakteret me Unicode që teksti të mund të lexohet dhe kopjohet. Ndreqi shkronjat ose krijo PDF-në nga e para.
+	Form data and PDF forms	Të dhënat e formularit dhe formularët PDF
+	Form fields	Fushat e formularit
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Fushat e formularit janë rrafshuar: vlerat e tyre mbeten të dukshme. Ruajtja rishkruan të gjithë skedarin.
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Fushat e formularit duhet të jenë në pemën e etiketave (etiketat Form) që të lexohen me zë. Etiketo fushat e formularit.
+	Form fields only	Vetëm fushat e formularit
+	Form fields panel	Paneli i fushave të formularit
+	Form fill-in and digital signatures	Plotësimi i formularëve dhe nënshkrimet dixhitale
+	Format	Formati
+	Finding document fonts…	Po gjenden shkronjat e dokumentit…
+	Installed fonts…	Shkronjat e instaluara…
+	Keep source fonts	Mbaj shkronjat burimore
+	Load font…	Ngarko shkronja…
+	No openly licensed document fonts found. Load a font file.	Nuk u gjetën shkronja dokumenti me licencë të hapur. Ngarko një skedar shkronjash.
+	Format text	Formato tekstin
+	Format:	Formati:
+	Forms	Formularët
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formulat dhe elementët e ngjashëm jo tekst kanë nevojë për tekst alternativ. Shtoju tekst alternativ.
+	From	Nga
+	From a PDF page or an image	Nga një faqe PDF ose një imazh
+	From colour	Nga ngjyra
+	From {file}	Nga {file}
+	From:	Nga:
+	Front side only	Vetëm ana e përparme
+	Full screen mode	Modaliteti me ekran të plotë
+	General	Të përgjithshme
+	Geospatial location	Vendndodhja gjeohapësinore
+	Get help, share feedback and follow development on Discord.	Merr ndihmë, ndaj komente dhe ndiq zhvillimin në Discord.
+	Go to a page view	Shko te një pamje faqeje
+	Go to page {p}	Shko te faqja {p}
+	Go to page…	Shko te faqja…
+	Go to the page	Shko te faqja
+	Go to this result	Shko te ky rezultat
+	Grab bag	Të ndryshme
+	Gray	Gri
+	Grayscale Images	Imazhe në nuanca gri
+	Green	Jeshile
+	H / Space (hold)	H / Hapësira (mbaje shtypur)
+	HTML web page	Faqe interneti HTML
+	Hand (H)	Dora (H)
+	Has JavaScript actions (run in M6)	Ka veprime JavaScript (ekzekutohen në M6)
+	Header and footer	Koka dhe këmba e faqes
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Qelizat e kokës (TH) u tregojnë dëgjuesve çfarë përmban çdo kolonë ose rresht. Shëno qelizat e kokës.
+	Headers	Kokat
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Nivelet e titujve nuk duhet të anashkalohen (një H1 i ndjekur nga një H3). Rietiketo titujt.
+	Headings	Titujt
+	Height	Lartësia
+	Height:	Lartësia:
+	Hidden layers	Shtresat e fshehura
+	Hidden text	Teksti i fshehur
+	Hide a field	Fshih një fushë
+	Hide all comments	Fshih të gjitha komentet
+	Hide field highlights	Fshih theksimet e fushave
+	Hide layer	Fshih shtresën
+	Hide menu bar	Fshih shiritin e menysë
+	Hide password	Fshih fjalëkalimin
+	Hide toolbars	Fshih shiritat e mjeteve
+	Hide window controls	Fshih kontrollet e dritares
+	Hides annotation	Fsheh shënimin
+	High	E lartë
+	High Resolution	Rezolucion i lartë
+	High resolution	Rezolucion i lartë
+	Highlight	Thekso
+	Highlight Style:	Stili i theksimit:
+	Highlight fields	Thekso fushat
+	Highlight text	Thekso tekstin
+	Home	Kreu
+	Home / End	Home / End
+	Horizontal	Horizontal
+	Horizontal reversed	Horizontal i kundërt
+	Horizontal scale	Shkalla horizontale
+	Horizontally	Horizontalisht
+	Icon	Ikona
+	Identity	Identiteti
+	Image	Imazh
+	Image (PNG)	Imazh (PNG)
+	Image field	Fushë imazhi
+	Image-only PDF	PDF vetëm me imazhe
+	Images	Imazhet
+	Images and text	Imazhet dhe teksti
+	Images and text (converted to PDF)	Imazhet dhe teksti (të konvertuara në PDF)
+	Import comments…	Importo komente…
+	Import data	Importo të dhëna
+	Import form data…	Importo të dhënat e formularit…
+	Import {name}	Importo {name}
+	Importing data arrives on the web with file pickers for data files	Importimi i të dhënave në ueb vjen me zgjedhës skedarësh për skedarët e të dhënave
+	In multiple files	Në disa skedarë
+	In this file	Në këtë skedar
+	Includes unsaved changes	Përfshin ndryshime të paruajtura
+	Incorrect password. Try again.	Fjalëkalim i pasaktë. Provo përsëri.
+	Indent	Zhvendos djathtas
+	Index	Indeksi
+	Initial View	Pamja fillestare
+	Initials	Inicialet
+	Insert	Fut
+	Insert Date	Fut datën
+	Insert Page Number	Fut numrin e faqes
+	Insert a blank page after the selection	Fut një faqe bosh pas përzgjedhjes
+	Insert a file at the end	Fut një skedar në fund
+	Insert a file before page {label}	Fut një skedar para faqes {label}
+	Insert blank page	Fut faqe bosh
+	Insert pages	Fut faqe
+	Insert pages from a file…	Fut faqe nga një skedar…
+	Insert pages from file…	Fut faqe nga skedari…
+	Insert pages from {name}	Fut faqe nga {name}
+	Insert pages from {name} — 1 field renamed	Fut faqe nga {name} — 1 fushë u riemërua
+	Insert pages from {name} — fields renamed	Fut faqe nga {name} — fushat u riemëruan
+	Insert text	Fut tekst
+	Inserted	Futur
+	Inserted text	Teksti i futur
+	Inserting, deleting, and rotating pages	Futja, fshirja dhe rrotullimi i faqeve
+	Inset	Brendashkruaj
+	Intended usage	Përdorimi i synuar
+	Intersection	Prerja
+	Intersections	Prerjet
+	Invert	Përmbys ngjyrat
+	Invisible Rectangle	Drejtkëndësh i padukshëm
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Tabelat e parregullta ngatërrojnë lëvizjen nëpër qeliza. Jepi çdo rreshti të njëjtin numër qelizash (duke numëruar edhe bashkimet).
+	Issued by	Lëshuar nga
+	Issued by: 	Lëshuar nga: 
+	Issued to	Lëshuar për
+	Issuer	Lëshuesi
+	Italic	Zhdrejtë
+	Item List	Lista e artikujve
+	Item:	Artikulli:
+	Items marked Ready work today.	Artikujt e shënuar Gati funksionojnë sot.
+	Its security settings don't allow copying pages	Cilësimet e tij të sigurisë nuk lejojnë kopjimin e faqeve
+	January	Janar
+	JavaScript	JavaScript
+	JavaScript Console	Konsola JavaScript
+	JavaScript console…	Konsola JavaScript…
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript është çaktivizuar (Preferencat > JavaScript).
+	JavaScript, e.g. getField("total").value	JavaScript, p.sh. getField("total").value
+	Join our Discord	Bashkohu me Discord-in tonë
+	Join the ArtCraft Discord	Bashkohu me Discord-in e ArtCraft
+	Join the ArtCraft community	Bashkohu me komunitetin e ArtCraft
+	July	Korrik
+	June	Qershor
+	Justify	Drejto në të dyja anët
+	Keep tool selected	Mbaje mjetin të zgjedhur
+	Keep tool selected: on	Mbaje mjetin të zgjedhur: aktiv
+	Key Algorithm	Algoritmi i çelësit
+	Key usage	Përdorimi i çelësit
+	Keyboard shortcuts	Shkurtoret e tastierës
+	Keychain  ·  	Zinxhiri i çelësave  ·  
+	Keywords	Fjalët kyçe
+	LI must be a child of L	LI duhet të jetë fëmijë i L
+	Label	Etiketa
+	Labels	Etiketat
+	Labels: {preview}. Later pages keep their labels.	Etiketat: {preview}. Faqet e mëvonshme i mbajnë etiketat e tyre.
+	Landscape	Peizazh
+	Landscape Pages	Faqe në peizazh
+	Landscape and Portrait Pages	Faqe në peizazh dhe portret
+	Landscape pages	Faqet në peizazh
+	Language	Gjuha
+	Last	E fundit
+	Last commit	Commit-i i fundit
+	Later	Më vonë
+	Later in tab order	Më vonë në rendin e tabit
+	Layers	Shtresat
+	Layers Panel and Page	Paneli i shtresave dhe faqja
+	Layout and Magnification	Faqosja dhe zmadhimi
+	Lbl and LBody	Lbl dhe LBody
+	Lbl and LBody must be children of LI	Lbl dhe LBody duhet të jenë fëmijë të LI
+	Left	Majtas
+	Left Edge	Skaji i majtë
+	Left Footer Text	Teksti i këmbës majtas
+	Left Header Text	Teksti i kokës majtas
+	Left:	Majtas:
+	Light blue	Blu e çelët
+	Light gray	Gri e çelët
+	Light theme	Tema e çelët
+	Limit of	Kufiri i
+	Line	Vijë
+	Line Style:	Stili i vijës:
+	Line Thickness:	Trashësia e vijës:
+	Line delta	Ndryshimi i rreshtave
+	Line spacing	Hapësira ndërmjet rreshtave
+	Line thickness	Trashësia e vijës
+	Lines +/−	Rreshta +/−
+	Lines added	Rreshta të shtuar
+	Lines deleted	Rreshta të fshirë
+	Link	Lidhje
+	Link Action	Veprimi i lidhjes
+	Link Appearance	Pamja e lidhjes
+	Link Properties	Vetitë e lidhjes
+	Link Type:	Lloji i lidhjes:
+	Links, actions and JavaScripts	Lidhjet, veprimet dhe JavaScript-et
+	List	Listë
+	List Box Properties	Vetitë e kutisë së listës
+	List box	Kuti liste
+	List items	Artikujt e listës
+	List items belong in a list. Fix the list's tags.	Artikujt e listës i përkasin një liste. Ndreqi etiketat e listës.
+	List labels and bodies belong in a list item. Fix the list's tags.	Etiketat dhe trupat e listës i përkasin një artikulli liste. Ndreqi etiketat e listës.
+	Lists	Listat
+	Location	Vendndodhja
+	Lock comment	Blloko komentin
+	Locked	E bllokuar
+	Logical Reading Order	Renditja logjike e leximit
+	Looking for PDFs…	Po kërkohen PDF…
+	Low	E ulët
+	Low Resolution (150 dpi)	Rezolucion i ulët (150 dpi)
+	Low resolution	Rezolucion i ulët
+	Magnification	Zmadhimi
+	Make Current Properties Default	Bëje vetitë aktuale parazgjedhje
+	Make accessible	Bëje të aksesueshëm
+	Make scans searchable, then make them smaller.	Bëji skanimet të kërkueshme, pastaj zvogëloji.
+	Manage embedded index	Menaxho indeksin e ngulitur
+	March	Mars
+	Margins (in)	Margjinat (in)
+	Mark Page Range	Shëno intervalin e faqeve
+	Mark all	Shëno të gjitha
+	Mark as Confidential	Shëno si konfidenciale
+	Mark as comments	Shëno si komente
+	Mark differences	Shëno dallimet
+	Mark figure as decorative	Shëno figurën si dekorative
+	Mark for redaction	Shëno për redaktim
+	Mark pages for redaction	Shëno faqet për redaktim
+	Mark with checkmark	Shëno me shenjë vizë
+	Marked	I shënuar
+	Markup	Shënime
+	Marquee zoom	Zmadhim me zgjedhje
+	Mask:	Maska:
+	Match field sizes	Përputh madhësitë e fushave
+	Maximum	Maksimumi
+	May	Maj
+	Measure	Mat
+	Measure area	Mat sipërfaqen
+	Measure distance	Mat distancën
+	Measure objects	Mat objektet
+	Measure perimeter	Mat perimetrin
+	Measurement information	Informacioni i matjes
+	Measurement snapping	Kapja e matjes
+	Measuring tool	Mjeti i matjes
+	Medium	Mesatar
+	Merge data files into spreadsheet…	Bashko skedarët e të dhënave në fletëllogaritëse…
+	Merged 1 file into {path}	U bashkua 1 skedar në {path}
+	Merged PRs	PR-të e bashkuara
+	Merged {n} files into {path}	U bashkuan {n} skedarë në {path}
+	Merging data files needs the desktop app	Bashkimi i skedarëve të të dhënave kërkon aplikacionin për desktop
+	Metadata	Metadatat
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Midpoint	Pika e mesit
+	Midpoints	Pikat e mesit
+	Minimum	Minimumi
+	Model	Modeli
+	Models	Modelet
+	Modified	Ndryshuar
+	Modify page	Modifiko faqen
+	More	Më shumë
+	More options	Më shumë opsione
+	More options:	Më shumë opsione:
+	More ways to add files	Më shumë mënyra për të shtuar skedarë
+	Mouse Down	Maus poshtë
+	Mouse Enter	Maus brenda
+	Mouse Exit	Maus jashtë
+	Mouse Up	Maus lart
+	Move bookmark	Zhvendos libërshënuesin
+	Move comment	Zhvendos komentin
+	Move down	Zhvendos poshtë
+	Move earlier	Zhvendos më herët
+	Move image	Zhvendos imazhin
+	Move later	Zhvendos më vonë
+	Move page	Zhvendos faqen
+	Move pages	Zhvendos faqet
+	Move up	Zhvendos lart
+	Multi-line	Shumë rreshta
+	Multiple	Të shumëfishta
+	Multiple files	Disa skedarë
+	Separate PDFs	PDF të veçanta
+	Multiple selection	Zgjedhje e shumëfishtë
+	Name	Emri
+	Name (A–Z)	Emri (A–Zh)
+	Name on new comments	Emri në komentet e reja
+	Name:	Emri:
+	Named Destinations	Destinacionet me emër
+	Navigation links	Lidhjet e navigimit
+	Navigation links are not repetitive	Lidhjet e navigimit nuk përsëriten
+	Navigation tab	Tabi i navigimit
+	Needs manual check	Kërkon kontroll manual
+	Negative number style:	Stili i numrave negativë:
+	Nested alternate text	Tekst alternativ i brendshëm
+	New Action	Veprim i ri
+	New Action…	Veprim i ri…
+	New blank PDF	PDF e re bosh
+	New bookmark	Libërshënues i ri
+	New bookmark (⌘B)	Libërshënues i ri (⌘B)
+	New file:	Skedari i ri:
+	New {tool} comments will look like this one	Komentet e reja {tool} do të duken si ky
+	Next (⌘G)	Tjetri (⌘G)
+	Next / previous match	Përputhja tjetër / e mëparshme
+	Next figure	Figura tjetër
+	Next month	Muaji tjetër
+	Next page	Faqja tjetër
+	Next sheet	Fleta tjetër
+	Next view	Pamja tjetër
+	No	Jo
+	No PDFs found in {folder}	Nuk u gjetën PDF në {folder}
+	No PDFs in this folder yet	Ende nuk ka PDF në këtë dosje
+	No actions	Nuk ka veprime
+	No changes allowed	Nuk lejohen ndryshime
+	No changes to save	Nuk ka ndryshime për t'u ruajtur
+	No check has run yet.	Ende nuk është ekzekutuar asnjë kontroll.
+	No color	Pa ngjyrë
+	No colour	Pa ngjyrë
+	No comments match.	Asnjë koment nuk përputhet.
+	No comments yet.	Ende nuk ka komente.
+	No contributor data was built into this copy.	Në këtë kopje nuk u ndërtuan të dhëna kontribuesish.
+	No differences in the text.	Nuk ka dallime në tekst.
+	No digital IDs yet.	Ende nuk ka ID dixhitale.
+	No documents are open	Nuk ka dokumente të hapura
+	No file chosen	Nuk u zgjodh asnjë skedar
+	No fonts are referenced by the pages.	Faqet nuk referojnë asnjë shkronjë.
+	No form fields were detected	Nuk u zbuluan fusha formulari
+	No inaccessible scripts	Nuk ka skripte të paaksesueshme
+	No issues found	Nuk u gjetën probleme
+	No limit	Pa kufi
+	No matches	Nuk ka përputhje
+	No matches.	Nuk ka përputhje.
+	No matching tools	Nuk ka mjete që përputhen
+	No model credits were built into this copy.	Në këtë kopje nuk u ndërtuan kredite modelesh.
+	No pages match those choices	Asnjë faqe nuk përputhet me ato zgjedhje
+	No pages selected	Nuk është zgjedhur asnjë faqe
+	No preview	Pa pamje paraprake
+	No problems found: the document conforms to {level}.	Nuk u gjetën probleme: dokumenti është në përputhje me {level}.
+	No recent files	Nuk ka skedarë të fundit
+	No security	Pa siguri
+	No sheets	Nuk ka fletë
+	No status has been set.	Nuk është caktuar asnjë status.
+	No unlinked web addresses were found in the text	Në tekst nuk u gjetën adresa uebi pa lidhje
+	None	Asnjë
+	None (prefix only)	Asnjë (vetëm prefiks)
+	None found	Nuk u gjet asnjë
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Asnjë nga ato skedarë nuk mund të bëhet PDF; përdor PDF, imazhe ose skedarë .txt
+	None — everything is allowed	Asnjë — gjithçka lejohet
+	Not allowed	Nuk lejohet
+	Not present	Nuk ekziston
+	Note	Shënim
+	Nothing to redo	Nuk ka asgjë për ripërsëritje
+	Nothing to undo	Nuk ka asgjë për zhbërje
+	November	Nëntor
+	Number	Numri
+	Number every page in the footer.	Numëro çdo faqe në fund të faqes.
+	Number of pages	Numri i faqeve
+	Number pages	Numëro faqet
+	Number pages…	Numëro faqet…
+	OK	OK
+	October	Tetor
+	Odd Pages Only	Vetëm faqet tek
+	Odd pages	Faqet tek
+	Odd pages only	Vetëm faqet tek
+	Off	Joaktiv
+	Old file:	Skedari i vjetër:
+	On Blur	Kur humbet fokusin
+	On Focus	Kur merr fokusin
+	On the web, open or drop an image to convert it	Në ueb, hap ose lësho një imazh për ta konvertuar
+	One {f} file per page, named after the document.	Një skedar {f} për faqe, me emrin e dokumentit.
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Vazhdo vetëm nëse i beson këtij dokumenti. Një adresë mund të mbartë informacion nga dokumenti, si ajo që shkruatë në formularin e tij.
+	Only the document's owner can change its security (open it with the permissions password)	Vetëm zotëruesi i dokumentit mund të ndryshojë sigurinë e tij (hape me fjalëkalimin e lejeve)
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Ndryshon vetëm përmbajtja e faqes: lidhjet, komentet, fushat e formularit dhe libërshënuesit në faqet origjinale mbeten.
+	Opacity	Tejdukshmëria
+	Open	Hap
+	Open Recent	Hap të fundit
+	Open a PDF (⌘O)	Hap një PDF (⌘O)
+	Open a PDF to measure it.	Hap një PDF për ta matur.
+	Open a document first	Hap fillimisht një dokument
+	Open a web link	Hap një lidhje ueb
+	Open a web page	Hap një faqe ueb
+	Open accessibility report	Hap raportin e aksesueshmërisë
+	Open email app	Hap aplikacionin e emailit
+	Open file	Hap skedarin
+	Open in Full Screen mode	Hap në ekran të plotë
+	Open in a new tab	Hap në një skedë të re
+	Open link	Hap lidhjen
+	Open the file as it was saved then	Hap skedarin siç ishte ruajtur atëherë
+	Open the older version first	Hap fillimisht versionin më të vjetër
+	Open this web page?	Të hapet kjo faqe ueb?
+	Open to page	Hap te faqja
+	Opened with	Hapur me
+	Opened, but its security settings don't allow combining. Enter the permissions password.	U hap, por cilësimet e sigurisë së tij nuk lejojnë bashkimin. Fut fjalëkalimin e lejeve.
+	Open…	Hap…
+	Optimization cancelled	Optimizimi u anulua
+	Optimization is already running	Optimizimi është tashmë në punë
+	Optimize	Optimizo
+	Optimize PDF…	Optimizo PDF…
+	Optimize Scanned Documents	Optimizo dokumentet e skanuara
+	Optimize scanned documents	Optimizo dokumentet e skanuara
+	Optimize scanned documents…	Optimizo dokumentet e skanuara…
+	Optimizing… cleaning up	Duke optimizuar… duke pastruar
+	Optimizing… image {d} of {t}	Duke optimizuar… imazhi {d} nga {t}
+	Optimizing… merging identical objects	Duke optimizuar… duke bashkuar objektet identike
+	Optimizing… removing user data	Duke optimizuar… duke hequr të dhënat e përdoruesit
+	Optimizing… writing the copy	Duke optimizuar… duke shkruar kopjen
+	Optional	Opsionale
+	Optional: needs an AI provider you configure	Opsionale: kërkon një ofrues IA që e konfiguron ti
+	Options	Opsionet
+	Options…	Opsionet…
+	Orange	Portokalli
+	Organization Name	Emri i organizatës
+	Organizational Unit	Njësia organizative
+	Organize pages	Organizo faqet
+	Orientation:	Orientimi:
+	Original: replace pages	Origjinali: zëvendëso faqet
+	Other elements alternate text	Teksti alternativ i elementeve të tjerë
+	Other elements that require alternate text	Elementet e tjerë që kërkojnë tekst alternativ
+	Outdent	Zvogëlo identimin
+	Outline	Strukturë
+	Output	Dalja
+	Output appears here.	Dalja shfaqet këtu.
+	Output intent: {list}	Qëllimi i daljes: {list}
+	Output preview	Pamja paraprake e daljes
+	Oval	Ovale
+	Overlap:	Mbivendosja:
+	Owner password (no restrictions apply)	Fjalëkalimi i zotëruesit (pa kufizime)
+	PDF Optimizer	Optimizuesi i PDF
+	PDF or image	PDF ose imazh
+	PDF producer	Prodhuesi i PDF
+	PDF version	Versioni i PDF
+	PDF, images and text	PDF, imazhe dhe tekst
+	PDF/A…	PDF/A…
+	PRs	PR-të
+	Page	Faqja
+	Page Content	Përmbajtja e faqes
+	Page Only	Vetëm faqja
+	Page Range	Intervali i faqeve
+	Page Range Options	Opsionet e intervalit të faqeve
+	Page Sizing & Handling	Madhësia dhe trajtimi i faqes
+	Page display	Shfaqja e faqes
+	Page display: {layout}	Shfaqja e faqes: {layout}
+	Page does not require timed responses	Faqja nuk kërkon përgjigje me kohë të kufizuar
+	Page grid	Rrjeta e faqes
+	Page labels	Etiketat e faqeve
+	Page layout	Paraqitja e faqes
+	Page navigation	Navigimi i faqeve
+	Page number	Numri i faqes
+	Page options	Opsionet e faqes
+	Page order:	Radha e faqeve:
+	Page size	Madhësia e faqes
+	Page thumbnails	Miniaturat e faqeve
+	Page transitions	Kalimet mes faqeve
+	Page will not cause screen flicker	Faqja nuk do të shkaktojë dridhje të ekranit
+	Page {label}	Faqja {label}
+	Page {p} of {n}	Faqja {p} nga {n}
+	Pages Panel and Page	Paneli i faqeve dhe faqja
+	Pages from	Faqet nga
+	Pages of {name} to combine, e.g. 1-3, 6	Faqet e {name} për t'u bashkuar, p.sh. 1-3, 6
+	Pages per file	Faqe për skedar
+	Pages per sheet:	Faqe për fletë:
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Faqet që janë vetëm figura teksti nuk mund të lexohen me zë ose të kërkohen. Njih tekstin (OCR) për të shtuar një shtresë teksti.
+	Pages to Print	Faqet për t'u printuar
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Faqet me lidhje, komente ose fusha duhet të kalojnë me tab sipas radhës së strukturës. Rregullimi vendos radhën e tab-it të çdo faqeje te Përdor strukturën e dokumentit.
+	Pages:	Faqet:
+	Paper:	Letra:
+	Part of	Pjesë e
+	Passed	Kaloi
+	Password	Fjalëkalimi
+	Password protection will be applied when you save	Mbrojtja me fjalëkalim do të zbatohet kur të ruash
+	Password required	Kërkohet fjalëkalimi
+	Password security	Siguria me fjalëkalim
+	Password-protected	E mbrojtur me fjalëkalim
+	Paste after	Ngjit pas
+	Paste pages	Ngjit faqet
+	Path	Rruga
+	Paths	Rrugët
+	Patterns	Modelet
+	Patterns (graphics objects)	Modelet (objekte grafike)
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft nuk u mbyll normalisht. Këta dokumente kishin ndryshime të ruajtura automatikisht:
+	PdfCraft on GitHub	PdfCraft në GitHub
+	PdfCraft web page	Faqja ueb e PdfCraft
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funksionon pa internet. Pa telemetri, pa llogari dhe pa përpunim në re, përveçse nëse shton një ofrues.
+	PdfCraft {c} is up to date.	PdfCraft {c} është i përditësuar.
+	PdfCraft {v} is available.	PdfCraft {v} është i disponueshëm.
+	People may need more time to respond. Check that nothing has a time limit.	Njerëzit mund të kenë nevojë për më shumë kohë për të përgjigjur. Kontrollo që asgjë të mos ketë kufi kohe.
+	Percentage	Përqindja
+	Perimeter	Perimetri
+	Permitted actions after certifying	Veprimet e lejuara pas certifikimit
+	Phone Number	Numri i telefonit
+	Phone Numbers	Numrat e telefonit
+	Pick a tool in the quick bar, or type above.	Zgjidh një mjet te shiriti i shpejtë, ose shkruaj më sipër.
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Fotografitë kanë nevojë për tekst alternativ që i përshkruan, ose duhen shënuar si dekorative. Shto tekst alternativ për çdo figurë.
+	Pin a folder to Home	Fiksoje një dosje te Kreu
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fikso një dosje për të listuar këtu PDF-të e saj më të reja, p.sh. ku ruan skaneri ose një disk i sinkronizuar në re.
+	Pin a folder…	Fikso një dosje…
+	Pin folder to Home…	Fikso dosjen te Kreu…
+	Pink	Rozë
+	Pinned folders need the desktop app	Dosjet e fiksuara kërkojnë aplikacionin për desktop
+	Pinned {folder} to Home	U fiksua {folder} te Kreu
+	Place saved {what}	Vendos {what} të ruajtur
+	Plain text in reading order; pages are separated by form feeds.	Tekst i thjeshtë sipas radhës së leximit; faqet ndahen me ndërprerje formulari.
+	Planned	Planifikuar
+	Planned for milestone	Planifikuar për fazën
+	Planned for milestone {m} — open to see what it will include	Planifikuar për fazën {m} — hape për të parë çfarë do të përfshijë
+	Planned · {m}	Planifikuar · {m}
+	Points from the page's bottom-left corner.	Pikë nga këndi i poshtëm majtas i faqes.
+	Polygon	Shumëkëndësh
+	Polyline	Vijë e thyer
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Modaliteti portativ është joaktiv: nuk mund të shkruhet në {folder} ({error}). Cilësimet ruhen në dosjen tënde të përdoruesit.
+	Portrait	Portret
+	Portrait Pages	Faqe portret
+	Portrait pages	Faqe portret
+	Position	Pozicioni
+	Post	Posto
+	PostScript / EPS	PostScript / EPS
+	PostScript XObjects aren't allowed	Objektet XObject PostScript nuk lejohen
+	Poster	Poster
+	Prefix	Parashtesa
+	Preflight	Preflight
+	Prepare a form	Përgatit një formular
+	Prepare for Distribution	Përgatit për shpërndarje
+	Prepare for accessibility	Përgatit për aksesueshmëri
+	Prepare for distribution	Përgatit për shpërndarje
+	Prepare for distribution…	Përgatit për shpërndarje…
+	Presentation (.pptx)	Prezantim (.pptx)
+	Preview	Pamje paraprake
+	Preview: page {p} of {n}	Pamje paraprake: faqja {p} nga {n}
+	Previous (⇧⌘G)	E mëparshmja (⇧⌘G)
+	Previous / next page	Faqja e mëparshme / tjetër
+	Previous figure	Figura e mëparshme
+	Previous month	Muaji i mëparshëm
+	Previous page	Faqja e mëparshme
+	Previous sheet	Fleta e mëparshme
+	Previous view	Pamja e mëparshme
+	Primary language	Gjuha kryesore
+	Print	Printo
+	Print (⌘P)	Printo (⌘P)
+	Print in grayscale	Printo me tonet e grisë
+	Print page border	Printo kornizën e faqes
+	Print production	Prodhimi për shtyp
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Printo vetëm nga njëra anë. Mbaji fletët në radhë, pri te shenjat, pastaj vendosi grumbujt nga e majta në të djathtë, nga lart poshtë.
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage ose LastPage
+	Printer:	Printeri:
+	Printing	Printimi
+	Printing allowed	Printimi lejohet
+	Print…	Printo…
+	Privacy	Privatësia
+	Private data of other applications	Të dhënat private të aplikacioneve të tjera
+	Properties…	Vetitë…
+	Protect	Mbro
+	Protect Using Password	Mbro me fjalëkalim
+	Protect a PDF	Mbro një PDF
+	Protect using password…	Mbro me fjalëkalim…
+	Protect with password	Mbro me fjalëkalim
+	Protected: the combined file won't keep its security settings	Mbrojtur: skedari i bashkuar nuk do t'i ruajë cilësimet e sigurisë
+	Public key	Çelësi publik
+	Purple	Vjollcë
+	PushButton	PushButton
+	Quality	Cilësia
+	Radio	Radio
+	Radio Button Properties	Vetitë e butonit radio
+	Radio button	Butoni radio
+	Re-type Password	Shkruaje sërish fjalëkalimin
+	Read	Lexo
+	Read Only	Vetëm lexim
+	Read mode	Modaliteti i leximit
+	Ready	Gati
+	Real name	Emri real
+	Reason	Arsyeja
+	Recent	Të fundit
+	Recognize Text	Njih tekstin
+	Recognize text	Njih tekstin
+	Recognize text in multiple files…	Njih tekstin në disa skedarë…
+	Recognize text…	Njih tekstin…
+	Recognized 1 word	U njoh 1 fjalë
+	Recognized {n} words	U njohën {n} fjalë
+	Recognized {w} words in 1 file	U njohën {w} fjalë në 1 skedar
+	Recognized {w} words in {n} files	U njohën {w} fjalë në {n} skedarë
+	Recognizing text… file {d} of {t}	Duke njohur tekstin… skedari {d} nga {t}
+	Recognizing text… page {d} of {t}	Duke njohur tekstin… faqja {d} nga {t}
+	Recommended tools	Mjetet e rekomanduara
+	Recover	Rikupero
+	Recover unsaved documents?	Të rikuperohen dokumentet e paruajtura?
+	Rectangle	Drejtkëndësh
+	Red	E kuqe
+	Redact	Redakto
+	Redact a PDF	Redakto një PDF
+	Redact all	Redakto të gjitha
+	Redact pages	Redakto faqet
+	Redact pages…	Redakto faqet…
+	Redact text and images	Redakto tekstin dhe imazhet
+	Redacted area fill colour:	Ngjyra e mbushjes së zonës së redaktuar:
+	Redaction Tool Properties	Vetitë e mjetit të redaktimit
+	Redaction properties…	Vetitë e redaktimit…
+	Redid {label}	U ribë {label}
+	Redo	Ribëj
+	Redo {action}	Ribëj {action}
+	Reduce file size	Zvogëlo madhësinë e skedarit
+	Reduce file size…	Zvogëlo madhësinë e skedarit…
+	Regularity	Rregullsia
+	Rejected	Refuzuar
+	Reliable character encoding is provided	Ofrohet kodim i besueshëm i karaktereve
+	Remove	Hiq
+	Remove all links	Hiq të gjitha lidhjet
+	No links to remove	Nuk ka lidhje për t'u hequr
+	Removed 1 link	U hoq 1 lidhje
+	Removed {n} links	U hoqën {n} lidhje
+	Remove background	Hiq sfondin
+	Remove checkmark	Hiq shenjën e zgjedhjes
+	Remove from Recent	Hiq nga të fundit
+	Remove header & footer	Hiq kokën dhe fundin e faqes
+	Remove hidden information	Hiq informacionin e fshehur
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Hiq informacionin e fshehur dhe sheshoji komentet e fushat e formularit, që marrësit të shohin vetëm faqet.
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Hiq informacionin e fshehur, metadatat, skriptet dhe përmbajtjen e ngulitur, dhe rishkruaj skedarët.
+	Remove hidden information…	Hiq informacionin e fshehur…
+	Remove invalid links and bookmarks	Hiq lidhjet dhe libërshënuesit e pavlefshëm
+	Remove redaction marks	Hiq shenjat e redaktimit
+	Remove saved {what}	Hiq {what} të ruajtur
+	Remove security	Hiq sigurinë
+	Remove unreferenced named destinations	Hiq destinacionet e emërtuara të pareferuara
+	Remove unused objects and merge identical ones	Hiq objektet e papërdorura dhe bashko ato identike
+	Remove watermark	Hiq filigranën
+	Remove {name}	Hiq {name}
+	Remove {name} from Recent	Hiq {name} nga të fundit
+	Remove {n} files	Hiq {n} skedarë
+	Removed 1 hidden item. Save to remove them from the file.	U hoq 1 element i fshehur. Ruaje për ta hequr nga skedari.
+	Removed {n} hidden items. Save to remove them from the file.	U hoqën {n} elemente të fshehur. Ruaje për t'i hequr nga skedari.
+	Rename	Riemërto
+	Rename bookmark	Riemërto libërshënuesin
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Duke vizatuar: hayro (fillestar) · UI: egui · Ikonat: Lucide (ISC) · Shkronjat: Inter, JetBrains Mono, Dancing Script (OFL)
+	Reopen the files that were open when PdfCraft last closed	Rihap skedarët që ishin hapur kur u mbyll PdfCraft për herë të fundit
+	Repair log	Regjistri i riparimeve
+	Repairs	Riparimet
+	Repeat overlay text	Përsërit tekstin e mbivendosjes
+	Repeated navigation links should be skippable. Check links that appear on every page.	Lidhjet e përsëritura të navigimit duhet të mund të anashkalohen. Kontrollo lidhjet që shfaqen në çdo faqe.
+	Replace	Zëvendëso
+	Replace Image…	Zëvendëso imazhin…
+	Replace Pages	Zëvendëso faqet
+	Replace image	Zëvendëso imazhin
+	Replace page	Zëvendëso faqen
+	Replace pages	Zëvendëso faqet
+	Replace pages…	Zëvendëso faqet…
+	Replace text	Zëvendëso tekstin
+	Replaced	Zëvendësuar
+	Replacement text	Teksti zëvendësues
+	Replacement: pages of {name}	Zëvendësimi: faqet e {name}
+	Replaces the existing one on those pages.	Zëvendëson atë ekzistues në ato faqe.
+	Replacing images arrives on the web with image file pickers	Zëvendësimi i imazheve vjen në ueb me zgjedhësit e skedarëve të imazhit
+	Replacing images on page {p} arrives on the web with image pickers ({i})	Zëvendësimi i imazheve në faqen {p} vjen në ueb me zgjedhësit e imazhit ({i})
+	Reply	Përgjigju
+	Report	Raporti
+	Report Options	Opsionet e raportit
+	Report…	Raporti…
+	Required	E detyrueshme
+	Requires user to enter a password for:	Kërkon që përdoruesi të fusë një fjalëkalim për:
+	Reset a form	Rivendos një formular
+	Reset columns	Rivendos kolonat
+	Resize comment	Ndrysho madhësinë e komentit
+	Resize window to initial page	Ndrysho madhësinë e dritares sipas faqes fillestare
+	Resolution	Rezolucioni
+	Restrictions	Kufizimet
+	Retain existing	Mbaj ekzistueset
+	Reverse pages	Ktheje radhën e faqeve
+	Reverse the order	Ktheje radhën
+	Revert	Rikthe
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Të rikthehet te versioni i ruajtur më parë i “{name}”? Ndryshimet e bëra që atëherë nuk mund të zhbëhen më pas.
+	Reverted to the last saved version	U rikthye te versioni i fundit i ruajtur
+	Review	Rishiko
+	Review History	Historiku i rishikimeve
+	Revisions	Rishikimet
+	Rich Text Format (.rtf)	Rich Text Format (.rtf)
+	Right	Djathtas
+	Right Edge	Skaji i djathtë
+	Right Footer Text	Teksti i fundit të faqes djathtas
+	Right Header Text	Teksti i kokës së faqes djathtas
+	Rotate	Rrotullo
+	Rotate Clockwise	Rrotullo në drejtim orar
+	Rotate Counterclockwise	Rrotullo në drejtim kundërorar
+	Rotate Pages	Rrotullo faqet
+	Rotate clockwise	Rrotullo në drejtim orar
+	Rotate counterclockwise	Rrotullo në drejtim kundërorar
+	Rotate image	Rrotullo imazhin
+	Rotate page	Rrotullo faqen
+	Rotate pages	Rrotullo faqet
+	Rotate pages clockwise	Rrotullo faqet në drejtim orar
+	Rotate pages counterclockwise	Rrotullo faqet në drejtim kundërorar
+	Rotate pages…	Rrotullo faqet…
+	Rotate view	Rrotullo pamjen
+	Rotate view clockwise	Rrotullo pamjen në drejtim orar
+	Rotate view clockwise (⇧⌘+)	Rrotullo pamjen në drejtim orar (⇧⌘+)
+	Rotate view counterclockwise	Rrotullo pamjen në drejtim kundërorar
+	Rotate:	Rrotullo:
+	Rotation	Rrotullimi
+	Rows	Rreshtat
+	Run	Ekzekuto
+	Run JavaScript	Ekzekuto JavaScript
+	Run a JavaScript	Ekzekuto një JavaScript
+	Run form script	Ekzekuto skriptin e formularit
+	Running action… file {d} of {t}	Duke ekzekutuar veprimin… skedari {d} nga {t}
+	SHA-1 digest	Përmbledhja SHA-1
+	SHA-256 digest	Përmbledhja SHA-256
+	Sanitize	Pastro
+	Sanitize Documents	Pastro dokumentet
+	Sanitize document	Pastro dokumentin
+	Sanitize document…	Pastro dokumentin…
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	Pastrimi heq nga dokumenti informacionin e fshehur: metadatat, bashkëngjitjet, komentet, fushat e formularit (të sheshuara), tekstin dhe shtresat e fshehura, libërshënuesit, lidhjet, veprimet dhe skriptet, si dhe të dhënat private të aplikacioneve.
+	Save	Ruaj
+	Save & Close	Ruaj dhe mbyll
+	Save (M4)	Ruaj (M4)
+	Save Image As…	Ruaj imazhin si…
+	Copy Image	Kopjo imazhin
+	The image has been copied ({w} × {h} pixels)	Imazhi u kopjua ({w} × {h} piksel)
+	Couldn't copy the image: {e}	Imazhi nuk u kopjua: {e}
+	Copy Image in Original Format	Kopjo imazhin në formatin origjinal
+	The image has been copied as a {ext} file	Imazhi u kopjua si skedar {ext}
+	The page has changed; select the image again	Faqja ka ndryshuar; zgjidh sërish imazhin
+	Save as PDF	Ruaj si PDF
+	Save as PDF/A	Ruaj si PDF/A
+	Save as PDF/A-1b	Ruaj si PDF/A-1b
+	Save as PDF/A-2b	Ruaj si PDF/A-2b
+	Save as PDF/A-3b	Ruaj si PDF/A-3b
+	Save as PDF/UA	Ruaj si PDF/UA
+	Save as PDF/X	Ruaj si PDF/X
+	Save as…	Ruaj si…
+	Save attachment…	Ruaj bashkëngjitjen…
+	Save changes to “{name}” before closing?	Të ruhen ndryshimet në “{name}” para mbylljes?
+	Save image	Ruaj imazhin
+	Save pages	Ruaj faqet
+	Save the accessibility report	Ruaj raportin e aksesueshmërisë
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Ruaje dokumentin më pas: ruajtja rishkruan të gjithë skedarin, që të mos mbetet asnjë gjurmë e përmbajtjes së hequr.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Ruaje dokumentin më pas; ruajtja rishkruan të gjithë skedarin, që asgjë e hequr të mos mbetet në të.
+	Save the spreadsheet	Ruaj fletëllogaritësen
+	Save these pages as one PDF	Ruaj këto faqe si një PDF
+	Saved measurements	Matjet e ruajtura
+	Saved measurements.	Matjet e ruajtura.
+	Saved the print-ready PDF to {path}	PDF-ja gati për shtyp u ruajt në {path}
+	Saved {name}	U ruajt {name}
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	U ruajt {place}: {before} → {after} ({pct}% më e vogël){detail}
+	Saved, but reopening failed: {e}	U ruajt, por rihapja dështoi: {e}
+	Scale relative to target page	Shkalla në raport me faqen e synuar
+	Scan & OCR	Skanim dhe OCR
+	Screen flicker	Dridhja e ekranit
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Lexuesit e ekranit e zgjedhin zërin sipas gjuhës së dokumentit. Caktojeni te Veçoritë e dokumentit > Të avancuara > Gjuha.
+	Script Name:	Emri i skriptit:
+	Script:	Skripti:
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Përmbajtja me skripte duhet të jetë e përdorshme me tastierë dhe teknologji ndihmëse. Kontrolloni skriptet e dokumentit.
+	Scripts	Skriptet
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skriptet ekzekutohen në një ambient të izoluar, pa qasje te skedarët apo rrjeti. Një skript që kërkon të hapë një faqe web ka nevojë më parë për lejen tuaj. Me JavaScript të çaktivizuar, funksionet standarde të Acrobat për formatim, vlerësim dhe llogaritje vazhdojnë të punojnë.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skriptet ekzekutohen në një ambient të izoluar, pa qasje te skedarët apo rrjeti. Me JavaScript të çaktivizuar, funksionet standarde të Acrobat për formatim, vlerësim dhe llogaritje vazhdojnë të punojnë.
+	Scroll long text	Lëviz tekstin e gjatë
+	Search	Kërko
+	Search comments	Kërko te komentet
+	Search tools and commands…	Kërko mjete dhe komanda…
+	Searchable Image (Exact)	Imazh i kërkueshëm (i saktë)
+	Searching… {s} of {p} pages	Po kërkohet… {s} nga {p} faqe
+	Searching… {s}/{p}	Po kërkohet… {s}/{p}
+	Security	Siguria
+	Security method	Metoda e sigurisë
+	Security properties	Veçoritë e sigurisë
+	Security properties…	Veçoritë e sigurisë…
+	Security settings	Cilësimet e sigurisë
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Cilësimet e sigurisë duhet t'i lejojnë teknologjisë ndihmëse ta lexojë përmbajtjen ("Enable text access for screen reader devices"). Ndryshoni sigurinë e dokumentit për ta lejuar.
+	Security will be removed when you save	Siguria do të hiqet kur ta ruani
+	Select (V)	Zgjidh (V)
+	Select Action:	Zgjidh veprimin:
+	Select All	Zgjidh të gjitha
+	Select Icon	Zgjidh ikonën
+	Select Trigger:	Zgjidh nxitësin:
+	Select a file first	Zgjidhni fillimisht një skedar
+	Select a file for the stamp	Zgjidhni një skedar për vulën
+	Select a password-protected file first	Zgjidhni fillimisht një skedar të mbrojtur me fjalëkalim
+	Select a word	Zgjidh një fjalë
+	Select all pages (Organize)	Zgjidh të gjitha faqet (Organizo)
+	Select data files to merge	Zgjidh skedarët e të dhënave për t'u bashkuar
+	Select files to compare	Zgjidh skedarët për krahasim
+	Select format category:	Zgjidh kategorinë e formatit:
+	Select pages	Zgjidh faqet
+	Select the items to remove from this document.	Zgjidhni elementët që do të hiqen nga ky dokument.
+	Selected image files: {count}	Skedarë imazhi të zgjedhur: {count}
+	Selected pages	Faqet e zgjedhura
+	Selection	Përzgjedhja
+	Self-signed	I vetënënshkruar
+	Sensitivity	Ndjeshmëria
+	Sent to {printer}	U dërgua te {printer}
+	Sent to {printer}: {msg}	U dërgua te {printer}: {msg}
+	Separator style:	Stili i ndarësit:
+	September	Shtator
+	Serial number	Numri serik
+	Set Alternate Text	Cakto tekstin alternativ
+	Set Fields to Same Size	Cakto fushat me madhësi të njëjtë
+	Set Page Boxes	Cakto kutitë e faqes
+	Set alternate text	Cakto tekstin alternativ
+	Set bookmark destination	Cakto destinacionin e libërshënuesit
+	Set document title	Cakto titullin e dokumentit
+	Set layer visibility	Cakto dukshmërinë e shtresës
+	Set measurement scale	Cakto shkallën e matjes
+	Set page boxes	Cakto kutitë e faqes
+	Set page boxes…	Cakto kutitë e faqes…
+	Set properties	Cakto veçoritë
+	Set status	Cakto statusin
+	Set status Accepted	Cakto statusin Pranuar
+	Set status Cancelled	Cakto statusin Anuluar
+	Set status Completed	Cakto statusin Përfunduar
+	Set status None	Cakto statusin Asnjë
+	Set status Rejected	Cakto statusin Refuzuar
+	Set status Unmarked	Cakto statusin Pa shënuar
+	Set tab order	Cakto renditjen e tabit
+	Set the image of {name}	Cakto imazhin e {name}
+	Set to current page ({n})	Cakto në faqen aktuale ({n})
+	Set to zero	Cakto në zero
+	Settings	Cilësimet
+	Shadings	Hijëzimet
+	Sheet {s} of {n}	Fleta {s} nga {n}
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift e kufizon në 45 gradë. Backspace heq një kulm. Escape anulon.
+	Show	Shfaq
+	Show Report	Shfaq raportin
+	Show a field	Shfaq një fushë
+	Show all	Shfaq të gjitha
+	Show all comments	Shfaq të gjitha komentet
+	Show certificate…	Shfaq certifikatën…
+	Show cover page in two-page view	Shfaq faqen e kopertinës në pamjen me dy faqe
+	Show layer	Shfaq shtresën
+	Show less	Shfaq më pak
+	Show password	Shfaq fjalëkalimin
+	Show the accessibility report	Shfaq raportin e qasshmërisë
+	Show this dialog when the Checker starts	Shfaq këtë dialog kur nis Kontrolluesi
+	Show {n} more	Shfaq edhe {n}
+	Show:	Shfaq:
+	Shrink oversized pages	Zvogëlo faqet e mëdha
+	Side panels	Panelet anësore
+	Sign	Nënshkruaj
+	Sign Here	Nënshkruani këtu
+	Sign this field…	Nënshkruaj këtë fushë…
+	Sign with a Digital ID	Nënshkruaj me një ID dixhitale
+	Sign yourself	Nënshkruani vetë
+	Signature	Nënshkrimi
+	Signature Details	Detajet e nënshkrimit
+	Signature is INVALID:	Nënshkrimi është i PAVLEFSHËM:
+	Signature is valid:	Nënshkrimi është i vlefshëm:
+	Signature panel	Paneli i nënshkrimit
+	Signature validity is UNKNOWN:	Vlefshmëria e nënshkrimit është E PANJOHUR:
+	Signatures	Nënshkrimet
+	Signatures panel	Paneli i nënshkrimeve
+	Signed and all signatures are valid.	Është nënshkruar dhe të gjitha nënshkrimet janë të vlefshme.
+	Signed and saved to {path}	U nënshkrua dhe u ruajt te {path}
+	Signer	Nënshkruesi
+	Signing time	Koha e nënshkrimit
+	Simplified field notation:	Shënimi i thjeshtuar i fushës:
+	Single Page	Faqe e vetme
+	Single Page Continuous	Faqe e vetme e vazhdueshme
+	Single file	Skedar i vetëm
+	Single page	Faqe e vetme
+	Single word or phrase	Fjalë ose frazë e vetme
+	Size	Madhësia
+	Skip Rule	Kapërce rregullin
+	Skipped	U kapërcye
+	Snap to drawing	Ngjit te vizatimi
+	Snapping	Ngjitja
+	Social Security Number	Numri i sigurimeve shoqërore
+	Social Security Numbers	Numrat e sigurimeve shoqërore
+	Solid	I plotë
+	Some page content couldn't be read; snapping uses the rest.	Një pjesë e përmbajtjes së faqes nuk u lexua; ngjitja përdor pjesën tjetër.
+	Sort	Rendit
+	Sort by	Rendit sipas
+	Sort comments by:	Rendit komentet sipas:
+	Sort items	Rendit elementët
+	Source	Burimi
+	Space Audit	Auditimi i hapësirës
+	Special	Speciale
+	Split	Ndaj
+	Split document	Ndaj dokumentin
+	Split document…	Ndaj dokumentin…
+	Split into files…	Ndaj në skedarë…
+	Spreadsheet (.xlsx)	Fletë llogaritjeje (.xlsx)
+	Square	Katror
+	Squiggly	Valëzuar
+	Squiggly underline	Nënvizim i valëzuar
+	Squiggly underline text	Nënvizo tekstin me valëzim
+	Stamp	Vulë
+	Stamp palette	Paleta e vulave
+	Stamps	Vulat
+	Standard Business	Biznes standard
+	Thai and Arabic use regular fallback fonts when available.	Tajlandishtja dhe arabishtja përdorin shkronja rezervë të zakonshme kur ka të tilla.
+	Standards	Standardet
+	Star	Yll
+	Start	Fillo
+	Start Checking	Fillo kontrollin
+	Start page number	Numri i faqes fillestare
+	Status	Statusi
+	Steps	Hapat
+	Sticky note	Shënim ngjitës
+	Strength: {s}	Fuqia: {s}
+	Strikethrough	Vizë mbi tekst
+	Strikethrough text	Tekst me vizë mbi të
+	Strong	E fortë
+	Structure Info	Info e strukturës
+	Style	Stili
+	Subject	Subjekti
+	Submit a form	Dërgo një formular
+	Subset	Nënbashkësi
+	Summarize	Përmblidh
+	Summarize Options	Opsionet e përmbledhjes
+	Summarize comments	Përmblidh komentet
+	Summary	Përmbledhje
+	Switch light / dark theme	Ndërro temën e çelët / të errët
+	Switch to two-page view first to show the cover page	Kaloni fillimisht te pamja me dy faqe për të shfaqur faqen e kopertinës
+	TH and TD	TH dhe TD
+	TH and TD must be children of TR	TH dhe TD duhet të jenë fëmijë të TR
+	TR must be a child of Table, THead, TBody, or TFoot	TR duhet të jetë fëmijë i Table, THead, TBody ose TFoot
+	Tab order	Renditja e tabit
+	Tab order by columns	Renditja e tabit sipas kolonave
+	Tab order by rows	Renditja e tabit sipas rreshtave
+	Tab order is consistent with structure order	Renditja e tabit përputhet me renditjen e strukturës
+	Tab order: by columns	Renditja e tabit: sipas kolonave
+	Tab order: by document structure	Renditja e tabit: sipas strukturës së dokumentit
+	Tab order: by rows	Renditja e tabit: sipas rreshtave
+	Tab order: move a field with its arrows.	Renditja e tabit: lëvizni një fushë me shigjetat e saj.
+	Table	Tabela
+	Table cells belong in a row. Fix the table's tags.	Qelizat e tabelës duhet të jenë në një rresht. Rregulloni etiketat e tabelës.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Rreshtat e tabelës duhet të jenë drejtpërdrejt në një tabelë ose në kokën, trupin ose fundin e saj. Rregulloni etiketat e tabelës.
+	Tables	Tabelat
+	Tables must contain the same number of columns in each row and rows in each column	Tabelat duhet të kenë të njëjtin numër kolonash në çdo rresht dhe rreshtash në çdo kolonë
+	Tables must have a summary	Tabelat duhet të kenë një përmbledhje
+	Tables should have headers	Tabelat duhet të kenë tituj
+	Tagged PDF	PDF me etiketa
+	Tagged annotations	Shënime me etiketa
+	Tagged content	Përmbajtje me etiketa
+	Tagged form fields	Fusha formulari me etiketa
+	Tagged multimedia	Multimedia me etiketa
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Etiketat i japin dokumentit një strukturë logjike që e ndjek teknologjia ndihmëse. Etiketoni dokumentin (Etiketo PDF automatikisht).
+	Take a snapshot	Merr një pamje
+	Text	Tekst
+	Text (plain)	Tekst (i thjeshtë)
+	Text Color:	Ngjyra e tekstit:
+	Text Field Properties	Veçoritë e fushës së tekstit
+	Text alignment:	Drejtimi i tekstit:
+	Text box	Kuti teksti
+	Text field	Fushë teksti
+	Text in images isn't found; recognise text (OCR) first.	Teksti në imazhe nuk gjendet; njihni fillimisht tekstin (OCR).
+	Text is compared word by word; the differences are shown on the new file.	Teksti krahasohet fjalë për fjalë; dallimet shfaqen te skedari i ri.
+	Text language is specified	Gjuha e tekstit është caktuar
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	Teksti duhet të kontrastojë mjaftueshëm me sfondin për personat me shikim të dobët. Kontrolloni ngjyrat me sy ose me një mjet kontrasti.
+	Text recognition is already running	Njohja e tekstit është tashmë në punë
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Njohja e tekstit nuk është e instaluar: mungojnë modelet e saj (ekzekutoni `cargo xtask models`, ose caktoni PDFCRAFT_MODELS).
+	Text to find	Teksti për t'u gjetur
+	Text to insert	Teksti për t'u futur
+	That didn't work: an internal error stopped it ({m}).	Nuk funksionoi: një gabim i brendshëm e ndali ({m}).
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Nuk funksionoi: një gabim i brendshëm e ndali ({m}). Dokumentet tuaja nuk janë ndryshuar.
+	The Keychain's digital IDs couldn't be listed: {e}	ID-të dixhitale të Keychain nuk u listuan dot: {e}
+	The Windows store's digital IDs couldn't be listed: {e}	ID-të dixhitale të depos së Windows nuk u listuan dot: {e}
+	The checker found 1 problem which may prevent the document from being fully accessible.	Kontrolluesi gjeti 1 problem që mund ta pengojë dokumentin të jetë plotësisht i qasshëm.
+	The checker found no problems in this document.	Kontrolluesi nuk gjeti probleme në këtë dokument.
+	The checker found {n} problems which may prevent the document from being fully accessible.	Kontrolluesi gjeti {n} probleme që mund ta pengojnë dokumentin të jetë plotësisht i qasshëm.
+	The clipboard has no image or text	Kujtesa e fragmenteve nuk ka imazh apo tekst
+	The document changed while you were choosing a file, so nothing was changed.	Dokumenti ndryshoi ndërsa zgjidhnit një skedar, ndaj nuk u ndryshua asgjë.
+	The document has additional actions (/AA)	Dokumenti ka veprime shtesë (/AA)
+	The document has document-level JavaScript	Dokumenti ka JavaScript në nivel dokumenti
+	The document has no XMP metadata	Dokumenti nuk ka metadata XMP
+	The document is encrypted	Dokumenti është i enkriptuar
+	The document now conforms to {level}; save it to keep the changes	Dokumenti tani është në përputhje me {level}; ruajeni për t'i mbajtur ndryshimet
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Dokumenti hapet pa fjalëkalim; ky fjalëkalim nevojitet për të ndryshuar kufizimet. Zbatohet kur ruani.
+	The document was closed before it could be saved.	Dokumenti u mbyll para se të ruhej.
+	The document's security settings don't allow filling in form fields	Cilësimet e sigurisë së dokumentit nuk lejojnë plotësimin e fushave të formularit
+	The document's security settings don't allow this change	Cilësimet e sigurisë së dokumentit nuk e lejojnë këtë ndryshim
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Formulari kërkon të dërgohet te {u}; PdfCraft nuk dërgon të dhëna formulari. Ruajeni dokumentin për të mbajtur të dhënat tuaja.
+	The form asks viewers to make appearances (NeedAppearances)	Formulari u kërkon shikuesve të krijojnë pamjet (NeedAppearances)
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Çelësi është në depon e certifikatave të Windows, e cila mund të kërkojë të lejohet PdfCraft ta përdorë.
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Çelësi është në Keychain të macOS, i cili mund të kërkojë të lejohet PdfCraft ta përdorë.
+	The newest {n} of {total} PDFs	{n} PDF-të më të reja nga {total}
+	The operation failed.	Veprimi dështoi.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Faqet u nxorën por nuk u fshinë, sepse dokumenti ndryshoi ndërsa zgjidhnit një dosje.
+	The password is only used to read the file; it isn't saved.	Fjalëkalimi përdoret vetëm për të lexuar skedarin; nuk ruhet.
+	The passwords don't match.	Fjalëkalimet nuk përputhen.
+	The replacement file doesn't have that many pages.	Skedari zëvendësues nuk ka kaq shumë faqe.
+	The same password is tried on each file.	I njëjti fjalëkalim provohet te çdo skedar.
+	The selected area has been copied ({w} × {h} pixels)	Zona e zgjedhur u kopjua ({w} × {h} piksel)
+	The signature will be invisible.	Nënshkrimi do të jetë i padukshëm.
+	The existing action will be preserved.	Veprimi ekzistues do të ruhet.
+	The text is the same	Teksti është i njëjtë
+	The title in the metadata and the document information differ	Titulli te metadata dhe te informacioni i dokumentit ndryshojnë
+	The value is shown as typed.	Vlera shfaqet siç është shkruar.
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	Dritarja duhet të shfaqë një titull kuptimplotë në vend të emrit të skedarit. Caktoni një titull dhe Pamja fillestare > Shfaq: Titulli i dokumentit.
+	There are no redaction marks (mark text, areas or pages first)	Nuk ka shenja redaktimi (shënoni fillimisht tekst, zona ose faqe)
+	There are no redaction marks to apply	Nuk ka shenja redaktimi për t'u zbatuar
+	Thick	E trashë
+	Thickness	Trashësia
+	Thin	E hollë
+	This area has too many overlapping paths; intersection snapping is limited.	Kjo zonë ka shumë shtigje që mbivendosen; ngjitja te prerjet është e kufizuar.
+	This certificate is in your list of trusted certificates.	Kjo certifikatë është në listën tuaj të certifikatave të besuara.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Kjo certifikatë nuk është e besuar. Nënshkrimet e bëra me të shfaqin një identitet të panjohur.
+	This certificate is trusted through a certificate above it in the chain.	Kjo certifikatë besohet nëpërmjet një certifikate mbi të në zinxhir.
+	This comment's appearance can't be changed yet.	Pamja e këtij komenti nuk mund të ndryshohet ende.
+	This compatibility level supports only plain ASCII passwords.	Ky nivel përputhshmërie mbështet vetëm fjalëkalime të thjeshta ASCII.
+	This dialog shows the details of a certificate and its chain.	Ky dialog shfaq detajet e një certifikate dhe të zinxhirit të saj.
+	This document can't be checked: it couldn't be read for editing	Ky dokument nuk mund të kontrollohet: nuk u lexua dot për redaktim
+	This document contains {n} interactive form fields.	Ky dokument përmban {n} fusha interaktive formulari.
+	This document has no attachments.	Ky dokument nuk ka bashkëngjitje.
+	This document has no bookmarks.	Ky dokument nuk ka libërshënues.
+	This document has no comments to flatten	Ky dokument nuk ka komente për t'u sheshuar
+	This document has no document-level scripts.	Ky dokument nuk ka skripte në nivel dokumenti.
+	This document has no form fields to flatten	Ky dokument nuk ka fusha formulari për t'u sheshuar
+	This document has no form fields you can fill in	Ky dokument nuk ka fusha formulari që mund të plotësoni
+	This document has no form fields.	Ky dokument nuk ka fusha formulari.
+	This document has no layers.	Ky dokument nuk ka shtresa.
+	This document has no pages.	Ky dokument nuk ka faqe.
+	This document has no signatures.	Ky dokument nuk ka nënshkrime.
+	This document has no tagged figures.	Ky dokument nuk ka figura me etiketa.
+	This document has no {kind} to change	Ky dokument nuk ka {kind} për t'u ndryshuar
+	This document hasn't been checked yet.	Ky dokument nuk është kontrolluar ende.
+	This document is secured. Some changes are restricted by its security settings.	Ky dokument është i siguruar. Disa ndryshime kufizohen nga cilësimet e sigurisë së tij.
+	This document isn't password-protected	Ky dokument nuk është i mbrojtur me fjalëkalim
+	This drawing exceeds the snapping limit; only the first paths are used.	Ky vizatim e tejkalon kufirin e ngjitjes; përdoren vetëm shtigjet e para.
+	This field is locked. Unlock it to change its properties.	Kjo fushë është e kyçur. Shkyçeni për të ndryshuar veçoritë e saj.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	Ky skedar ishte i dëmtuar dhe u riparua. Ruajtja mban versionin e riparuar.
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Kjo dosje nuk është e disponueshme tani. Mund të jetë zhvendosur, ose disku apo sinkronizimi i saj në re është jashtë linje.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ky formular përmban edhe të dhëna XFA, të cilat PdfCraft ende nuk i lexon. Mund t'i plotësoni fushat e tij, por Acrobat mund të shfaqë në vend të tyre vlerat XFA.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Ky është një formular dinamik XFA, të cilin PdfCraft ende nuk mund ta shfaqë. Ajo që shihni është faqja zëvendësuese e skedarit.
+	This measurement needs at least {n} points.	Kjo matje kërkon të paktën {n} pika.
+	This page couldn't be displayed.\n{e}	Kjo faqe nuk u shfaq dot.\n{e}
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Kjo adresë web përzien shkronja nga alfabete të ndryshme, një mënyrë e zakonshme për të imituar emrin e një faqeje tjetër.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Kjo adresë web përdor shkronja nga një alfabet tjetër, të cilat mund të duken si ato të njohurat.
+	Thumbnails	Miniaturat
+	Tile scale:	Shkalla e pllakave:
+	Time	Ora
+	Timed responses	Përgjigje të kohëzuara
+	Timestamp	Vula kohore
+	Title	Titulli
+	To:	Për:
+	Toggle fit page / fit width	Ndërro përshtatjen e faqes / gjerësisë
+	Tool	Mjeti
+	Tooltip:	Këshilla e mjetit:
+	Top	Sipër
+	Top-level bookmarks ({n})	Libërshënuesit e nivelit të parë ({n})
+	Total	Totali
+	Translate	Përkthe
+	Trust	Besim
+	Try the form as people filling it in will see it	Provoni formularin siç do ta shohin ata që e plotësojnë
+	Two-Up (Cover Page)	Dy faqe (me kopertinë)
+	Two-Up (Facing)	Dy faqe (përballë)
+	Two-Up Continuous (Cover Page)	Dy faqe të vazhdueshme (me kopertinë)
+	Two-Up Continuous (Facing)	Dy faqe të vazhdueshme (përballë)
+	Two-page view	Pamja me dy faqe
+	Two-sided:	Dyanëshe:
+	Type	Lloji
+	Type Password	Shkruaj fjalëkalimin
+	Type a password.	Shkruani një fjalëkalim.
+	Type text	Shkruaj tekst
+	Type the web address.	Shkruani adresën web.
+	Type your {what}.	Shkruani {what} tuaj.
+	Typewriter	Makinë shkrimi
+	URL to submit to	URL-ja ku do të dërgohet
+	Unchecked	Pa shënuar
+	Underline	Nënvizim
+	Underline text	Nënvizo tekstin
+	Undid {label}	U zhbë {label}
+	Undo	Zhbëj
+	Undo {action}	Zhbëj {action}
+	Unit	Njësia
+	Units	Njësitë
+	Unknown	E panjohur
+	Unknown author	Autor i panjohur
+	Unlock	Shkyç
+	Unlock comment	Shkyç komentin
+	Unlock {name}	Shkyç {name}
+	Unlock {n} files	Shkyç {n} skedarë
+	Unlocked {n} of {m} files	U shkyçën {n} nga {m} skedarë
+	Unlocked: the combined file won't be password-protected	Shkyçur: skedari i bashkuar nuk do të mbrohet me fjalëkalim
+	Unlock…	Shkyç…
+	Unpin	Hiq gozhdimin
+	Unpin {folder}	Hiq gozhdimin e {folder}
+	Unplaced	I paplasuar
+	Unsupported measurements	Matje të pambështetura
+	Up	Lart
+	Update	Përditëso
+	Update background	Përditëso sfondin
+	Update background…	Përditëso sfondin…
+	Update header & footer	Përditëso kokën & fundin
+	Update header & footer…	Përditëso kokën & fundin…
+	Update watermark	Përditëso filigranin
+	Update watermark…	Përditëso filigranin…
+	Use 72 DPI (one point per pixel)	Përdor 72 DPI (një pikë për piksel)
+	Use Flate to encode streams that are not encoded	Përdor Flate për të koduar rrjedhat që nuk janë të koduara
+	Use JavaScript	Përdor JavaScript
+	Use a Digital ID from a file	Përdor një ID dixhitale nga një skedar
+	Use a certificate	Përdor një certifikatë
+	Use custom DPI	Përdor DPI të personalizuar
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Përdor DPI-në e ngulitur të çdo imazhi; përdor 72 DPI kur mungon.
+	Use guided actions	Përdor veprime të udhëzuara
+	Use image resolution	Përdor rezolucionin e imazhit
+	Use now	Përdor tani
+	Use overlay text	Përdor tekst mbivendosës
+	Use print production	Përdor prodhimin e shtypit
+	Use system setting	Përdor cilësimin e sistemit
+	Use {what}	Përdor {what}
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Përdoret kur një PDF nuk kërkon paraqitje apo zmadhim. Lëvizja e vazhdueshme nuk ngjitet kurrë mes faqeve.
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Përdoret kur hapen PDF-të. Një nisje e qartë ose mënyra e kontrollit ka përparësi gjatë sesionit.
+	User Interface Options	Opsionet e ndërfaqes së përdoruesit
+	User password	Fjalëkalimi i përdoruesit
+	Username	Emri i përdoruesit
+	Valid	I vlefshëm
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	E vlefshme për 5 vjet, për nënshkrime dixhitale. ID-të e vetënënshkruara zakonisht nuk besohen nga të tjerët.
+	Valid from	E vlefshme nga
+	Valid to	E vlefshme deri
+	Validate	Vlerëso
+	Validate all	Vlerëso të gjitha
+	Validate all signatures	Vlerëso të gjitha nënshkrimet
+	Validity ends	Vlefshmëria mbaron
+	Validity starts	Vlefshmëria fillon
+	Value is not calculated	Vlera nuk llogaritet
+	Value is the	Vlera është
+	Value:	Vlera:
+	Verify	Verifiko
+	Verify to see what the document needs.	Verifikoni për të parë çfarë i nevojitet dokumentit.
+	Version	Versioni
+	Version {v}	Versioni {v}
+	Vertical	Vertikale
+	Vertical reversed	Vertikale e kthyer
+	Vertically	Vertikalisht
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Videoja, zëri dhe media e pasur duhet të etiketohen për t'u lexuar. Etiketoni shënimet e multimedias.
+	View less	Shiko më pak
+	View more	Shiko më shumë
+	View revision {n}	Shiko rishikimin {n}
+	View signed version	Shiko versionin e nënshkruar
+	Viewing	Shikimi
+	Viewport	Dritarja e pamjes
+	Viewport rectangle in page points (x, y, width, height)	Drejtkëndëshi i dritares së pamjes në pika faqeje (x, y, gjerësia, lartësia)
+	Visible Rectangle	Drejtkëndësh i dukshëm
+	Visual	Pamor
+	Warnings	Paralajmërimet
+	Watermark	Filigran
+	Weak	E dobët
+	Welcome to PdfCraft	Mirë se vini në PdfCraft
+	What word or phrase would you like to search for?	Çfarë fjale ose fraze do të kërkoni?
+	Whole words only	Vetëm fjalë të plota
+	Width	Gjerësia
+	Width:	Gjerësia:
+	Window Options	Opsionet e dritares
+	Windows store  ·  	Dyqani i Windows  ·
+	Write this email?	Ta shkruani këtë email?
+	Wrong password	Fjalëkalim i gabuar
+	Wrote 1 file to {dir}	U shkrua 1 skedar te {dir}
+	Wrote {n} files to {dir}	U shkruan {n} skedarë te {dir}
+	X Object Forms	Forma X Object
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formular XFA: fushat dhe të dhënat XFA mbahen në përputhje, kështu që shfletuesit e tjerë shfaqin atë që plotësoni.
+	Yellow	E verdhë
+	Yes	Po
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Jeni gati të zbatoni 1 shenjë redaktimi. Teksti, imazhet dhe vizatimet nën shenjat, si dhe komentet dhe fushat e formularit që mbivendosen me to, hiqen përgjithmonë.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Jeni gati të zbatoni {n} shenja redaktimi. Teksti, imazhet dhe vizatimet nën shenjat, si dhe komentet dhe fushat e formularit që mbivendosen me to, hiqen përgjithmonë.
+	You can pin up to {n} folders. Unpin one first.	Mund të fiksoni deri në {n} dosje. Hiqni fiksimin e njërës më parë.
+	You have version {c}. All releases are listed at {page}.	Keni versionin {c}. Të gjitha botimet janë të listuara te {page}.
+	You have version {c}. Download the new version from its release page.	Keni versionin {c}. Shkarkoni versionin e ri nga faqja e botimit.
+	Your changes will be lost if you don't save them.	Ndryshimet tuaja do të humbasin nëse nuk i ruani.
+	Your name	Emri juaj
+	ZIP	ZIP
+	Zip Code	Kodi postar
+	Zip Code + 4	Kodi postar + 4
+	Zoom	Zmadhimi
+	Zoom in	Zmadho
+	Zoom in (⌘+)	Zmadho (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Zmadho / zvogëlo (edhe me pinch ose ⌘-rrotullim)
+	Zoom out	Zvogëlo
+	Zoom out (⌘−)	Zvogëlo (⌘−)
+	Zoom to page level	Zmadho në nivelin e faqes
+	`{command}` {when}	`{command}` {when}
+	a bookmark cannot be moved inside itself	një libërshënues nuk mund të zhvendoset brenda vetes
+	a document must keep at least one page	një dokument duhet të mbajë të paktën një faqe
+	average	mesatarja
+	background	sfondi
+	characters	karaktere
+	e.g. My stamps	p.sh. Pullat e mia
+	e.g. en-US	p.sh. en-US
+	for images above	për imazhet mbi
+	header or footer	koka ose këmba
+	initials	inicialet
+	is available	është i disponueshëm
+	is not available yet	nuk është ende i disponueshëm
+	just now	pikërisht tani
+	maximum	maksimumi
+	minimum	minimumi
+	needs an AI provider (off by default)	kërkon një ofrues IA (i çaktivizuar si parazgjedhje)
+	no such document	nuk ka dokument të tillë
+	none	asnjë
+	nothing in the file matches this document	asgjë në skedar nuk përputhet me këtë dokument
+	nothing to redo	asgjë për ta ribërë
+	nothing to undo	asgjë për ta zhbërë
+	of the following fields:	e fushave të mëposhtme:
+	of {name}	e {name}
+	of {pages}	e {pages}
+	on page {label}	në faqen {label}
+	open to see what it will include	hapeni për të parë çfarë do të përfshijë
+	pages	faqe
+	product (x)	prodhimi (x)
+	ships in milestone {m}	vjen në fazën {m}
+	signature	nënshkrimi
+	sorted ascending	renditur në rritje
+	sorted descending	renditur në zbritje
+	sum (+)	shuma (+)
+	the document has no form fields	dokumenti nuk ka fusha formulari
+	the document has no page tree	dokumenti nuk ka pemë faqesh
+	the document has no tags	dokumenti nuk ka etiketa
+	the document is protected by a password	dokumenti është i mbrojtur me fjalëkalim
+	the image is empty	imazhi është bosh
+	the password is incorrect	fjalëkalimi është i pasaktë
+	the title must not be empty	titulli nuk duhet të jetë bosh
+	there are no pages to print	nuk ka faqe për t'u printuar
+	there are no redaction marks to apply	nuk ka shenja redaktimi për t'u zbatuar
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	ky dokument është i nënshkruar: rishkrimi i tij do të bënte të pavlefshme nënshkrimet (ruajeni në mënyrë inkrementale)
+	this file isn't XFDF, FDF, XML or text form data	ky skedar nuk është të dhëna formulari XFDF, FDF, XML ose tekst
+	to	deri në
+	to {n}	deri në {n}
+	watermark	filigrami
+	yesterday	dje
+	{0}: {1}	{0}: {1}
+	{c} of {n}{more}	{c} nga {n}{more}
+	{dpi} pixels/inch	{dpi} piksele/inç
+	{field}: {e}	{field}: {e}
+	{file} is too large for a stamp (at most {n} MB)	{file} është shumë i madh për një pullë (më së shumti {n} MB)
+	{folder} is already pinned to Home	{folder} është tashmë i fiksuar te Kreu
+	{kind} Properties	Vetitë e {kind}
+	{kind} field	Fusha {kind}
+	{kind} · page {p}	{kind} · faqja {p}
+	{kind} — click to show it on the page	{kind} — klikoni për ta shfaqur në faqe
+	{k} of {n}	{k} nga {n}
+	{label} (1 issue)	{label} (1 problem)
+	{label} ({n} issues)	{label} ({n} probleme)
+	{label} failed: {e}	{label} dështoi: {e}
+	{month} {day}, {y}	{day} {month}, {y}
+	{month} {y}	{month} {y}
+	{msg} to {dir}	{msg} te {dir}
+	{name} (default)	{name} (parazgjedhja)
+	{name} can't be combined: {why}	{name} nuk mund të kombinohet: {why}
+	{name} has no action	{name} nuk ka veprim
+	{name} is read-only	{name} është vetëm për lexim
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} dërgon formularin te {url}; PdfCraft nuk dërgon të dhëna formulari. Ruajeni dokumentin për të mbajtur të dhënat tuaja.
+	{name} — unsaved changes	{name} — ndryshime të paruajtura
+	{name}: choosing images arrives on the web with file pickers for images	{name}: zgjedhja e imazheve vjen në ueb me zgjedhës skedarësh për imazhe
+	{name}: the {other} action isn't supported yet	{name}: veprimi {other} nuk mbështetet ende
+	{n} contributors · {c} commits	{n} kontribues · {c} commit
+	{n} days ago	{n} ditë më parë
+	{n} differences found	U gjetën {n} dallime
+	{n} files	{n} skedarë
+	{n} files done	{n} skedarë përfunduan
+	{n} files need attention	{n} skedarë kërkojnë vëmendje
+	{n} h ago	{n} orë më parë
+	{n} instances	{n} instanca
+	{n} issues	{n} probleme
+	{n} marks	{n} shenja
+	{n} match(es) marked for redaction.	{n} përputhje u shënuan për redaktim.
+	{n} measurements use an unsupported format and are left out.	{n} matje përdorin një format të pambështetur dhe janë lënë jashtë.
+	{n} min ago	{n} min më parë
+	{n} pages	{n} faqe
+	{n} pages selected	{n} faqe të zgjedhura
+	{n} pages selected.	{n} faqe të zgjedhura.
+	{n} selected	{n} të zgjedhura
+	{n} {kind}	{n} {kind}
+	{rule} - {status}	{rule} - {status}
+	{s} action	Veprimi {s}
+	This PDF uses the unsupported {s} action.	Ky PDF përdor veprimin e pambështetur {s}.
+	{verb} Background	{verb} sfondin
+	{verb} Header and Footer	{verb} kokën dhe këmbën
+	{verb} Watermark	{verb} filigranin
+	{verb} as "{name}"	{verb} si "{name}"
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} në këtë dokument u përpoq të hapte një adresë që PdfCraft nuk e hap: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} në këtë dokument u përpoq të hapte një adresë që PdfCraft nuk e hap: {e}. Nga dokumentet hapen vetëm lidhjet e uebit (http, https) dhe të emailit (mailto).
+	{who} in this document wants to open this address in your browser:	{who} në këtë dokument dëshiron ta hapë këtë adresë në shfletuesin tuaj:
+	{who} in this document wants to open your email app with this address:	{who} në këtë dokument dëshiron të hapë aplikacionin tuaj të emailit me këtë adresë:
+	{words} on {pages}	{words} në {pages}
+	ΔLOC	ΔLOC
+	— (protection is applied when you save)	— (mbrojtja zbatohet kur ruani)
+	“{name}” is protected. Enter a password to open it.	“{name}” është i mbrojtur. Vendosni një fjalëkalim për ta hapur.
+	−Bin	−Bin
+	−LOC	−LOC
+action wizard	Start	Fillo
+certificate	Subject	Subjekti
+comment menu	Edit	Redakto
+signature pad	Type	Shkruaj
+@plural	{n} field|{n} fields	{n} fushë|{n} fusha
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} në {dpi} dpi, madhësia më e madhe në të cilën mund të vizatohen)
+	A selected field has no widget on any page, so the fields can't be edited together.	Një fushë e zgjedhur nuk ka widget në asnjë faqe, kështu që fushat nuk mund të redaktohen së bashku.
+	Butt	Skaj i sheshtë
+	Character limit 0 means no limit. A comb of characters needs a limit.	Kufiri 0 i karaktereve do të thotë pa kufi. Një krehër karakteresh kërkon një kufi.
+	Character limit:	Kufiri i karaktereve:
+	Closed arrow	Shigjetë e mbyllur
+	Comb of characters	Krehër karakteresh
+	Couldn't open the printer's preferences: {e}	Nuk u hapën preferencat e printerit: {e}
+	Custom font	Font i personalizuar
+	Date format	Formati i datës
+	Document properties ({key})	Vetitë e dokumentit ({key})
+	Fill & Sign dates	Datat e Fill & Sign
+	Flatten Fill & Sign when saving	Sheshoje Fill & Sign gjatë ruajtjes
+	Font size 0 uses automatic sizing.	Madhësia 0 e fontit përdor përmasim automatik.
+	Import list…	Importo listën…
+	Larger pages	Faqe më të mëdha
+	Line ending	Fundi i vijës
+	Mixed	E përzier
+	Multiple words or phrases	Fjalë ose fraza të shumta
+	New bookmark ({key})	Libërshënues i ri ({key})
+	New bookmarks from structure	Libërshënues të rinj nga struktura
+	Next ({key})	Tjetra ({key})
+	One word or phrase per line	Një fjalë ose frazë për rresht
+	Only checked properties will change. Mixed means the selected fields have different values.	Vetëm vetitë e shënuara do të ndryshojnë. E përzier do të thotë se fushat e zgjedhura kanë vlera të ndryshme.
+	Open a PDF ({key})	Hap një PDF ({key})
+	Open arrow	Shigjetë e hapur
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Hap preferencat e drajverit të printerit. Ato ruhen për çdo printim nga ky kompjuter; kopjet, dyanshmi, nuanca gri dhe letra e zgjedhur këtu vlejnë prapë.
+	Pattern	Modeli
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft po vizaton pa procesor grafik, ndaj mund të jetë i ngadaltë. Përditësimi i drajverit grafik mund të ndihmojë.
+	Previous ({key})	E mëparshmja ({key})
+	Print ({key})	Printo ({key})
+	Printer properties	Vetitë e printerit
+	Redaction code:	Kodi i redaktimit:
+	Reset page size	Rivendos madhësinë e faqes
+	Reset to printer defaults	Rivendos te parazgjedhjet e printerit
+	Reverse closed arrow	Shigjetë e mbyllur e kundërt
+	Reverse open arrow	Shigjetë e hapur e kundërt
+	Rotate view clockwise ({key})	Rrotullo pamjen në drejtim orar ({key})
+	Rotation:	Rrotullimi:
+	Same as interface ({language})	Njësoj si ndërfaqja ({language})
+	Scroll tabs left	Lëviz skedat majtas
+	Scroll tabs right	Lëviz skedat djathtas
+	Shared Field Properties	Vetitë e përbashkëta të fushës
+	Shift- or Ctrl/Command-click to select several fields.	Shift- ose Ctrl/Command-klikoni për të zgjedhur disa fusha.
+	Slash	Vijë e pjerrët
+	Smaller pages	Faqe më të vogla
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Njohja e tekstit nuk është e instaluar: mungojnë skedarët e modelit. Instaloni përsëri PdfCraft, ose vendosni PDFCRAFT_MODELS te dosja që i përmban.
+	Text, marks and signatures become part of the page. Other comments stay editable.	Teksti, shenjat dhe nënshkrimet bëhen pjesë e faqes. Komentet e tjera mbeten të redaktueshme.
+	The document changed while you were editing field properties.	Dokumenti ndryshoi ndërsa po redaktonit vetitë e fushës.
+	The document is no longer open.	Dokumenti nuk është më i hapur.
+	The field properties could not be changed.	Vetitë e fushës nuk mund të ndryshoheshin.
+	The field properties dialog is no longer open.	Dialogu i vetive të fushës nuk është më i hapur.
+	The field {name} no longer exists.	Fusha {name} nuk ekziston më.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Cilësimet e vetë drajverit të printerit për këtë printim: tabaka e letrës, lloji i letrës, përfundimi e më shumë.
+	The selected fields could not be found. Select them again.	Fushat e zgjedhura nuk u gjetën. Zgjidhni ato përsëri.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Fontet e tekstit PDF nuk mund të vizatojnë “{c}” ({code}). Zgjidhni tekst të mbështetur.
+	This printer offers no settings of its own.	Ky printer nuk ofron cilësime të veta.
+	To change locked fields, also set Locked to No.	Për të ndryshuar fushat e kyçura, vendosni edhe Kyçur në Jo.
+	Today: {date}	Sot: {date}
+	Zoom in ({key})	Zmadho ({key})
+	Zoom in / out (also pinch or {key}-scroll)	Zmadho / zvogëlo (edhe me pinch ose {key}-rrotullim)
+	Zoom out ({key})	Zvogëlo ({key})
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	modelet e njohjes së tekstit nuk janë të instaluara (instaloni përsëri PdfCraft, ose vendosni PDFCRAFT_MODELS te dosja që i përmban)
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy ose yy vit · m ose mm muaj · mmm ose mmmm emri i muajit · d ose dd ditë · ddd ose dddd ditë e javës. H, h, M, s dhe t janë shkronja ore dhe nuk mund të përdoren vetëm: vendosni {escape} para një shkronje për ta shfaqur siç është.
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} nuk mund të shkruhet ende në PDF: teksti i Fill & Sign është vetëm evropianoperëndimor. Zgjidhni një format numerik si dd.mm.yyyy.
+	{name} is too large for a word list (at most 1 MB).	{name} është shumë i madh për një listë fjalësh (më së shumti 1 MB).
+	{n} fields selected	{n} fusha të zgjedhura
+	{n} word(s) or phrase(s)	{n} fjalë ose frazë
+	Auto ({percent}%)	Auto ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Auto ndjek madhësinë e tekstit të sistemit. Faqet vizatohen gjithmonë në rezolucionin e plotë të ekranit.
+	Check the pages	Kontrollo faqet
+	Collapse all	Palos të gjitha
+	Column select	Zgjedhje kolone
+	Drag the selection to move it. Esc clears the selection.	Zvarrit zgjedhjen për ta lëvizur. Esc e pastron zgjedhjen.
+	Expand all	Zgjero të gjitha
+	Files are combined in the order shown. Drag them to change it.	Skedarët kombinohen sipas rendit të treguar. Zvarritini për ta ndryshuar.
+	Fill colour	Ngjyra e mbushjes
+	Fill colour: none	Ngjyra e mbushjes: asnjë
+	Finish or discard the text being edited before selecting several objects.	Përfundoni ose hidhni tekstin që po redaktohet para se të zgjidhni disa objekte.
+	Grid view	Pamja me rrjetë
+	Interface size	Madhësia e ndërfaqes
+	List view	Pamja me listë
+	Move object	Lëviz objektin
+	Move objects	Lëviz objektet
+	No fill	Pa mbushje
+	Pages: {k} of {n}	Faqet: {k} nga {n}
+	Preview unavailable: {e}	Pamja paraprake nuk është e disponueshme: {e}
+	Remove page	Hiq faqen
+	Remove {n} pages	Hiq {n} faqe
+	Saved {place}: {before} → {after} (not smaller){detail}	U ruajt {place}: {before} → {after} (jo më i vogël){detail}
+	Select at most 1000 objects at a time.	Zgjidhni më së shumti 1000 objekte njëherësh.
+	Shift-click to select several objects. Drag empty space to select an area.	Shift-klikoni për të zgjedhur disa objekte. Zvarrisni mbi hapësirë të zbrazët për të zgjedhur një zonë.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Disa libërshënues nuk shfaqen këtu: paneli liston një numër të kufizuar, të ndërthurur në një thellësi të kufizuar.
+	Switch to List view to change the pages it takes.	Kaloni te pamja me listë për të ndryshuar faqet që merr.
+	Text used as a clipping path cannot be moved with this selection.	Teksti i përdorur si shteg prerjeje nuk mund të lëvizet me këtë zgjedhje.
+	These objects could not be moved. Select them again and try a smaller move.	Këto objekte nuk mund të lëviznin. Zgjidhni ato përsëri dhe provoni një lëvizje më të vogël.
+	This file is already as small as it can be made ({size}). No copy was saved.	Ky skedar është tashmë sa më i vogël që mund të bëhet ({size}). Nuk u ruajt asnjë kopje.
+	This page contains objects that cannot be selected together.	Kjo faqe përmban objekte që nuk mund të zgjidhen së bashku.
+	Vertical text cannot be moved with this selection.	Teksti vertikal nuk mund të lëvizet me këtë zgjedhje.
+key	Ctrl	Ctrl
+key	Delete	Fshi
+key	End	End
+key	Esc	Esc
+key	Home	Home
+key	Shift	Shift
+key	Space	Hapësirë
+@plural	{n} object selected|{n} objects selected	{n} objekt i zgjedhur|{n} objekte të zgjedhura
+	Looking for printers…	Po kërkohen printerë…
+	Sending to {printer}…	Po dërgohet te {printer}…
+	Float panel	Shkëput panelin
+	Inspector	Inspektori
+	Move to group	Zhvendos te grupi
+	Panels	Panelet
+	Reset panel layout	Rivendos strukturën e paneleve
+	Resize panel window	Ndrysho madhësinë e dritares së panelit
+	Resize panels	Ndrysho madhësinë e paneleve
+	Tools	Veglat
+	Appearance mode	Mënyra e pamjes
+	Light	E çelët
+	Dark	E errët
+	Active	Aktive
+	Dark theme	Tema e errët
+	Appearance settings…	Cilësimet e pamjes…
+	Save ({key})	Ruaj ({key})
+	Select page {label}	Zgjidh faqen {label}
+	Rotate page {label} counterclockwise	Rrotullo faqen {label} në drejtim kundërorar
+	Rotate page {label} clockwise	Rrotullo faqen {label} në drejtim orar
+	Delete page {label}	Fshi faqen {label}
+	Offset from centre	Zhvendosja nga qendra
+	Graphic	Grafik
+	Signer's name	Emri i nënshkruesit
+	Fill & Sign signature	Nënshkrimi Fill & Sign
+	Choose image…	Zgjidh imazhin…
+	Enter permissions password…	Vendos fjalëkalimin e lejeve…
+	Permissions password	Fjalëkalimi i lejeve
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” ka kufizime sigurie. Vendosni fjalëkalimin e lejeve për t'i hequr.
+	Restrictions lifted	Kufizimet u hoqën
+	Couldn't unlock {name}: {e}	Nuk u zhbllokua {name}: {e}
+	This document has no restrictions to lift	Ky dokument nuk ka kufizime për t'u hequr
+	The document's security settings don't allow copying text and images	Cilësimet e sigurisë së dokumentit nuk lejojnë kopjimin e tekstit dhe imazheve
+	Add the files to combine	Shtoni skedarët për t'u kombinuar
+	Leave out files that can't be read?	Të lihen jashtë skedarët që nuk lexohen?
+	These files can't be read, so they won't be in the combined PDF:	Këta skedarë nuk lexohen, ndaj nuk do të jenë në PDF-në e kombinuar:
+	Combine the rest	Kombino pjesën tjetër
+	and {n} more	dhe {n} të tjerë
+	Drop PDFs, images, text files or folders here, or choose them.	Hidhni këtu PDF, imazhe, skedarë teksti ose dosje, ose zgjidhini.
+	Every PDF, image and text file in the folder	Çdo skedar PDF, imazh dhe teksti në dosje
+	Every PDF, image and text file in the folder and the folders inside it	Çdo skedar PDF, imazh dhe teksti në dosje dhe në dosjet brenda saj
+	No PDFs, images or text files found in {folder}	Nuk u gjetën PDF, imazhe ose skedarë teksti në {folder}
+	Added the first {n} files in {folder}	U shtuan {n} skedarët e parë në {folder}
+	Margins	Margjinat
+	For page sizes and margins.	Për madhësitë e faqeve dhe margjinat.
+	PDF page: {size}	Faqja PDF: {size}
+	Match page at 100%	Përputh faqen në 100%
+	PDF scale: {scale}%	Shkalla e PDF: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	Letra dhe shkallëzimi i printerit mund të ndryshojnë. Kontrolloni cilësimet e drajverit.
+	Drawing scale changes. Use Actual size for full-scale plans.	Shkalla e vizatimit ndryshon. Përdorni Madhësinë aktuale për planet në shkallë të plotë.
+	Reload documents when their files change on disk	Ringarko dokumentet kur skedarët e tyre ndryshojnë në disk
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ky skedar ndryshoi në disk. Ringarkojeni për të parë versionin e ri; ndryshimet tuaja të paruajtura do të humbasin.
+	Reload	Ringarko
+	Couldn't reload {name}: {e}	Nuk u ringarkua {name}: {e}
+	Mouse wheel scroll speed	Shpejtësia e lëvizjes me rrotëzën e miut
+scroll speed	Slow	Ngadalë
+scroll speed	Normal	Normale
+scroll speed	Fast	Shpejt
+	Animation effects	Efektet e animacionit
+animation effects	On	Aktiv
+animation effects	Off	Joaktiv
+	Enhance camera image	Përmirëso imazhin e kamerës
+	Drag the corners onto the document's edges, then choose Enhance page.	Zvarrisni qoshet te skajet e dokumentit, pastaj zgjidhni Përmirëso faqen.
+	Enhance page	Përmirëso faqen
+	Done adding text	Përfundoi shtimi i tekstit
+	Discard this text (Esc)	Hidhe këtë tekst (Esc)
+	Clean-up	Pastrimi
+	Original	Origjinali
+	Greyscale	Nuanca gri
+	Black and white	Bardhë e zi
+	Reading colours	Ngjyrat e leximit
+	Replace document colours	Zëvendëso ngjyrat e dokumentit
+	Black on white	E zezë mbi të bardhë
+	White on black	E bardhë mbi të zezë
+	Yellow on black	E verdhë mbi të zezë
+	Green on black	E gjelbër mbi të zezë
+	Page background	Sfondi i faqes
+	Only change the colour of black text or line art	Ndrysho vetëm ngjyrën e tekstit të zi ose të vijave
+	Change the colour of line art as well as text	Ndrysho ngjyrën e vijave si dhe të tekstit
+	Colours are remapped while rendering; the document itself never changes.	Ngjyrat ripërcaktohen gjatë vizatimit; vetë dokumenti nuk ndryshon kurrë.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Drajveri i këtij printeri nuk i merr cilësimet dyanshe nga programet e tjera, ndaj zbatohet cilësimi i tij. Ndryshojeni te Vetitë…
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Fonti i kësaj fushe nuk mund të vizatojë “{c}” ({code}), ndaj PdfCraft shfaq ? në vend të tij. Vlera ruhet dhe shfaqësit e tjerë PDF e vizatojnë fushën nga ajo.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Fontet me të cilat shkruan PdfCraft nuk mund të vizatojnë “{c}” ({code}), ndaj shfaqet si ? në çdo shfaqës PDF. Teksti ruhet.
+	Browser's print dialog	Dialogu i printimit të shfletuesit
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Kopjet, printimi dyanësh dhe ngjyra zgjidhen në dialogun e printimit të shfletuesit.
+	Preparing {n} sheets for printing…	Po përgatiten {n} fletë për printim…
+	Preparing sheet {done} of {total} for printing…	Po përgatitet fleta {done} nga {total} për printim…
+	Opening the browser's print dialog…	Po hapet dialogu i printimit të shfletuesit…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	Nuk u printua nga shfletuesi ({e}); u shkarkua {name} për ta printuar
+	Tools panel side	Ana e panelit të veglave
+	Add comment	Shto koment
+	Change tag properties	Ndrysho vetitë e etiketës
+	Tags panel	Paneli i etiketave
+	Tags	Etiketat
+	Tag type	Lloji i etiketës
+	Actual text	Teksti aktual
+	Find a tag	Gjej një etiketë
+	Collapse tag	Palos etiketën
+	Expand tag	Zgjero etiketën
+	Revert changes	Ktheji ndryshimet
+	Save tag properties	Ruaj vetitë e etiketës
+	This document has no editable structure tags.	Ky dokument nuk ka etiketa strukture të redaktueshme.
+	{n} tags	{n} etiketa
+	Save or revert changes before selecting another tag.	Ruani ose ktheni ndryshimet para se të zgjidhni një etiketë tjetër.
+	Left out: {names}	Lënë jashtë: {names}
+	already a PDF	tashmë një PDF
+	no unused output name	nuk ka emër të papërdorur dalës
+	no output folder was chosen	nuk u zgjodh dosje dalëse
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	U shkarkua {n} PDF|U shkarkuan {n} PDF
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} emër fushe përplaset me skedarët e mëparshëm dhe do të riemërtohet: {list}|{n} emra fushash përplasen me skedarët e mëparshëm dhe do të riemërtohen: {list}
+	Scan	Skano
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Nënshkruani një fletë letre të bardhë dhe bëni një foto në dritë të fortë e të njëtrajtshme (përdorni blicin). Zgjidhni foton ose hidheni këtu: PdfCraft gjen nënshkrimin dhe heq letrën.
+	Choose photo…	Zgjidh foton…
+	No photo chosen	Nuk u zgjodh foto
+	Photo	Foto
+	Ink sensitivity	Ndjeshmëria e bojës
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Nuk u gjet nënshkrim në kornizë. Lëvizeni kornizën mbi nënshkrim ose rritni ndjeshmërinë e bojës.
+	Couldn't use the photo: {e}	Nuk u përdor dot fotoja: {e}
+	Close Tab	Mbyll skedën
+	Reopen Closed Tab	Rihap skedën e mbyllur
+	Reveal in Finder	Shfaq në Finder
+	Reveal in File Explorer	Shfaq në File Explorer
+	Other colour…	Ngjyrë tjetër…
+	Recent colours	Ngjyrat e fundit
+	Couldn't follow linked PDF: {reason}	Nuk u ndoq dot PDF-ja e lidhur: {reason}
+	The linked PDF opened, but its named destination was not applied.	PDF-ja e lidhur u hap, por destinacioni i saj i emërtuar nuk u zbatua.
+	The linked PDF opened, but its page destination was out of range.	PDF-ja e lidhur u hap, por destinacioni i faqes ishte jashtë kufijve.
+	Local cross-PDF links require the desktop app	Lidhjet e brendshme midis PDF-ve lokale kërkojnë aplikacionin desktop
+	Next tab	Skeda tjetër
+	Minimize	Minimizo
+	Maximize	Maksimizo
+	Restore	Rikthe
+	Use system title bar	Përdor shiritin e titullit të sistemit
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Shfaq një shirit bazë titulli për butonat e dritares në vend të shiritit të skedave. GNOME nuk vizaton shirita titulli për aplikacionet, prandaj ky nuk e ndjek temën e tij.
+	Allow	Lejo
+	Only allow this if you trust the source document.	Lejoje vetëm nëse i beson dokumentit burimor.
+	Open this local PDF?	Të hapet ky PDF lokal?
+	This document is trying to open a local file:	Ky dokument po përpiqet të hapë një skedar lokal:
+	Move tag earlier	Zhvendose etiketën më herët
+	Move tag later	Zhvendose etiketën më vonë
+	Remove "{name}" from this list? The file itself is not deleted.	Të hiqet «{name}» nga kjo listë? Vetë skedari nuk fshihet.
+	Previous tab	Skeda e mëparshme
+# Untranslated: English text until a translator fills these in.
+	Alignment	Alignment
+	Back to Prepare a form	Back to Prepare a form
+	Bulleted list	Bulleted list
+	Characters	Characters
+	Characters without spaces	Characters without spaces
+	Collapse all pages	Collapse all pages
+	Counting words… {n} pages read	Counting words… {n} pages read
+	Create Link…	Create Link…
+	Crop Image	Crop Image
+	Current page only	Current page only
+	Cut Image	Cut Image
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.
+	Drag a field to move it, or select it and press {up} or {down}.	Drag a field to move it, or select it and press {up} or {down}.
+	Earlier in calculation order	Earlier in calculation order
+	Edit {field}'s formula	Edit {field}'s formula
+	Every field calculates after the fields it reads.	Every field calculates after the fields it reads.
+	Every field outside a loop calculates after the fields it reads.	Every field outside a loop calculates after the fields it reads.
+	Exclude image/OCR text	Exclude image/OCR text
+	Exclude tagged code blocks	Exclude tagged code blocks
+	Exclude tagged tables	Exclude tagged tables
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.
+	Expand all pages	Expand all pages
+	Fill colour:	Fill colour:
+	Fix order	Fix order
+	Font	Font
+	Font size	Font size
+	Found {n} untagged content problems.	Found {n} untagged content problems.
+	Full Screen	Full Screen
+	Hide hover previews for highlights without comment text	Hide hover previews for highlights without comment text
+	Later in calculation order	Later in calculation order
+	Less	Less
+	Links on page	Links on page
+	Loop	Loop
+	Make Properties Default	Make Properties Default
+	Make properties default	Make properties default
+	Mark as artifact	Mark as artifact
+	Merge image fragments	Merge image fragments
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Mobile	Mobile
+	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
+	Moves only what must move	Moves only what must move
+	New file only	New file only
+	New file: {name}	New file: {name}
+	No field reads it	No field reads it
+	No order can fix a loop. Change one of the formulas.	No order can fix a loop. Change one of the formulas.
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.
+	No untagged content was found.	No untagged content was found.
+	Not in order	Not in order
+	Not now	Not now
+	Numbered list	Numbered list
+	Old file: {name}	Old file: {name}
+	Opacity:	Opacity:
+	Open in Full Screen mode?	Open in Full Screen mode?
+	Optimizing… merging image fragments	Optimizing… merging image fragments
+	Order · top calculates first	Order · top calculates first
+	Other options	Other options
+	Outline colour:	Outline colour:
+	Page properties	Page properties
+	Pages counted	Pages counted
+	Pages selected	Pages selected
+	Paragraph spacing	Paragraph spacing
+	Print as image	Print as image
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
+	Reads {name}, which calculates later, so it shows an old value.	Reads {name}, which calculates later, so it shows an old value.
+	Recognize Text…	Recognize Text…
+	Redact Image	Redact Image
+	Redaction mark appearance	Redaction mark appearance
+	Remove Crop	Remove Crop
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Remove this leaf tag from reading order and mark its direct content as an artifact
+	Resolution:	Resolution:
+	Save anyway	Save anyway
+	Save over the changed file?	Save over the changed file?
+	Script	Script
+	Scroll speed (mouse wheel and arrow keys)	Scroll speed (mouse wheel and arrow keys)
+	Sending sheet {s} of {n} to {printer}…	Sending sheet {s} of {n} to {printer}…
+	Show on the page which fields each field reads	Show on the page which fields each field reads
+	Shown while the pointer is over a mark.	Shown while the pointer is over a mark.
+	Side by side	Side by side
+	Some content could not be classified safely and was kept in the count.	Some content could not be classified safely and was kept in the count.
+	Some pages contain no countable text. Scanned images need OCR first.	Some pages contain no countable text. Scanned images need OCR first.
+	Standard	Standard
+	Subscript	Subscript
+	Superscript	Superscript
+	The labels are in English: the signature's font can't draw them in this language.	The labels are in English: the signature's font can't draw them in this language.
+	The order saved in the PDF needs tidying	The order saved in the PDF needs tidying
+	Too early	Too early
+	Turn upside down (180°)	Turn upside down (180°)
+	What takes up the space in this file, by kind of content.	What takes up the space in this file, by kind of content.
+	Word count	Word count
+	Word counting stopped unexpectedly.	Word counting stopped unexpectedly.
+	Words	Words
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.
+	Zoom — type a percentage and press Enter	Zoom — type a percentage and press Enter
+	the name is not a plain file name	the name is not a plain file name
+	{fields} read each other	{fields} read each other
+	{field} reads its own value	{field} reads its own value
+	{field} reads no other field	{field} reads no other field
+	{field} reads {fields}	{field} reads {fields}
+	{names} and {last}	{names} and {last}
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.
+# Untranslated: English text until a translator fills these in.
+	Calculation order	Calculation order
+	Find untagged content	Find untagged content
+	Tag form fields	Tag form fields
+	Word count…	Word count…
+	Always use my default zoom and page layout	Always use my default zoom and page layout
+	Larger thumbnails	Larger thumbnails
+	Layer options	Layer options
+	Printer default	Printer default
+	Reading the printer's settings…	Reading the printer's settings…
+	Reset to Initial Visibility	Reset to Initial Visibility
+	Shrink the page content to make room for the header and footer	Shrink the page content to make room for the header and footer
+	Smaller thumbnails	Smaller thumbnails
+	The document's security settings don't allow printing	The document's security settings don't allow printing
+	Thumbnail size	Thumbnail size
+	Digitally signed by	Nënshkruar dixhitalisht nga
+	DN: 	DN: 
+	Reason: 	Arsyeja: 
+	Location: 	Vendndodhja: 
+	Date: 	Data: 
+
+# Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
+	Add text field table	Shto tabelë fushash teksti
+	Text field table	Tabelë fushash teksti
+	Text Field Table	Tabelë fushash teksti
+	Columns	Kolonat
+	Row spacing	Hapësira mes rreshtave
+	Column spacing	Hapësira mes kolonave
+	First row number	Numri i rreshtit të parë
+	Column widths	Gjerësitë e kolonave
+	Distribute evenly	Shpërndaj në mënyrë të barabartë
+	Field names	Emrat e fushave
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N ose {row} është numri i rreshtit, {col} numri i kolonës, {seq} numri i qelizës. Pa asnjërin prej tyre, numri i rreshtit vendoset në fund.
+	Column {n}	Kolona {n}
+	Add fields	Shto fushat
+	a table has 1 to {max} rows	një tabelë ka nga 1 deri në {max} rreshta
+	a table has 1 to {max} columns	një tabelë ka nga 1 deri në {max} kolona
+	the first row number can be at most {max}	numri i rreshtit të parë mund të jetë më së shumti {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	zona, hapësira dhe gjerësitë e kolonave duhet të jenë numra, hapësira 0 ose më shumë dhe çdo gjerësi më e madhe se 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	rreshtat janë shumë të ulët: bëni zonën më të lartë ose përdorni më pak rreshta ose më pak hapësirë mes rreshtave
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	një kolonë është shumë e ngushtë: bëni zonën më të gjerë, jepini kolonës më shumë prej saj ose përdorni më pak kolona ose më pak hapësirë mes kolonave
+	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
+	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
+	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}

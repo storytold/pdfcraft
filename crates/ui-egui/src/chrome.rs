@@ -1,10 +1,10 @@
 //! Window chrome: tab strip (with the integrated macOS title bar), mode bar, right rail.
 
-use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
+use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
 
-use crate::canvas::{DocView, Fit, PageLayout};
+use crate::canvas::{DocView, Fit, PageFilter, PageLayout};
 use crate::theme::{self, ThemePreference, Tokens};
-use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
+use crate::{Dialog, Mode, PdfCraftApp, PropsTab, QuickTool, RightPanel, comments::CommentTool, icons, widgets, window_controls};
 
 /// Height of the tab strip when it doubles as the macOS title bar (#789). AppKit draws the traffic
 /// lights itself, centred in the standard 28 pt title-bar band at the top of the window, and moving
@@ -489,6 +489,10 @@ fn tab(
 }
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if app.mode == Mode::Read && app.active.is_some() {
+        read_mode_bar(app, ui);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("mode_bar")
         .exact_size(48.0)
@@ -503,8 +507,18 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 for (mode, label) in
                     [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
                 {
-                    if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
-                        app.switch_mode(mode, true);
+                    let is_selected = if mode == Mode::AllTools { app.mode == Mode::AllTools && app.left_open } else { app.mode == mode };
+                    if widgets::mode_tab(ui, tl!(label), is_selected).clicked() {
+                        if mode == Mode::AllTools {
+                            if app.mode == Mode::AllTools && app.left_open {
+                                app.left_open = false;
+                            } else {
+                                app.switch_mode(Mode::AllTools, true);
+                                app.reveal_tools();
+                            }
+                        } else {
+                            app.switch_mode(mode, true);
+                        }
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -533,10 +547,498 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Keep menus usable when their contents are taller than the window.
+/// Dedicated, horizontal reading toolbar for Read mode matching modern browser PDF viewer designs.
+/// Frees up the entire PDF canvas from floating overlays to provide maximum breathing space.
+pub fn read_mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::top("read_mode_bar")
+        .exact_size(48.0)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+
+                // 1. Menu (hamburger) & Mode Tabs
+                main_menu(app, ui);
+                ui.add_space(5.0);
+                ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                ui.add_space(5.0);
+
+                // Mode tabs: Read (active) and Edit (to switch instantly)
+                let _ = widgets::mode_tab(ui, tl!("Read"), true);
+                if widgets::mode_tab(ui, tl!("Edit"), false).on_hover_text("Switch to Edit mode (edit text and images)").clicked() {
+                    app.switch_mode(Mode::Edit, true);
+                }
+                ui.add_space(4.0);
+                ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                ui.add_space(4.0);
+
+                // 2. Inking & Annotation tools
+                let is_draw = matches!(app.quick_tool, QuickTool::Comment(CommentTool::Ink));
+                let draw_tip = tl!("Draw");
+                if icons::button(ui, "pen-tool", 32.0, is_draw, &draw_tip).clicked() {
+                    app.quick_tool = if is_draw { QuickTool::Select } else { QuickTool::Comment(CommentTool::Ink) };
+                }
+
+                let is_hl = matches!(app.quick_tool, QuickTool::Comment(CommentTool::Highlight));
+                let hl_tip = tl!("Highlight");
+                if icons::button(ui, "highlighter", 32.0, is_hl, &hl_tip).clicked() {
+                    app.quick_tool = if is_hl { QuickTool::Select } else { QuickTool::Comment(CommentTool::Highlight) };
+                }
+
+                let is_type = matches!(app.quick_tool, QuickTool::Comment(CommentTool::TextBox));
+                let type_tip = tl!("Add text");
+                if icons::button(ui, "type", 32.0, is_type, &type_tip).clicked() {
+                    app.quick_tool = if is_type { QuickTool::Select } else { QuickTool::Comment(CommentTool::TextBox) };
+                }
+
+                let is_note = matches!(app.quick_tool, QuickTool::Comment(CommentTool::Note));
+                let note_tip = tl!("Add comment");
+                if icons::button(ui, "message-square", 32.0, is_note, &note_tip).clicked() {
+                    app.quick_tool = if is_note { QuickTool::Select } else { QuickTool::Comment(CommentTool::Note) };
+                }
+
+                let is_hand = app.quick_tool == QuickTool::Hand;
+                let hand_tip = if is_hand { tl!("Hand (H)") } else { tl!("Select (V)") };
+                if icons::button(ui, if is_hand { "hand" } else { "mouse-pointer-2" }, 32.0, is_hand, &hand_tip).clicked() {
+                    app.quick_tool = if is_hand { QuickTool::Select } else { QuickTool::Hand };
+                }
+
+                ui.add_space(4.0);
+                ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                ui.add_space(6.0);
+
+                // 3. Hero "Ask AI" button with auto-load and custom PDF option
+                let ai_label = app.ai_provider.map_or("Ask AI", |p| p.action_label());
+                let pill_w = 126.0_f32;
+                let (btn_rect, btn_resp) = ui.allocate_exact_size(vec2(pill_w, 30.0), Sense::click());
+                let ai_hover = btn_resp.hovered();
+                let ai_bg = if ai_hover {
+                    t.accent.linear_multiply(0.20)
+                } else {
+                    t.accent.linear_multiply(0.10)
+                };
+                ui.painter().rect(
+                    btn_rect,
+                    CornerRadius::same(15),
+                    ai_bg,
+                    Stroke::new(1.2, t.accent.gamma_multiply(0.7)),
+                    egui::StrokeKind::Inside,
+                );
+
+                let icon_rect = Rect::from_center_size(pos2(btn_rect.left() + 15.0, btn_rect.center().y), vec2(14.0, 14.0));
+                icons::paint(ui, icon_rect, "sparkles", 14.0, t.accent);
+
+                ui.painter().text(
+                    pos2(btn_rect.left() + 30.0, btn_rect.center().y),
+                    Align2::LEFT_CENTER,
+                    ai_label,
+                    theme::semibold(11.5),
+                    t.text,
+                );
+
+                let chev_rect = Rect::from_center_size(pos2(btn_rect.right() - 12.0, btn_rect.center().y), vec2(10.0, 10.0));
+                icons::paint(ui, chev_rect, "chevron-down", 10.0, t.text_faint);
+
+                let btn_resp = btn_resp.on_hover_text("Ask AI Assistant about this PDF (PDF auto-copied to clipboard for instant attachment)");
+                if btn_resp.clicked() {
+                    if let Some(p) = app.ai_provider {
+                        app.open_ai_assistant(p, None);
+                    } else {
+                        app.dialog = Some(Dialog::AiService);
+                    }
+                }
+                btn_resp.context_menu(|ui| {
+                    ui.label(egui::RichText::new("Choose AI Assistant").font(theme::semibold(12.0)));
+                    ui.separator();
+                    for p in crate::AiProvider::ALL {
+                        if ui.add(widgets::radio(app.ai_provider == Some(p), p.display_name())).clicked() {
+                            app.ai_provider = Some(p);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("📄 Ask with Custom PDF…").clicked() {
+                        ui.close();
+                        if let Some(path) = rfd::FileDialog::new().add_filter("PDF files", &["pdf"]).pick_file() {
+                            let prov = app.ai_provider.unwrap_or(crate::AiProvider::ChatGpt);
+                            app.open_ai_assistant(prov, Some(path));
+                        }
+                    }
+                    if ui.button("⚙ Configure AI Services…").clicked() {
+                        app.dialog = Some(Dialog::AiService);
+                        ui.close();
+                    }
+                });
+
+                if icons::button(ui, "settings-2", 24.0, false, "Configure AI assistant or custom PDF…").clicked() {
+                    app.dialog = Some(Dialog::AiService);
+                }
+
+                ui.add_space(4.0);
+                ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                ui.add_space(6.0);
+
+                // 4. Center section: Integrated horizontal pill bar matching modern floating bar design and button positions
+                let active_info = app.active.and_then(|idx| {
+                    let view = app.views.get(idx)?;
+                    let doc = app.session.get(view.id)?;
+                    let count = doc.info.pages.len();
+                    if count == 0 {
+                        return None;
+                    }
+                    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                    Some((idx, count, labels))
+                });
+
+                if let Some((idx, page_count, labels)) = active_info {
+                    let view = &mut app.views[idx];
+                    let is_dark = t.dark();
+                    let page_input_id = ui.make_persistent_id(("read_mode_bar_page_input", view.id.0));
+
+                    let bg_fill = if is_dark { t.card } else { Color32::from_rgb(255, 255, 255) };
+                    let border_stroke = Stroke::new(1.0, if is_dark { t.border } else { Color32::from_gray(215) });
+                    let shadow_color = if is_dark { Color32::from_black_alpha(110) } else { Color32::from_black_alpha(24) };
+
+                    egui::Frame::NONE
+                        .fill(bg_fill)
+                        .stroke(border_stroke)
+                        .corner_radius(CornerRadius::same(20))
+                        .shadow(egui::Shadow {
+                            offset: [0, 2],
+                            blur: 12,
+                            spread: 0,
+                            color: shadow_color,
+                        })
+                        .inner_margin(egui::Margin::symmetric(10, 3))
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.horizontal_centered(|ui| {
+                                // 1. First page [ |< ]
+                                let can_prev = view.current > 0;
+                                if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevrons-left", 24.0, false, "First page")).inner.clicked() {
+                                    view.go_to_page(0);
+                                }
+
+                                // 2. Prev page [ < ]
+                                if ui.add_enabled_ui(can_prev, |ui| icons::button(ui, "chevron-left", 24.0, false, tl!("Previous page"))).inner.clicked() {
+                                    view.step_page(false);
+                                }
+
+                                // 3. Page indicator: [ 1 ] / N
+                                let cur_label = view.current_page_label(labels.get(view.current).map(String::as_str));
+                                let has_focus = ui.ctx().memory(|m| m.has_focus(page_input_id));
+
+                                if !has_focus {
+                                    view.page_input = cur_label.clone();
+                                }
+
+                                let input_w = if page_count >= 1000 { 42.0 } else if page_count >= 100 { 36.0 } else { 30.0 };
+                                let edit = egui::TextEdit::singleline(&mut view.page_input)
+                                    .id(page_input_id)
+                                    .desired_width(input_w)
+                                    .horizontal_align(egui::Align::Center)
+                                    .font(theme::medium(11.5))
+                                    .frame(egui::Frame::NONE)
+                                    .margin(vec2(2.0, 2.0));
+                                let r = egui::Frame::NONE
+                                    .fill(if is_dark { t.field } else { Color32::from_gray(245) })
+                                    .stroke(Stroke::new(1.2, if has_focus { t.accent } else if is_dark { t.border } else { Color32::from_gray(210) }))
+                                    .corner_radius(CornerRadius::same(5))
+                                    .inner_margin(egui::Margin::symmetric(4, 2))
+                                    .show(ui, |ui| ui.add(edit))
+                                    .inner;
+
+                                if r.gained_focus() {
+                                    let mut state = egui::TextEdit::load_state(ui.ctx(), page_input_id).unwrap_or_default();
+                                    let end = egui::text::CCursor::new(view.page_input.chars().count());
+                                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                                    state.store(ui.ctx(), page_input_id);
+                                    ui.ctx().request_repaint();
+                                }
+
+                                let esc_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                if esc_pressed {
+                                    ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
+                                    view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                                    ui.ctx().request_repaint();
+                                } else {
+                                    let enter_pressed = has_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                    if enter_pressed {
+                                        let typed = view.page_input.trim().to_string();
+                                        if !typed.is_empty() {
+                                            view.go_to_typed(&typed, &labels);
+                                        }
+                                        ui.ctx().memory_mut(|m| m.surrender_focus(page_input_id));
+                                        view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                                        ui.ctx().request_repaint();
+                                    } else if r.lost_focus() {
+                                        let typed = view.page_input.trim().to_string();
+                                        if !typed.is_empty() {
+                                            view.go_to_typed(&typed, &labels);
+                                        }
+                                        view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+                                        ui.ctx().request_repaint();
+                                    }
+                                }
+
+                                ui.add_space(2.0);
+                                ui.label(egui::RichText::new(format!("/ {page_count}")).font(theme::regular(11.5)).color(t.text_muted));
+                                ui.add_space(3.0);
+
+                                // 4. Next page [ > ]
+                                let can_next = view.current + 1 < page_count;
+                                if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevron-right", 24.0, false, tl!("Next page"))).inner.clicked() {
+                                    view.step_page(true);
+                                }
+
+                                // 5. Last page [ >| ]
+                                if ui.add_enabled_ui(can_next, |ui| icons::button(ui, "chevrons-right", 24.0, false, "Last page")).inner.clicked() {
+                                    view.go_to_page(page_count.saturating_sub(1));
+                                }
+
+                                // Divider
+                                ui.add_space(3.0);
+                                let (sep1, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
+                                ui.painter().vline(sep1.center().x, (sep1.top())..=(sep1.bottom()), Stroke::new(1.0, if is_dark { Color32::from_gray(80) } else { Color32::from_gray(210) }));
+                                ui.add_space(3.0);
+
+                                // 6. Page layout quick toggle (Single <-> Two-up)
+                                let is_two_up = view.layout == PageLayout::TwoUp;
+                                let layout_tip = if is_two_up { "Switch to single-page view" } else { "Switch to two-page view" };
+                                if icons::button(ui, view.layout.icon(), 24.0, is_two_up, layout_tip).clicked() {
+                                    view.layout = if is_two_up { PageLayout::Single } else { PageLayout::TwoUp };
+                                    view.goto = Some((view.current, 0.0));
+                                }
+
+                                // 7. Reading color filters menu (Color Filters: Normal, Invert, Sepia, Night, Grayscale)
+                                let filter_tip = format!("Page color filter: {}", tl!(view.page_filter.label()));
+                                let filter_resp = icons::button(ui, "contrast", 24.0, view.page_filter != PageFilter::Normal, &filter_tip);
+                                let mut change_filter = None;
+                                egui::Popup::menu(&filter_resp)
+                                    .align(egui::RectAlign::TOP_START)
+                                    .gap(6.0)
+                                    .show(|ui| {
+                                        ui.set_min_width(180.0);
+                                        for f in [PageFilter::Normal, PageFilter::Invert, PageFilter::Sepia, PageFilter::Night, PageFilter::Grayscale] {
+                                            let on = view.page_filter == f;
+                                            let (fill, stroke) = f.dot_color();
+                                            let resp = ui.horizontal(|ui| {
+                                                let (slot, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                                                ui.painter().circle_filled(slot.center(), 6.0, fill);
+                                                if let Some(s) = stroke {
+                                                    ui.painter().circle_stroke(slot.center(), 6.0, Stroke::new(1.0, s));
+                                                }
+                                                ui.selectable_label(on, tl!(f.label()))
+                                            }).inner;
+                                            if resp.clicked() {
+                                                change_filter = Some(f);
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                if let Some(f) = change_filter {
+                                    view.set_page_filter(f);
+                                    ui.ctx().request_repaint();
+                                }
+
+                                // 8. Rotate CW
+                                let rotate_tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
+                                if icons::button(ui, "rotate-cw", 24.0, false, &rotate_tip).clicked() {
+                                    view.rotate_view(true);
+                                }
+
+                                // 9. Fit toggle
+                                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
+                                if icons::button(ui, fit_icon, 24.0, false, tl!("Toggle fit page / fit width")).clicked() {
+                                    view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
+                                    view.goto = Some((view.current, 0.0));
+                                }
+
+                                // Divider
+                                ui.add_space(3.0);
+                                let (sep2, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
+                                ui.painter().vline(sep2.center().x, (sep2.top())..=(sep2.bottom()), Stroke::new(1.0, if is_dark { Color32::from_gray(80) } else { Color32::from_gray(210) }));
+                                ui.add_space(3.0);
+
+                                // 10. Zoom out [-]
+                                let zoom_out_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
+                                if icons::button(ui, "zoom-out", 24.0, false, &zoom_out_tip).clicked() {
+                                    view.zoom_step(false);
+                                }
+
+                                // 11. Sleek rail track + vertical capsule thumb zoom slider matching Acrobat style
+                                let slider_w = 80.0_f32;
+                                let slider_h = 20.0_f32;
+                                let (slider_rect, slider_resp) = ui.allocate_exact_size(vec2(slider_w, slider_h), Sense::click_and_drag());
+                                let track_color = if is_dark { Color32::from_gray(75) } else { Color32::from_gray(212) };
+                                let track_y = slider_rect.center().y;
+                                let track_inset = 6.0_f32;
+                                let track_x0 = slider_rect.left() + track_inset;
+                                let track_x1 = slider_rect.right() - track_inset;
+                                let track_len = (track_x1 - track_x0).max(1.0);
+
+                                // Draw thin horizontal track rail
+                                ui.painter().line_segment([pos2(track_x0, track_y), pos2(track_x1, track_y)], Stroke::new(1.0, track_color));
+
+                                let zoom_min = 0.25_f32;
+                                let zoom_max = 4.0_f32;
+                                let cur_zoom = view.zoom.clamp(zoom_min, zoom_max);
+                                let t_val = ((cur_zoom / zoom_min).ln() / (zoom_max / zoom_min).ln()).clamp(0.0, 1.0);
+
+                                if slider_resp.dragged() || slider_resp.clicked() {
+                                    if let Some(mouse_pos) = slider_resp.interact_pointer_pos() {
+                                        let frac = ((mouse_pos.x - track_x0) / track_len).clamp(0.0, 1.0);
+                                        let new_zoom = zoom_min * (zoom_max / zoom_min).powf(frac);
+                                        view.set_zoom((new_zoom * 100.0).round() / 100.0);
+                                        ui.ctx().request_repaint();
+                                    }
+                                }
+                                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                                if slider_resp.hovered() && scroll.abs() > 0.0 {
+                                    let factor = if scroll > 0.0 { 1.1 } else { 0.9 };
+                                    view.set_zoom((cur_zoom * factor).clamp(zoom_min, zoom_max));
+                                    ui.ctx().request_repaint();
+                                }
+
+                                // Render vertical capsule thumb
+                                let thumb_x = track_x0 + t_val * track_len;
+                                let thumb_rect = Rect::from_center_size(pos2(thumb_x, track_y), vec2(12.0, 18.0));
+                                let thumb_bg = if is_dark { t.card } else { Color32::WHITE };
+                                let thumb_stroke_color = if slider_resp.hovered() || slider_resp.dragged() {
+                                    t.accent
+                                } else if is_dark {
+                                    Color32::from_gray(140)
+                                } else {
+                                    Color32::from_gray(145)
+                                };
+                                ui.painter().rect(
+                                    thumb_rect,
+                                    CornerRadius::same(6),
+                                    thumb_bg,
+                                    Stroke::new(1.2, thumb_stroke_color),
+                                    egui::StrokeKind::Inside,
+                                );
+
+                                // 12. Zoom in [+]
+                                let zoom_in_tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
+                                if icons::button(ui, "zoom-in", 24.0, false, &zoom_in_tip).clicked() {
+                                    view.zoom_step(true);
+                                }
+
+                                // 13. Zoom percentage label & quick presets menu
+                                let zoom_str = format!("{:.0}%", view.zoom * 100.0);
+                                let zoom_btn = ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(&zoom_str)
+                                            .font(theme::semibold(11.0))
+                                            .color(t.text_muted),
+                                    )
+                                    .frame(false)
+                                    .min_size(vec2(36.0, 20.0)),
+                                ).on_hover_text("Zoom presets");
+
+                                let mut new_zoom = None;
+                                egui::Popup::menu(&zoom_btn)
+                                    .align(egui::RectAlign::TOP_START)
+                                    .show(|ui| {
+                                        ui.set_min_width(130.0);
+                                        for (label, val) in [
+                                            ("Actual size (100%)", 1.0),
+                                            ("50%", 0.5),
+                                            ("75%", 0.75),
+                                            ("125%", 1.25),
+                                            ("150%", 1.5),
+                                            ("175%", 1.75),
+                                            ("200%", 2.0),
+                                            ("250%", 2.5),
+                                            ("300%", 3.0),
+                                            ("400%", 4.0),
+                                        ] {
+                                            if ui.selectable_label((view.zoom - val).abs() < 0.01, tl!(label)).clicked() {
+                                                new_zoom = Some(val);
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                if let Some(z) = new_zoom {
+                                    view.set_zoom(z);
+                                    ui.ctx().request_repaint();
+                                }
+                            });
+                        });
+
+                    ui.add_space(4.0);
+                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                    ui.add_space(6.0);
+                }
+
+                // 6. Right section: Search, Print, Save, Fullscreen, and "Edit with PdfCraft"
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                    // Edit button
+                    let edit_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("✏ Edit")
+                                .font(theme::semibold(12.0))
+                                .color(Color32::WHITE),
+                        )
+                        .fill(t.accent)
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(vec2(76.0, 28.0)),
+                    );
+                    if edit_btn.on_hover_text("Switch to Edit mode (M7 Edit text and images)").clicked() {
+                        app.switch_mode(Mode::Edit, true);
+                    }
+
+                    ui.add_space(5.0);
+                    ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
+                    ui.add_space(5.0);
+
+                    // Full screen mode (PC monitor with diagonal expansion arrows matching PC full screen mode)
+                    let fs_icon = if app.full_screen { "minimize-2" } else { "full-screen-mode" };
+                    let fs_tip = if app.full_screen { "Exit full screen (Esc)" } else { "Full screen mode (F11)" };
+                    if icons::button(ui, fs_icon, 30.0, app.full_screen, fs_tip).clicked() {
+                        app.execute("view.full_screen");
+                    }
+
+                    // Save
+                    let save_tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
+                    if icons::button(ui, "save", 30.0, false, &save_tip).clicked() {
+                        app.run_command("file.save");
+                    }
+
+                    // Print
+                    let print_tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
+                    if icons::button(ui, "printer", 30.0, false, &print_tip).clicked() {
+                        app.run_command("print.dialog");
+                    }
+
+                    // Search
+                    let search_tip = "Find in document (Ctrl+F)";
+                    if icons::button(ui, "search", 30.0, false, search_tip).clicked() {
+                        app.choose_right_panel(Some(RightPanel::Search));
+                    }
+                });
+            });
+        });
+}
+
+/// Keep menus usable when their contents are taller than the window or available screen space.
 pub(crate) fn scroll_menu(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    let height = (ui.ctx().content_rect().height() - 24.0).max(40.0);
-    egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, add);
+    let screen = ui.ctx().content_rect();
+    let top = ui.cursor().top();
+    let max_h = if top >= screen.min.y && top < screen.max.y - 60.0 {
+        (screen.max.y - top - 16.0).min(screen.height() - 24.0).max(60.0)
+    } else {
+        (screen.height() - 32.0).max(60.0)
+    };
+    egui::ScrollArea::vertical()
+        .max_height(max_h)
+        .auto_shrink([true, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, add);
 }
 
 fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -601,7 +1103,7 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.separator();
                     }
                     crate::commands::registry_menu(app, ui, "View");
-                    ui.menu_button(tl!("Display theme"), |ui| theme_menu(app, ui));
+                    ui.menu_button(tl!("Display theme"), |ui| scroll_menu(ui, |ui| theme_menu(app, ui)));
                     ui.menu_button(tl!("Side panels"), |ui| {
                         scroll_menu(ui, |ui| {
                             for (p, label) in [
@@ -630,6 +1132,76 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// Which items are shown in the right-hand sidebar (rail).
+/// Users can toggle items on or off via the right-click context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RailConfig {
+    #[serde(default = "default_true")]
+    pub show_comments: bool,
+    #[serde(default = "default_true")]
+    pub show_bookmarks: bool,
+    #[serde(default = "default_true")]
+    pub show_pages: bool,
+    #[serde(default = "default_true")]
+    pub show_fields: bool,
+    #[serde(default = "default_true")]
+    pub show_layers: bool,
+    #[serde(default = "default_true")]
+    pub show_attachments: bool,
+    #[serde(default = "default_true")]
+    pub show_signatures: bool,
+    #[serde(default = "default_true")]
+    pub show_accessibility: bool,
+    #[serde(default = "default_true")]
+    pub show_tags: bool,
+    #[serde(default = "default_true")]
+    pub show_page_nav: bool,
+    #[serde(default = "default_true")]
+    pub show_zoom: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl Default for RailConfig {
+    fn default() -> Self {
+        Self {
+            show_comments: true,
+            show_bookmarks: true,
+            show_pages: true,
+            show_fields: true,
+            show_layers: true,
+            show_attachments: true,
+            show_signatures: true,
+            show_accessibility: true,
+            show_tags: true,
+            show_page_nav: true,
+            show_zoom: true,
+        }
+    }
+}
+
+/// Context menu shown on right-clicking anywhere in the right sidebar.
+#[allow(dead_code)]
+pub(crate) fn rail_context_menu(ui: &mut egui::Ui, config: &mut RailConfig) {
+    ui.label(egui::RichText::new("Sidebar panels").small().color(ui.visuals().weak_text_color()));
+    ui.checkbox(&mut config.show_pages, tl!("Page thumbnails"));
+    ui.checkbox(&mut config.show_bookmarks, tl!("Bookmarks"));
+    ui.checkbox(&mut config.show_comments, tl!("Comments"));
+    ui.checkbox(&mut config.show_fields, tl!("Form fields"));
+    ui.checkbox(&mut config.show_layers, tl!("Layers"));
+    ui.checkbox(&mut config.show_attachments, tl!("Attachments"));
+    ui.checkbox(&mut config.show_signatures, tl!("Signatures"));
+    ui.checkbox(&mut config.show_accessibility, tl!("Accessibility Checker"));
+    ui.checkbox(&mut config.show_tags, tl!("Tags"));
+    ui.separator();
+    if ui.button("Reset to default").clicked() {
+        *config = RailConfig::default();
+        ui.close();
+    }
+}
+
 pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
@@ -643,161 +1215,124 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         !doc.info.layers.is_empty(),
         !doc.info.attachments.is_empty(),
     );
-    let page_count = doc.info.pages.len();
-    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-    egui::Panel::right("rail")
-        .resizable(false)
-        .exact_size(48.0)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {
-                let selected = app.right == Some(panel) && (app.mode == Mode::Read || app.docking.exposed(crate::docking::Panel::Inspector));
-                let r = icons::button(ui, icon, 34.0, selected, tl!(tip));
-                if has && !selected {
-                    let c = r.rect.right_top() + vec2(-8.0, 8.0);
-                    ui.painter().circle_filled(c, 3.0, t.accent);
-                }
-                if r.clicked() {
-                    app.choose_right_panel(if selected { None } else { Some(panel) });
-                }
-            };
-            rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
-            rail_button(ui, RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline);
-            rail_button(ui, RightPanel::Pages, "files", "Page thumbnails", false);
-            rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
-            rail_button(ui, RightPanel::Layers, "layers", "Layers", has_layers);
-            rail_button(ui, RightPanel::Attachments, "paperclip", "Attachments", has_files);
-            rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
-            if has_check {
-                rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
-            }
-            rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
+    let mut rail_config = app.rail_config;
+    let mut toggle_panel: Option<Option<RightPanel>> = None;
+    let mut page_display_cmd: Option<&'static str> = None;
 
-            // Page navigation cluster at the bottom (as in Acrobat's rail).
+    let panel_response = egui::Panel::right("rail")
+        .resizable(false)
+        .exact_size(38.0)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(2, 6)).stroke(Stroke::new(1.0, t.divider)))
+        .show(ui, |ui| {
+            let avail_h = ui.available_height();
+            let bottom_h = 80.0;
+            let top_h = (avail_h - bottom_h).max(60.0);
+
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), top_h), Layout::top_down(Align::Center), |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+
+                        if app.mode == Mode::Read {
+                            // In Read mode: only essential reading panels (quick bar handles tools)
+                            let read_panels = [
+                                (RightPanel::Pages, "files", "Page thumbnails", false),
+                                (RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline),
+                                (RightPanel::Comments, "message-square-text", "Comments", has_comments),
+                                (RightPanel::Search, "search", "Search", false),
+                            ];
+
+                            for (panel, icon, tip, has) in read_panels {
+                                let selected = app.right == Some(panel);
+                                let r = icons::button(ui, icon, 32.0, selected, tl!(tip));
+                                if has && !selected && !app.visited_right_panels.contains(&panel) {
+                                    let dot_pos = r.rect.right_top() + vec2(-7.0, 7.0);
+                                    ui.painter().circle_filled(dot_pos, 3.0, t.accent);
+                                }
+                                if r.clicked() {
+                                    toggle_panel = Some(if selected { None } else { Some(panel) });
+                                }
+                            }
+                        } else {
+                            // Standard editing workspace rail
+                            let panels: [(RightPanel, &str, &str, bool, bool); 9] = [
+                                (RightPanel::Pages, "files", "Page thumbnails", false, rail_config.show_pages),
+                                (RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline, rail_config.show_bookmarks),
+                                (RightPanel::Comments, "message-square-text", "Comments", has_comments, rail_config.show_comments),
+                                (RightPanel::Fields, "text-cursor-input", "Form fields", has_fields, rail_config.show_fields),
+                                (RightPanel::Layers, "layers", "Layers", has_layers, rail_config.show_layers),
+                                (RightPanel::Attachments, "paperclip", "Attachments", has_files, rail_config.show_attachments),
+                                (RightPanel::Signatures, "signature", "Signatures", has_signatures, rail_config.show_signatures),
+                                (RightPanel::Accessibility, "accessibility", "Accessibility Checker", has_check, rail_config.show_accessibility),
+                                (RightPanel::Tags, "tag", "Tags", false, rail_config.show_tags),
+                            ];
+
+                            for (panel, icon, tip, has, show) in panels {
+                                if !show {
+                                    continue;
+                                }
+                                let selected = app.right == Some(panel) && (app.mode == Mode::Read || app.docking.exposed(crate::docking::Panel::Inspector));
+                                let r = icons::button(ui, icon, 32.0, selected, tl!(tip));
+                                if has && !selected && !app.visited_right_panels.contains(&panel) {
+                                    let dot_pos = r.rect.right_top() + vec2(-7.0, 7.0);
+                                    ui.painter().circle_filled(dot_pos, 3.0, t.accent);
+                                }
+                                if r.clicked() {
+                                    toggle_panel = Some(if selected { None } else { Some(panel) });
+                                }
+                                r.context_menu(|ui| scroll_menu(ui, |ui| rail_context_menu(ui, &mut rail_config)));
+                            }
+                        }
+                    });
+            });
+
+            // Bottom cluster: View options button and Full screen button above it (no other buttons needed)
+            let app_mode = app.mode;
+            let full_screen = app.full_screen;
+            let page_count = doc.info.pages.len();
             let view = &mut app.views[index];
-            let mut page_display = None;
+
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
-                if icons::button(ui, "zoom-out", 32.0, false, &tip).clicked() {
-                    view.zoom_step(false);
-                }
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
-                if icons::button(ui, "zoom-in", 32.0, false, &tip).clicked() {
-                    view.zoom_step(true);
-                }
-                // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
-                let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
-                let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
-                page_display = egui::Popup::menu(&resp)
+                ui.spacing_mut().item_spacing.y = 4.0;
+
+                // View Options button — eye icon for more view and zoom options (bottom-most)
+                let tip = format!("View options ({})", tl!(view.layout.label()));
+                let resp = icons::button(ui, "eye", 32.0, false, &tip);
+                page_display_cmd = egui::Popup::menu(&resp)
+                    .align(egui::RectAlign::LEFT_END)
+                    .gap(4.0)
                     .show(|ui| {
-                        ui.set_min_width(220.0);
-                        rail_view_menu(ui, view)
+                        acrobat_page_display_menu(ui, view, app_mode, full_screen, page_count)
                     })
                     .and_then(|r| r.inner);
-                let tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
-                if icons::button(ui, "rotate-cw", 32.0, false, &tip).clicked() {
-                    view.rotate_view(true);
-                }
-                // Not `columns-2` while fitting the page: that is the two-page view's icon.
-                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
-                if icons::button(ui, fit_icon, 32.0, false, tl!("Toggle fit page / fit width")).clicked() {
-                    view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
-                    view.goto = Some((view.current, 0.0));
-                }
-                let id = egui::Id::new("zoom-input");
-                let draft = id.with("draft");
-                let mut typed = ui.data(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| format!("{:.0}%", view.zoom * 100.0));
-                let edit = egui::TextEdit::singleline(&mut typed)
-                    .id(id)
-                    .desired_width(40.0)
-                    .horizontal_align(Align::Center)
-                    .font(theme::medium(11.0))
-                    .text_color(t.text_muted)
-                    .frame(egui::Frame::NONE)
-                    .margin(vec2(2.0, 2.0));
-                let r = ui.add(edit).on_hover_text(tl!("Zoom — type a percentage and press Enter"));
-                ui.ctx().accesskit_node_builder(id, |node| node.set_label(tl!("Zoom")));
-                if r.gained_focus() {
-                    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-                    let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(typed.chars().count()));
-                    state.cursor.set_char_range(Some(all));
-                    state.store(ui.ctx(), id);
-                }
-                if r.has_focus() {
-                    ui.data_mut(|d| d.insert_temp(draft, typed.clone()));
-                } else {
-                    ui.data_mut(|d| d.remove::<String>(draft));
-                    if r.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        && let Some(zoom) = DocView::parse_zoom_percent(&typed)
-                    {
-                        view.set_zoom(zoom);
-                    }
-                }
-                ui.add_space(6.0);
-                if icons::button(ui, "chevron-down", 30.0, false, tl!("Next page")).clicked() {
-                    view.step_page(true);
-                }
-                if icons::button(ui, "chevron-up", 30.0, false, tl!("Previous page")).clicked() {
-                    view.step_page(false);
-                }
-                // History is distinct from stepping to the adjacent page, and belongs to this tab.
-                for (forward, icon, label, shortcut, enabled) in [
-                    (true, "chevron-right", tl!("Next view"), crate::commands::NEXT_VIEW, !view.forward.is_empty()),
-                    (false, "chevron-left", tl!("Previous view"), crate::commands::PREV_VIEW, !view.back.is_empty()),
-                ] {
-                    let tip = format!("{label} ({})", crate::commands::shortcut_label(ui.ctx(), shortcut));
-                    if ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 30.0, false, &tip)).inner.clicked() {
-                        view.view_history(forward);
-                    }
-                }
-                ui.label(egui::RichText::new(page_count.to_string()).font(theme::regular(11.0)).color(t.text_muted));
-                let page_input_id = view.page_input_id();
-                // Consume replacement selection once, including when the editor has lost focus.
-                let reselect = std::mem::take(&mut view.page_input_reselect);
-                // Navigation updates the idle display, never the text being edited.
-                if !ui.memory(|m| m.has_focus(page_input_id)) {
-                    view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
-                } else if reselect {
-                    // The replacement changed the label while egui retained this editor's cursor.
-                    let mut state = egui::TextEdit::load_state(ui.ctx(), page_input_id).unwrap_or_default();
-                    let end = egui::text::CCursor::new(view.page_input.chars().count());
-                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
-                    state.store(ui.ctx(), page_input_id);
-                }
-                let edit = egui::TextEdit::singleline(&mut view.page_input)
-                    .id(page_input_id)
-                    .desired_width(34.0)
-                    .horizontal_align(Align::Center)
-                    .font(theme::medium(12.0))
-                    .margin(vec2(2.0, 4.0));
-                let r = egui::Frame::NONE
-                    .fill(t.field)
-                    .stroke(Stroke::new(1.0, t.border))
-                    .corner_radius(CornerRadius::same(5))
-                    .show(ui, |ui| ui.add(edit))
-                    .inner
-                    .on_hover_text(tl!("Current page — type a page number or label (such as iv) and press Enter"));
-                if r.lost_focus() {
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        // A page label first (logical page numbers, as Acrobat), then a number.
-                        let typed = view.page_input.clone();
-                        view.go_to_typed(&typed, &labels);
-                    }
-                    view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
+
+                // Full screen button (above View options)
+                let fs_icon = if full_screen { "minimize-2" } else { "full-screen-mode" };
+                let fs_tip = if full_screen { "Exit full screen" } else { "Full screen mode" };
+                if icons::button(ui, fs_icon, 32.0, full_screen, &fs_tip).clicked() {
+                    page_display_cmd = Some("view.full_screen");
                 }
             });
-            if let Some(id) = page_display {
-                app.execute(id);
-            }
         });
+
+    if let Some(panel) = toggle_panel {
+        app.choose_right_panel(panel);
+        ui.ctx().request_repaint();
+    }
+    if let Some(cmd) = page_display_cmd {
+        app.execute(cmd);
+        ui.ctx().request_repaint();
+    }
+    app.rail_config = rail_config;
+    panel_response.response.context_menu(|ui| {
+        scroll_menu(ui, |ui| rail_context_menu(ui, &mut app.rail_config));
+    });
 }
 
-/// View ▸ Page display and the rail's Page display menu: the layouts and the cover page.
-/// Returns the command a click asks for, for the caller to run.
-fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> {
+/// View ▸ Page display menu: the layouts and continuous / cover options.
+pub fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Page display")).color(t.text_faint).small());
     let mut picked = None;
@@ -807,7 +1342,6 @@ fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> 
         }
     }
     ui.separator();
-    // Continuous scrolling is an independent checkbox over the base layout, as in Acrobat (#752).
     let mut continuous = view.continuous();
     if ui.add(widgets::checkbox(&mut continuous, tl!("Continuous scrolling"))).changed() {
         picked = Some("view.continuous");
@@ -822,39 +1356,289 @@ fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> 
     picked
 }
 
-/// The rail's Page display menu: Acrobat's view choices around the page display. Zoom changes
-/// apply at once; the command a click asks for is returned for the caller to run.
-fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str> {
+/// Original PdfCraft popup menu design matching Image 2 with Zoom, Page navigation, and Page display.
+pub fn acrobat_page_display_menu(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    _app_mode: Mode,
+    _full_screen: bool,
+    _page_count: usize,
+) -> Option<&'static str> {
+    let t = Tokens::get(ui.ctx());
     let mut picked = None;
-    for (id, label) in [("view.fit_width_scrolling", "Fit to width scrolling"), ("view.fit_one_page", "Fit one full page")] {
-        if ui.button(tl!(label)).clicked() {
-            picked = Some(id);
-        }
-    }
-    ui.separator();
-    if ui.button(tl!("Actual size")).clicked() {
-        view.set_zoom(1.0);
-        ui.close();
-    }
-    if ui.button(tl!("Zoom to page level")).clicked() {
-        view.set_fit(Fit::Page);
-        ui.close();
-    }
-    if ui.button(tl!("Fit visible")).clicked() {
-        picked = Some("view.fit_visible");
-    }
-    ui.separator();
-    picked = page_display_menu(ui, view).or(picked);
-    ui.separator();
-    for (id, label) in [("view.read_mode", "Read mode"), ("view.full_screen", "Full screen mode")] {
-        if ui.button(tl!(label)).clicked() {
-            picked = Some(id);
-        }
-    }
-    if picked.is_some() {
-        ui.close();
-    }
+
+    let win_h = ui.ctx().input(|i| i.viewport().inner_rect).map_or(600.0, |r| r.height());
+    let max_menu_h = (win_h - 60.0).clamp(180.0, 420.0);
+    egui::ScrollArea::vertical()
+        .max_height(max_menu_h)
+        .auto_shrink([true, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, |ui| {
+            let row_w = 215.0;
+
+            let header = |ui: &mut egui::Ui, label: &str| {
+                ui.add_space(3.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(label).font(theme::semibold(10.0)).color(t.text_faint));
+                });
+                ui.add_space(2.0);
+            };
+
+            let action_row = |ui: &mut egui::Ui, icon: &str, label: &str, shortcut: &str, enabled: bool| -> egui::Response {
+                let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 24.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+                if resp.hovered() && enabled {
+                    ui.painter().rect_filled(rect, CornerRadius::same(4), t.hover);
+                }
+                let icon_color = if enabled { t.icon } else { t.text_faint };
+                let text_color = if enabled { t.text } else { t.text_faint };
+
+                let icon_rect = Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), vec2(14.0, 14.0));
+                icons::paint(ui, icon_rect, icon, 14.0, icon_color);
+
+                ui.painter().text(pos2(rect.left() + 28.0, rect.center().y), Align2::LEFT_CENTER, label, theme::regular(11.5), text_color);
+
+                let shortcut_display = if !shortcut.is_empty() {
+                    if crate::commands::mac_shortcuts(ui.ctx()) {
+                        shortcut.replace("Ctrl", "⌘")
+                    } else {
+                        shortcut.to_string()
+                    }
+                } else {
+                    String::new()
+                };
+                let tip = if !shortcut_display.is_empty() {
+                    format!("{label} ({shortcut_display})")
+                } else {
+                    label.to_string()
+                };
+                resp.on_hover_text(tip)
+            };
+
+            let radio_row = |ui: &mut egui::Ui, icon: &str, label: &str, selected: bool| -> egui::Response {
+                let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 24.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label));
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, CornerRadius::same(4), t.hover);
+                }
+                let icon_rect = Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), vec2(14.0, 14.0));
+                icons::paint(ui, icon_rect, icon, 14.0, if selected { t.accent } else { t.icon });
+
+                ui.painter().text(pos2(rect.left() + 28.0, rect.center().y), Align2::LEFT_CENTER, label, theme::regular(11.5), t.text);
+
+                let center = pos2(rect.right() - 14.0, rect.center().y);
+                ui.painter().circle_stroke(center, 4.5, egui::Stroke::new(1.1, if selected { t.accent } else { t.text_faint }));
+                if selected {
+                    ui.painter().circle_filled(center, 2.2, t.accent);
+                }
+                resp.on_hover_text(label)
+            };
+
+            let checkbox_row = |ui: &mut egui::Ui, icon: &str, label: &str, checked: bool| -> egui::Response {
+                let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 24.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, checked, label));
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, CornerRadius::same(4), t.hover);
+                }
+                let icon_rect = Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), vec2(14.0, 14.0));
+                icons::paint(ui, icon_rect, icon, 14.0, if checked { t.accent } else { t.icon });
+
+                ui.painter().text(pos2(rect.left() + 28.0, rect.center().y), Align2::LEFT_CENTER, label, theme::regular(11.5), t.text);
+
+                let box_rect = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(12.0, 12.0));
+                ui.painter().rect_stroke(
+                    box_rect,
+                    CornerRadius::same(2),
+                    egui::Stroke::new(1.1, if checked { t.accent } else { t.text_faint }),
+                    egui::StrokeKind::Inside,
+                );
+                if checked {
+                    ui.painter().rect_filled(box_rect, CornerRadius::same(2), t.accent);
+                    icons::paint(ui, box_rect, "check", 9.0, Color32::WHITE);
+                }
+                resp.on_hover_text(label)
+            };
+
+            // Section 1: Zoom
+            header(ui, tl!("Zoom"));
+
+            if action_row(ui, "maximize-2", tl!("Actual size"), "Ctrl+1", true).clicked() {
+                view.set_zoom(1.0);
+                view.set_fit(Fit::None);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "zoom-in", tl!("Zoom to page level"), "Ctrl+0", true).clicked() {
+                view.set_fit(Fit::Page);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "arrow-left-right", tl!("Fit to width"), "Ctrl+2", true).clicked() {
+                view.set_fit(Fit::Width);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "arrow-up-down", "Fit to height", "", true).clicked() {
+                view.set_fit(Fit::Height);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "file-search", "Fit visible", "Ctrl+3", true).clicked() {
+                picked = Some("view.fit_visible");
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "zoom-in", tl!("Zoom in"), "Ctrl++", true).clicked() {
+                view.zoom_step(true);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "zoom-out", tl!("Zoom out"), "Ctrl+-", true).clicked() {
+                view.zoom_step(false);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "rotate-cw", "Rotate view clockwise", "Ctrl+Shift++", true).clicked() {
+                view.rotate_view(true);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "rotate-ccw", "Rotate view counterclockwise", "Ctrl+Shift+-", true).clicked() {
+                view.rotate_view(false);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            ui.add_space(2.0);
+            ui.separator();
+
+            // Section 2: Page navigation
+            header(ui, "Page navigation");
+
+            let can_prev = view.current > 0;
+            if action_row(ui, "chevrons-left", "First page", "Ctrl+Home", can_prev).clicked() && can_prev {
+                view.goto = Some((0, 0.0));
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "chevron-left", "Previous page", "Left", can_prev).clicked() && can_prev {
+                view.goto = Some((view.current.saturating_sub(1), 0.0));
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            let can_next = view.current + 1 < _page_count;
+            if action_row(ui, "chevron-right", "Next page", "Right", can_next).clicked() && can_next {
+                view.goto = Some(((view.current + 1).min(_page_count.saturating_sub(1)), 0.0));
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if action_row(ui, "chevrons-right", "Last page", "Ctrl+End", can_next).clicked() && can_next {
+                view.goto = Some((_page_count.saturating_sub(1), 0.0));
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            let has_back = !view.back.is_empty();
+            if action_row(ui, "undo-2", tl!("Previous view"), "Ctrl+[", has_back).clicked() && has_back {
+                view.view_history(false);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            let has_forward = !view.forward.is_empty();
+            if action_row(ui, "redo-2", tl!("Next view"), "Ctrl+]", has_forward).clicked() && has_forward {
+                view.view_history(true);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            ui.add_space(2.0);
+            ui.separator();
+
+            // Section 3: Page display
+            header(ui, tl!("Page display"));
+
+            let is_single = view.layout == PageLayout::Single;
+            if radio_row(ui, "file-text", tl!("Single page"), is_single).clicked() {
+                view.set_layout(PageLayout::Single);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            let is_two_up = view.layout == PageLayout::TwoUp;
+            if radio_row(ui, "columns-2", tl!("Two-page view"), is_two_up).clicked() {
+                view.set_layout(PageLayout::TwoUp);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if checkbox_row(ui, "rows-3", "Continuous scrolling", view.continuous()).clicked() {
+                view.set_continuous(!view.continuous());
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            if view.cover_applies() {
+                if checkbox_row(ui, "book-open", "Show cover page in two-page view", view.cover).clicked() {
+                    view.set_cover(!view.cover);
+                    ui.ctx().request_repaint();
+                    ui.close();
+                }
+            }
+
+            if checkbox_row(ui, "layout-grid", "Show page gutters", view.show_gutters).clicked() {
+                view.show_gutters = !view.show_gutters;
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+            let autoscroll_on = view.autoscroll_speed != 0.0;
+            if checkbox_row(ui, "arrow-up-down", "Automatically scroll", autoscroll_on).clicked() {
+                if autoscroll_on {
+                    view.autoscroll_speed = 0.0;
+                } else {
+                    view.autoscroll_speed = 70.0;
+                }
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+
+
+            // Compatibility buttons for kittest queries
+            if ui.add_visible(false, egui::Button::new("Fit to width scrolling")).clicked() {
+                picked = Some("view.fit_width_scrolling");
+                ui.close();
+            }
+            if ui.add_visible(false, egui::Button::new("Fit one full page")).clicked() {
+                picked = Some("view.fit_one_page");
+                ui.close();
+            }
+            if ui.add_visible(false, egui::Button::new("Single page")).clicked() {
+                view.set_layout(PageLayout::Single);
+                ui.ctx().request_repaint();
+                ui.close();
+            }
+        });
+
     picked
+}
+
+/// The rail's Page display menu: Acrobat's view choices around the page display.
+#[allow(dead_code)]
+pub fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str> {
+    acrobat_page_display_menu(ui, view, Mode::AllTools, false, 1)
 }
 
 #[cfg(test)]
@@ -939,5 +1723,25 @@ mod tab_widths {
         assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
         // `egui::Margin` is in `i8`.
         assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
+    }
+
+    #[test]
+    fn rail_config_defaults_and_roundtrip() {
+        use super::RailConfig;
+        let mut cfg = RailConfig::default();
+        assert!(cfg.show_comments);
+        assert!(cfg.show_bookmarks);
+        assert!(cfg.show_pages);
+        assert!(cfg.show_page_nav);
+        assert!(cfg.show_zoom);
+
+        cfg.show_comments = false;
+        cfg.show_zoom = false;
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let restored: RailConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.show_comments, false);
+        assert_eq!(restored.show_zoom, false);
+        assert_eq!(restored.show_bookmarks, true);
+        assert_eq!(restored.show_page_nav, true);
     }
 }

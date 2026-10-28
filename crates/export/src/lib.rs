@@ -8,6 +8,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::collections::HashMap;
+
 mod pptx;
 mod zip;
 
@@ -49,6 +51,9 @@ pub struct Page {
     pub height: f64,
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
+    /// The colour the whole page is painted before its content (a page background), as sRGB
+    /// components in 0..=1; `None` for a page with no background of its own.
+    pub background: Option<[f64; 3]>,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -82,14 +87,33 @@ enum Item<'a> {
     PageBreak,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Entries read to find a font size's or a colour's slot, for the tests that keep it constant.
+    static LOOKUP_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` entries read by a lookup (tests only).
+#[inline]
+fn count_lookup_steps(_n: usize) {
+    #[cfg(test)]
+    LOOKUP_STEPS.with(|c| c.set(c.get().saturating_add(_n)));
+}
+
 /// The body text size: the size most of the document's characters are set in.
 fn body_size(pages: &[Page]) -> f64 {
+    // Sizes in first-seen order (which breaks ties), and where each one is in it.
     let mut by: Vec<(i64, usize)> = Vec::new();
+    let mut slot: HashMap<i64, usize> = HashMap::new();
     for b in pages.iter().flat_map(|p| &p.blocks) {
         let k = (b.size * 2.0).round() as i64;
-        match by.iter_mut().find(|e| e.0 == k) {
-            Some(e) => e.1 += b.text.len(),
-            None => by.push((k, b.text.len())),
+        count_lookup_steps(1);
+        let i = *slot.entry(k).or_insert_with(|| {
+            by.push((k, 0));
+            by.len() - 1
+        });
+        if let Some(e) = by.get_mut(i) {
+            e.1 = e.1.saturating_add(b.text.len());
         }
     }
     by.into_iter().max_by_key(|e| e.1).map_or(11.0, |e| e.0 as f64 / 2.0)
@@ -662,6 +686,14 @@ fn section(page: &Page) -> String {
     )
 }
 
+/// The page colour of a Word document: Word has one background for the whole document, so it
+/// is written only when every page has the same, non-white background (#2992).
+fn word_background(pages: &[Page]) -> Option<String> {
+    let first = rgb8(pages.first()?.background?);
+    let same = pages.iter().all(|p| p.background.map(rgb8) == Some(first));
+    (same && first != [255, 255, 255]).then(|| format!("{:02X}{:02X}{:02X}", first[0], first[1], first[2]))
+}
+
 /// A Word document (.docx, Office Open XML). Ordinary pages flow as paragraphs and tables;
 /// pages with rotated text, or text that overlaps artwork, use floating shapes to retain their layout.
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
@@ -728,10 +760,13 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
         }
         after_table = false;
     }
+    // Word shows a document background only when its settings say so (`settings.xml` below).
+    let page_colour = word_background(pages);
+    let background = page_colour.as_deref().map(|c| format!("<w:background w:color=\"{c}\"/>")).unwrap_or_default();
     let doc = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
 <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
-xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\"><w:body>{body}\
+xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\">{background}<w:body>{body}\
 </w:body></w:document>"
     );
     let mut types = String::from(
@@ -742,6 +777,11 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
 <Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\
 <Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>",
     );
+    if page_colour.is_some() {
+        types.push_str(
+            "<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>",
+        );
+    }
     types.push_str("</Types>");
     let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
 <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
@@ -755,6 +795,9 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
             "<Relationship Id=\"rIdImg{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{name}\"/>",
             i + 1
         ));
+    }
+    if page_colour.is_some() {
+        doc_rels.push_str("<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>");
     }
     doc_rels.push_str("</Relationships>");
     let styles = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
@@ -773,6 +816,9 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
     z.add("word/document.xml", doc.as_bytes(), true);
     z.add("word/styles.xml", styles.as_bytes(), true);
     z.add("word/_rels/document.xml.rels", doc_rels.as_bytes(), true);
+    if page_colour.is_some() {
+        z.add("word/settings.xml", b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:displayBackgroundShape/></w:settings>", true);
+    }
     for (name, im) in &media {
         z.add(&format!("word/media/{name}"), &im.bytes, false);
     }
@@ -806,9 +852,12 @@ pub fn rtf(pages: &[Page]) -> String {
     let items = items(pages);
     // The colour table: entry 0 is the default (auto) colour, then each non-black colour once.
     let mut colors: Vec<[u8; 3]> = Vec::new();
+    let mut slot: HashMap<[u8; 3], usize> = HashMap::new();
     let mut note = |c: [f64; 3]| {
         let c = rgb8(c);
-        if c != [0, 0, 0] && !colors.contains(&c) {
+        count_lookup_steps(1);
+        if c != [0, 0, 0] && !slot.contains_key(&c) {
+            slot.insert(c, colors.len());
             colors.push(c);
         }
     };
@@ -822,7 +871,8 @@ pub fn rtf(pages: &[Page]) -> String {
     // `\cfN` for a colour (nothing for black, which keeps the default).
     let cf = |c: [f64; 3]| {
         let c = rgb8(c);
-        colors.iter().position(|e| *e == c).map_or(String::new(), |i| format!("\\cf{}", i + 1))
+        count_lookup_steps(1);
+        slot.get(&c).map_or(String::new(), |i| format!("\\cf{}", i + 1))
     };
     let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}}\n");
     if !colors.is_empty() {
@@ -886,6 +936,46 @@ pub fn rtf(pages: &[Page]) -> String {
 mod tests {
     use super::*;
 
+    /// A page of `n` one-word blocks, each in its own size and colour.
+    fn varied_page(n: usize) -> Page {
+        let blocks = (0..n)
+            .map(|i| Block {
+                text: "word".into(),
+                rect: [72.0, i as f64, 100.0, i as f64 + 1.0],
+                size: 4.0 + i as f64 * 0.5,
+                bold: false,
+                italic: false,
+                color: [(i % 256) as f64 / 255.0, (i / 256 % 256) as f64 / 255.0, 0.5],
+                rotation: 0.0,
+            })
+            .collect();
+        Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None }
+    }
+
+    fn lookup_steps(f: impl FnOnce()) -> usize {
+        LOOKUP_STEPS.with(|c| c.set(0));
+        f();
+        LOOKUP_STEPS.with(|c| c.get())
+    }
+
+    #[test]
+    fn many_distinct_sizes_are_counted_in_constant_steps_each() {
+        let pages = [varied_page(3000)];
+        let steps = lookup_steps(|| {
+            body_size(&pages);
+        });
+        assert!(steps <= 2 * 3000, "{steps} steps");
+    }
+
+    #[test]
+    fn many_distinct_colours_take_constant_steps_each() {
+        let pages = [varied_page(3000)];
+        let mut out = String::new();
+        let steps = lookup_steps(|| out = rtf(&pages));
+        assert!(steps <= 4 * 3000, "{steps} steps");
+        assert!(out.contains("\\cf3000 ") || out.contains("\\cf3000\\"), "the last colour has the last slot");
+    }
+
     fn page() -> Page {
         let b = |t: &str, y: f64, size: f64, bold: bool| Block {
             text: t.into(),
@@ -912,6 +1002,7 @@ mod tests {
                 size: [200.0, 150.0],
                 rotation: 0.0,
             }],
+            background: None,
         }
     }
 
@@ -1005,6 +1096,30 @@ mod tests {
         assert!(xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"));
         assert_eq!(xml.matches("id=\"Text1\"").count(), 1);
         assert_eq!(xml.matches(">Meter</w:t>").count(), 2);
+    }
+
+    /// #2992: pages that share a background colour get it as the Word document's page colour
+    /// (with the setting that makes Word show it); differing or white backgrounds don't.
+    #[test]
+    fn docx_keeps_a_shared_page_background() {
+        let teal = Page { background: Some([0.0, 0.5, 0.5]), ..page() };
+        let zip = docx(&[teal.clone(), teal.clone()], "Teal");
+        let xml = part(&zip, "word/document.xml");
+        assert!(xml.contains("<w:background w:color=\"008080\"/><w:body>"), "{xml}");
+        assert!(part(&zip, "word/settings.xml").contains("<w:displayBackgroundShape/>"));
+        assert!(part(&zip, "[Content_Types].xml").contains("/word/settings.xml"));
+        assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"settings.xml\""));
+        let other = Page { background: Some([1.0, 0.0, 0.0]), ..page() };
+        for (pages, why) in [
+            (vec![teal.clone(), other], "different colours"),
+            (vec![teal.clone(), page()], "a page without one"),
+            (vec![Page { background: Some([1.0; 3]), ..page() }], "white"),
+            (vec![page()], "none"),
+        ] {
+            let zip = docx(&pages, "Plain");
+            assert!(!part(&zip, "word/document.xml").contains("<w:background"), "{why}");
+            assert!(!zip.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "{why}");
+        }
     }
 
     /// One part of a package written by [`Zip`], inflated.
@@ -1134,6 +1249,7 @@ mod tests {
                 },
             ],
             images: Vec::new(),
+            background: None,
         }
     }
 
@@ -1214,6 +1330,7 @@ mod tests {
                 })
                 .collect(),
             images: Vec::new(),
+            background: None,
         };
         let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
         assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -1248,6 +1365,7 @@ mod tests {
                 block("conducted during a WGP tournament.", 164.3, 502.0, 352.5, 516.6),
             ],
             images: Vec::new(),
+            background: None,
         };
         let h = html(std::slice::from_ref(&p), "Regulations");
         assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -1267,7 +1385,7 @@ mod tests {
             blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
             blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
         let h = html(std::slice::from_ref(&p), "Event");
         assert!(!h.contains("<table>"), "sentences became a table: {h}");
         assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -1284,7 +1402,7 @@ mod tests {
             blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
             blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
         let h = html(std::slice::from_ref(&p), "Prizes");
         assert!(h.contains("<table>"), "the prize table was lost: {h}");
         assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -1311,6 +1429,7 @@ mod tests {
                 para("Second right block, still a tall flowing paragraph rather than a cell.", 320.0, 400.0),
             ],
             images: Vec::new(),
+            background: None,
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");

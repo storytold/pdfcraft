@@ -148,8 +148,8 @@ fn resolve_pages<'a>(
         ctx.rotate = Some(rotate);
     }
 
-    let resources = Resources::from_parent(
-        pages_dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default(),
+    let resources = Resources::for_page(
+        pages_dict.contains_key(RESOURCES).then(|| pages_dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default()),
         resources.clone(),
     );
 
@@ -431,8 +431,8 @@ impl<'a> Page<'a> {
             .map_or(1.0, |u| u.min(MAX_USER_UNIT) as f32);
 
         let ctx = resources.ctx.clone();
-        let resources = Resources::from_parent(
-            dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default(),
+        let resources = Resources::for_page(
+            dict.contains_key(RESOURCES).then(|| dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default()),
             resources,
         );
 
@@ -674,11 +674,13 @@ impl<'a> Page<'a> {
 pub struct Resources<'a> {
     parent: Option<Box<Self>>,
     ctx: ReaderContext<'a>,
+    // PdfCraft patch: legacy forms without Resources use the page, not their caller.
+    page_properties: Dict<'a>,
     /// The raw dictionary of external graphics states.
     pub ext_g_states: Dict<'a>,
     /// The raw dictionary of fonts.
     pub fonts: Dict<'a>,
-    /// The raw dictionary of properties.
+    /// The effective property dictionary selected at page or form entry.
     pub properties: Dict<'a>,
     /// The raw dictionary of color spaces.
     pub color_spaces: Dict<'a>,
@@ -698,6 +700,26 @@ impl<'a> Resources<'a> {
         Self::new(resources, Some(parent), &ctx)
     }
 
+    // PdfCraft patch: page-tree inheritance stops at any present Resources dictionary.
+    fn for_page(resources: Option<Dict<'a>>, parent: Self) -> Self {
+        let properties = resources.as_ref().map_or_else(|| parent.properties.clone(), |dict| dict.get::<Dict<'_>>(PROPERTIES).unwrap_or_default());
+        let mut result = Self::from_parent(resources.unwrap_or_default(), parent);
+        result.properties = properties.clone();
+        result.page_properties = properties;
+        result
+    }
+
+    /// Create form resources, using page Properties only when Resources is absent.
+    /// Other resource categories retain their existing parent-chain lookup.
+    // PdfCraft patch: ISO 32000-2, 7.8.3 and Table 93 require the page origin.
+    pub fn for_form(resources: Option<Dict<'a>>, parent: Self) -> Self {
+        let properties =
+            resources.as_ref().map_or_else(|| parent.page_properties.clone(), |dict| dict.get::<Dict<'_>>(PROPERTIES).unwrap_or_default());
+        let mut result = Self::from_parent(resources.unwrap_or_default(), parent);
+        result.properties = properties;
+        result
+    }
+
     /// Create a new `Resources` object.
     pub(crate) fn new(resources: Dict<'a>, parent: Option<Self>, ctx: &ReaderContext<'a>) -> Self {
         let ext_g_states = resources.get::<Dict<'_>>(EXT_G_STATE).unwrap_or_default();
@@ -708,6 +730,8 @@ impl<'a> Resources<'a> {
         let shadings = resources.get::<Dict<'_>>(SHADING).unwrap_or_default();
         let properties = resources.get::<Dict<'_>>(PROPERTIES).unwrap_or_default();
 
+        // PdfCraft patch: generic child resources retain the page origin.
+        let page_properties = parent.as_ref().map_or_else(|| properties.clone(), |parent| parent.page_properties.clone());
         let parent = parent.map(Box::new);
 
         Self {
@@ -716,6 +740,7 @@ impl<'a> Resources<'a> {
             fonts,
             color_spaces,
             properties,
+            page_properties,
             x_objects,
             patterns,
             shadings,

@@ -6,6 +6,22 @@ use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
+/// The job's two-sided setting for `doc_print`'s `duplex`: `printer` sends none, so the printer's
+/// own default applies (as the Print dialog's Printer default, #2422), except that cut and stack
+/// needs single-sided sheets.
+fn duplex(value: &str, cut_stack: bool) -> Result<Option<spool::Duplex>> {
+    Ok(match value {
+        "printer" if cut_stack => Some(spool::Duplex::Off),
+        "printer" => None,
+        "off" => Some(spool::Duplex::Off),
+        "long-edge" if cut_stack => return Err(bad("cut-and-stack printing needs duplex off (single-sided sheets)")),
+        "short-edge" if cut_stack => return Err(bad("cut-and-stack printing needs duplex off (single-sided sheets)")),
+        "long-edge" => Some(spool::Duplex::LongEdge),
+        "short-edge" => Some(spool::Duplex::ShortEdge),
+        d => return Err(bad(format!("unknown duplex {d:?}"))),
+    })
+}
+
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
@@ -92,9 +108,7 @@ impl Automation {
             },
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
-        if matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. }) && a.opt_str("duplex")?.unwrap_or("off") != "off" {
-            return Err(bad("cut-and-stack printing needs duplex off (single-sided sheets)"));
-        }
+        let duplex = duplex(a.opt_str("duplex")?.unwrap_or("off"), matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. }))?;
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
             return Err(bad("cut-stack order needs layout multiple"));
         }
@@ -153,12 +167,7 @@ impl Automation {
                     printer: if printer == "default" { None } else { Some(printer.to_string()) },
                     copies: a.opt_int("copies")?.unwrap_or(1).clamp(1, 999) as u32,
                     collate: a.opt_bool("collate")?.unwrap_or(true),
-                    duplex: Some(match a.opt_str("duplex")?.unwrap_or("off") {
-                        "off" => spool::Duplex::Off,
-                        "long-edge" => spool::Duplex::LongEdge,
-                        "short-edge" => spool::Duplex::ShortEdge,
-                        d => return Err(bad(format!("unknown duplex {d:?}"))),
-                    }),
+                    duplex,
                     scaling: spool::Scaling::Exact,
                     grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
                     title: name,
@@ -179,5 +188,23 @@ impl Automation {
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `printer` leaves two-sided to the printer's own default (#2422); cut and stack still asks
+    /// for single-sided sheets, and refuses an explicit edge.
+    #[test]
+    fn duplex_printer_leaves_two_sided_to_the_printer() {
+        assert_eq!(duplex("printer", false).ok(), Some(None));
+        assert_eq!(duplex("printer", true).ok(), Some(Some(spool::Duplex::Off)));
+        assert_eq!(duplex("off", false).ok(), Some(Some(spool::Duplex::Off)));
+        assert_eq!(duplex("long-edge", false).ok(), Some(Some(spool::Duplex::LongEdge)));
+        assert_eq!(duplex("short-edge", false).ok(), Some(Some(spool::Duplex::ShortEdge)));
+        assert!(duplex("long-edge", true).is_err());
+        assert!(duplex("sideways", false).is_err());
     }
 }

@@ -1,0 +1,10 @@
+[package]
+name = "pdfcraft-wasm-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebAssembly client bridge for browser-based zero-install PDF viewing"
+
+[dependencies]
+pdfcraft-rasterizer = { path = "../../../bundle_1_core_decoders_and_rasterizer/crates/rasterizer" }
+pdfcraft-tiling = { path = "../tiling" }

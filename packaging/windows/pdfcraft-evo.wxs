@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="PdfCraft EVO"
+      Manufacturer="ArtCraft Team"
+      Version="$(var.Version)"
+      UpgradeCode="7A9F5320-E980-5B0C-C2E7-9F4B8276EAFF"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="PdfCraft EVO PDF workbench" Manufacturer="ArtCraft Team" />
+    <Launch Condition="ALLUSERS = 1 OR (Installed AND REMOVE = &quot;ALL&quot;)"
+        Message="PdfCraft EVO must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of PdfCraft EVO is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="PdfcraftEvoIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="PdfcraftEvoIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/storytold/pdfcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/storytold/pdfcraft" />
+    <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+
+    <Property Id="INSTALLDESKTOPSHORTCUT" Secure="yes" Value="1" />
+    <Property Id="INSTALLPDFCONTEXTMENU" Secure="yes" Value="1" />
+
+    <UIRef Id="PdfcraftInstallerUI" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="PdfCraft EVO">
+        <Directory Id="ModelsFolder" Name="models" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="Main" Title="PdfCraft EVO" Level="1">
+      <ComponentGroupRef Id="PdfcraftEvoFiles" />
+      <ComponentGroupRef Id="PdfcraftEvoModels" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="PdfcraftEvoFiles" Directory="INSTALLFOLDER">
+      <Component Id="PdfcraftEvoApp" Guid="5E9892AC-4D3E-5DA9-B39E-51FF87634A23">
+        <File Id="PdfcraftEvoExe" Source="$(var.BinDir)\pdfcraft-evo.exe" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft-evo.exe" Value="[#PdfcraftEvoExe]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft-evo.exe" Name="Path" Value="[INSTALLFOLDER]" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftEVO.Document" Value="PDF Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftEVO.Document\DefaultIcon" Value="&quot;[#PdfcraftEvoExe]&quot;,-2" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftEVO.Document\shell\open\command" Value="&quot;[#PdfcraftEvoExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraftEVO.Document" Name="TypeOverlay" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="PdfCraftEVO.Document" Value="" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-evo.exe" Name="FriendlyAppName" Value="PdfCraft EVO" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-evo.exe\DefaultIcon" Value="&quot;[#PdfcraftEvoExe]&quot;,-2" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-evo.exe\SupportedTypes" Name=".pdf" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft-evo.exe\shell\open\command" Value="&quot;[#PdfcraftEvoExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftEVO\Capabilities" Name="ApplicationName" Value="PdfCraft EVO" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftEVO\Capabilities" Name="ApplicationDescription" Value="Open-source PDF workbench EVO" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftEVO\Capabilities" Name="ApplicationIcon" Value="[#PdfcraftEvoExe],0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftEVO\Capabilities\FileAssociations" Name=".pdf" Value="PdfCraftEVO.Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PdfCraft EVO" Value="Software\PdfCraftEVO\Capabilities" Type="string" />
+      </Component>
+
+      <Component Id="PdfcraftEvoStartMenuShortcut" Directory="ProgramMenuFolder" Guid="7B66C32F-85C9-5FF3-B665-D4E862542CD8">
+        <Shortcut Id="StartMenuShortcut" Name="PdfCraft EVO" Description="PdfCraft EVO PDF workbench"
+            Target="[#PdfcraftEvoExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftEvoIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftEVO\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="PdfcraftEvoDesktopShortcut" Directory="DesktopFolder" Guid="E3B7C3AD-A37E-59A3-CB5A-E95DF0B82C73"
+          Condition="INSTALLDESKTOPSHORTCUT = 1">
+        <Shortcut Id="DesktopShortcut" Name="PdfCraft EVO" Description="PdfCraft EVO PDF workbench"
+            Target="[#PdfcraftEvoExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftEvoIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraftEVO\Shortcuts" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="PdfcraftEvoContextMenu" Guid="71C423F5-1F48-5CBB-C092-7D8FF2BA7793"
+          Condition="INSTALLPDFCONTEXTMENU = 1">
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftEVO.Edit" Value="Edit with PdfCraft EVO" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftEVO.Edit" Name="Icon" Value="&quot;[#PdfcraftEvoExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftEVO.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraftEVO.Edit\command" Value="&quot;[#PdfcraftEvoExe]&quot; &quot;%1&quot;" Type="string" />
+      </Component>
+
+      <Component Id="PdfcraftEvoCli">
+        <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftEvoIco">
+        <File Id="PdfcraftEvoIcoFile" Source="$(var.BinDir)\pdfcraft_evo.ico" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftEvoDocIconLicense">
+        <File Id="PdfcraftEvoDocIconLicenseFile" Source="$(var.BinDir)\LICENSE-document.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftEvoMitLicense">
+        <File Id="PdfcraftEvoMitLicenseFile" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftEvoApacheLicense">
+        <File Id="PdfcraftEvoApacheLicenseFile" Source="$(var.BinDir)\LICENSE-APACHE" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftEvoNotice">
+        <File Id="PdfcraftEvoNoticeFile" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="PdfcraftEvoModels" Directory="ModelsFolder">
+      <Files Include="$(var.ModelsDir)\*" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

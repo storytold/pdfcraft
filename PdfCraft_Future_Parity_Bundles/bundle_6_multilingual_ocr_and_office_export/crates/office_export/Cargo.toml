@@ -1,0 +1,8 @@
+[package]
+name = "pdfcraft-office-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clean-room high-fidelity ISO/IEC 29500 OpenXML DOCX, PPTX, and HTML5 document exporter"
+
+[dependencies]
