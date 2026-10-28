@@ -63,6 +63,18 @@ impl PrimarySelection {
         drop(text);
     }
 
+    /// Drop the selections waiting to be tried again: once the window loses the focus, the user
+    /// may have selected text elsewhere, which a late retry must not replace.
+    pub(crate) fn cancel_retries(&mut self) {
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+        {
+            self.pending = None;
+            if let Some(worker) = &self.worker {
+                worker.forget_refused();
+            }
+        }
+    }
+
     /// Write a selection made while a stopped worker waited to be replaced, once one may start.
     /// Run every frame; says how long until it may, so a frame can be drawn then.
     pub(crate) fn retry(&mut self) -> Option<std::time::Duration> {
@@ -89,6 +101,9 @@ impl PrimarySelection {
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
 struct Worker {
     latest: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// A selection the display refused, tried again every [`RETRY`] until it is written, a newer
+    /// one replaces it, or the window loses the focus ([`PrimarySelection::cancel_retries`]).
+    refused: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     wake: std::sync::mpsc::SyncSender<()>,
 }
 
@@ -104,6 +119,11 @@ impl Worker {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Forget a selection the display refused: it is not tried again.
+    fn forget_refused(&self) {
+        self.refused.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     }
 }
 
@@ -126,8 +146,9 @@ fn may_start(since_stopped: Option<std::time::Duration>) -> bool {
 fn spawn_worker() -> Option<Worker> {
     use arboard::{LinuxClipboardKind, SetExtLinux};
     let latest = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let refused = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
     let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
-    let slot = latest.clone();
+    let (slot, failed) = (latest.clone(), refused.clone());
     let spawned = std::thread::Builder::new().name("primary-selection".into()).spawn(move || {
         let mut clipboard = match arboard::Clipboard::new() {
             Ok(c) => c,
@@ -136,21 +157,22 @@ fn spawn_worker() -> Option<Worker> {
                 return;
             }
         };
-        // Woken for each selection, and every `RETRY` to write again one the display refused.
+        // Woken for each selection, and every `RETRY` to write again one the display refused. A
+        // new selection replaces a refused one.
         while !matches!(woken.recv_timeout(RETRY), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)) {
-            let Some(text) = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { continue };
+            let new = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            let mut refused = failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(text) = new.or_else(|| refused.take()) else { continue };
+            *refused = None;
+            drop(refused);
             if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text.clone()) {
                 log::debug!("couldn't set the primary selection: {e}");
-                // Tried again later, unless a newer selection has taken its place meanwhile.
-                let mut latest = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if latest.is_none() {
-                    *latest = Some(text);
-                }
+                *failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text);
             }
         }
     });
     match spawned {
-        Ok(_) => Some(Worker { latest, wake }),
+        Ok(_) => Some(Worker { latest, refused, wake }),
         Err(e) => {
             log::debug!("no primary selection thread: {e}");
             None
