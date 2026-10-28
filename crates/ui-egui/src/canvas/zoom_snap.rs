@@ -64,9 +64,17 @@ impl PdfCraftApp {
                 }
             }
             QuickTool::Snapshot => {
-                if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
-                    return;
-                }
+                // A click (or a drag too small to be an area) copies the whole page, as Acrobat's
+                // Snapshot tool does (#2078). The page's own size comes from the same transform
+                // the gesture was measured in.
+                let view_rect = if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
+                    let Some(xf) = self.views.get(index).and_then(|v| v.screen_xforms.iter().find(|(i, _)| *i == page)).map(|(_, xf)| xf) else {
+                        return;
+                    };
+                    [0.0, 0.0, xf.pw, xf.ph]
+                } else {
+                    view_rect
+                };
                 // The tool outlives the tab it was chosen on.
                 if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
                     return;

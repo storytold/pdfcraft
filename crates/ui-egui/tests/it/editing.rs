@@ -3016,6 +3016,42 @@ fn copying_out_of_a_document_honours_its_security() {
     assert!(h.state().last_snapshot.is_some());
 }
 
+/// #2078: one click with the Snapshot tool copies the whole page, as in Acrobat; a drag still
+/// copies only the area dragged over.
+#[test]
+fn a_snapshot_click_copies_the_whole_page() {
+    let _gpu = gpu();
+    let mut h = harness(2, |app| {
+        app.system_clipboard = false;
+        app.set_option("quick", "snapshot").unwrap();
+    });
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    h.hover_at(r.center());
+    h.run_steps(2);
+    h.drag_at(r.center());
+    h.drop_at(r.center());
+    h.run_steps(4);
+    let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    // The 200 × 300 pt page, whole, at the view's scale.
+    let scale = *w as f32 / 200.0;
+    assert!(scale > 0.0 && (*hgt as f32 - 300.0 * scale).abs() <= 2.0, "{w} × {hgt} is the whole page");
+    let page = (*w, *hgt);
+
+    // A drag over part of the page copies just that part.
+    h.state_mut().last_snapshot = None;
+    let (a, b) = (r.left_top() + r.size() * 0.25, r.left_top() + r.size() * 0.5);
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(b);
+    h.run_steps(1);
+    h.drop_at(b);
+    h.run_steps(3);
+    let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a drag copies its area");
+    assert!(*w < page.0 && *hgt < page.1, "{w} × {hgt} is smaller than the page's {page:?}");
+}
+
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();
