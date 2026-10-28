@@ -1216,3 +1216,13 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }
+
+/// Label printers are sent black-and-white pixels: anti-aliased greys fall to ink or paper, and
+/// transparency is paper.
+#[test]
+fn label_sheets_are_made_black_and_white() {
+    // Premultiplied RGBA: black, 40% grey, 60% grey, white, transparent, black at 40% coverage.
+    let rgba = [0, 0, 0, 255, 102, 102, 102, 255, 153, 153, 153, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 102];
+    assert_eq!(crate::label::black_and_white(&rgba), [0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]);
+    assert!(crate::label::black_and_white(&[1, 2, 3]).is_empty(), "a partial pixel is left out");
+}

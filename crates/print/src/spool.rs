@@ -171,15 +171,24 @@ pub struct PrinterPaper {
     pub default: bool,
 }
 
-/// The paper sizes a printer's driver offers (CUPS: its PPD's `*PaperDimension` entries, in the
-/// PPD's order); empty when it names none, when the destination is unknown, and on other
-/// platforms. Reads a file, so call it when a printer is chosen, not every frame.
+/// The paper sizes a printer's driver offers, in the driver's order: on CUPS its PPD's
+/// `*PaperDimension` entries; on Windows its PrintCapabilities page media sizes (craft-print),
+/// keyed by their Print Schema or vendor name. Empty when it names none, when the printer is
+/// unknown, and on the web. Reads a file or the driver, so call it when a printer is chosen,
+/// not every frame.
 pub fn printer_papers(printer: &str) -> Vec<PrinterPaper> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         printer_papers_in(printer, std::path::Path::new("/etc/cups/ppd"))
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(windows)]
+    {
+        craft_print::printer_papers(printer)
+            .into_iter()
+            .map(|p| PrinterPaper { key: p.key, label: p.label, size: p.size, default: p.default })
+            .collect()
+    }
+    #[cfg(not(any(all(unix, not(target_arch = "wasm32")), windows)))]
     {
         let _ = printer;
         Vec::new()
@@ -259,12 +268,19 @@ pub fn paper_of_size(papers: &[PrinterPaper], size: (f64, f64)) -> Option<usize>
 }
 
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    submit_with_progress(pdf, job, &mut |_, _| {})
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
-/// whole PDF at once and reports nothing).
+/// whole PDF at once and reports nothing). On Windows a thermal label printer
+/// (`craft_print::is_label_printer`) is sent the sheets as black-and-white pictures at its
+/// resolution through GDI with the user's own driver settings, as Acrobat does: its driver
+/// dithers any grey, which turned barcodes and seals into dot patterns.
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
+    #[cfg(windows)]
+    if let Some(printer) = crate::label::label_printer(job) {
+        return crate::label::submit(pdf, job, &printer, progress).map_err(crate::PrintError::Spool);
+    }
     craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
