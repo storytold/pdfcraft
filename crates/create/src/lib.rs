@@ -590,6 +590,17 @@ pub enum ImageResolution {
     Dpi(f64),
 }
 
+/// The page an image is placed on.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ImagePage {
+    /// A page the size of the image at its resolution.
+    #[default]
+    Image,
+    /// A page of this size in points, with the image scaled to fit and centred. Every page comes
+    /// out the same size, whatever the images measure (#3273).
+    Fixed { width: f64, height: f64 },
+}
+
 /// One page per image, each the size of its image at the image's resolution.
 pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError> {
     from_images_with_resolution(images, ImageResolution::Embedded)
@@ -597,10 +608,22 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
 
 /// Create image pages with embedded resolution or a fixed dpi (72 gives one point per pixel).
 pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Document, CreateError> {
+    from_images_on_pages(images, resolution, ImagePage::Image)
+}
+
+/// [`from_images_with_resolution`], placing each image on `page`. On a fixed page the image keeps
+/// its proportions, is scaled to fit and is centred, so a set of photos of different pixel sizes
+/// comes out as pages of one paper size instead of one page per image size.
+pub fn from_images_on_pages(images: &[(String, Vec<u8>)], resolution: ImageResolution, page: ImagePage) -> Result<Document, CreateError> {
     if let ImageResolution::Dpi(dpi) = resolution
         && (!dpi.is_finite() || !(1.0..=1200.0).contains(&dpi))
     {
         return Err(CreateError::Invalid("image DPI must be finite and between 1 and 1200".into()));
+    }
+    if let ImagePage::Fixed { width, height } = page
+        && (!width.is_finite() || !height.is_finite() || !(1.0..=MAX_SIDE).contains(&width) || !(1.0..=MAX_SIDE).contains(&height))
+    {
+        return Err(CreateError::Invalid(format!("page size must be finite and between 1 and {MAX_SIDE} points")));
     }
     if images.is_empty() {
         return Err(CreateError::Invalid("no images".into()));
@@ -617,13 +640,24 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         let k = (MAX_SIDE / w.max(h)).min(1.0);
         w *= k;
         h *= k;
+        // On a fixed page the image fits inside it, keeping its proportions, and sits in the middle.
+        let (page_w, page_h, x, y) = match page {
+            ImagePage::Image => (w, h, 0.0, 0.0),
+            ImagePage::Fixed { width, height } => {
+                // Scaled to fit: as large as the page allows, up or down, never cropped or
+                // stretched. An image at its own size instead is what omitting a page size gives.
+                let fit = (width / w).min(height / h);
+                (w, h) = (w * fit, h * fit);
+                (width, height, (width - w) / 2.0, (height - h) / 2.0)
+            }
+        };
         let xr = add_image(&mut doc, img, &mut profiles);
         let mut xobj = Dict::new();
         xobj.set(b"Im0".to_vec(), Object::Ref(xr));
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xobj));
-        let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
-        add_page(&mut doc, w, h, res, Some(content))?;
+        let content = format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n").into_bytes();
+        add_page(&mut doc, page_w, page_h, res, Some(content))?;
     }
     if let Some((name, _)) = images.first() {
         set_title(&mut doc, name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s));

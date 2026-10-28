@@ -16,6 +16,14 @@ fn pages(doc: &Document) -> Vec<Dict> {
     kids.iter().map(|k| doc.resolve(k).as_dict().cloned().unwrap()).collect()
 }
 
+/// Page `n`'s content stream as text.
+fn content_of(doc: &Document, n: usize) -> String {
+    let page = pages(doc)[n].clone();
+    let stream = doc.resolve(page.get(b"Contents").unwrap());
+    let Object::Stream(stream) = &*stream else { panic!("expected a content stream") };
+    String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned()
+}
+
 fn media(d: &Dict) -> Vec<f64> {
     d.get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect()
 }
@@ -81,6 +89,37 @@ fn images_become_pages_at_their_resolution() {
     let title = doc.resolve(doc.trailer().get(b"Info").unwrap());
     assert_eq!(title.as_dict().unwrap().get(b"Title").unwrap().as_string().unwrap().to_text(), "photo");
     assert!(matches!(from_images(&[("x.gif".into(), b"GIF89a".to_vec())]), Err(CreateError::Image(..))));
+}
+
+/// A set of photos of different pixel sizes gave pages of different sizes, none of them a paper
+/// size (#3273). On a fixed page every page comes out that size, with the image scaled to fit,
+/// keeping its proportions, and centred.
+#[test]
+fn images_on_a_fixed_page_are_fitted_and_centred() {
+    // 4 x 2 px at 72 dpi: 4 x 2 pt, so it is wider than it is tall.
+    let images = [("photo.png".into(), png_bytes(true))];
+    let page = ImagePage::Fixed { width: 10.0, height: 10.0 };
+    let doc = reopen(&from_images_on_pages(&images, ImageResolution::Dpi(72.0), page).unwrap());
+    let page_box = media(&pages(&doc)[0]);
+    assert!((page_box[2] - 10.0).abs() < 0.001 && (page_box[3] - 10.0).abs() < 0.001, "the page is the size asked for: {page_box:?}");
+    // Scaled by 10/4, so 10 x 5, and centred: (10 - 5) / 2 = 2.5 up from the bottom.
+    let drawn = content_of(&doc, 0);
+    assert!(drawn.contains("10.000 0 0 5.000 0.000 2.500 cm"), "fitted and centred: {drawn}");
+
+    // A taller page fits the image to its width and leaves the proportions alone.
+    let doc = reopen(&from_images_on_pages(&images, ImageResolution::Dpi(72.0), ImagePage::Fixed { width: 20.0, height: 40.0 }).unwrap());
+    let drawn = content_of(&doc, 0);
+    assert!(drawn.contains("20.000 0 0 10.000 0.000 15.000 cm"), "fitted to the width: {drawn}");
+
+    // The default is still a page the size of its image.
+    let doc = reopen(&from_images_on_pages(&images, ImageResolution::Dpi(72.0), ImagePage::Image).unwrap());
+    let page_box = media(&pages(&doc)[0]);
+    assert!((page_box[2] - 4.0).abs() < 0.001 && (page_box[3] - 2.0).abs() < 0.001, "{page_box:?}");
+
+    for bad in [(0.0, 10.0), (10.0, 0.0), (f64::NAN, 10.0), (10.0, f64::INFINITY), (-1.0, 10.0)] {
+        let page = ImagePage::Fixed { width: bad.0, height: bad.1 };
+        assert!(matches!(from_images_on_pages(&images, ImageResolution::Embedded, page), Err(CreateError::Invalid(_))), "{bad:?}");
+    }
 }
 
 #[test]

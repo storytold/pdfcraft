@@ -262,6 +262,9 @@ pub fn tools() -> Vec<ToolDef> {
                     "field_conflicts": { "type": "string", "enum": ["rename", "merge"] },
                     "out": save_out,
                     "open": open,
+                    "pageSize": { "type": "string", "description": "For image sources: put each image on a page of this paper size, scaled to fit and centred (a name such as \"a4\" or \"letter\"). Omit for a page the size of each image." },
+                    "pageWidth": { "type": "number", "minimum": 1, "description": "For image sources: the page width in points, given with pageHeight instead of pageSize." },
+                    "pageHeight": { "type": "number", "minimum": 1, "description": "For image sources: the page height in points, given with pageWidth." },
                 }),
                 &["paths"],
             )),
@@ -275,6 +278,9 @@ pub fn tools() -> Vec<ToolDef> {
                     "out": save_out.clone(),
                     "open": open.clone(),
                     "out_dir": { "type": "string", "description": "Folder for mode \"separate\"." },
+                    "pageSize": { "type": "string", "description": "For image sources: put each image on a page of this paper size, scaled to fit and centred (a name such as \"a4\" or \"letter\"). Omit for a page the size of each image." },
+                    "pageWidth": { "type": "number", "minimum": 1, "description": "For image sources: the page width in points, given with pageHeight instead of pageSize." },
+                    "pageHeight": { "type": "number", "minimum": 1, "description": "For image sources: the page height in points, given with pageWidth." },
                 }),
                 &["paths"],
             )),
@@ -1283,13 +1289,16 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution, or every image on a page of one size with pageSize or pageWidth/pageHeight) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused). Save it with doc_save and a path.",
         )
         .with(schema(
             json!({
                 "from": { "type": "string", "enum": ["blank", "images", "text"] },
                 "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                 "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override the embedded resolution without resampling. 72 gives one point per pixel; omit to use each image's resolution (72 when absent)." },
+                "pageSize": { "type": "string", "description": "For images: put every image on a page of this paper size, scaled to fit and centred, so a set of photos gives pages of one size. A name such as \"a4\", \"letter\" or \"tabloid\" (the sizes Print lists); omit for a page the size of each image." },
+                "pageWidth": { "type": "number", "minimum": 1, "description": "For images: the page width in points, given with pageHeight instead of pageSize." },
+                "pageHeight": { "type": "number", "minimum": 1, "description": "For images: the page height in points, given with pageWidth." },
                 "text": { "type": "string" },
                 "path": { "type": "string" },
                 "pages": { "type": "integer", "minimum": 1, "maximum": 10000 },

@@ -24,7 +24,8 @@ impl Automation {
                 } else {
                     "Images.pdf".into()
                 };
-                (name, self.session.create_from_images_with_resolution(&images, resolution).map_err(failed)?)
+                let page = crate::image_page(a)?;
+                (name, self.session.create_from_images_on_pages(&images, resolution, page).map_err(failed)?)
             }
             "text" => {
                 let (title, text) = match (a.opt_str("text")?, a.opt_str("path")?) {
@@ -204,7 +205,7 @@ impl Automation {
             let path = self.resolve(p, false)?;
             let bytes = read_input(&path)?;
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            let (_, pdf) = self.session.convert_to_pdf_on_pages(&name, &Arc::new(bytes), crate::image_page(a)?).map_err(failed)?;
             let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Ok((title, pdf, range))
         });
@@ -217,12 +218,14 @@ impl Automation {
         let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("mode \"separate\" needs out_dir".into()))?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut out = Vec::new();
+        // Read once, outside the closure: inside, the error type is `String`.
+        let page = crate::image_page(a)?;
         for &p in paths {
             let converted = self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| {
                 let bytes = read_input_bytes(&src).map_err(|e| format!("{}: {e}", src.display()))?;
                 let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let stem = src.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                let (kind, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(|e| e.to_string())?;
+                let (kind, pdf) = self.session.convert_to_pdf_on_pages(&name, &Arc::new(bytes), page).map_err(|e| e.to_string())?;
                 Ok((kind, stem, pdf))
             });
             out.push(match converted {
@@ -326,7 +329,7 @@ impl Automation {
                     let bytes = Arc::new(read_input(&path)?);
                     // Images and text files are made into PDFs first (#569), as in the Combine files tab.
                     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.session.as_pdf(&file_name, &bytes).map_err(failed)?
+                    self.session.as_pdf_on_pages(&file_name, &bytes, crate::image_page(a)?).map_err(failed)?
                 }
             };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

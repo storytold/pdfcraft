@@ -4274,6 +4274,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
+ "pdfcraft-print",
  "pdfcraft-render",
  "pdfcraft-xfa",
  "png 0.18.1",

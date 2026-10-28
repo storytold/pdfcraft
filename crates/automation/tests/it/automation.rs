@@ -9239,3 +9239,69 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// Photos turned into a PDF gave one page per image size, none of them a paper size (#3273).
+/// `pageSize` (or `pageWidth`/`pageHeight`) puts every image on a page of one size.
+#[test]
+fn images_can_be_created_on_a_paper_size() {
+    let dir = workdir("images-on-paper");
+    image::RgbImage::new(400, 300).save(dir.join("landscape.png")).unwrap();
+    image::RgbImage::new(300, 400).save(dir.join("portrait.png")).unwrap();
+    let paths = json!(["landscape.png", "portrait.png"]);
+    let mut a = auto(&dir);
+    let sizes = |a: &mut Automation, doc: u64| -> Vec<(f64, f64)> {
+        ok(a, "doc_info", json!({ "doc": doc }))["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["width"].as_f64().unwrap(), p["height"].as_f64().unwrap()))
+            .collect()
+    };
+    // Unchanged by default: a page the size of each image.
+    let plain = ok(&mut a, "doc_create", json!({ "from": "images", "paths": paths }))["doc"].as_u64().unwrap();
+    assert_eq!(sizes(&mut a, plain), vec![(400.0, 300.0), (300.0, 400.0)]);
+
+    // A paper name gives pages of one size, whatever the images measure.
+    let on_a4 = ok(&mut a, "doc_create", json!({ "from": "images", "paths": paths, "pageSize": "a4" }))["doc"].as_u64().unwrap();
+    for (w, h) in sizes(&mut a, on_a4) {
+        assert!((w - 595.28).abs() < 0.01 && (h - 841.89).abs() < 0.01, "A4: {w} x {h}");
+    }
+    // "letter" and the table's own "US Letter" are the same size.
+    for name in ["letter", "US Letter", "LETTER"] {
+        let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["landscape.png"], "pageSize": name }))["doc"].as_u64().unwrap();
+        assert_eq!(sizes(&mut a, doc), vec![(612.0, 792.0)], "{name}");
+    }
+    // Explicit points work too.
+    let pts = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["landscape.png"], "pageWidth": 300, "pageHeight": 300 }))["doc"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(sizes(&mut a, pts), vec![(300.0, 300.0)]);
+
+    // An unknown name, half a size, and both ways at once are each refused by name.
+    let bad = a.call("doc_create", &json!({ "from": "images", "paths": ["landscape.png"], "pageSize": "A9" }));
+    assert!(format!("{bad:?}").contains("unknown pageSize"), "{bad:?}");
+    let half = a.call("doc_create", &json!({ "from": "images", "paths": ["landscape.png"], "pageWidth": 300 }));
+    assert!(format!("{half:?}").contains("pageHeight"), "{half:?}");
+    let both = a.call("doc_create", &json!({ "from": "images", "paths": ["landscape.png"], "pageSize": "a4", "pageWidth": 300, "pageHeight": 300 }));
+    assert!(format!("{both:?}").contains("can't both be given"), "{both:?}");
+
+    // Combining images takes it as well.
+    ok(&mut a, "doc_combine", json!({ "paths": paths, "pageSize": "letter", "out": "combined.pdf" }));
+    let combined = ok(&mut a, "doc_open", json!({ "path": "combined.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(sizes(&mut a, combined), vec![(612.0, 792.0), (612.0, 792.0)]);
+
+    // And one PDF per image, which goes down a separate path and so was ignoring the page size.
+    let separate = ok(&mut a, "doc_create_multiple", json!({ "paths": paths, "mode": "separate", "out_dir": "out", "pageSize": "a4" }));
+    let written = separate["files"].as_array().or(separate.as_array()).cloned().unwrap_or_default();
+    assert!(!written.is_empty(), "mode separate reports what it wrote: {separate}");
+    let mut checked = 0;
+    for entry in &written {
+        let Some(path) = entry["output"].as_str() else { continue };
+        checked += 1;
+        let doc = ok(&mut a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        for (w, h) in sizes(&mut a, doc) {
+            assert!((w - 595.28).abs() < 0.01 && (h - 841.89).abs() < 0.01, "{path} on A4, not {w} x {h}");
+        }
+    }
+    assert_eq!(checked, 2, "both images were written and measured: {separate}");
+}
