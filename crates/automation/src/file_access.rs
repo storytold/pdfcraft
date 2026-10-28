@@ -61,6 +61,10 @@ impl Root {
     }
 }
 
+/// The most roots of one kind. More is refused rather than cut short: font discovery searches
+/// at most this many folders, and leaving some out quietly would give an incomplete answer.
+pub const MAX_ROOTS: usize = 4096;
+
 impl AutomationRoots {
     /// The roots `read` and `write`, which must be existing folders; `None` when neither is given
     /// (nothing is confined then).
@@ -71,10 +75,15 @@ impl AutomationRoots {
 
     /// Every folder in `read` and in `write`, which must all be existing folders; `None` when both
     /// lists are empty (nothing is confined then). A path is allowed when it lies inside any
-    /// folder of its kind.
+    /// folder of its kind. More than [`MAX_ROOTS`] of a kind is an error.
     pub fn with_folders(read: &[PathBuf], write: &[PathBuf]) -> Result<Option<Arc<Self>>, String> {
         if read.is_empty() && write.is_empty() {
             return Ok(None);
+        }
+        for (folders, kind) in [(read, "read"), (write, "write")] {
+            if folders.len() > MAX_ROOTS {
+                return Err(format!("too many automation {kind} roots: {}, at most {MAX_ROOTS}", folders.len()));
+            }
         }
         let open = |folders: &[PathBuf], access| folders.iter().map(|p| Root::open(p, access)).collect::<Result<Vec<_>, _>>();
         Ok(Some(Arc::new(Self { read: open(read, Access::Read)?, write: open(write, Access::Write)? })))
@@ -319,6 +328,24 @@ mod tests {
         assert!(AutomationRoots::with_folders(&[], &bad).unwrap_err().starts_with("cannot open the automation write root"));
         assert!(AutomationRoots::with_folders(&[], &[]).unwrap().is_none());
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// More roots of a kind than font discovery can search is refused, not cut short.
+    #[test]
+    fn more_than_the_most_roots_is_refused() {
+        let base = std::env::temp_dir().join(format!("pc-file-access-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let many: Vec<PathBuf> = (0..=MAX_ROOTS).map(|i| base.join(format!("r{i}"))).collect();
+        for d in &many {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let read = AutomationRoots::with_folders(&many, &[]).map(|_| ());
+        let write = AutomationRoots::with_folders(&[], &many).map(|_| ());
+        let most = AutomationRoots::with_folders(&many[..MAX_ROOTS], &many[..MAX_ROOTS]).map(|r| r.is_some());
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(read, Err(format!("too many automation read roots: {}, at most {MAX_ROOTS}", MAX_ROOTS + 1)));
+        assert_eq!(write, Err(format!("too many automation write roots: {}, at most {MAX_ROOTS}", MAX_ROOTS + 1)));
+        assert_eq!(most, Ok(true), "the most roots are still accepted");
     }
 
     #[test]

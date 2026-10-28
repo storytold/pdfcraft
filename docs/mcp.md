@@ -71,6 +71,7 @@ config works across the suite) keep the agent to the folders you give it:
 
 - Each flag may be given more than once (`--automation-read-root /work/project --automation-read-root
   /work/assets`): a path is allowed when it lies inside any root of its kind, and nothing else is.
+  More than 4096 roots of a kind are refused at startup.
   The rest of this section says "the root" for the one that applies.
 - Every file a tool reads must lie inside the **read root**: `doc_open`, `page_insert_file`,
   `page_replace`, `doc_combine` and `doc_create_multiple` inputs, `doc_create` images, stamp,

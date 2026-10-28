@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use pdfcraft_automation::Automation;
-use pdfcraft_automation::file_access::AutomationRoots;
+use pdfcraft_automation::file_access::{AutomationRoots, MAX_ROOTS};
 use pdfcraft_automation::mcp::McpServer;
 use serde_json::{Value, json};
 
@@ -164,14 +164,22 @@ fn font_discovery_searches_every_read_root() {
 /// up the scan's budget for files and folders.
 #[test]
 fn font_discovery_looks_inside_roots_when_given_the_most_roots() {
+    /// Removes the test's folders even when an assertion fails, so runs don't pile them up.
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
     let base = folders("fonts-many");
-    let roots: Vec<PathBuf> = (0..4096).map(|i| base.join(format!("r{i}"))).collect();
+    let _cleanup = Cleanup(base.clone());
+    let roots: Vec<PathBuf> = (0..MAX_ROOTS).map(|i| base.join(format!("r{i}"))).collect();
     for r in &roots {
         std::fs::create_dir_all(r).unwrap();
     }
     let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
     std::fs::copy(fonts.join("Inter-Regular.ttf"), roots[0].join("Inter-Regular.ttf")).unwrap();
-    std::fs::copy(fonts.join("JetBrainsMono-Regular.ttf"), roots[4095].join("JetBrainsMono-Regular.ttf")).unwrap();
+    std::fs::copy(fonts.join("JetBrainsMono-Regular.ttf"), roots[MAX_ROOTS - 1].join("JetBrainsMono-Regular.ttf")).unwrap();
     let roots = AutomationRoots::with_folders(&roots, &[]).unwrap();
     let mut server = McpServer::new(Automation::new().with_automation_roots(roots).with_clock(|| 1_700_000_000));
     let found = ok(&mut server, "text_font_files", json!({}));
