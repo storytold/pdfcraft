@@ -84,13 +84,18 @@ async fn load() -> Result<(Ocr, [js_sys::Uint8Array; 2]), String> {
     Ok((ocr, [detection, recognition]))
 }
 
-/// `models/<name>`, relative to the page, so the site works under any path.
+/// `models/<name>`, relative to the page, so the site works under any path. The names carry no
+/// content hash and `Ocr::from_bytes` refuses any file but the expected one, so the browser asks
+/// the server before using a cached copy (`no-cache`): after a model update a stale copy is
+/// replaced, not refused until the cache expires.
 async fn fetch(name: &str) -> Result<js_sys::Uint8Array, String> {
     use wasm_bindgen_futures::JsFuture;
     let url = format!("models/{name}");
     let failed = |e: JsValue| format!("{url}: {}", e.as_string().unwrap_or_else(|| format!("{e:?}")));
     let window = web_sys::window().ok_or("no window")?;
-    let resp = JsFuture::from(window.fetch_with_str(&url)).await.map_err(failed)?;
+    let init = web_sys::RequestInit::new();
+    init.set_cache(web_sys::RequestCache::NoCache);
+    let resp = JsFuture::from(window.fetch_with_str_and_init(&url, &init)).await.map_err(failed)?;
     let resp: web_sys::Response = resp.dyn_into().map_err(failed)?;
     if !resp.ok() {
         return Err(format!("{url}: HTTP {}", resp.status()));

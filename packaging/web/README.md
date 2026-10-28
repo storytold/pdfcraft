@@ -62,9 +62,10 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 Scan & OCR ▸ Recognize Text downloads `models/text-detection.onnx` and
 `models/text-recognition.onnx`, relative to the page, the first time it is opened in a visit.
 Keep `models/` beside `index.html`. The app loads only the files whose SHA-256 matches
-`ATTRIBUTION.toml`, so a stale or wrong file fails like a missing one. Their file names carry no
-content hash, so serve them with a short cache lifetime or revalidation. Without them, everything
-else works and the Recognize Text dialog says the download failed.
+`ATTRIBUTION.toml`, so a wrong file fails like a missing one. Their file names carry no content
+hash, so the app asks the server before using a cached copy (`no-cache`): the server must answer
+that check correctly (an ETag, or a `Last-Modified` that changes whenever the file does). Without
+the models, everything else works and the Recognize Text dialog says the download failed.
 
 Pages are read in Web Workers (`pdfcraft-ocr-worker-<hash>_loader.js`, a module worker), so the
 app keeps responding, and two pages are read at once on a machine with three or more cores. Each
