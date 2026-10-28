@@ -2666,8 +2666,7 @@ fn hairline_strokes_draw_line_art_one_pixel_wide_except_for_print() {
         body.len()
     );
     let render = |hairlines: bool, scale: f32, tag: u64| {
-        let mut r =
-            PageRenderer::new(Arc::new(pdf.clone().into_bytes()), RenderConfig { hairline_strokes: hairlines, ..RenderConfig::default() });
+        let mut r = PageRenderer::new(Arc::new(pdf.clone().into_bytes()), RenderConfig { hairline_strokes: hairlines, ..RenderConfig::default() });
         r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag, ..Default::default() })
     };
     // Rows of column `x` with any ink: an antialiased hairline straddling two rows counts two.
