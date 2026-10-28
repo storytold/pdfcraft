@@ -669,6 +669,18 @@ fn quoted_empty_csv_value_clears_a_field() {
 }
 
 #[test]
+fn empty_value_of_a_one_field_form_round_trips_through_csv() {
+    let mut src = one_field();
+    set_value(&mut src, "Name", &FieldValue::Text(String::new())).unwrap();
+    let csv = export_data(&src, Format::Csv);
+    let mut dst = one_field();
+    set_value(&mut dst, "Name", &FieldValue::Text("Ada".into())).unwrap();
+    let report = import(&mut dst, csv.as_bytes()).unwrap_or_else(|e| panic!("{csv:?} -> {e:?}"));
+    assert_eq!(report.fields, 1, "{csv:?}");
+    assert!(values(&dst)[0].1.is_empty(), "{csv:?}");
+}
+
+#[test]
 fn multi_select_lists_round_trip_through_xml_csv_and_text() {
     let src = filled();
     for format in [Format::Xml, Format::Csv, Format::Txt] {

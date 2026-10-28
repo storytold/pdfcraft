@@ -112,7 +112,9 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             out
         }
         Format::Csv => {
-            let q = |s: &str| if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+            let q = |s: &str| {
+                if s.is_empty() || s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
+            };
             format!(
                 "{}\n{}\n",
                 fields.iter().map(|f| q(&f.0)).collect::<Vec<_>>().join(","),
