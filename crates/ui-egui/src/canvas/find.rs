@@ -73,11 +73,38 @@ impl Find {
     }
 }
 
+/// The longest selection ⌘F takes as the search text, in characters: a selection past a few
+/// lines is not something one looks for.
+const FIND_PHRASE_MAX: usize = 200;
+
+/// `selected` as a search phrase: its lines and runs of spaces become single spaces, so the
+/// one-line find field shows what the page reads as. `None` for nothing but white space, and for
+/// a selection too long to be a search (a Select All).
+pub(super) fn find_phrase(selected: &str) -> Option<String> {
+    let phrase = selected.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!phrase.is_empty() && phrase.chars().count() <= FIND_PHRASE_MAX).then_some(phrase)
+}
+
 impl DocView {
     /// Open the find bar (or focus it if already open).
     pub fn open_find(&mut self) {
         let f = self.find.get_or_insert_with(Find::default);
         f.focus = true;
+    }
+
+    /// ⌘F: [`Self::open_find`], with the text selected in the document as the search, run at
+    /// once, as Acrobat, Preview and browsers do (#5141). With nothing selected, the bar opens as
+    /// it was: with the last search.
+    pub fn open_find_for_selection(&mut self) {
+        let phrase = if self.all_text { None } else { self.selected_text().as_deref().and_then(find_phrase) };
+        self.open_find();
+        if let (Some(phrase), Some(f)) = (phrase, self.find.as_mut()) {
+            // The same search again keeps its matches and the match the reader is on.
+            if f.query != phrase || f.case_query != phrase {
+                f.query = phrase;
+                self.rerun_find();
+            }
+        }
     }
 
     /// Re-run the search on all pages whose text is known (after the query changed).

@@ -422,6 +422,21 @@ fn a_late_automatic_match_does_not_override_the_readers_navigation() {
     }
 }
 
+/// #5141: a selection becomes the search phrase on one line; white space alone, or a selection too
+/// long to be a search, is none.
+#[test]
+fn a_selection_is_a_search_phrase_on_one_line() {
+    assert_eq!(super::find::find_phrase("sample"), Some("sample".into()));
+    assert_eq!(super::find::find_phrase("  two\n  lines \t here "), Some("two lines here".into()));
+    assert_eq!(super::find::find_phrase(" \n\t "), None);
+    assert_eq!(super::find::find_phrase(""), None);
+    let limit = "a".repeat(200);
+    assert_eq!(super::find::find_phrase(&limit), Some(limit.clone()));
+    assert_eq!(super::find::find_phrase(&format!("{limit}b")), None, "past the limit");
+    // Counted in characters, not bytes.
+    assert!(super::find::find_phrase(&"é".repeat(200)).is_some());
+}
+
 /// Typing on while the results arrive must not re-anchor the search on a page the automatic
 /// flash picked. The anchor stays the page the reader was on when they started searching.
 #[test]
