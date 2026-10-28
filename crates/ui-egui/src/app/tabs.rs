@@ -37,8 +37,11 @@ impl PdfCraftApp {
         let mut anchor = Some(id);
         let mut active = Some(index);
         if shift {
-            // The run starts where the last click without Shift was, and a Shift-click leaves it there.
-            let start = self.tab_selection.anchor.filter(|a| ids.contains(a)).or_else(|| self.active_ids().map(|(_, a)| a)).unwrap_or(id);
+            // The run starts where the last click without Shift was, even one that took that tab
+            // out of the selection, and a Shift-click leaves it there.
+            let current = self.tab_selection.active == self.active_ids().map(|(_, a)| a);
+            let open = |a: &DocId| self.views.iter().any(|v| v.id == *a);
+            let start = self.tab_selection.anchor.filter(|a| current && open(a)).or_else(|| self.active_ids().map(|(_, a)| a)).unwrap_or(id);
             let from = self.views.iter().position(|v| v.id == start).unwrap_or(index);
             let run: Vec<DocId> = self.views.get(from.min(index)..=from.max(index)).unwrap_or_default().iter().map(|v| v.id).collect();
             // Ctrl/⌘ as well keeps what was picked before; Shift alone replaces it.
@@ -49,11 +52,11 @@ impl PdfCraftApp {
             }
             anchor = Some(start);
         } else if command {
-            if let Some(at) = ids.iter().position(|s| *s == id) {
-                // The last selected tab stays: there is always an active document.
-                if ids.len() == 1 {
-                    return;
-                }
+            // The last selected tab stays (there is always an active document), though the
+            // click still starts the next Shift-click's run there.
+            if ids.len() == 1 && ids.contains(&id) {
+                active = self.active;
+            } else if let Some(at) = ids.iter().position(|s| *s == id) {
                 ids.remove(at);
                 // The active tab taken out hands over to its neighbour in the selection.
                 if self.active == Some(index) {
@@ -71,6 +74,16 @@ impl PdfCraftApp {
         self.active = active;
         let active = self.active_ids().map(|(_, a)| a);
         self.tab_selection = TabSelection { ids, anchor, active };
+    }
+
+    /// Forgets the tabs picked with the active one once another document is shown by any route
+    /// but a click on the strip (Ctrl+Tab, opening or closing a file, Home), so coming back to
+    /// it later selects its tab alone. Run once a frame.
+    pub(crate) fn forget_stale_tab_selection(&mut self) {
+        let active = self.active_ids().map(|(_, id)| id);
+        if self.tab_selection.active != active {
+            self.tab_selection = TabSelection { ids: Vec::new(), anchor: active, active };
+        }
     }
 
     /// The tabs a drag of the tab at `index` moves, by index: the whole selection when the tab

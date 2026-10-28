@@ -1671,6 +1671,18 @@ fn command_and_shift_clicks_select_several_tabs() {
     h.run_steps(3);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[3]));
     assert_eq!(h.state().selected_tabs(), [ids[3]]);
+    // Back to c the same way: b doesn't come back with it.
+    h.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+    assert_eq!(h.state().selected_tabs(), [ids[2]]);
+    // A tab taken out with Ctrl/⌘ is still where the next Shift-click's run starts.
+    click(&mut h, "a.pdf", Modifiers::NONE);
+    click(&mut h, "c.pdf", Modifiers::COMMAND);
+    click(&mut h, "a.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[2]]);
+    click(&mut h, "e.pdf", Modifiers::SHIFT);
+    assert_eq!(h.state().selected_tabs(), ids);
 }
 
 /// #4590: dragging one of several selected tabs moves them all, kept in their order on the strip
