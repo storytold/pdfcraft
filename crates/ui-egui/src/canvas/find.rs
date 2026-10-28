@@ -102,6 +102,9 @@ impl DocView {
             // The same search again keeps its matches and the match the reader is on.
             if f.query != phrase || f.case_query != phrase {
                 f.query = phrase;
+                // A new search starts from the page the reader is on: an earlier one that followed
+                // its matches here must not pull this one back to the page it began on.
+                f.stop_following();
                 self.rerun_find();
             }
         }
