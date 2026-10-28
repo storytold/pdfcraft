@@ -20,7 +20,7 @@ pub(crate) struct PrimarySelection {
     /// takes the primary selection back from whichever application took it meanwhile.
     pub(crate) written_key: Option<(DocId, SelectionKey)>,
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
-    worker: Option<std::sync::mpsc::Sender<String>>,
+    worker: Option<Worker>,
     /// Tests: what was written, oldest first.
     #[cfg(test)]
     pub(crate) written: Vec<String>,
@@ -40,11 +40,8 @@ impl PrimarySelection {
             if self.worker.is_none() {
                 self.worker = spawn_worker();
             }
-            if let Some(worker) = &self.worker
-                && worker.send(text).is_err()
-            {
-                // The worker found no clipboard and stopped: don't start another.
-                log::debug!("no primary selection to write");
+            if let Some(worker) = &self.worker {
+                worker.send(text);
             }
         }
         #[cfg(not(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32"))))))]
@@ -52,14 +49,36 @@ impl PrimarySelection {
     }
 }
 
-/// A thread that owns the clipboard and writes what it is sent, the latest first: connecting to
+/// The thread that owns the clipboard, and the one selection waiting for it: setting it again
+/// before the thread takes it replaces it, so a stalled display holds one string, not a queue.
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+struct Worker {
+    latest: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    wake: std::sync::mpsc::SyncSender<()>,
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+impl Worker {
+    fn send(&self, text: String) {
+        *self.latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text);
+        // A full channel means the thread is already due to look; a closed one, that it found no
+        // clipboard and stopped.
+        if let Err(std::sync::mpsc::TrySendError::Disconnected(())) = self.wake.try_send(()) {
+            log::debug!("no primary selection to write");
+        }
+    }
+}
+
+/// A thread that owns the clipboard and writes the newest selection it is given: connecting to
 /// the display and setting the selection make round trips to the compositor or X server, which
 /// must never hold up a frame. Holding the clipboard also keeps the selection served on X11. It
-/// stops when the app drops its sender, or when there is no clipboard to write.
+/// stops when the app drops its [`Worker`], or when there is no clipboard to write.
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
-fn spawn_worker() -> Option<std::sync::mpsc::Sender<String>> {
+fn spawn_worker() -> Option<Worker> {
     use arboard::{LinuxClipboardKind, SetExtLinux};
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let latest = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
+    let slot = latest.clone();
     let spawned = std::thread::Builder::new().name("primary-selection".into()).spawn(move || {
         let mut clipboard = match arboard::Clipboard::new() {
             Ok(c) => c,
@@ -68,18 +87,15 @@ fn spawn_worker() -> Option<std::sync::mpsc::Sender<String>> {
                 return;
             }
         };
-        while let Ok(mut text) = rx.recv() {
-            // Selections sent while the last one was written are out of date but the newest.
-            while let Ok(newer) = rx.try_recv() {
-                text = newer;
-            }
+        while woken.recv().is_ok() {
+            let Some(text) = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { continue };
             if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text) {
                 log::debug!("couldn't set the primary selection: {e}");
             }
         }
     });
     match spawned {
-        Ok(_) => Some(tx),
+        Ok(_) => Some(Worker { latest, wake }),
         Err(e) => {
             log::debug!("no primary selection thread: {e}");
             None

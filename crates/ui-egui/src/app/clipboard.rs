@@ -143,16 +143,17 @@ impl PdfCraftApp {
         let view = self.active.and_then(|i| self.views.get(i));
         let now = view.and_then(|v| Some((v.id, v.page_selection()?)));
         let primary = &mut self.primary_selection;
+        if now.is_none() {
+            // The selection is gone, if only for a frame; its text stays, and selecting it again
+            // writes it again.
+            primary.written_key = None;
+        }
         let settled = primary.seen == now;
         primary.seen = now;
         if !settled {
             // Settle on the next frame even if nothing else draws one.
             ctx.request_repaint();
             return;
-        }
-        if now.is_none() {
-            // The selection is gone, its text stays: selecting it again writes it again.
-            primary.written_key = None;
         }
         let Some((id, _)) = now.filter(|_| now != primary.written_key) else { return };
         primary.written_key = now;

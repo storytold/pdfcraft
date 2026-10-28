@@ -2068,18 +2068,23 @@ fn a_settled_page_selection_becomes_the_primary_selection() {
     app.finish_render_frame(&ctx);
     assert_eq!(written(&app), vec!["Alpha".to_owned(), "one".to_owned()]);
     // The same text selected again, after another application took the primary selection,
-    // takes it back.
+    // takes it back, even when it was cleared for only one frame.
     app.views[0].select_text(0, 6, 8);
     app.finish_render_frame(&ctx);
     app.finish_render_frame(&ctx);
-    assert_eq!(written(&app), vec!["Alpha".to_owned(), "one".to_owned(), "one".to_owned()]);
+    app.views[0].clear_selection();
+    app.finish_render_frame(&ctx);
+    app.views[0].select_text(0, 6, 8);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app), vec!["Alpha".to_owned(), "one".to_owned(), "one".to_owned(), "one".to_owned()]);
     // Select All of the whole document reads its pages only when copied: not on selecting.
     assert!(app.views[0].continuous);
     app.views[0].select_all();
     assert!(app.views[0].all_text);
     app.finish_render_frame(&ctx);
     app.finish_render_frame(&ctx);
-    assert_eq!(written(&app).len(), 3, "no whole-document text");
+    assert_eq!(written(&app).len(), 4, "no whole-document text");
 
     // A document whose security refuses copying (Table 22, bit 5).
     use pdfcraft_engine::{Edit as E, Protection, Session};
