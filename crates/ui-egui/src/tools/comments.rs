@@ -33,7 +33,7 @@ pub(crate) use composer::{composer, submit_key};
 use geometry::handle_pos;
 #[cfg(test)]
 pub(crate) use geometry::{caret_snap, snapped_caret};
-pub(crate) use geometry::{corner_ratio, page_rotation, resized};
+pub(crate) use geometry::{corner_ratio, page_rotation, resized, take_turn_tabs};
 pub use geometry::{drawn_text_box_rect, text_box_rect};
 #[cfg(test)]
 use input::hover_tip;
