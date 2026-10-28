@@ -148,6 +148,12 @@ licences = ["MIT"]
 destination = "vendor/vello_common/LICENSE-MIT"
 sha256 = "adf157330f722fe7cfd5964a2a6974eff851b718228c6735724a11706e6f4dec"
 
+[[document]]
+source = "LICENSES/CC-BY-SA-4.0.txt"
+licences = ["CC-BY-SA-4.0"]
+destination = "LICENSES/CC-BY-SA-4.0.txt"
+sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
+
 [[bundled]]
 crate = "epaint_default_fonts"
 path = "fonts/Ubuntu-Light.ttf"

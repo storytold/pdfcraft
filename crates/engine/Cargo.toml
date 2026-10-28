@@ -61,3 +61,7 @@ craft-tiff = { workspace = true }
 pdfcraft-testkit = { workspace = true }
 # JBIG2 fixtures (`encode_jbig2_generic`).
 pdfcraft-filters = { workspace = true }
+# Sets the OCR ground-truth texts on synthetic scans (tests/it/support/ocr_scan.rs).
+ab_glyph = "0.2"
+# Reads MDPBench's annotations in examples/ocr_mdpbench.rs.
+serde_json = { workspace = true }
