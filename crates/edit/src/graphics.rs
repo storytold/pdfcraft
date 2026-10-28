@@ -46,6 +46,13 @@ fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditErro
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
+impl PageGraphic {
+    /// The painted paths it groups, as operator ranges (zero-based, end exclusive).
+    pub(crate) fn run_ranges(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.runs.iter().map(|(start, end, _)| (*start, *end))
+    }
+}
+
 fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
     Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
 }
@@ -192,6 +199,57 @@ fn paint_operator(op: &[u8]) -> bool {
     matches!(op, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*")
 }
 
+/// Concatenates a `cm` operator's matrix onto the current one, flagging a malformed or absurd
+/// matrix so the paths it would place are not painted.
+fn apply_matrix(matrix: &mut Matrix, matrix_ok: &mut bool, op: &Op) {
+    match op.nums::<6>() {
+        Some(m) if m.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) => *matrix = Matrix(m).then(matrix),
+        _ => *matrix_ok = false,
+    }
+}
+
+/// Adds a path operator's points to the path being built, in user space. Returns whether the
+/// operator's numbers were malformed, so the path is not painted.
+fn add_path_points(op: &Op, keyword: &[u8], add: &mut impl FnMut(f64, f64)) -> bool {
+    match keyword {
+        b"m" | b"l" => match op.nums::<2>() {
+            Some([x, y]) => {
+                add(x, y);
+                false
+            }
+            None => true,
+        },
+        b"c" => match op.nums::<6>() {
+            Some([x1, y1, x2, y2, x3, y3]) => {
+                for (x, y) in [(x1, y1), (x2, y2), (x3, y3)] {
+                    add(x, y);
+                }
+                false
+            }
+            None => true,
+        },
+        b"v" | b"y" => match op.nums::<4>() {
+            Some([x1, y1, x2, y2]) => {
+                for (x, y) in [(x1, y1), (x2, y2)] {
+                    add(x, y);
+                }
+                false
+            }
+            None => true,
+        },
+        b"re" => match op.nums::<4>() {
+            Some([x, y, w, h]) => {
+                for (x, y) in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)] {
+                    add(x, y);
+                }
+                false
+            }
+            None => true,
+        },
+        _ => false,
+    }
+}
+
 fn marked_content_operator(op: &[u8]) -> bool {
     matches!(op, b"MP" | b"DP" | b"BMC" | b"BDC" | b"EMC")
 }
@@ -325,46 +383,11 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
                     path.add(x, y);
                 }
             };
-            match keyword {
-                b"m" | b"l" => match op.nums::<2>() {
-                    Some([x, y]) => add(x, y),
-                    None => path_bad = true,
-                },
-                b"c" => match op.nums::<6>() {
-                    Some([x1, y1, x2, y2, x3, y3]) => {
-                        for (x, y) in [(x1, y1), (x2, y2), (x3, y3)] {
-                            add(x, y);
-                        }
-                    }
-                    None => path_bad = true,
-                },
-                b"v" | b"y" => match op.nums::<4>() {
-                    Some([x1, y1, x2, y2]) => {
-                        for (x, y) in [(x1, y1), (x2, y2)] {
-                            add(x, y);
-                        }
-                    }
-                    None => path_bad = true,
-                },
-                b"re" => match op.nums::<4>() {
-                    Some([x, y, w, h]) => {
-                        for (x, y) in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)] {
-                            add(x, y);
-                        }
-                    }
-                    None => path_bad = true,
-                },
-                _ => {}
-            }
+            path_bad |= add_path_points(op, keyword, &mut add);
         } else if keyword == b"W" || keyword == b"W*" {
             pending_clip = true;
         } else if keyword == b"cm" {
-            match op.nums::<6>() {
-                Some(m) if m.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) => {
-                    matrix = Matrix(m).then(&matrix);
-                }
-                _ => matrix_ok = false,
-            }
+            apply_matrix(&mut matrix, &mut matrix_ok, op);
         } else if keyword == b"n" || paint_operator(keyword) {
             let painted = paint_operator(keyword) && !in_text && !path_bad;
             if let Some(bounds) = path.rect() {
@@ -403,6 +426,16 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
         }
     }
 
+    let mut out = collect_graphics(&runs, &scopes, crop);
+    out.sort_by_key(|g| (g.start, g.end));
+    out.dedup_by(|a, b| (a.start, a.end) == (b.start, b.end));
+    Ok(out)
+}
+
+/// One graphic per outermost pure scope, its runs merged; runs outside any pure scope stay
+/// separate. Page-spanning artwork is split back into its paths so the icons printed into it
+/// stay selectable, while its background path is skipped.
+fn collect_graphics(runs: &[Run], scopes: &[Scope], crop: [f64; 4]) -> Vec<PageGraphic> {
     // A run belongs to the outermost pure scope around it; its siblings then stay one icon or
     // logo rather than one object per filled bar. Runs outside any pure scope stay separate.
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -459,9 +492,7 @@ pub fn page_graphics(doc: &Document, page: usize) -> Result<Vec<PageGraphic>, Ed
             });
         }
     }
-    out.sort_by_key(|g| (g.start, g.end));
-    out.dedup_by(|a, b| (a.start, a.end) == (b.start, b.end));
-    Ok(out)
+    out
 }
 
 fn background(rect: [f64; 4], crop: [f64; 4]) -> bool {

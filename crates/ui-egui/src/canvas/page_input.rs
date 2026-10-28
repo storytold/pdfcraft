@@ -757,7 +757,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
     }
     if tool == QuickTool::EditText {
-        crate::object_ui::paint(painter, &xf, i, info, &view.objects);
+        crate::object_ui::paint(painter, &xf, i, info, &view.objects, &doc.page_graphics(i), pointer);
     }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::paint(painter, &xf, i, view);

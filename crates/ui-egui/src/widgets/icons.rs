@@ -36,12 +36,22 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
+    // A disabled button is still drawn, in the faint text colour, so the panel keeps its shape and
+    // the control reads as unavailable without disappearing.
+    let enabled = ui.is_enabled();
+    let tint = if !enabled {
+        t.text_faint
+    } else if selected {
+        t.accent_text
+    } else {
+        t.icon
+    };
     // The shared button paints no fill of its own: the eased press wash below replaces it.
     let clear = |icon| ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon };
     let style = IconButtonStyle {
-        normal: clear(t.icon),
-        hovered: clear(t.icon),
-        pressed: Some(clear(t.icon)),
+        normal: clear(tint),
+        hovered: clear(tint),
+        pressed: Some(clear(tint)),
         selected: clear(t.accent_text),
         corner_radius: t.radius.into(),
         focus_stroke: Stroke::new(1.0, t.accent),
@@ -99,7 +109,7 @@ mod tests {
 
     #[test]
     fn shared_catalog_preserves_existing_icons_and_fallback_uri() {
-        assert_eq!(ICONS.len(), 190);
+        assert_eq!(ICONS.len(), 192);
         assert!(exists("minimize-2"));
         for (name, original) in ICONS {
             let expected =

@@ -9573,10 +9573,25 @@ fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_
     h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
 
-    // 3. Open "Arrange image" submenu and click "Bring to front"
+    // 3. Open "Arrange image" submenu and click "Bring to front". The Edit panel's Manage
+    // levels section has a button with the same label, so pick the one inside the open menu.
     h.get_by_label("Arrange image").click();
     h.run_steps(2);
-    h.get_by_label("Bring to front").click();
+    let menu_item = h
+        .get_all_by_label("Bring to front")
+        .into_iter()
+        .find(|node| {
+            let mut parent = node.parent();
+            while let Some(ancestor) = parent {
+                if ancestor.accesskit_node().role() == Role::Menu {
+                    return true;
+                }
+                parent = ancestor.parent();
+            }
+            false
+        })
+        .expect("the context menu still offers Bring to front");
+    menu_item.click();
     h.run_steps(3);
 
     // 4. Selection must be preserved after arrange: B is now at index 1 (in front)
