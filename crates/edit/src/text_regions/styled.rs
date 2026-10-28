@@ -238,10 +238,9 @@ fn indent_len(row: &[StyledChar]) -> usize {
     row.iter().take_while(|c| c.0 == ' ').count()
 }
 
-/// Whether characters `a` and `b` of `row` are drawn in one run: the same source and font, and
-/// both in the row's indent or both out of it.
-fn same_run(row: &[StyledChar], a: usize, b: usize) -> bool {
-    let indent = indent_len(row);
+/// Whether characters `a` and `b` of `row`, whose first `indent` characters indent it, are drawn
+/// in one run: the same source and font, and both in the indent or both out of it.
+fn same_run(row: &[StyledChar], indent: usize, a: usize, b: usize) -> bool {
     match (row.get(a), row.get(b)) {
         (Some(x), Some(y)) => x.1 == y.1 && x.2 == y.2 && (a < indent) == (b < indent),
         _ => false,
@@ -296,7 +295,7 @@ fn prepare_shaped_rows(
         let indent = indent_len(row);
         while let Some(item) = row.get(at) {
             let mut end = at + 1;
-            while same_run(row, at, end) {
+            while same_run(row, indent, at, end) {
                 end += 1;
             }
             let segment = row.get(at..end).unwrap_or_default();
@@ -347,8 +346,9 @@ fn calibration_factors(
     for (index, source) in lines.iter().enumerate() {
         if let Some(metrics) = metrics.get(&source.font) {
             // A row with spaces at its edges, such as a justified row's indent (#4487), is
-            // measured over its words alone: from its first word's ink to its last's. The spaces
-            // there may be drawn without the word spacing of the rest, taken back by `TJ`.
+            // measured over its words alone: from its first word's ink to its last's, which ends
+            // before the character spacing after the last glyph. The spaces there may be drawn
+            // without the word spacing of the rest, taken back by `TJ`.
             let words = source.text.trim_matches(' ');
             let inked = (words.len() != source.text.len())
                 .then(|| {
@@ -357,18 +357,19 @@ fn calibration_factors(
                     (x1 - x0).is_finite().then_some(x1 - x0)
                 })
                 .flatten();
-            let (text, measured) = match inked {
-                Some(width) => (words, width),
-                None => (source.text.as_str(), source.rect[2] - source.rect[0]),
+            let (text, measured, trailing) = match inked {
+                Some(width) => (words, width, source.origin.state.char_spacing),
+                None => (source.text.as_str(), source.rect[2] - source.rect[0], 0.0),
             };
-            let nominal = source_width(
+            let nominal = (source_width(
                 metrics,
                 text,
                 source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size),
                 space_of(&source.font, metrics),
                 source.origin.state.char_spacing,
                 source.origin.state.word_spacing,
-            ) * source.origin.state.scale
+            ) - trailing)
+                * source.origin.state.scale
                 * across(source);
             let changed_face =
                 style.resource.is_some() || overrides.get(&index).is_some_and(|range| range.family.is_some() || range.resource.is_some());
@@ -483,6 +484,8 @@ fn wrap_styled_rows(
     let mut row_start = 0;
     let mut row = Vec::new();
     let mut row_width = 0.0;
+    // Whether the row has a word yet: the spaces before its first one indent it.
+    let mut worded = false;
     let mut at = 0;
     while at < chars.len() {
         let Some(item) = chars.get(at) else { break };
@@ -500,6 +503,7 @@ fn wrap_styled_rows(
             draft_line = draft_line.saturating_add(1);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            worded = false;
             at += 1;
             row_start = at;
             continue;
@@ -516,7 +520,7 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         // A space before the row's first word indents it.
-        let word_width = measure(word, item.0 == ' ' && row.iter().all(|c: &StyledChar| c.0 == ' '))?;
+        let word_width = measure(word, item.0 == ' ' && !worded)?;
         if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
@@ -535,6 +539,7 @@ fn wrap_styled_rows(
         }
         row.extend_from_slice(word);
         row_width += word_width;
+        worded |= item.0 != ' ';
         at = end;
     }
     if !row.is_empty() {
@@ -1107,7 +1112,7 @@ pub(crate) fn rewrite_styled_block(
             let Some(item) = row.get(pos) else { break };
             let source = lines.get(item.1).unwrap_or(first);
             let mut end = pos + 1;
-            while same_run(row, pos, end) {
+            while same_run(row, indent, pos, end) {
                 end += 1;
             }
             let segment = row.get(pos..end).unwrap_or_default();

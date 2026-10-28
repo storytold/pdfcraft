@@ -9670,6 +9670,31 @@ fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     assert!(lines.first().is_some_and(|l| l.text.starts_with("    aaa")), "the indent is kept: {lines:?}");
 }
 
+/// The same with character spacing: a row with an indent is measured to its last glyph, which
+/// ends before the spacing after it, so the second edit doesn't scale it (#4487).
+#[test]
+fn a_justified_indent_with_character_spacing_edits_again_at_its_own_scale() {
+    let style = text::BlockStyle {
+        family: Some((added::Family::Helvetica, false, false)),
+        align: Some(added::Align::Justify),
+        width: Some(300.0),
+        ..Default::default()
+    };
+    let mut doc = text_page("BT /F1 12 Tf 2 Tc 72 700 Td (Hello world) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb ccc  \nddd"), &style).unwrap();
+    let mut doc = reopen(&doc);
+    let written = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(written.lines().any(|l| l == "2 Tc"), "drawn with character spacing: {written}");
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("ccc", "cc", 1);
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert!(blocks[0].editor_text.starts_with("    aaa"), "{blocks:?}");
+}
+
 /// A paragraph drawn at `0 Tz` has no width to justify into: nothing is divided by it. The
 /// writer writes a number that isn't finite as 0, so the test looks for the word spacing and
 /// the move a division by zero would add, rather than for `NaN`.
