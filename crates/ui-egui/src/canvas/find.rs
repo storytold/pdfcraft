@@ -235,7 +235,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
                         if is_rtl {
-                            edit = edit.horizontal_align(egui::Align::RIGHT);
+                            edit = edit.align(egui::Align2::RIGHT_TOP);
                         }
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
                         if find.focus {

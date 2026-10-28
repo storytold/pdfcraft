@@ -70,7 +70,7 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     let is_rtl = crate::bidi::has_rtl(text.as_str()) || crate::i18n::current().rtl();
     let mut edit = egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT));
     if is_rtl {
-        edit = edit.horizontal_align(egui::Align::RIGHT);
+        edit = edit.align(egui::Align2::RIGHT_TOP);
     }
     edit
 }
@@ -80,7 +80,7 @@ pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     let is_rtl = crate::bidi::has_rtl(text.as_str()) || crate::i18n::current().rtl();
     let mut edit = egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6));
     if is_rtl {
-        edit = edit.horizontal_align(egui::Align::RIGHT);
+        edit = edit.align(egui::Align2::RIGHT_TOP);
     }
     edit
 }
