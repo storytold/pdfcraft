@@ -35,6 +35,8 @@ pdfcraft-fonts = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
+# The photographed-page test draws its sheet pixel by pixel and writes it as a JPEG.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rustix = { version = "1", features = ["fs"] }

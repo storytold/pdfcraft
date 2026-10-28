@@ -17,6 +17,9 @@
 //! The ocrs models read the Latin alphabet (English and other languages written without
 //! accents); Tesseract (the `tesseract` module, off the web build) reads whatever its installed
 //! language packs cover.
+//!
+//! [`flatten`] straightens photographed pages (the UVDoc model, Apache-2.0, fetched the same way)
+//! for Enhance camera image.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -26,6 +29,8 @@ mod ocrs;
 pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
+
+pub mod flatten;
 
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
@@ -67,6 +72,11 @@ pub enum OcrError {
     OutputTooLarge(u64),
     #[error("tesseract failed: {0}")]
     Process(String),
+    /// Shown to end users, like [`OcrError::NoModels`]. The UI catalogs key this exact text.
+    #[error("the page flattening model is not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds it)")]
+    NoFlattenModel,
+    #[error("flattening the page failed: {0}")]
+    Flatten(String),
 }
 
 /// An RGBA8 raster, row-major, top-left origin: what the engines read. The fields are private
