@@ -44,7 +44,7 @@ pub(super) fn splittable(node: &Node) -> bool {
     matches!(node, Node::Subform(s) if matches!(s.layout, Layout::Tb | Layout::Table) && s.common.h.is_none())
 }
 
-/// Top and bottom of an item a page break must not cut (text, a picture, a field); `None`
+/// Top and bottom of an item a page break must not cut (text, a picture, a field, an arc); `None`
 /// for fills and lines, which are cut at the break.
 pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
     match item {
@@ -52,6 +52,7 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Turned(t) => Some(t.extent),
+        Item::Arc(a) => Some((a.rect.y, a.rect.bottom())),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
     }
 }
@@ -118,6 +119,10 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
         Item::Rounded(r) => {
             r.rect.x += dx;
             r.rect.y += dy;
+        }
+        Item::Arc(a) => {
+            a.rect.x += dx;
+            a.rect.y += dy;
         }
         Item::Line { from, to, .. } => {
             *from = (from.0 + dx, from.1 + dy);
