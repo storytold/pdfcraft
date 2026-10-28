@@ -16,7 +16,10 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         return Err(EditError::Invalid("type the header or footer text first".into()));
     }
     if let Some(ref name) = hf.font_name {
-        let _ = pdfcraft_fonts::set_active_thai_font_by_name(name);
+        let set_res = pdfcraft_fonts::set_active_thai_font_by_name(name);
+        if set_res.is_err() && hf.text.iter().any(|t| t.chars().any(added::is_thai)) {
+            return Err(added::thai_error(pdfcraft_fonts::GlyphError::NoFont, name));
+        }
     }
     if let Some(c) = hf.first_undrawable() {
         if added::is_thai(c) && pdfcraft_fonts::document_thai_font().is_none() {

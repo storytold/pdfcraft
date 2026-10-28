@@ -247,7 +247,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                                 let selected = d.hf.font_name.as_deref() == Some(&entry.name);
                                 if ui.selectable_label(selected, &entry.name).clicked() {
                                     if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
-                                        ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                                        let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+                                        ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
                                     }
                                     if entry.family.eq_ignore_ascii_case("TlwgTypewriter")
                                         || entry.family.eq_ignore_ascii_case("Tlwg Typewriter")
@@ -363,7 +364,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                                             if ui.selectable_label(selected, &entry.name).clicked()
                                                 && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
                                             {
-                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                                                let cjk = crate::theme::CjkPreference::for_language(crate::i18n::current().code());
+                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(cjk));
                                             }
                                         }
                                     },
