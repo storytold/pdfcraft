@@ -12,7 +12,8 @@
 use std::fmt;
 use std::ops::Range;
 
-use super::*;
+use super::place::{check, page_list};
+use super::{Dict, Document, EditError, Object};
 use pdfcraft_content::{Op, Pieces};
 
 /// Marked-content scopes open at once beyond which a page is not read.
