@@ -10334,3 +10334,24 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+/// An indent another program drew with the word spacing of its words (`Tw` applies to every
+/// space in the show) keeps it when the paragraph is edited again: the first word stays where it
+/// was. Only an indent drawn without it, as the justified rows of #4487 are, is measured without.
+#[test]
+fn an_indent_drawn_with_word_spacing_keeps_it_when_edited_again() {
+    // Two colours make two runs on the row, which the styled rewrite edits run by run.
+    let mut doc = text_page("BT /F1 12 Tf 4 Tw 72 700 Td (    aaa bbb ) Tj 1 0 0 rg (ccc) Tj ET");
+    let first_ink = |doc: &pdfcraft_cos::Document| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        lines[0].ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min)
+    };
+    let before = first_ink(&doc);
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("bbb", "bb", 1);
+    assert!(draft.starts_with("    aaa"), "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let doc = reopen(&doc);
+    let after = first_ink(&doc);
+    assert!((after - before).abs() < 0.5, "the first word moved: {before} -> {after}: {content}");
+}
