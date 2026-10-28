@@ -427,6 +427,8 @@ pub struct DocView {
     pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
+    /// Edit text & images: the inline vector graphics per page (by document generation).
+    pub(crate) edit_graphics: HashMap<usize, (u64, Vec<pdfcraft_engine::PageGraphic>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
@@ -679,6 +681,7 @@ impl DocView {
             text_background: Default::default(),
             move_background: Default::default(),
             edit_images: HashMap::new(),
+            edit_graphics: HashMap::new(),
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
@@ -1957,7 +1960,17 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 crate::content_ui::paint_page(painter, &xf, i, info, &added, view, pointer);
             }
             if tool == QuickTool::EditText {
-                crate::object_ui::paint(painter, &xf, i, info, &view.objects);
+                let graphics = if can_modify {
+                    let generation = doc.edit_generation();
+                    if !matches!(view.edit_graphics.get(&i), Some((g, _)) if *g == generation) {
+                        let graphics = doc.page_graphics(i);
+                        view.edit_graphics.insert(i, (generation, graphics));
+                    }
+                    view.edit_graphics.get(&i).map_or(&[][..], |(_, graphics)| graphics.as_slice())
+                } else {
+                    &[][..]
+                };
+                crate::object_ui::paint(painter, &xf, i, info, &view.objects, graphics, pointer);
             }
             if tool == QuickTool::EnhanceCamera {
                 crate::camera_ui::paint(painter, &xf, i, view);

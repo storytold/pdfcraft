@@ -11,6 +11,9 @@ use crate::canvas::{DocView, PageXform};
 use crate::page_pointer::PagePointer;
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// How many faint inline-graphic outlines are drawn per page per frame, like the paragraph and
+/// image outlines. Past this, only the selected and hovered graphics are boxed.
+const MAX_GRAPHIC_OUTLINES: usize = 250;
 
 #[derive(Default)]
 pub(crate) struct ObjectSelection {
@@ -126,8 +129,12 @@ impl ObjectSelection {
     }
 }
 
+fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
+    xf.user_rect(info, page, rect.map(|v| v as f32))
+}
+
 fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) -> Rect {
-    xf.user_rect(info, page, object.rect.map(|v| v as f32))
+    screen_rect(xf, info, page, object.rect)
 }
 
 fn modified(ui: &egui::Ui) -> bool {
@@ -163,17 +170,25 @@ fn leave_single(view: &mut DocView) {
 
 /// A graphic covering nearly the whole page is background artwork: a click should reach the
 /// smaller icon or text on top of it, never select and delete the page's background.
-fn background_graphic(info: &DocInfo, page: usize, graphic: &EditableObject) -> bool {
+fn background_rect(info: &DocInfo, page: usize, rect: [f64; 4]) -> bool {
     let p = &info.pages[page];
     let [x0, y0, x1, y1] = p.crop;
     let page_area = f64::from((x1 - x0).max(0.0)) * f64::from((y1 - y0).max(0.0));
-    let width = (graphic.rect[2].min(f64::from(x1)) - graphic.rect[0].max(f64::from(x0))).max(0.0);
-    let height = (graphic.rect[3].min(f64::from(y1)) - graphic.rect[1].max(f64::from(y0))).max(0.0);
+    let width = (rect[2].min(f64::from(x1)) - rect[0].max(f64::from(x0))).max(0.0);
+    let height = (rect[3].min(f64::from(y1)) - rect[1].max(f64::from(y0))).max(0.0);
     page_area > 0.0 && width * height >= page_area * 0.9
+}
+
+fn background_graphic(info: &DocInfo, page: usize, graphic: &EditableObject) -> bool {
+    background_rect(info, page, graphic.rect)
 }
 
 fn area(o: &EditableObject) -> f64 {
     (o.rect[2] - o.rect[0]).max(0.0) * (o.rect[3] - o.rect[1]).max(0.0)
+}
+
+fn area_rect(rect: Rect) -> f32 {
+    rect.width().max(0.0) * rect.height().max(0.0)
 }
 
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
@@ -484,7 +499,47 @@ fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
     }
 }
 
-pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
+pub(crate) fn paint(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    selection: &ObjectSelection,
+    graphics: &[pdfcraft_engine::PageGraphic],
+    pointer: Option<Pos2>,
+) {
+    let selected = |index: usize| {
+        selection.page == Some(page) && selection.selected.iter().any(|o| o.target.kind == ObjectKind::Graphic && o.target.index == index)
+    };
+    // Inline graphics have no single-object tool of their own, so they get the same faint boxes
+    // paragraphs and images show: the boxes say what the tool can select before it is clicked.
+    let boxes: Vec<(usize, Rect)> = graphics
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !background_rect(info, page, graphics[*index].rect))
+        .map(|(index, graphic)| (index, screen_rect(xf, info, page, graphic.rect)))
+        .filter(|(_, rect)| rect.is_positive())
+        .collect();
+    let hovered = pointer.filter(|p| xf.rect.contains(*p)).and_then(|p| {
+        boxes
+            .iter()
+            .filter(|(index, _)| !selected(*index))
+            .filter(|(_, rect)| rect.expand(2.0).contains(p))
+            .min_by(|(_, a), (_, b)| area_rect(*a).total_cmp(&area_rect(*b)))
+            .map(|(index, _)| *index)
+    });
+    let faint_all = boxes.len() <= MAX_GRAPHIC_OUTLINES;
+    for (index, rect) in &boxes {
+        if !selected(*index) && (faint_all || hovered == Some(*index)) {
+            painter.rect_stroke(*rect, 0.0, Stroke::new(0.75, BLUE.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+        }
+    }
+    if let Some(index) = hovered
+        && let Some(graphic) = graphics.get(index)
+    {
+        let rect = screen_rect(xf, info, page, graphic.rect);
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+    }
     if selection.page != Some(page) {
         return;
     }

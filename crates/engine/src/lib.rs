@@ -92,7 +92,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
-pub use pdfcraft_edit::{BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
+pub use pdfcraft_edit::{BlockKey, BlockStyle, PageGraphic, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
