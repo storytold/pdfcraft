@@ -8453,11 +8453,15 @@ fn signing_with_a_pkcs11_token_through_tools() {
         .as_str()
         .unwrap()
         .to_owned();
-    // A wrong PIN is refused with the PIN message (and burns no attempts on other tokens).
-    assert!(matches!(
-        a.call("sign_document", &json!({ "doc": 0, "id": reference, "password": "0000", "out": "bad.pdf" })),
-        Err(ToolError::Failed(m)) if m.contains("PIN")
-    ));
+    // A wrong PIN is refused with the PIN message — but a failed login burns a token's
+    // retry budget, so this check runs only on a disposable token, by explicit opt-in
+    // (PDFCRAFT_PKCS11_TEST_WRONG_PIN, set together with the module).
+    if std::env::var("PDFCRAFT_PKCS11_TEST_WRONG_PIN").map(|v| !v.is_empty()).unwrap_or(false) {
+        assert!(matches!(
+            a.call("sign_document", &json!({ "doc": 0, "id": reference, "password": "0000", "out": "bad.pdf" })),
+            Err(ToolError::Failed(m)) if m.contains("PIN")
+        ));
+    }
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": reference, "password": "1234", "out": "token-signed.pdf" }));
     assert_eq!(r["signature"]["signer"], "Test Signer RSA");

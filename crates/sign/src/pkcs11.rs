@@ -109,11 +109,8 @@ fn token_certificates(session: &Session) -> Vec<(Certificate, Vec<u8>)> {
             continue;
         }
         let Ok(certificate) = Certificate::parse(&value) else { continue };
-        // Only keys PdfCraft signs with (RSA, P-256, P-384); Ed25519, P-521 and brainpool
-        // tokens would list only to fail at sign time with a misleading message.
-        if certificate.public_key.store_signing_key().is_none() {
-            continue;
-        }
+        // Every parseable certificate: the chain (token_chain) needs the intermediates
+        // too, including ones whose key type PdfCraft doesn't sign with.
         out.push((certificate, id));
     }
     out
@@ -168,6 +165,12 @@ pub fn list() -> Result<Vec<DigitalId>, SignError> {
             // Some modules (SoftHSM among them) only take a login on a read-write session.
             let Ok(session) = open_session(&client, slot) else { continue };
             for (certificate, id) in token_certificates(&session) {
+                // Signing identities only (RSA, P-256, P-384); Ed25519, P-521 and brainpool
+                // keys would list only to fail at sign time with a misleading message.
+                // Chain certificates keep all key types (token_chain above).
+                if certificate.public_key.store_signing_key().is_none() {
+                    continue;
+                }
                 if session_key(&session, &id).is_none() && !login_required {
                     // No visible key: without login, keys are hidden (CKA_PRIVATE), so a
                     // token that requires login keeps the pairing unproven until the PIN
@@ -208,6 +211,11 @@ pub fn find_with_pin(reference_or_name: &str, pin: Option<&str>) -> Result<Digit
             let login_required = token.login_required();
             let Ok(session) = open_session(&client, slot) else { continue };
             for (certificate, id) in token_certificates(&session) {
+                // A signable identity (RSA, P-256, P-384); references to other certificates
+                // resolve to nothing rather than to an identity that can't sign.
+                if certificate.public_key.store_signing_key().is_none() {
+                    continue;
+                }
                 let by_name = certificate.subject.common_name() == Some(reference_or_name.trim_start_matches("pkcs11:"));
                 if reference(&certificate) != reference_or_name && !by_name {
                     continue;
